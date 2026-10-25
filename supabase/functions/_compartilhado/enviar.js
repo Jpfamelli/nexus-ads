@@ -56,6 +56,16 @@ async function vezDaConta(db, ctx, cliente) {
   if (r && r.ok === false) throw new ErroApi("limite_taxa", 429);
 }
 
+/** plano 1500c · SC-037: limites por CLIENTE das ações sem limite (as duas últimas chamam a Meta): [quantas, janela em s]. */
+export const LIMITES_ACAO = Object.freeze({ lido: [600, 60], sincronizar_templates: [6, 3600], testar_canal: [10, 3600] });
+async function limiteDaAcao(db, acao, cliente) {
+  const [n, janela] = LIMITES_ACAO[acao];
+  let r;
+  try { r = await db.rpc("nx_taxa_usar", { p_chave: `enviar:${acao}:${cliente}`, p_limite: n, p_janela_s: janela }); }
+  catch (e) { if (funcaoAusente(e, "nx_taxa_usar")) return; throw e; }
+  if (r && r.ok === false) throw new ErroApi("limite_taxa", 429);
+}
+
 const PAPEL = {
   texto: "atendente", midia: "atendente", template: "atendente", reenviar: "atendente", lido: "leitura",
   testar_canal: "admin", inscrever_app: "admin", sincronizar_templates: "admin", testar_codewords: "admin",
@@ -447,8 +457,7 @@ async function acaoMidia(db, ctx, corpo, deps, env) {
     // plano 1000 (SV-048): o tamanho declarado é do navegador e o upload assinado aceita qualquer arquivo — o tamanho REAL do
     // objeto (HEAD na URL assinada) acima do teto do tipo é recusado aqui, antes da Graph (que só falhava com 131053)
     const real = await tamanhoReal(link, deps.fetch);
-    if (real != null && real > tipo.max) throw new ErroApi("midia_grande", 400);
-    const citacao = await citacaoValida(db, cliente, cx.contato?.id, corpo.responde_a);
+    if (real != null && real > tipo.max) throw new ErroApi("midia_grande", 400);    const citacao = await citacaoValida(db, cliente, cx.contato?.id, corpo.responde_a);
     return { cred, link, citacao };
   });
   const cw = ehCodeWords(cred);
@@ -1130,6 +1139,7 @@ async function tratarEnviar(req, env, deps) {
     const d = { ...deps, fetch: f, rede: comPrazo(f, deps.prazoRede ?? PRAZO_GRAPH_MS) };
     if (PAPEL[acao] === "admin") await interna(db, "nx_exigir_modulo", { p_cliente: String(corpo.cliente), p_modulo: "conversas" });
     if (ENVIOS.has(acao)) await vezDaConta(db, ctx, String(corpo.cliente));
+    if (Object.hasOwn(LIMITES_ACAO, acao)) await limiteDaAcao(db, acao, String(corpo.cliente));
     switch (acao) {
       case "texto": return acaoTexto(db, ctx, corpo, d);
       case "midia": return acaoMidia(db, ctx, corpo, d, env);

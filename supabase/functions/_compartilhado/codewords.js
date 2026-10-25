@@ -1211,6 +1211,8 @@ export async function estadoCanalCodeWords(db, cred, o = {}) {
 /** Plano 1000 (SV-027/SV-028): intervalo mínimo entre dois «Enviar teste» e entre dois «Parear» do mesmo canal. */
 export const TRAVA_TESTE_S = 30;
 export const TRAVA_PAREAR_S = 90;
+/** plano 1500c · SC-026: «Enviar teste» por cliente por hora. */
+export const LIMITE_TESTE_H = 5;
 /** Trava que NÃO é solta (vence sozinha no prazo): true = pode seguir. Erro ao gravar a trava → segue (como antes). */
 async function travaPainel(db, nome, segundos) {
   try { return (await db.rpc("nx_trava_pegar", { p_nome: nome, p_segundos: segundos, p_dono: "nx-codewords:painel" })) === true; }
@@ -1272,6 +1274,17 @@ async function painelEnviarTeste(db, cred, corpo, o) {
   if (ehJidLid(corpo.para)) throw new ErroApi("dados_invalidos", 400, "para");
   const para = corpo.para == null || corpo.para === "" ? soDigitos(cred.codewords_numero) : soDigitos(corpo.para);
   if (para.length < 8 || para.length > 15) throw new ErroApi("dados_invalidos", 400, "para");
+  // plano 1500c · SC-026: o teste só vai para o PRÓPRIO número do canal ou para um contato que o cliente já tem (antes qualquer
+  // número: o aparelho do cliente virava canal de spam) e no máximo LIMITE_TESTE_H por hora por cliente
+  const proprio = new Set(variantesTelefone(cred.codewords_numero));
+  if (!proprio.has(para)) {
+    const conhecido = await db.select("nx_contatos", { cliente_id: `eq.${cred.cliente_id}`, telefone: `in.(${variantesTelefone(para).join(",")})`, select: "id", limit: 1 })
+      .catch(() => []);
+    if (!conhecido.length) throw new ErroApi("dados_invalidos", 400, "para_desconhecido");
+  }
+  const taxa = await db.rpc("nx_taxa_usar", { p_chave: `cw-teste:${cred.cliente_id}`, p_limite: LIMITE_TESTE_H, p_janela_s: 3600 })
+    .catch(e => (funcaoAusente(e, "nx_taxa_usar") ? { ok: true } : { ok: false }));
+  if (taxa?.ok === false) return { ok: false, erro: "limite_taxa", detalhe: `No máximo ${LIMITE_TESTE_H} testes por hora.` };
   const hora = rotuloAgora(new Date().toISOString());
   const r = await enviarTextoCodeWords(cred, para, `Teste do Órbita: o envio pelo CodeWords está funcionando (${hora}).`, { ...o, db });
   if (!r.ok) return { ok: false, erro: "envio_falhou", ambigua: !!r.ambigua, detalhe: r.erro.title };
@@ -1612,7 +1625,12 @@ async function tratarCodeWords(req, env, deps) {
         if (!(await travaPainel(db, `nx-codewords:teste:${cred.canal_id}`, TRAVA_TESTE_S))) return respostaPainel({ ok: false, erro: "aguarde" });
         return comAuditoria(await painelEnviarTeste(db, cred, corpo, o));
       }
-      case "receita": return respostaPainel(await painelReceita(db, cred, cliente, req));
+      case "receita": {
+        // plano 1500c · SC-027: a receita devolve o segredo do canal (?ch=) — quem viu fica em nx_auditoria
+        const r = await painelReceita(db, cred, cliente, req);
+        await auditar(db, conta, cliente, "codewords_segredo_visto", { canal: cred.canal_id });
+        return respostaPainel(r);
+      }
     }
     throw new ErroApi("dados_invalidos", 400, "acao");
   }, deps.drenagem);

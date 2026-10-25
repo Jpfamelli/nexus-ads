@@ -184,8 +184,11 @@
     <nav class="barra" id="barra" aria-label="Navegação principal"></nav>
   </div>
 
-  <div class="toasts" id="toasts" popover="manual" aria-live="polite"></div>
-  <div class="sr-only" id="anuncio" aria-live="polite"></div>
+  <!-- plano 1500c · UCC-068: os avisos falam pelo #anuncio (ui.anunciar), a caixa não é aria-live (uma voz só) -->
+  <div class="toasts" id="toasts" popover="manual"></div>
+  <div class="sr-only" id="anuncio" aria-live="polite" aria-atomic="true"></div>
+  <!-- plano 1500c · UCC-067: a região dos erros existe desde o início (criada na hora, o leitor de tela costuma perder o 1º anúncio) -->
+  <div class="sr-only" id="anuncio-urgente" aria-live="assertive" aria-atomic="true"></div>
 
   <script type="module" src="app.js?v=20261016a"></script>
 </body>

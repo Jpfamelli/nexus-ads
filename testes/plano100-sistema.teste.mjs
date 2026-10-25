@@ -336,13 +336,17 @@ test("A2 · pulso.avisoDeNaoLidas (puro): só quando sobe, fora de Conversas; so
 });
 
 test("A2/A3 · app.js: o shell assina nao_lidas do pulso (avisa fora de Conversas com as preferências de nx-cv-avisos), marca a detecção e para de consultar nx_cv_listar; referência zera ao trocar de empresa", () => {
-  assert.match(APP_JS, /aoNaoLidas: n => \{ E\.naoLidasPulsoEm = Date\.now\(\); E\.pulsoTemNaoLidas = true; definirBadge\("conversas", n\); avisarNaoLidas\(n\); \}/);
-  const avisar = fnDoApp("function avisarNaoLidas(n) {");
-  assert.match(avisar, /E\.M\.pulso\.avisoDeNaoLidas\(\{ antes, depois: n, emConversas: !!\(E\.atual && E\.atual\.arquivo === "conversas\.js"\), escondida: !!document\.hidden, pref: lerAvisosConversas\(\) \}\)/);
-  assert.match(avisar, /if \(a\.som && \(papel === "lider" \|\| papel === "solo"\)\) tocarSomNaoLidas\(\);\s*if \(a\.tela\) notificarNaoLidas\(a\.novas, n\);/);
+  // plano 1500c: UCC-018 — o pulso também passa o carimbo da última mensagem (servidor novo), e o shell repassa ao aviso
+  assert.match(APP_JS, /aoNaoLidas: \(n, ultima\) => \{ E\.naoLidasPulsoEm = Date\.now\(\); E\.pulsoTemNaoLidas = true; definirBadge\("conversas", n\); avisarNaoLidas\(n, ultima\); \}/);
+  const avisar = fnDoApp("function avisarNaoLidas(n, ultima = null) {");   // plano 1500c: UCC-018 — com o carimbo da última mensagem
+  assert.match(avisar, /E\.M\.pulso\.avisoDeNaoLidas\(\{ antes, depois: n, emConversas: !!\(E\.atual && E\.atual\.arquivo === "conversas\.js"\), escondida: !!document\.hidden, pref: lerAvisosConversas\(\),\s*ultimaAntes, ultimaDepois: ultima \}\)/);
+  // plano 1500c: o aviso de área de trabalho recebe se o app já tocou o som (UCC-120: mudo nesse caso, com renotify no outro)
+  assert.match(avisar, /if \(a\.som && \(papel === "lider" \|\| papel === "solo"\)\) tocarSomNaoLidas\(\);\s*if \(a\.tela\) notificarNaoLidas\(a\.novas, n, \{ somProprio:/);
   assert.match(fnDoApp("function lerAvisosConversas() {"), /LS\.ler\("nx-cv-avisos"\)/, "mesmas preferências do menu «Avisos» de Conversas");
   assert.match(fnDoApp("function tocarSomNaoLidas() {"), /if \(agora - E\.somEm < 10000\) return;/, "no máximo um som a cada 10 s");
-  assert.match(fnDoApp("function notificarNaoLidas(novas, total) {"), /Notification\.permission !== "granted"\) return;[\s\S]*navegar\("#\/conversas\?aba=aguardando"\)/);
+  // plano 1500c: o destino do clique vem de opcoesDoAvisoNaoLidas (data.hash, o mesmo que o service worker usa — UCC-123)
+  assert.match(fnDoApp("function notificarNaoLidas(novas, total, { somProprio = true } = {}) {"), /Notification\.permission !== "granted"\) return;[\s\S]*navegar\(opcoes\.data\.hash\)/);
+  assert.match(fnDoApp("function opcoesDoAvisoNaoLidas("), /data: \{ hash: "#\/conversas\?aba=aguardando" \}/);
   assert.match(APP_JS, /document\.addEventListener\("pointerdown", desbloquearAudio, \{ once: true, passive: true \}\);/, "o áudio nasce no 1º gesto");
   // A3: detecção fixa — depois que o pulso trouxe nao_lidas, a lista não é consultada para o badge
   assert.match(fnDoApp("async function atualizarNaoLidas() {"), /if \(E\.pulsoTemNaoLidas\) return;/);

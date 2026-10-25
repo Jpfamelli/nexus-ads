@@ -162,7 +162,7 @@ async function pedirGanho(k, card, estagio, detalhe) {
 async function pedirPerda(k, card, estagio) {
   const { ui, h, L } = k;
   const motivos = k.base.motivos || [];
-  const nomeRadio = `mot-${Date.now()}`;
+  const nomeRadio = L.idUnico ? L.idUnico("mot") : `mot-${Date.now()}`;      // plano 1500c · RC-090: dois modais no mesmo milissegundo não dividem o grupo
   const lista = h("div", { class: "crm-motivos", role: "radiogroup", "aria-label": "Motivo da perda" },
     motivos.map(m => h("label", { class: "crm-motivo" },
       h("input", { type: "radio", name: nomeRadio, value: m.id, dataset: { texto: m.exige_texto ? "1" : "" } }),
@@ -255,7 +255,12 @@ async function criarRetomada(k, card, dias, { keepalive = false } = {}) {
   const vence = k.L.retomarEm(dias);
   if (!vence) return null;
   const idContato = card.contato && card.contato.id != null ? card.contato.id : (card.contato_id ?? null);
-  const p = { titulo: `Retomar contato — ${k.L.tituloCard(card)}`.slice(0, 160), tipo: "whatsapp", vence_em: vence, negocio_id: card.id,
+  // plano 1500c · RC-091: o tipo segue o que o contato tem — telefone → WhatsApp; só e-mail → e-mail; nenhum → tarefa
+  const tel = card.telefone || (card.contato && card.contato.telefone);
+  const mail = card.email || (card.contato && card.contato.email);
+  const semInfo = tel === undefined && mail === undefined;      // o cartão não trouxe os meios de contato: fica como antes (WhatsApp)
+  const tipo = tel || semInfo ? "whatsapp" : mail ? "email" : "tarefa";
+  const p = { titulo: `Retomar contato — ${k.L.tituloCard(card)}`.slice(0, 160), tipo, vence_em: vence, negocio_id: card.id,
     ...(idContato != null ? { contato_id: idContato } : {}), ...(typeof k.eu === "function" && k.eu() ? { dono_id: k.eu() } : {}) };
   try {
     const t = await k.api.rpcC("nx_tarefa_salvar", { p_tarefa: p }, keepalive ? { keepalive: true } : {});
@@ -319,8 +324,16 @@ export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro
       marcarSalvo(k, controle.parentElement);      // plano 1000b · RB-063: status discreto ao lado do campo (antes: toast a cada campo)
     } catch (e) {
       ui.limpar(erro);
-      erro.textContent = k.erro(e);
-      if (aoErro) try { aoErro(e, erro); } catch { /* ok */ }
+      // plano 1500c · RC-265: sem internet o valor digitado FICA no campo e a gravação é refeita sozinha quando a conexão voltar
+      const semRede = (typeof navigator !== "undefined" && navigator && navigator.onLine === false) || (e && e.codigo === "sem_conexao");
+      if (semRede) {
+        erro.textContent = "Não salvo — tentaremos quando a conexão voltar.";
+        if (!controle._esperaRede && typeof addEventListener === "function") {
+          controle._esperaRede = () => { removeEventListener("online", controle._esperaRede); controle._esperaRede = null; if (controle.isConnected !== false) aoMudar(); };
+          addEventListener("online", controle._esperaRede);
+        }
+      } else erro.textContent = k.erro(e);
+      if (aoErro && !semRede) try { aoErro(e, erro); } catch { /* ok */ }
       erro.hidden = false;
       controle.setAttribute("aria-invalid", "true");
       controle.setAttribute("aria-describedby", erro.id = `${id}-er`);
@@ -332,9 +345,10 @@ export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro
   const evento = controle.tagName === "SELECT" || controle.type === "date" || controle.type === "datetime-local" ? "change" : "blur";
   controle.addEventListener(evento, aoMudar);
   if (avisoEl && evento !== "change") controle.addEventListener("change", pintarAviso);
-  if (controle.tagName === "INPUT" && controle.type !== "date" && controle.type !== "datetime-local") {
+  // plano 1500c · RC-092: o Esc também desfaz (e não fecha a gaveta) na observação (TEXTAREA); Enter só sai do INPUT (no TEXTAREA é quebra de linha)
+  if ((controle.tagName === "INPUT" && controle.type !== "date" && controle.type !== "datetime-local") || controle.tagName === "TEXTAREA") {
     controle.addEventListener("keydown", ev => {
-      if (ev.key === "Enter") { ev.preventDefault(); controle.blur(); }
+      if (ev.key === "Enter" && controle.tagName === "INPUT") { ev.preventDefault(); controle.blur(); }
       if (ev.key === "Escape") {
         // plano 1000b · RB-057: com o valor mudado, o Esc só desfaz a edição — não sobe para o diálogo e não fecha a gaveta (como o título)
         if (controle.value !== exibir(ultimo)) { ev.preventDefault(); ev.stopPropagation(); }
@@ -425,6 +439,19 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
     irPara(ev.key.toLowerCase() === "j" ? 1 : -1);
   };
   if (typeof vizinhos === "function") corpo.addEventListener("keydown", aoTeclaNav);
+  // plano 1500c · RC-281: G = ganhar, P = perder com a gaveta em foco (fora de campos de texto); o desenho de cada abertura diz o que cada tecla faz
+  let atalhosGP = null;
+  corpo.addEventListener("keydown", ev => {
+    if (fechada || !atalhosGP || ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
+    const tecla = String(ev.key || "").toLowerCase();
+    if (tecla !== "g" && tecla !== "p") return;
+    const a = ev.target;
+    if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || ""))) return;
+    const fn = tecla === "g" ? atalhosGP.ganhar : atalhosGP.perder;
+    if (!fn) return;
+    ev.preventDefault();
+    fn();
+  });
 
   /** plano 1000b · RB-061: outro negócio (do mesmo contato) na MESMA gaveta, como o ‹ › — e entra em «Recentes» da paleta. */
   function trocarPara(alvo, titulo) {
@@ -616,7 +643,8 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
 
     const valorFinal = n.status === "ganho";
     const valorEl = h("div", { class: ["ng-valor", valorFinal && "ganho"] },
-      h("b", null, (valorFinal ? n.valor : n.valor_previsto) != null ? ui.brl(valorFinal ? n.valor : n.valor_previsto) : "Sem valor"),
+      // plano 1500c · RC-287: centavos só quando o valor tem (a mesma régua do cartão: «R$ 1.500», não «R$ 1.500,00» num lugar e «R$ 1.500» no outro)
+      h("b", null, (valorFinal ? n.valor : n.valor_previsto) != null ? ui.brl(valorFinal ? n.valor : n.valor_previsto, { centavos: L.temCentavos(valorFinal ? n.valor : n.valor_previsto) }) : "Sem valor"),
       h("small", null, valorFinal ? "valor final" : "previsto"));
 
     const acoes = h("div", { class: "ng-acoes" });
@@ -633,13 +661,17 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
         } catch (err) { k.toastErro(err); }
       } } }, ui.icone("calendario"), remarcar ? `Remarcar ${nomeCompromisso(k)}` : `Marcar ${nomeCompromisso(k)}`));      // plano 1000b · RB-040: «Marcar visita» na oficina
     }
+    atalhosGP = null;
     if (podeEditar && n.status === "aberto") {
-      if (estGanho) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-ganhou", disabled: pendente, on: { click: () => mover(estGanho) } }, ui.icone("check"), k.v.ganhar));
-      if (estPerda) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-perdeu", disabled: pendente, on: { click: () => mover(estPerda) } }, ui.icone("fechar"), k.v.perder));
+      // plano 1500c · RC-281: a dica do botão anuncia o atalho (G/P)
+      if (estGanho) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-ganhou", disabled: pendente, title: `${k.v.ganhar} (G)`, "aria-keyshortcuts": "G", on: { click: () => mover(estGanho) } }, ui.icone("check"), k.v.ganhar));
+      if (estPerda) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-perdeu", disabled: pendente, title: `${k.v.perder} (P)`, "aria-keyshortcuts": "P", on: { click: () => mover(estPerda) } }, ui.icone("fechar"), k.v.perder));
+      if (!pendente) atalhosGP = { ganhar: estGanho ? () => mover(estGanho) : null, perder: estPerda ? () => mover(estPerda) : null };
     }
     if (podeEditar && n.status !== "aberto" && funil) {
-      const primeira = funil.estagios.find(e => e.tipo === "aberto");
-      if (primeira) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-reabrir", disabled: pendente, on: { click: () => mover(primeira) } }, ui.icone("relogio"), "Reabrir"));
+      // plano 1500c · RC-286: reabre na etapa ABERTA em que estava antes de fechar (pela linha do tempo); sem o histórico, a 1ª etapa como antes
+      const primeira = L.etapaParaReabrir(d.tempo, funil.estagios) || funil.estagios.find(e => e.tipo === "aberto");
+      if (primeira) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-reabrir", disabled: pendente, title: `Volta para «${primeira.nome}»`, on: { click: () => mover(primeira) } }, ui.icone("relogio"), "Reabrir"));
     }
     if (podeEditar && n.status === "ganho" && d.contato && !pendente) {
       acoes.appendChild(h("button", { type: "button", class: "bt bt-prim", on: { click: () => iniciarPosVenda(k, n, d.contato, { aoCriar: nv => { avisar({ ...nv, criado: true }); } }) } },
@@ -650,7 +682,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
       acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-nova-tarefa", on: { click: async () => {
         try {
           const T = await k.mod("tarefas");
-          const t = await T.formTarefa(k, null, { negocio_id: n.id, contato_id: d.contato && d.contato.id != null ? d.contato.id : (n.contato_id ?? null) });
+          const t = await T.formTarefa(k, null, { negocio_id: n.id, ...(n.dono_id != null ? { dono_id: n.dono_id } : {}) /* plano 1500c · RC-240 */, contato_id: d.contato && d.contato.id != null ? d.contato.id : (n.contato_id ?? null) });
           if (t) { ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); if (!fechada) carregar(); }
         } catch (err) { k.toastErro(err); }
       } } }, ui.icone("tarefa"), "Tarefa"));
@@ -664,6 +696,8 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
       const dicaTrava = pend && pend.efetivado ? " (gravando a última mudança…)" : " (espere o «Desfazer» terminar)";
       if (podeEditar) itens.push({ rotulo: `Mover para outro funil…${travado ? dicaTrava : ""}`, icone: "funil", desabilitado: travado, fn: () => moverDeFunil(k, n, { aoMover: async card => { avisar(card); await carregar(); } }) });
       if (d.contato) itens.push({ rotulo: `Ver ficha d${k.v.art("contato") === "a" ? "a" : "o"} ${k.v.min("contato")}`, icone: "contato", fn: () => abrirContato(k, d.contato.id, {}) });
+      // plano 1500c · RC-082: «Duplicar» — orçamento parecido para o mesmo cliente sem redigitar (sem histórico, tarefas nem notas)
+      if (podeEditar && k.pode("atendente")) itens.push({ rotulo: "Duplicar", icone: "camadas", fn: () => novoNegocio(k, L.dadosDuplicar(n, d.contato), { aoCriar: c => avisar({ ...c, atualizado: true }) }) });
       // plano 1000b · RB-045: sem linkPublico do shell, o endereço DO NEGÓCIO (aberto pelo cartão, location.href era só #/crm)
       itens.push({ rotulo: "Copiar link", icone: "link", fn: () => ui.copiar(k.ctx.linkPublico ? k.ctx.linkPublico(`#/crm/negocio/${n.id}`) : `${location.origin || ""}${location.pathname || ""}#/crm/negocio/${n.id}`) });
       if (k.pode("admin")) itens.push("-", { rotulo: `Excluir${travado ? dicaTrava : ""}`, icone: "lixeira", perigo: true, desabilitado: travado, fn: async () => {
@@ -708,7 +742,9 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
     const topo = h("div", { class: "ng-topo" },
       nav,
       h("div", { class: "ng-status" }, statusPil,
-        pendente ? ui.pilula("Confirmando…", "neutra", { icone: "relogio", class: "ng-confirmando", title: "Dá para desfazer pelo aviso por alguns segundos" }) : null,
+        // plano 1500c · RC-283: previsão de fechamento vencida (negócio aberto) chama atenção ao abrir, não só ao editar o campo
+        n.status === "aberto" && L.previsaoVencida(n.previsao_fechamento, ui.hojeSP ? ui.hojeSP() : null) ? ui.pilula("Previsão vencida", "aten", { icone: "alerta", class: "ng-prev-vencida", title: `A previsão de fechamento era ${String(n.previsao_fechamento).split("-").reverse().join("/")}` }) : null,
+        pendente ?ui.pilula("Confirmando…", "neutra", { icone: "relogio", class: "ng-confirmando", title: "Dá para desfazer pelo aviso por alguns segundos" }) : null,
         faixa ? ui.pilula(L.textoDiasEtapa(n.estagio_em), faixa.nivel === "ruim" ? "ruim" : faixa.nivel === "aten" ? "aten" : "neutra", { icone: "relogio", title: faixa.texto, class: "ng-tempo" }) : null,
         orig ? ui.pilula(null, orig.chave, { variante: "origem", plataforma: orig.plataforma, class: "ng-origem" }) : null,
         funil && funil.conta_no_ads ? ui.pilula("Conta nos anúncios", "neutra", { title: "Este funil entra nos números de Anúncios" }) : null,
@@ -788,14 +824,23 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
       dl.append(...linhaEd(k, { rotulo: "Responsável", desabilitado: !podeEditar,
         controle: sel([{ valor: "", rotulo: "Sem responsável" }, ...k.base.usuarios.map(u => ({ valor: u.id, rotulo: u.nome }))], n.dono_id),
         ler: c => c.value || null, salvar: v => salvar({ dono_id: v }) }));
-      dl.append(...linhaEd(k, { rotulo: "Valor previsto", desabilitado: !podeEditar,
-        controle: h("input", { type: "text", inputmode: "decimal", value: n.valor_previsto != null ? Number(n.valor_previsto).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "", placeholder: "R$ 0,00" }),
+      // plano 1500c · RC-268: «R$» visível dentro do campo (os dois valores), como o ui.campo tipo moeda
+      const comMoeda = blocos => {
+        for (const b of blocos) {
+          const dd = b.querySelector && b.querySelector("dd");
+          const inp = dd && dd.querySelector("input");
+          if (inp) { dd.insertBefore(h("span", { class: "ng-moeda", "aria-hidden": "true" }, "R$"), inp); dd.classList.add("ng-dd-moeda"); }
+        }
+        return blocos;
+      };
+      dl.append(...comMoeda(linhaEd(k, { rotulo: "Valor previsto", desabilitado: !podeEditar,
+        controle: h("input", { type: "text", inputmode: "decimal", value: n.valor_previsto != null ? Number(n.valor_previsto).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "", placeholder: "0,00" }),
         ler: c => k.L.lerNumero(c.value), validar: c => k.L.dinheiroInvalido(c.value) ? "Valor inválido. Use só números, por exemplo 1.500,00." : null,
-        salvar: v => salvar({ valor_previsto: v }) }));
-      if (n.status === "ganho") dl.append(...linhaEd(k, { rotulo: "Valor final", desabilitado: !podeEditar || pendente,
-        controle: h("input", { type: "text", inputmode: "decimal", value: n.valor != null ? Number(n.valor).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "" }),
+        salvar: v => salvar({ valor_previsto: v }) })));
+      if (n.status === "ganho") dl.append(...comMoeda(linhaEd(k, { rotulo: "Valor final", desabilitado: !podeEditar || pendente,
+        controle: h("input", { type: "text", inputmode: "decimal", value: n.valor != null ? Number(n.valor).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "", placeholder: "0,00" }),
         ler: c => k.L.lerNumero(c.value), validar: c => k.L.dinheiroInvalido(c.value) ? "Valor inválido. Use só números, por exemplo 1.500,00." : null,
-        salvar: v => salvar({ valor: v }) }));
+        salvar: v => salvar({ valor: v }) })));
       const servicos = Object.keys(k.base.ticket || {});
       const idLista = `srv-${n.id}`;
       const inServ = h("input", { type: "text", value: n.servico || "", list: servicos.length ? idLista : null, maxlength: 120, placeholder: `Ex.: ${servicos[0] || k.v.servico}` });
@@ -814,9 +859,18 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
       dl.append(...linhaEd(k, { rotulo: `Data e hora da ${nomeCompromisso(k)}`, desabilitado: !podeEditar, largo: true,
         controle: h("input", { type: "datetime-local", value: k.L.paraDataHoraLocal(n.consulta_em) }), aviso: avisoPassou,
         ler: c => c.value || null, salvar: v => salvar({ consulta_em: v }) }));
-      dl.append(...linhaEd(k, { rotulo: "Previsão de fechamento", desabilitado: !podeEditar,
-        controle: h("input", { type: "date", value: n.previsao_fechamento || "" }), aviso: c => (L.dataPassou(c.value) ? L.TEXTO_DATA_PASSOU : null),
-        ler: c => c.value || null, salvar: v => salvar({ previsao_fechamento: v }) }));
+      const inPrevG = h("input", { type: "date", value: n.previsao_fechamento || "" });
+      const blocoPrev = linhaEd(k, { rotulo: "Previsão de fechamento", desabilitado: !podeEditar,
+        controle: inPrevG, aviso: c => (L.dataPassou(c.value) ? L.TEXTO_DATA_PASSOU : null),
+        ler: c => c.value || null, salvar: v => salvar({ previsao_fechamento: v }) });
+      // plano 1500c · RC-282: atalhos (Em 15 dias · Fim do mês · Fim do próximo mês) — grava pelo mesmo caminho do campo (evento change)
+      if (podeEditar) {
+        const ddPrev = blocoPrev[0].querySelector("dd");
+        if (ddPrev) ddPrev.appendChild(h("div", { class: "tf-atalhos ng-prev-atalhos", role: "group", "aria-label": "Atalhos da previsão" },
+          L.atalhosPrevisao(ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10)).map(a => h("button", { type: "button", class: "bt bt-fant bt-p tf-atalho", dataset: { valor: a.valor },
+            on: { click: () => { inPrevG.value = a.valor; if (typeof inPrevG.dispatchEvent === "function") inPrevG.dispatchEvent(new Event("change")); } } }, a.rotulo))));
+      }
+      dl.append(...blocoPrev);
       // plano 1000 (CR-046): origem nula (lead antigo do webhook) não pode aparecer como «Anúncio» (a 1ª opção) — e não grava nada até escolherem
       dl.append(...linhaEd(k, { rotulo: "Origem", desabilitado: !podeEditar || !!n.plataforma,
         controle: sel([...(n.origem ? [] : [{ valor: "", rotulo: "— não informada —" }]), ...k.L.origensManuais(n.origem).map(([valor, rotulo]) => ({ valor, rotulo }))], n.origem),
@@ -839,7 +893,8 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
         const antes = (n.etiquetas || []).slice();
         const nomeDe = id => (k.etiqueta(id) || {}).nome || "etiqueta";
         const mais = ids.filter(i => !antes.includes(i)), menos = antes.filter(i => !ids.includes(i));
-        const texto = mais.length ? `Etiqueta «${nomeDe(mais[0])}» adicionada` : menos.length ? `Etiqueta «${nomeDe(menos[0])}» removida` : "Etiquetas atualizadas";
+        // plano 1500c · RC-093: várias de uma vez → «3 etiquetas adicionadas: A, B e C» / «1 adicionada, 1 removida»
+        const texto = (L.textoEtiquetasMudaram && L.textoEtiquetasMudaram(mais.map(nomeDe), menos.map(nomeDe))) || "Etiquetas atualizadas";
         try { await salvar({ etiquetas: ids }); }
         catch (e) { k.toastErro(e); montarEtq(antes); return; }
         ui.acaoComDesfazer({ texto, reverter: async () => {
@@ -898,13 +953,18 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
       if ((d.outros || []).length || (d.conversas || []).length) {
         const blk = h("section", { class: "ng-bloco", "aria-label": "Histórico do contato" }, h("div", { class: "ng-bloco-cab" }, h("h3", null, `Mais d${k.v.art("contato") === "a" ? "a" : "o"} ${k.v.min("contato")}`)));
         const lst = h("div", { class: "ng-outros" });
+        // plano 1500c · RC-100: «Última mensagem há 5 dias» — o dado para decidir o próximo passo
+        const ultMsg = L.ultimaMensagemEm ? L.ultimaMensagemEm(d.conversas) : null;
+        if (ultMsg) blk.appendChild(h("p", { class: "ng-ult-msg sub" }, ui.icone("chat"), ` Última mensagem ${ui.relativo(ultMsg)}`));
         for (const o of d.outros || []) {
           const e = k.estagio(o.estagio_id);
           lst.appendChild(h("button", { type: "button", class: "ng-mini", style: e && k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null,
             // plano 1000b · RB-061: troca o negócio NA MESMA gaveta (como o ‹ ›) e entra em «Recentes» — antes fechava e reabria sem ‹ › nem Recentes
             on: { click: () => { trocarPara(o.id, k.L.tituloCard(o)); } } },
             h("i", { "aria-hidden": "true" }), h("span", null, `${k.L.tituloCard(o)} · ${e ? e.nome : ""}`),
-            h("b", null, ui.brl(o.status === "ganho" ? o.valor : o.valor_previsto))));
+            // plano 1500c · RC-094: sem valor → «Sem valor» (antes: ui.brl(null) = «R$ 0»), na régua do cartão (valor final ?? previsto)
+            (o.status === "ganho" ? (o.valor ?? o.valor_previsto) : o.valor_previsto) != null
+              ? h("b", null, ui.brl(o.status === "ganho" ? (o.valor ?? o.valor_previsto) : o.valor_previsto)) : h("span", { class: "sem" }, "Sem valor")));
         }
         // plano 1000b · RB-051: sem o módulo Conversas o protocolo é só texto (o link levava a uma tela que a conta não tem)
         const temConversas = !!(k.ctx && typeof k.ctx.temModulo === "function" && k.ctx.temModulo("conversas"));
@@ -986,8 +1046,9 @@ export async function iniciarPosVenda(k, n, contato, { aoCriar } = {}) {
   // plano 1000b · RB-050: sem o jargão «fora do Ads»
   if (!funis.length) { ui.toast("Crie um funil de pós-venda (que não conta nos anúncios) em Configurações → Funis e etapas.", { tipo: "info" }); return; }
   const doAds = !!(k.funil(n.funil_id) || {}).conta_no_ads;
+  // plano 1500c · RC-095: sem nome, «este paciente»/«este cliente» (termo da vertical), não «este contato» fixo
   const form = h("form", { class: "crm-form", novalidate: true },
-    h("p", { class: "sub" }, `Cria ${k.v.art("negocio") === "a" ? "uma nova" : "um novo"} ${k.v.min("negocio")} para ${contato.nome || "este contato"}. ${k.v.art("negocio") === "a" ? "A" : "O"} atual continua ${k.v.ganhar.toLowerCase()}${doAds ? " no funil de anúncios — a receita do anúncio não muda" : ""}.`),     // plano 1000b · RB-050
+    h("p", { class: "sub" }, `Cria ${k.v.art("negocio") === "a" ? "uma nova" : "um novo"} ${k.v.min("negocio")} para ${contato.nome || `est${k.v.art("contato") === "a" ? "a" : "e"} ${k.v.min("contato")}`}. ${k.v.art("negocio") === "a" ? "A" : "O"} atual continua ${k.v.ganhar.toLowerCase()}${doAds ? " no funil de anúncios — a receita do anúncio não muda" : ""}.`),     // plano 1000b · RB-050
     ui.campo({ rotulo: "Título", nome: "titulo", valor: `Pós-venda — ${contato.nome || k.L.tituloCard(n)}`.slice(0, 120), max: 120 }));
   // plano 1000 (CR-220): a etapa em que nasce (as abertas do funil escolhido; antes era sempre a 1ª) e (CR-221) o serviço e o responsável do negócio
   // ganho já preenchidos (dá para trocar) — antes o pós-venda vinha só com o título
@@ -1163,7 +1224,10 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
         if (alvo && q) alvo.value = q;
         (alvo || zonaContato.querySelector("input")).focus();
       } } }, ui.icone("mais"), `Cadastrar ${k.v.min("contato")} novo`));
-    setTimeout(() => busca.focus(), 60);
+    // plano 1500c · RC-096: no toque o teclado cobriria metade da gaveta antes de a pessoa ver as opções — foco automático só com mouse
+    let ponteiroFino = true;
+    try { ponteiroFino = !(globalThis.matchMedia && globalThis.matchMedia("(pointer: coarse)").matches); } catch { /* ok */ }
+    if (ponteiroFino) setTimeout(() => busca.focus(), 60);
   }
   desenharContato();
 
@@ -1203,7 +1267,7 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
   dono.querySelector("select").name = "dono_id";
   let etiquetas = [];
   // formulário que só GUARDA o valor (grava no «Criar»): emite na hora — com a pausa de 300 ms a etiqueta marcada logo antes do «Criar» ficava fora
-  const etq = ui.seletorEtiquetas({ todas: k.base.etiquetas, marcadas: [], podeCriar: nome => k.criarEtiqueta(nome), aoMudar: ids => { etiquetas = ids; }, debounceMs: 0 });
+  const etq = ui.seletorEtiquetas({ todas: k.base.etiquetas, marcadas: Array.isArray(dados.etiquetas) ? dados.etiquetas.slice() : [], podeCriar: nome => k.criarEtiqueta(nome), aoMudar: ids => { etiquetas = ids; }, debounceMs: 0 });
   const erro = h("p", { class: "modal-erro", role: "alert", hidden: true });
   // M25: uma chave por intenção. Erro ambíguo (prazo estourado depois de o servidor aplicar) repete com a MESMA chave; mudou o conteúdo, chave nova.
   const status = h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true });
@@ -1219,10 +1283,22 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
     avisoConsulta.hidden = !passou;
   });
 
+  // plano 1500c · RC-097: previsão de fechamento já no cadastro (opcional), com atalhos — depois quase ninguém volta para pôr
+  const inPrev = h("input", { type: "date", name: "previsao_fechamento", class: "inp", "aria-label": "Previsão de fechamento (opcional)" });
+  const hojeSPn = ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10);
+  const campoPrev = h("div", { class: "campo ng-prev-novo" }, h("span", { class: "campo-rot" }, "Previsão de fechamento (opcional)"), inPrev,
+    h("div", { class: "tf-atalhos", role: "group", "aria-label": "Atalhos da previsão" }, L.atalhosPrevisao(hojeSPn).map(a =>
+      h("button", { type: "button", class: "bt bt-fant bt-p tf-atalho", dataset: { valor: a.valor }, on: { click: () => { inPrev.value = a.valor; ui.anunciar && ui.anunciar(`Previsão: ${a.rotulo}.`); } } }, a.rotulo))));
+  // plano 1500c · RC-082: «Duplicar» chega com o título, o serviço, o valor e as etiquetas do original
+  if (dados.servico) inServico.querySelector("input").value = String(dados.servico);
+  if (dados.valor_previsto != null && Number.isFinite(Number(dados.valor_previsto))) inValor.querySelector("input").value = Number(dados.valor_previsto).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
+  if (Array.isArray(dados.etiquetas)) etiquetas = dados.etiquetas.slice();
+  const inTitulo = ui.campo({ rotulo: "Título (opcional)", nome: "titulo", max: 120, placeholder: `Ex.: ${servicos[0] || L.exemploTituloNegocio(k.v && k.v.vertical)}` });
+  if (dados.titulo) { const it = inTitulo.querySelector("input"); if (it) it.value = String(dados.titulo).slice(0, 120); }
   form.append(zonaContato,
     // plano 1000b · RB-042: sem serviços no ticket o exemplo é da vertical (oficina não vê «Implante superior»)
-    ui.campo({ rotulo: "Título (opcional)", nome: "titulo", max: 120, placeholder: `Ex.: ${servicos[0] || L.exemploTituloNegocio(k.v && k.v.vertical)}` }),
-    h("div", { class: "crm-form-2" }, selFunil, selEtapa, inServico, inValor, campoConsulta, dono),
+    inTitulo,
+    h("div", { class: "crm-form-2" }, selFunil, selEtapa, inServico, inValor, campoConsulta, dono, campoPrev),
     h("div", { class: "pilha-p" }, h("span", { class: "campo-rot" }, "Etiquetas"), etq),
     status, erro,
     h("div", { class: "linha linha-fim" },
@@ -1242,11 +1318,13 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
     if (campoValor) d.valor_previsto = k.L.lerNumero(campoValor.value);   // "1.500" = mil e quinhentos
     const p = { funil_id: d.funil_id, estagio_id: d.estagio_id, titulo: d.titulo || null, servico: d.servico || null,
       valor_previsto: d.valor_previsto, consulta_em: d.consulta_em || null, dono_id: d.dono_id || null, etiquetas, origem: "manual" };
+    if (inPrev.value) p.previsao_fechamento = inPrev.value;      // plano 1500c · RC-097
+    if (dados.campos && typeof dados.campos === "object") p.campos = { ...dados.campos };      // plano 1500c · RC-082: campos do original
     if (dados.conversa_id) p.conversa_id = dados.conversa_id;
     if (contato) p.contato_id = contato.id;
     else if (modoNovo) {
       if (!d.c_nome && !d.c_telefone) { ui.marcarErro(form, "c_nome", "Informe o nome ou o telefone."); return; }
-      if (d.c_telefone && !L.normalizarTelefone(d.c_telefone)) { ui.marcarErro(form, "c_telefone", "Telefone inválido. Use DDD + número."); return; }
+      if (d.c_telefone && !L.normalizarTelefone(d.c_telefone)) { ui.marcarErro(form, "c_telefone", L.textoTelefoneInvalido(d.c_telefone)); return; }      // plano 1500c · RC-098
       // plano 1000b · RB-053: e-mail conferido aqui, no campo (a mesma regra da ficha) — antes o erro voltava genérico do servidor
       if (d.c_email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(d.c_email).trim())) { ui.marcarErro(form, "c_email", "E-mail inválido. Confira, por exemplo: ana@exemplo.com.br."); return; }
       p.contato = { nome: d.c_nome || null, telefone: d.c_telefone || null, email: d.c_email || null };

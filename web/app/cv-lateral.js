@@ -198,7 +198,7 @@ export function criarLateral(A) {
   function caixaNome(ct, nome) {
     const ed = editandoNome && editandoNome.ctId === ct.id ? editandoNome : null;
     if (!ed) {
-      return h("div", { class: "cvt-nome" }, h("h2", null, nome),
+      return h("div", { class: "cvt-nome" }, h("h2", { class: "dado-pessoal" }, nome),   // plano 1500c · CX-001: modo apresentação
         A.podeEscrever ? h("button", { type: "button", class: "bt-icone", "aria-label": "Editar nome", title: "Editar nome", dataset: { foco: "editar-nome" }, on: { click: () => abrirEdicaoNome(ct) } }, ui.icone("editar")) : null);
     }
     const idErro = `cvt-nome-erro-${ct.id}`;
@@ -276,11 +276,8 @@ export function criarLateral(A) {
         h("button", { type: "button", class: "bt bt-prim bt-p", disabled: ed.salvando, dataset: { foco: `${campo}-salvar` }, on: { click: () => salvarCampo(ct) } }, ui.icone("check"), ed.salvando ? "Salvando…" : "Salvar")));
   }
   /** CA-124: o horário de atendimento que vale para a conversa (departamento dela ou o padrão), quando a tela o conhece (admin). */
-  function horarioDe(conv) {
-    const deps = (A.base && A.base.config && A.base.config.departamentos) || [];
-    const d = deps.find(x => x && x.id === conv.departamento_id) || deps.find(x => x && x.padrao);
-    return d && Object.prototype.hasOwnProperty.call(d, "horario") ? d.horario : undefined;
-  }
+  // plano 1500c · CC-002: a regra única da cv-logica — cai em base.departamentos quando a config (só do admin) não vem
+  function horarioDe(conv) { return L.horarioDoDepartamento(A.base, conv && conv.departamento_id); }
 
   function rotuloOrigem(origem, plataforma) {
     const base = ORIGEM[origem] || origem;
@@ -296,7 +293,7 @@ export function criarLateral(A) {
     // pílula de origem da frente A (A8); o anúncio ganha o bloco «Veio do anúncio» em Dados
     if (ct.origem && ct.origem !== "anuncio") selos.appendChild(ui.pilula(rotuloOrigem(ct.origem), ct.origem, { variante: "origem", plataforma: ct.plataforma || undefined, tamanho: "p" }));
     return h("div", { class: "cvt-contato" }, ui.avatar(nome, ct.id), caixaNome(ct, nome),
-      ct.telefone ? h("div", { class: "cvt-tel" }, ui.telBR(ct.telefone)) : null,
+      ct.telefone ? h("div", { class: "cvt-tel dado-pessoal" }, ui.telBR(ct.telefone)) : null,
       selos.childNodes.length ? selos : null,
       h("div", { class: "linha" },
         // plano 1000 · CA-080: o formato internacional (+55…), pronto para o discador e o WhatsApp; o aviso diz qual foi
@@ -335,7 +332,7 @@ export function criarLateral(A) {
     const btEditar = (campo, rotulo) => A.podeEscrever && ct.id ? h("button", { type: "button", class: "bt-icone cvt-campo-ed", "aria-label": `Editar ${rotulo.toLowerCase()}`, title: `Editar ${rotulo.toLowerCase()}`,
       dataset: { foco: `editar-${campo}` }, on: { click: () => abrirEdicaoCampo(ct, campo) } }, ui.icone("editar")) : null;
     if (edCampo && edCampo.campo === "email") add("E-mail", caixaCampo(ct, "email", "E-mail"));
-    else if (ct.email) add("E-mail", h("span", { class: "cvt-email" }, h("a", { href: `mailto:${String(ct.email).trim()}`, class: "link" }, ct.email),
+    else if (ct.email) add("E-mail", h("span", { class: "cvt-email dado-pessoal" }, h("a", { href: `mailto:${String(ct.email).trim()}`, class: "link" }, ct.email),
       h("button", { type: "button", class: "bt-icone cvt-email-copiar", "aria-label": "Copiar e-mail", title: "Copiar e-mail", dataset: { foco: "copiar-email" },
         on: { click: () => ui.copiar(String(ct.email).trim(), { aviso: "E-mail copiado." }) } }, ui.icone("copiar")), btEditar("email", "E-mail")));
     else if (A.podeEscrever && ct.id) add("E-mail", h("button", { type: "button", class: "link cvt-campo-add", dataset: { foco: "editar-email" }, on: { click: () => abrirEdicaoCampo(ct, "email") } }, "Adicionar e-mail"));
@@ -561,20 +558,23 @@ export function criarLateral(A) {
     if (iso) adiarTarefa(t, iso);
   }
 
-  async function novaTarefa(ver) {
+  async function novaTarefa(ver, { titulo: tituloIni = "" } = {}) {   // plano 1500c · CC-071: título vindo da mensagem
     const ct = ver.contato || {};
     const conv = ver.conversa || {};
     // CA-037: «Para quem» — a tarefa pode ficar com outra pessoa da equipe (padrão: quem cria)
     const pessoas = ((A.base && A.base.usuarios) || []).filter(u => u && u.papel !== "leitura" && u.aprovado !== false);
     const eu = A.eu && A.eu.id;
     const f = h("form", { class: "pilha", novalidate: true },
-      ui.campo({ rotulo: "O que fazer", nome: "titulo", obrigatorio: true, max: 160, placeholder: "Ex.: Ligar para confirmar a avaliação" }),
+      ui.campo({ rotulo: "O que fazer", nome: "titulo", obrigatorio: true, max: 160, placeholder: "Ex.: Ligar para confirmar a avaliação", valor: tituloIni || undefined }),
       ui.campo({ rotulo: "Tipo", nome: "tipo", tipo: "select", valor: "tarefa", opcoes: [
         { valor: "tarefa", rotulo: "Tarefa" }, { valor: "ligacao", rotulo: "Ligação" }, { valor: "whatsapp", rotulo: "WhatsApp" },
         { valor: "reuniao", rotulo: "Reunião" }, { valor: "visita", rotulo: "Visita" }, { valor: "email", rotulo: "E-mail" }] }),
       pessoas.length > 1 ? ui.campo({ rotulo: "Para quem", nome: "dono_id", tipo: "select", valor: eu || "",
         opcoes: pessoas.map(u => ({ valor: u.id, rotulo: u.id === eu ? `${u.nome} (você)` : u.nome })) }) : null,
-      ui.campo({ rotulo: "Vence em (horário de Brasília)", nome: "vence_em", tipo: "datahora" }));
+      ui.campo({ rotulo: "Vence em (horário de Brasília)", nome: "vence_em", tipo: "datahora" }),
+      // plano 1500c · CC-080: prazos rápidos (a maioria é «hoje fim do dia» ou «amanhã 9h») preenchem o campo
+      h("div", { class: "linha cvt-prazos", role: "group", "aria-label": "Prazos rápidos" }, L.PRAZOS_RAPIDOS.map(p => h("button", { type: "button", class: "bt bt-fant bt-p cvt-prazo", dataset: { prazo: p.v },
+        on: { click: () => { const inp = f.querySelector('[name="vence_em"]'); if (inp) { inp.value = L.prazoRapido(p.v); try { inp.dispatchEvent(new Event("input", { bubbles: true })); } catch { /* ok */ } } } } }, p.r))));
     let passadoConfirmado = null;   // CB-061
     const r = await ui.modal({ titulo: "Nova tarefa", corpo: f, largura: "p",
       acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Criar tarefa", tipo: "primario", fn: async () => {
@@ -611,7 +611,9 @@ export function criarLateral(A) {
   const resumos = new Map();   // conversa → {texto, em}
   function blocoResumo(ver) {
     const conv = ver.conversa || {};
-    const r = resumos.get(conv.id);
+    // plano 1500c · CC-099: ao reabrir, o resumo já guardado como nota volta para a seção (não paga a IA de novo)
+    const daNota = !resumos.get(conv.id) ? L.resumoDaNota(A.msgs) : null;
+    const r = resumos.get(conv.id) || (daNota ? { texto: daNota.texto, em: daNota.em, guardado: true } : null);
     const saida = h("div", { class: "cvt-resumo", "aria-live": "polite" });
     // CA-004: sem IA configurada a seção diz isso (sem botão que só dá erro); com a cota gasta o botão fica desligado com o motivo
     const ia0 = A.base && A.base.ia;
@@ -630,7 +632,8 @@ export function criarLateral(A) {
           render();
         } catch (e) { A.acoes.tratarErro(e); }
       });
-      saida.append(h("p", null, r.texto), h("small", null, `Gerado ${ui.relativo(r.em)} pela IA — confira antes de usar.`), guardar);
+      // plano 1500c · CC-099: o resumo que veio da nota diz de onde veio (vale também para quem só lê)
+      saida.append(h("p", null, r.texto), h("small", null, daNota && r.guardado ? `Guardado como nota ${ui.relativo(r.em)} — confira antes de usar.` : `Gerado ${ui.relativo(r.em)} pela IA — confira antes de usar.`), guardar);
     }
     else saida.appendChild(h("p", { class: "cvt-vazio" }, semIA ? "A IA ainda não foi configurada para esta empresa." : "Um parágrafo com o que o cliente quer, o que já foi combinado e o próximo passo."));
     // plano 1000b · CB-062: cada resumo gasta 1 da cota — o botão diz; com menos de 10% da cota sobrando, «Refazer» pergunta antes
@@ -667,6 +670,21 @@ export function criarLateral(A) {
   /* ---------------- desenho por seção (D1) */
   const sig = v => JSON.stringify(v);
   /** As seções da conversa, cada uma com a assinatura do que ela mostra: só a que mudou é refeita. */
+  /** plano 1500c · CC-050: «Consultas» — as próximas (até 3) e a última, com «Lembrar» (texto no campo, sem enviar) e «Remarcar» (agenda). */
+  function blocoConsultas(ver) {
+    const ct = ver.contato || {};
+    const { proximas, ultima } = L.consultasDoContato(ct.consultas, Date.now());
+    const PRES = { compareceu: "compareceu", faltou: "faltou", confirmada: "confirmada", desmarcou: "desmarcou" };
+    const linha = (c, futura) => h("div", { class: "cvt-consulta", dataset: { futura: futura ? "1" : "0" } },
+      h("div", { class: "cvt-consulta-txt" }, h("b", null, ui.dataHoraBR(c.inicio)), c.servico ? h("span", null, ` · ${c.servico}`) : null,
+        c.presenca && PRES[c.presenca] ? h("small", { class: "fraco" }, ` · ${PRES[c.presenca]}`) : null),
+      futura && A.podeEscrever ? h("div", { class: "linha cvt-consulta-acoes" },
+        h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { const t = L.textoLembrarConsulta(c, A.acoes.nomeContato(ct), (A.ctx.vocab && A.ctx.vocab.compromisso) || "consulta"); /* plano 1500c · CX-014 */ if (typeof A.acoes.colocarTexto === "function") A.acoes.colocarTexto(t); else ui.copiar(t, { aviso: "Lembrete copiado." }); } } }, ui.icone("sino"), "Lembrar"),
+        typeof A.acoes.agendar === "function" ? h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.agendar(c.negocio_id ? { id: c.negocio_id } : null) } }, ui.icone("calendario"), "Remarcar") : null) : null);
+    const itens = [...proximas.map(c => linha(c, true)), ultima ? h("p", { class: "rotulo cvt-consulta-ult" }, "Última") : null, ultima ? linha(ultima, false) : null].filter(Boolean);
+    return secao({ id: "consultas", titulo: "Consultas", contador: proximas.length || null },
+      itens.length ? h("div", null, itens) : h("p", { class: "cvt-vazio" }, "Nenhuma consulta marcada."));
+  }
   function definicoes(ver) {
     const ct = ver.contato || {}, conv = ver.conversa || {};
     const rastreio = rastreioDe(ver);
@@ -681,6 +699,9 @@ export function criarLateral(A) {
         conv.primeira_resposta_em, conv.aberta_em, !!rotulos, !!crmBase /* CB-064: relida depois de falhar */, rastreio, A.podeEscrever, conv.departamento_id, horarioDe(conv) === undefined ? "-" : horarioDe(conv),
         editandoCampo && editandoCampo.ctId === ct.id ? [editandoCampo.campo, editandoCampo.salvando, editandoCampo.erro] : 0]),
         criar: () => blocoDados(ver, rastreio) },
+      // plano 1500c · CC-050: consultas do contato — só quando o nx_cv_ver mandar contato.consultas (servidor novo); sem o campo, nada muda
+      ...(Array.isArray(ct.consultas) ? [{ chave: "consultas", sig: sig([ct.consultas.map(c => [c.negocio_id, c.inicio, c.servico, c.presenca]), A.podeEscrever, temCrm]),
+        criar: () => blocoConsultas(ver) }] : []),
       { chave: "etiquetas", sig: sig([conv.id, A.podeEscrever, ((A.base && A.base.etiquetas) || []).map(e => [e.id, e.nome, e.cor]), A.podeEscrever ? 0 : conv.etiquetas]),
         criar: () => blocoEtiquetas(ver), atualizar: el => atualizarEtiquetas(el, ver) },
       { chave: "negocios", sig: sig([(ver.negocios || []).map(n => [n.id, n.titulo, n.valor_previsto, n.estagio_nome, n.estagio_cor, n.origem, n.anuncio, n.tarefa && n.tarefa.atrasada,
@@ -692,7 +713,7 @@ export function criarLateral(A) {
         criar: () => blocoTarefas(ver) },
       { chave: "atendimentos", sig: sig([(ver.atendimentos || []).map(a => [a.id, a.protocolo, a.status, a.aberta_em, a.atribuida_nome]), A.selId]),
         criar: () => blocoAtendimentos(ver) },
-      { chave: "resumo-ia", sig: sig([conv.id, (resumos.get(conv.id) || {}).em || null, !!(resumos.get(conv.id) || {}).guardado, A.base && A.base.ia ? [A.base.ia.ligada, A.base.ia.cota] : null, A.podeEscrever]), criar: () => blocoResumo(ver) },
+      { chave: "resumo-ia", sig: sig([conv.id, (resumos.get(conv.id) || {}).em || null, (L.resumoDaNota(A.msgs) || {}).id || null /* CC-099 */, !!(resumos.get(conv.id) || {}).guardado, A.base && A.base.ia ? [A.base.ia.ligada, A.base.ia.cota] : null, A.podeEscrever]), criar: () => blocoResumo(ver) },
     ];
   }
   /** A pessoa está mexendo nesta seção: nome aberto, campo de texto com o foco ou etiqueta a caminho do servidor. */
@@ -768,5 +789,7 @@ export function criarLateral(A) {
     for (const [k, x] of secoes) if (!vivas.has(k)) { x.el.remove(); secoes.delete(k); }
   }
 
-  return { montarEm, render, get editandoNome() { return !!editandoNome; } };
+  return { montarEm, render, get editandoNome() { return !!editandoNome; },
+    /** plano 1500c · CC-071: «Criar tarefa» da bolha abre a nova tarefa com o texto da mensagem. */
+    novaTarefa: (o = {}) => (A.ver ? novaTarefa(A.ver, o) : null) };
 }

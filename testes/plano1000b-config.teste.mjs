@@ -348,7 +348,8 @@ test("UB-083 + UB-084 + UB-085 + UB-086 + UB-087 + UB-196 + UB-197 + UB-198 Perf
     const [formDados, formSenha] = raiz.querySelectorAll(".cfg-sec form");
     // UB-196 / UB-197
     assert.match(textoDe(formDados.querySelector("[data-campo=telefone]")), /Para avisos do sistema a você; clientes não veem\./);
-    assert.match(textoDe(formDados.querySelector("[data-campo=email_ro]")), /Para trocar o e-mail, peça a um administrador\./);
+    // plano 1500c: UCB-111 — nenhum administrador tem a ação na tela; a ajuda manda falar com o suporte
+    assert.match(textoDe(formDados.querySelector("[data-campo=email_ro]")), /Para trocar o e-mail, fale com o suporte\./);
     // UB-083: salvou; a releitura falhou → só o toast de sucesso
     formDados.dispatchEvent(new d.Evento("submit")); await tique(8);
     assert.deepEqual(t.toasts.map(x => x[1].tipo), ["ok"]);

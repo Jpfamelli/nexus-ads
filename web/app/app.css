@@ -30,7 +30,7 @@
   --c-borda: #D8D6D1;
   --c-borda-2: #C6C5C1;
   --c-prim: #B0761F;
-  --c-prim-hi: #9B681B;
+  --c-prim-hi: #B9863A;   /* plano 1500c · UCC-071: o hover afasta-se da cor do texto (igual ao tema.js) */
   --c-prim-txt: #0B1B2B;
   --c-prim-luz: #8D5F19;
   --c-prim-suave: #E8DCC9;
@@ -1055,7 +1055,7 @@ body.palco-vivo .palco .brilho-b { animation: orbitaBrilhoB 39s cubic-bezier(.45
 .busca-item b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .busca-item small { color: var(--c-texto-3); font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .busca-item[aria-selected="true"], .busca-item:hover { background: var(--c-hover); }
-.flut.notifs { width: min(390px, calc(100vw - 16px)); max-width: calc(100vw - 16px); }
+.flut.notifs { width: min(380px, calc(100vw - 32px)); max-width: calc(100vw - 32px); }   /* plano 1500c · UCC-118: 16 px de respiro de cada lado */
 .notif-item { display: flex; gap: .7rem; width: 100%; padding: .6rem .5rem; border-radius: 12px; text-align: left; }
 .notif-item:hover { background: var(--c-hover); }
 .notif-item i { width: 8px; height: 8px; margin-top: .45rem; border-radius: 50%; background: var(--c-prim); flex: none; }
@@ -1223,6 +1223,7 @@ html.aba-oculta .palco i, html.aba-oculta .palco::before, html.aba-oculta .palco
 }
 @media (prefers-reduced-motion: reduce) {
   body .palco i, body .palco::before, body .palco::after { animation: none; transform: none; will-change: auto; }
+  .palco::before { filter: none; display: none; }   /* plano 1500c · UCC-114: movimento reduzido também dispensa o blur(74px) */
 }
 
 @media (forced-colors: active) {
@@ -1432,12 +1433,17 @@ button, a, [role="button"], [role="tab"], [role="option"], [role="menuitem"], in
 }
 @media (pointer: coarse) {
   .toast-x, .toast-acao { min-width: var(--alvo-toque); min-height: var(--alvo-toque); }
+  .topo-busca, .empresa-bt, .topo-produtos { min-height: var(--alvo-toque); }   /* plano 1500c · UCC-107/UCC-108/UCC-109: 44 px no toque */
   .campo-check label, .chip-check, .chip-check span { min-height: var(--alvo-toque); }
+  .flut-busca, .cor-hex, .dom-add input, .papel-sel { min-height: var(--alvo-toque) !important; }   /* plano 1500c · UCC-110/UCC-111/UCC-112/UCC-113: 44 px no toque */
+  .palco::before { filter: none; display: none; }   /* plano 1500c · UCC-114: sem a aurora com blur(74px) no celular (os brilhos radiais continuam) */
 }
 @media (forced-colors: active) {
   .menu-item:focus-visible, .empresa-op:focus-visible {
     outline-color: Highlight; outline-style: solid; outline-width: var(--foco-largura);
   }
+  /* plano 1500c · UCC-073: alto contraste — pílulas, chips e etiquetas perdem o fundo colorido; a borda do sistema mantém o contorno */
+  .pilula, .chip, .chip-check span, .etiq, .badge, .pilula-teste { border: 1px solid ButtonText; }
 }
 
 /* ============================================================
@@ -1782,3 +1788,31 @@ html.sem-internet [data-sem-rede] { opacity: .6; cursor: not-allowed; }
 .sobre-app { margin: 0; padding: var(--esp-3); border-radius: var(--r-p); background: var(--c-poco); border: 1px solid var(--c-borda); font-size: var(--fs-13); white-space: pre-wrap; overflow-wrap: anywhere; }
 /* pedido de Relatórios: a conversão com explicação ganha o sublinhado pontilhado de «tem dica» */
 .g-fconv-dica { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+
+/* plano 1500c · UC-025: empresa só para consulta (teste vencido/suspensa): os botões de escrita marcados ficam visivelmente desligados */
+html.somente-consulta [data-so-consulta] { opacity: .55; cursor: not-allowed; }
+/* plano 1500c · UCB-054: faixa da demonstração */
+.faixa-demo { background: var(--c-info-suave, var(--c-aten-suave)); }
+.faixa-demo .ic { color: var(--c-info, var(--c-aten)); }
+/* plano 1500c · UCB-120/UCB-053: validade curta do convite e o caminho de quem ainda não usa */
+.entrar-validade-aten { color: var(--c-aten); font-weight: 600; }
+.entrar-prospect { margin: 0; text-align: center; font-size: var(--fs-14); }
+.entrar-prospect .link { display: inline-flex; align-items: center; min-height: var(--alvo-toque); }
+/* plano 1500c · UCC-038: Central de ajuda */
+.ajuda { max-width: 46rem; }
+.ajuda-busca { width: 100%; min-height: var(--alvo-toque); }
+.ajuda-itens { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--esp-1); }
+.ajuda-itens a { display: flex; align-items: center; min-height: var(--alvo-toque); padding: 0 var(--esp-3); border-radius: var(--r-p); background: var(--c-poco); border: 1px solid var(--c-borda); color: inherit; text-decoration: none; overflow-wrap: anywhere; }
+.ajuda-itens a:hover { border-color: var(--c-prim); }
+.ajuda-itens a:focus-visible { outline: 2px solid var(--c-foco, var(--c-prim)); outline-offset: 2px; }
+.ajuda-passos { margin: 0; padding-left: 1.3rem; display: grid; gap: var(--esp-2); line-height: 1.5; }
+.ajuda-rodape { font-size: var(--fs-14); }
+/* plano 1500c · UCC-080: «(3×)» do aviso repetido */
+.toast-vezes { font-variant-numeric: tabular-nums; opacity: .8; }
+/* plano 1500c · UCC-091/UCC-094/UCC-095: faixa de fim de teste, selo «Não incluso» e a lista do que o módulo resolve */
+.faixa-aviso { background: var(--c-aten-suave); } .faixa-aviso .ic { color: var(--c-aten); }
+.produto-op-selo { flex: none; padding: .1rem .5rem; border-radius: 999px; border: 1px solid var(--c-borda-2); color: var(--c-texto-3); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; }
+.produto-op-fora .produto-op-icone { opacity: .6; }
+.beneficios { list-style: none; margin: var(--esp-3) auto 0; padding: 0; display: grid; gap: var(--esp-2); max-width: 30rem; text-align: left; }
+.beneficios li { display: flex; gap: .5rem; align-items: flex-start; }
+.beneficios .ic { flex: none; width: 18px; height: 18px; color: var(--c-ok); margin-top: .15rem; }

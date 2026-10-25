@@ -32,9 +32,11 @@
    · Bloco PURO (entre as marcas "PURO") é testado no Node: statusEnvio,
      contraste da marca, estado da integração, simulador, linguagem leiga.
    ============================================================ */
+// plano 1500c · AC-225: DIAS_MIN_PROJECAO (o «cedo para projetar» do Órbita e do WhatsApp) vem do núcleo
 import {
   datasetDeLinhas, montar, hojeSP, meioDia, isoDe, fin, brl, brl0, int, pc, dec, esc, waHtml, fmtN,
   razao, variacao, plural, pluralDec, nomePlat, CFG_PADRAO, cfgCom, MESES, MES3, SEMANA,
+  DIAS_MIN_PROJECAO,
 } from "./nucleo.js";
 import { gerarDemo } from "./demo.js";
 import * as api from "./dados.js";
@@ -456,7 +458,9 @@ function erroCredencial(campo, valor) {
 function valorMeta(texto) {
   const s = String(texto ?? "").trim();
   if (!s) return { ok: true, valor: null };
-  const v = parseFloat(s.replace(",", "."));
+  // plano 1500c · AC-275: «1.500» e «1.234,50» (milhar com ponto, do jeito brasileiro) não viram 1,5 — e «R$ » na frente é aceito
+  const t = s.replace(/^R\$\s*/i, "");
+  const v = parseFloat(/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(t) ? t.replace(/\./g, "").replace(",", ".") : t.replace(",", "."));
   if (!Number.isFinite(v)) return { ok: false, erro: "use só números" };
   if (v < 0) return { ok: false, erro: "não pode ser negativo" };
   return { ok: true, valor: v };
@@ -490,6 +494,78 @@ function lerFiltros(bruto) {
   if (x.sort && COLS_ORDEM.includes(x.sort.key) && (x.sort.dir === 1 || x.sort.dir === -1)) o.sort = { key: x.sort.key, dir: x.sort.dir };
   return o;
 }
+/** plano 1500c · AC-224: a cor do custo contra a meta QUE VALE para a campanha (própria, do Google ou do Meta) — antes a meta do Meta
+    pintava o Google de vermelho. Sem meta: neutro. */
+function nivelCpa(cpa, meta) {
+  if (!(meta > 0)) return "dot-neutro";
+  if (!Number.isFinite(cpa)) return "dot-bad";
+  return cpa <= meta ? "dot-ok" : cpa <= meta * 1.35 ? "dot-warn" : "dot-bad";
+}
+/** plano 1500c · AC-229: «campanha mais eficiente» com amostra que se sustenta — 3 fechamentos, ou 10 conversas com algum fechamento. */
+const amostraEficiente = k => !!k && k.fecharam > 0 && (k.fecharam >= 3 || k.conversas >= 10);
+/** plano 1500c · AC-227/AC-228: Meta × Google — só compara custo quando as DUAS plataformas têm custo por contato (antes «E ainda sai
+    mais barata» com o Google sem conversão e «R$ —»); a palavra é «contato» (conversão do Google não é conversa). */
+function fraseCustoPlat(ca, cb) {
+  if (!Number.isFinite(ca) || !Number.isFinite(cb)) return "";
+  return ca > cb ? `Cada contato custa mais ali (${brl(ca)} × ${brl(cb)}), mas chega mais decidido.`
+    : `E cada contato ainda sai mais barato (${brl(ca)} × ${brl(cb)}).`;
+}
+/** plano 1500c · AC-235: CTR-limite em linguagem de consultório sem arredondar 0,9% para «1 em cada 100» — fora do inteiro, por 1.000. */
+const ctrLeigo = lim => (lim >= 1 && Number.isInteger(lim) ? `menos de ${lim} em cada 100` : `menos de ${Math.max(1, Math.round(lim * 10))} em cada 1.000`);
+/** plano 1500c · AC-236: frequência-limite com a casa decimal quando houver (2,5 não vira «3»). */
+const vezesLeigo = lim => (Number.isInteger(lim) ? String(lim) : dec(lim, 1));
+/** plano 1500c · AC-225/AC-226/AC-271: a frase do ritmo do mês. Orçamento já gasto é um caso próprio (nada de «Segurar R$ X por dia»); nos
+    primeiros dias (cedo) não há projeção. m = M.ritmoMes(); orc > 0; sug = diarioSugerido(). → {msg, aten} */
+function msgRitmo(m, orc, sug) {
+  const txtSug = sug != null && sug > 0 ? ` Orçamento diário sugerido: ${brl(sug)} (somando as plataformas).` : "";
+  if (m.restam === 0) return { msg: `Mês fechado em ${brl0(m.gasto)}.`, aten: false };
+  if (m.gasto >= orc) return { msg: `O orçamento do mês já foi todo usado (${brl0(m.gasto)} de ${brl0(orc)}) e ${m.restam === 1 ? "falta 1 dia" : `faltam ${m.restam} dias`}: pausar as campanhas ou aumentar a verba do mês.`, aten: true };
+  if (m.cedo) return { msg: `Cedo para projetar (dia ${m.pass} do mês): até ontem foram investidos ${brl0(m.gasto)} de ${brl0(orc)}.${txtSug}`, aten: false };
+  const acima = m.proj > orc * 1.02, noLimite = !acima && m.proj >= orc * .98;
+  // plano 1000 (AD-198): frase neutra — o painel não sabe se o aviso do radar saiu
+  if (acima) return { msg: `No ritmo atual o mês fecha ${brl0(m.proj - orc)} acima do orçamento. Segurar ${brl((m.proj - orc) / m.restam)} por dia fecha dentro.${txtSug}`, aten: true };
+  if (noLimite) return { msg: `No limite: o mês deve fechar em ${brl0(m.proj)}, praticamente no orçamento.`, aten: false };
+  return { msg: `Dentro do orçamento: o mês deve fechar em ${brl0(m.proj)} (sobram ${brl0(orc - m.proj)}).`, aten: false };
+}
+/** plano 1500c · AC-231: «De X para Y por mês» só entre meses FECHADOS — o mês corrente parcial não é comparado com um mês cheio.
+    dados = [{fecharam, parcial}] em ordem → {de, para, parcial} (de null = sem 2 meses fechados). */
+function comparaMeses(dados) {
+  const cheios = dados.filter(d => !d.parcial), ult = dados[dados.length - 1];
+  return { de: cheios.length >= 2 ? cheios[0].fecharam : null, para: cheios.length ? cheios[cheios.length - 1].fecharam : null, parcial: ult && ult.parcial ? ult.fecharam : null };
+}
+/** plano 1500c · AC-239: linhas de valor por serviço com valor mas sem nome (antes descartadas em silêncio ao salvar). */
+const ticketsSemNome = linhas => (linhas || []).filter(([s, v]) => !String(s || "").trim() && String(v ?? "").trim() !== "").length;
+/** plano 1500c · AC-248: CSV (separador «;», decimal com vírgula, BOM para o Excel em português) — aspas quando precisa. */
+function csvDe(linhas) {
+  const cel = v => {
+    const s = typeof v === "number" ? (Number.isFinite(v) ? String(Math.round(v * 100) / 100).replace(".", ",") : "") : String(v ?? "");
+    return s.includes('"') || s.includes(";") || /[\n\r]/.test(s) ? '"' + s.split('"').join('""') + '"' : s;
+  };
+  return String.fromCharCode(0xFEFF) + linhas.map(l => l.map(cel).join(";")).join("\r\n");
+}
+/** plano 1500c · AC-245/AC-273: modo apresentação — o nome do paciente vira iniciais em toda lista (não só no celular do herói). */
+const nomeExibido = (nome, ocultar) => (ocultar ? String(nome || "").trim().split(/\s+/).filter(Boolean).slice(0, 3).map(p => `${p.charAt(0).toUpperCase()}.`).join(" ") || "—" : String(nome || ""));
+/** plano 1500c · AC-241: status técnico da integração («erro — invalid_grant (…)») em português com o que fazer — cópia do
+    ads-config.explicarStatusIntegracao do Órbita (AB-106); o texto cru fica no title. → {texto, tecnico} */
+function explicarStatusInteg(status) {
+  const s = String(status || "").trim();
+  if (!/^erro/i.test(s)) return { texto: s, tecnico: "" };
+  const cru = s.replace(/^erro\s*[—:-]?\s*/i, "");
+  const regras = [
+    [/invalid_grant|expired|revoked|expirad|revogad|OAuthException|\b190\b|session has/i, "o acesso expirou ou foi revogado — gere um token novo na plataforma e salve aqui"],
+    [/permission|permiss|PERMISSION_DENIED|\b403\b|not authorized|unauthori[sz]ed|\b401\b/i, "a conta não deu permissão para ler os anúncios — confira o acesso do usuário à conta de anúncios"],
+    [/not.?found|\b404\b|CUSTOMER_NOT|does not exist|inexistente|n[ãa]o encontrad/i, "a conta de anúncios não foi encontrada — confira o ID da conta e salve de novo"],
+    [/rate|quota|\b429\b|too many|limite/i, "a plataforma pediu para esperar (limite de leituras) — costuma passar sozinho na próxima hora"],
+    [/timeout|timed out|ETIMEDOUT|ECONN|\b50[234]\b|unavailable|indispon/i, "a plataforma não respondeu a tempo — costuma passar sozinho na próxima hora"],
+    [/developer.?token/i, "o developer token do Google não foi aceito — confira se ele está aprovado e salve de novo"],
+  ];
+  const achou = regras.find(([re]) => re.test(cru));
+  return { texto: `a leitura falhou: ${achou ? achou[1] : "confira os dados da conexão e salve de novo"}`, tecnico: cru };
+}
+/** plano 1500c · AC-275: número no campo de texto com vírgula (o input type=number recusava «12,5» em navegador em inglês). */
+const numCampo = v => (v == null || v === "" || !Number.isFinite(+v) ? "" : String(+v).replace(".", ","));
+/** plano 1500c · AC-068: o dia (YYYY-MM-DD, SP) dos dados carregados ficou para trás? */
+const diaVirou = (hojeDados, hojeAgora) => !!hojeDados && !!hojeAgora && String(hojeAgora) > String(hojeDados).slice(0, 10);
 /* ==== PURO: fim ==== */
 
 /* ============================================================
@@ -642,6 +718,9 @@ function aoEntrar(bloco) {
 /* ---------- nomes e datas para os objetos ---------- */
 const SEMANA_LONGA = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"];
 /** Só primeiro nome + inicial (nada de telefone nem sobrenome nos objetos). */
+/** plano 1500c · AC-245/AC-273: modo apresentação (?apresentar ou «nx-ocultar-nomes») — iniciais em TODA lista de pacientes (kanban,
+    gaveta, avisos, «desde a última visita», paleta), não só no celular do herói. */
+const nomeTela = nome => (OCULTAR_NOMES ? nomeExibido(nome, true) : nomeCurto(nome));
 function nomeCurto(nome) {
   const p = String(nome || "").trim().split(/\s+/).filter(Boolean);
   if (!p.length || /^sem nome$/i.test(String(nome).trim())) return "Paciente";
@@ -703,7 +782,8 @@ function htmlSemAnuncios() {
     const comErro = ligadas.find(i => /^erro/i.test(i.status || ""));
     if (comErro) return cartaoVazio({
       erro: true, titulo: `A leitura do ${nomePlat(comErro.canal)} deu erro`,
-      texto: `${esc(comErro.status)}. ${gestor() ? "Confira as credenciais em Ajustes." : "A Nexus já foi avisada e está vendo isso."}`, botoes: btnAj,
+      // plano 1500c · AC-241: o status cru vira frase com o que fazer
+      texto: `${esc(capt(explicarStatusInteg(comErro.status).texto))}. ${gestor() ? "Confira as credenciais em Ajustes." : "A equipe que cuida dos anúncios já foi avisada e está vendo isso."}`, botoes: btnAj,
     });
     const nomes = ligadas.map(i => nomePlat(i.canal)).join(" e ");
     return cartaoVazio({
@@ -719,6 +799,29 @@ function htmlSemAnuncios() {
 }
 
 /** Aviso rápido. tipo: ok · erro · nota (neutro). acao = { rotulo, fn } vira um botão (ex.: "Desfazer", 5 s). */
+/** plano 1500c · AC-242: confirmação no diálogo do próprio painel (<dialog> modal: foco preso, Esc cancela, o foco volta ao botão de
+    origem) — antes o confirm() nativo, sem estilo e diferente em cada navegador. → Promise<boolean> */
+function confirmar(msg, { ok = "Confirmar", cancelar = "Cancelar" } = {}) {
+  const volta = document.activeElement;
+  let d = $("#dlg-confirmar");
+  if (!d && typeof HTMLDialogElement === "function") {
+    d = document.createElement("dialog");
+    d.id = "dlg-confirmar"; d.className = "dlg-confirmar";
+    d.setAttribute("aria-labelledby", "dlg-confirmar-t");
+    d.innerHTML = `<form method="dialog"><p id="dlg-confirmar-t" class="dlg-t"></p><div class="acoes"><button class="pill pill-ghost" value="nao" type="submit" data-cancelar></button><button class="pill pill-bronze" value="sim" type="submit" data-ok></button></div></form>`;
+    document.body.appendChild(d);
+  }
+  if (!d || typeof d.showModal !== "function") return Promise.resolve(window.confirm(msg));   // navegador sem <dialog>
+  $("#dlg-confirmar-t", d).textContent = msg;
+  $("[data-ok]", d).textContent = ok;
+  $("[data-cancelar]", d).textContent = cancelar;
+  d.returnValue = "";
+  return new Promise(res => {
+    d.addEventListener("close", () => { res(d.returnValue === "sim"); if (volta && document.contains(volta)) volta.focus({ preventScroll: true }); }, { once: true });
+    d.showModal();
+    $("[data-cancelar]", d).focus();   // o padrão seguro é não fazer
+  });
+}
 function toast(msg, tipo = "ok", acao = null) {
   const t = $("#toast");
   clearTimeout(t._t); clearTimeout(t._t2);
@@ -776,6 +879,7 @@ function numerosPeriodo() {
   const c = M.crmTot(de, ate, f), ca = M.crmTot(deA, ateA, f);
   const roas = t.gasto ? c.receita / t.gasto : null;
   const fee = S.plat ? 0 : (M.CFG.fee || 0) * S.dias / 30;
+  // plano 1500c · AC-016: é a MESMA conta de nucleo.retornoInvestimento, usada pelo resumo mensal e pela folha (receita ÷ anúncios + gestão)
   const custoTotal = t.gasto + fee;
   const retorno = S.plat ? roas : (custoTotal ? c.receita / custoTotal : null);
   return { de, ate, deA, ateA, f, t, ta, c, ca, roas, fee, custoTotal, retorno, dias: S.dias, plat: S.plat };
@@ -851,12 +955,13 @@ function renderGeral() {
   const par = fn => [idx.map(fn), idxA.map(i => (i < 0 ? null : fn(i)))];
   const m7 = arr => i => (i < 0 ? null : M.media7(arr, i));
   const acum = lista => lista.reduce((acc, i) => (acc.push(i < 0 ? null : (acc[acc.length - 1] || 0) + sd.rec[i]), acc), []);
-  const cpa7 = i => { if (i < 0) return null; const g = M.soma7(sd.meta, i) + M.soma7(sd.google, i), n = M.soma7(sd.conv, i); return n ? g / n : null; };
+  // plano 1500c · AC-009/AC-246: TikTok e outras plataformas («outras» do porDia) entram nas somas do dia
+  const cpa7 = i => { if (i < 0) return null; const g = M.soma7(sd.meta, i) + M.soma7(sd.google, i) + M.soma7(sd.outras, i), n = M.soma7(sd.conv, i); return n ? g / n : null; };
   const dif = fin(t.cpa) && meta > 0 ? Math.abs(t.cpa - meta) / meta * 100 : null;   // AD-116: meta 0 não divide (antes «Infinity% abaixo»)
   const temG = S.plat ? S.plat === "google" : M.linhasDe(de, M.R, { plat: "google" }).some(l => (+l.gasto || 0) > 0 || (+l.conversoes || 0) > 0);
   const cap = x => String(x).charAt(0).toUpperCase() + String(x).slice(1);
   const K = [
-    { k: "k-inv", l: "Investido em anúncios", v: t.gasto, a: ta.gasto, f: "brl0", s: "neutro", sp: par(i => sd.meta[i] + sd.google[i]) },
+    { k: "k-inv", l: "Investido em anúncios", v: t.gasto, a: ta.gasto, f: "brl0", s: "neutro", sp: par(i => sd.meta[i] + sd.google[i] + sd.outras[i]) },
     // AD-196: com Google no período o custo é «por conversão da plataforma» e a meta (de conversa no WhatsApp) não é régua
     { k: "k-cpa", l: temG ? "Custo por conversão da plataforma" : "Custo por conversa", v: t.cpa, a: ta.cpa, f: "brl", s: "baixo", medidor: !temG && meta > 0,
       extra: !(meta > 0) ? "sem meta definida" : temG ? `a meta de ${brl(meta)} vale para conversas no WhatsApp (Meta)` : !fin(t.cpa) ? `meta ${brl(meta)}` : t.cpa <= meta ? `meta ${brl(meta)} · ${pc(dif, 0)} abaixo` : `meta ${brl(meta)} · ${pc(dif, 0)} acima`,
@@ -893,6 +998,7 @@ function renderGeral() {
 
   desenharChart("troca");
   renderTabelaDia();
+  renderMarcosLista();   // plano 1500c · AC-272
   renderFunil(t, c);
   renderMeses();
   renderLeitura(t, ta, c);
@@ -902,7 +1008,8 @@ function renderGeral() {
 
 function serieDia(de, ate, plat) {
   const sd = M.porDia(plat), out = [];
-  for (let i = de; i <= ate; i++) out.push(i < 0 ? null : { i, meta: sd.meta[i], google: sd.google[i], conv: sd.conv[i], convMedia: M.media7(sd.conv, i) });
+  // plano 1500c · AC-246: «outras» (TikTok…) na série do gráfico e da tabela
+  for (let i = de; i <= ate; i++) out.push(i < 0 ? null : { i, meta: sd.meta[i], google: sd.google[i], outras: sd.outras[i], conv: sd.conv[i], convMedia: M.media7(sd.conv, i) });
   return out;
 }
 
@@ -917,7 +1024,7 @@ function desenharChart(modo) {
   const { de, ate, deA, ateA } = janela(), serie = serieDia(de, ate, S.plat), ant = serieDia(deA, ateA, S.plat);
   const W = Math.max(300, Math.round(el.clientWidth)), H = W < 560 ? 230 : 280;
   const P = { l: W < 560 ? 50 : 60, r: 30, t: 14, b: 30 }, iw = W - P.l - P.r, ih = H - P.t - P.b;
-  const maxG = eixoTopo(Math.max(1, ...serie.map(d => d.meta + d.google)));
+  const maxG = eixoTopo(Math.max(1, ...serie.map(d => d.meta + d.google + d.outras)));   // plano 1500c · AC-246
   const maxC = Math.max(4, Math.ceil(Math.max(...serie.map(d => d.convMedia), ...ant.filter(Boolean).map(d => d.convMedia)) * 1.1 / 4) * 4);
   const bw = iw / serie.length, base = P.t + ih;
   const y = v => base - v / maxG * ih, yc = v => base - v / maxC * ih;
@@ -939,6 +1046,8 @@ function desenharChart(modo) {
     const x = P.l + n * bw + bw * .17, w = Math.max(1.5, bw * .66), rx = Math.min(3, w / 2);
     if (d.meta > 0) s += `<rect class="bm" data-i="${d.i}" data-id="m${d.i}" x="${x.toFixed(1)}" y="${y(d.meta).toFixed(1)}" width="${w.toFixed(1)}" height="${(base - y(d.meta)).toFixed(1)}" rx="${rx}" style="--k:${n}"/>`;
     if (d.google > 0) s += `<rect class="bg" data-i="${d.i}" data-id="g${d.i}" x="${x.toFixed(1)}" y="${y(d.meta + d.google).toFixed(1)}" width="${w.toFixed(1)}" height="${(y(d.meta) - y(d.meta + d.google)).toFixed(1)}" rx="${rx}" style="--k:${n}"/>`;
+    // plano 1500c · AC-246: a fatia das outras plataformas empilhada por cima
+    if (d.outras > 0) s += `<rect class="bo" data-i="${d.i}" data-id="o${d.i}" x="${x.toFixed(1)}" y="${y(d.meta + d.google + d.outras).toFixed(1)}" width="${w.toFixed(1)}" height="${(y(d.meta + d.google) - y(d.meta + d.google + d.outras)).toFixed(1)}" rx="${rx}" style="--k:${n}"/>`;
   });
   s += `</g>`;
   // marcos (claquetes): linha tracejada creme no dia + a claquete no topo
@@ -971,10 +1080,12 @@ function renderTabelaDia() {
   const el = $("#tabela-dia");
   if (!el || el.hidden || !M || semAnuncios()) return;
   const { de, ate } = janela(), serie = serieDia(de, ate, S.plat).filter(Boolean);
+  // plano 1500c · AC-246: coluna «Outras» só quando há TikTok/outra plataforma no período; o custo usa o total do dia
+  const temOutras = serie.some(d => d.outras > 0);
   el.innerHTML = `<div class="tabela-dia-rol" role="region" tabindex="0" aria-label="Investimento e conversões por dia"><table class="tabela-dia-t">
     <caption class="sr-only">Investimento e conversões da plataforma por dia, últimos ${int(S.dias)} dias</caption>
-    <thead><tr><th scope="col">Dia</th><th scope="col">Meta</th><th scope="col">Google</th><th scope="col">Conversões</th><th scope="col">Custo por conversão</th></tr></thead>
-    <tbody>${serie.map(d => `<tr><th scope="row">${esc(SEMANA[M.dataDe(d.i).getDay()])} · ${esc(M.ddmm(d.i))}</th><td>${brl(d.meta)}</td><td>${brl(d.google)}</td><td>${Number.isInteger(d.conv) ? int(d.conv) : dec(d.conv, 1)}</td><td>${brl((d.meta + d.google) / d.conv)}</td></tr>`).join("")}</tbody>
+    <thead><tr><th scope="col">Dia</th><th scope="col">Meta</th><th scope="col">Google</th>${!temOutras ? "" : `<th scope="col">Outras</th>`}<th scope="col">Conversões</th><th scope="col">Custo por conversão</th></tr></thead>
+    <tbody>${serie.map(d => `<tr><th scope="row">${esc(SEMANA[M.dataDe(d.i).getDay()])} · ${esc(M.ddmm(d.i))}</th><td>${brl(d.meta)}</td><td>${brl(d.google)}</td>${!temOutras ? "" : `<td>${brl(d.outras)}</td>`}<td>${Number.isInteger(d.conv) ? int(d.conv) : dec(d.conv, 1)}</td><td>${brl((d.meta + d.google + d.outras) / d.conv)}</td></tr>`).join("")}</tbody>
   </table></div>`;
 }
 /** A caneta de luz desenha a linha de conversas quando o gráfico entra em quadro. */
@@ -1019,9 +1130,9 @@ function ligarChart() {
     pt.setAttribute("cx", cx.toFixed(1)); pt.setAttribute("cy", cy.toFixed(1));
     $$(".bars rect", svg).forEach(r => r.classList.toggle("ativo", +r.dataset.i === p.i));
     el.classList.add("foco");
-    const dt = M.dataDe(p.i), g = p.meta + p.google, cpc = p.conv ? g / p.conv : null, a = d.ant[k];
+    const dt = M.dataDe(p.i), g = p.meta + p.google + p.outras, cpc = p.conv ? g / p.conv : null, a = d.ant[k];   // plano 1500c · AC-246
     // legenda fixa no cabeçalho: o título do cartão nunca some (Google manda conversão fracionada: plural/int)
-    leg.innerHTML = `<b>${SEMANA[dt.getDay()]} · ${M.ddmm(p.i)}</b> — Meta <span class="v">${brl(p.meta)}</span> · Google <span class="v">${brl(p.google)}</span> · ` +
+    leg.innerHTML = `<b>${SEMANA[dt.getDay()]} · ${M.ddmm(p.i)}</b> — Meta <span class="v">${brl(p.meta)}</span> · Google <span class="v">${brl(p.google)}</span>${p.outras > 0 ? ` · Outras <span class="v">${brl(p.outras)}</span>` : ""} · ` +
       // plano 1000b · AB-139: com Google no dia, conversão sem arredondar e «por conversão»
       `<span class="v">${esc(convDiaTxt(p))}</span>${fin(cpc) ? ` · <span class="v">${brl(cpc)}</span> por ${p.google > 0 ? "conversão" : "conversa"}` : ""}` +
       `${a ? ` · antes: <span class="v">${esc(fmtConv(a.conv))}</span>` : ""}`;
@@ -1073,6 +1184,8 @@ function ligarChart() {
   el.addEventListener("blur", () => { if (!fixo) esconder(); });
 }
 
+// plano 1500c · AC-230: taxa acima de 100% (quem veio agora tinha agendado antes do período) é cortada em 100% — e a nota diz por quê
+const NOTA_FUNIL = "inclui quem entrou na etapa anterior antes do período";
 function renderFunil(t, c) {
   const leigo = !gestor();
   const FUNIL_VERT = faixasFunil(M.vertical);
@@ -1107,14 +1220,15 @@ function renderFunil(t, c) {
     return `<div class="fun-row">
         <span class="fun-l">${e.l}<small>${e.s}</small></span>
         <div class="fun-bar"><div class="fun-fill${fora ? " out" : ""}" style="--w:${w.toFixed(1)}%;--i:${n}"><span data-n="${e.v}" data-f="int" data-k="fun-${n}">${int(e.v)}</span></div></div>
-        ${r != null ? `<p class="fun-rate">${taxa} ${st}</p>` : ""}
+        ${r != null ? `<p class="fun-rate">${taxa} ${st}${!(fin(e.r) && e.r > 100) ? "" : `<small class="fun-nota">${esc(NOTA_FUNIL)}</small>`}</p>` : ""}
       </div>`;
   }).join("");
 }
 
 function renderMeses() {
   const todos = M.mesesDados(), fp = { plat: S.plat };
-  const lista = todos.filter(m => m.ate - m.de >= 9 || m.ate === M.R).slice(-5);
+  // plano 1500c · AC-043: mês com menos de 3 dias de número (o cliente começou no fim dele) não vira barra
+  const lista = todos.filter(m => (m.ate - m.de >= 9 && (m.diasComDado ?? 99) >= 3) || m.ate === M.R).slice(-5);
   const rit = M.ritmoMes(M.R);
   const dados = lista.map(m => {
     const c = M.crmTot(m.de, m.ate, fp), atual = m.ate === M.R && !m.completo;
@@ -1125,12 +1239,14 @@ function renderMeses() {
   });
   const el = $("#mes-a-mes");
   if (!dados.length) { el.innerHTML = `<p class="vazio">Ainda não há meses para comparar.</p>`; return; }
-  const v0 = dados[0].c.fecharam, ult = dados[dados.length - 1], vN = ult.c.fecharam;
+  const ult = dados[dados.length - 1], vN = ult.c.fecharam;
   const pn = v => (v === 1 ? M.VOC.novo[0] : M.VOC.novo[1]);   // AD-194
-  const parc = ult.parcial ? ` <span class="mam-parc">(${MES3[ult.m.mes]}. parcial)</span>` : "";
-  $("#mam-titulo").innerHTML = dados.length < 2 ? `${vN} ${pn(vN)} em ${MESES[ult.m.mes]}${parc}`
-    : v0 === vN ? `${vN} ${pn(vN)} por mês, estável${parc}`
-    : `De ${v0} para ${vN} ${pn(vN)} por mês${parc}`;
+  // plano 1500c · AC-231: a comparação é entre meses FECHADOS; o mês corrente parcial aparece só como «(out. parcial: N)»
+  const cmp = comparaMeses(dados.map(d => ({ fecharam: d.c.fecharam, parcial: d.parcial })));
+  const parc = ult.parcial ? ` <span class="mam-parc">(${MES3[ult.m.mes]}. parcial${!(cmp.de == null && cmp.para == null) ? `: ${int(vN)}` : ""})</span>` : "";
+  $("#mam-titulo").innerHTML = cmp.de == null ? (cmp.para != null && ult.parcial ? `${int(cmp.para)} ${pn(cmp.para)} no último mês fechado${parc}` : `${int(vN)} ${pn(vN)} em ${MESES[ult.m.mes]}${ult.parcial ? ` <span class="mam-parc">(${MES3[ult.m.mes]}. parcial)</span>` : ""}`)
+    : cmp.de === cmp.para ? `${int(cmp.para)} ${pn(cmp.para)} por mês, estável${parc}`
+    : `De ${int(cmp.de)} para ${int(cmp.para)} ${pn(cmp.para)} por mês${parc}`;
   const acum = todos.reduce((s, m) => s + M.crmTot(m.de, m.ate, fp).fecharam, 0);
   $("#mam-sub").textContent = `${plural(acum, M.VOC.novo[0], M.VOC.novo[1])} vindos dos anúncios desde ${MESES[todos[0].mes]}.`;
 
@@ -1192,7 +1308,8 @@ function renderLeitura(t, ta, c) {
   // campanha com alerta ativo não pode ser elogiada nem receber verba
   const comAlerta = new Set(M.avaliar(M.R).filter(a => a.regra.nivel === "campanha").map(a => a.chave.split("|")[1]));
   const rows = linhasCamp().filter(r => r.t.gasto >= 40);
-  const efic = rows.filter(r => r.k.fecharam > 0 && !comAlerta.has(r.c.id)).sort((a, b) => a.cpp - b.cpp)[0];
+  // plano 1500c · AC-229: «mais eficiente» só com amostra que se sustenta (3 fechamentos, ou 10 conversas com algum fechamento)
+  const efic = rows.filter(r => amostraEficiente(r.k) && !comAlerta.has(r.c.id)).sort((a, b) => a.cpp - b.cpp)[0];
   if (efic) out.push({ k: "bom", h: `<b>${esc(efic.c.nome)}</b> é a campanha mais eficiente: cada ${esc(M.VOC.novo[0])} custou ${brl0(efic.cpp)} em anúncio.` });
   const serv = Object.entries(c.serv).sort((a, b) => b[1].v - a[1].v)[0];
   if (serv && c.receita) out.push({ k: "bom", h: `<b>${esc(serv[0])}</b> trouxe ${pc(serv[1].v / c.receita * 100, 0)} do valor ${esc(M.VOC.receitaEm)} (${serv[1].n} de ${c.fecharam} ${esc(c.fecharam === 1 ? M.VOC.pessoa[0] : M.VOC.pessoa[1])}).` });   // AD-194
@@ -1209,7 +1326,7 @@ function renderLeitura(t, ta, c) {
       const cm = M.consolidar(M.linhasDe(de, M.R, { plat: "meta" })).cpa, cg = M.consolidar(M.linhasDe(de, M.R, { plat: "google" })).cpa;
       // plano 1000b · AB-149: «viram <agendamento da vertical>» e «Meta» (antes «avaliação» e «Instagram/Facebook» fixos)
       const [a, b, ta2, tb, ca2, cb] = tg >= tm ? [nomePlat("google"), nomePlat("meta"), tg, tm, cg, cm] : [nomePlat("meta"), nomePlat("google"), tm, tg, cm, cg];
-      out.push({ k: "acao", h: `No <b>${a}</b>, de cada 100 conversas ${Math.round(ta2)} viram ${esc(M.VOC.agendada[0])} (contra ${Math.round(tb)} no ${b}). ${ca2 > cb ? `A conversa custa mais (${brl(ca2)} × ${brl(cb)}), mas chega mais decidida.` : "E ainda sai mais barata."}` });
+      out.push({ k: "acao", h: `No <b>${a}</b>, de cada 100 conversas ${Math.round(ta2)} viram ${esc(M.VOC.agendada[0])} (contra ${Math.round(tb)} no ${b}). ${esc(fraseCustoPlat(ca2, cb))}` });
     }
   }
   $("#leitura").innerHTML = out.slice(0, 5).map((x, n) => `<li class="${x.k}" style="--i:${n}"><span class="lt-n" aria-hidden="true">${p2(n + 1)}</span>` +
@@ -1218,7 +1335,7 @@ function renderLeitura(t, ta, c) {
 }
 
 function renderRitmo() {
-  const m = M.ritmoMes(M.R), orc = M.CFG.orcamento, escala = Math.max(orc, m.proj, 1) * 1.08;
+  const m = M.ritmoMes(M.R), orc = M.CFG.orcamento, escala = Math.max(orc, (m.cedo || m.pass < DIAS_MIN_PROJECAO) ? m.gasto : m.proj, 1) * 1.08;   // AC-225
   $("#ritmo-sub").textContent = `${MESES[m.mes]} · dia ${m.pass} de ${m.diasMes} · todas as plataformas`;
   $("#ritmo-h").innerHTML = rotT("ritmo.titulo");
   // plano 1000 (AD-001/AD-007): sem orçamento definido (null ou 0) não há barra nem «acima/abaixo» — só o gasto do mês
@@ -1229,21 +1346,18 @@ function renderRitmo() {
     return;
   }
   // plano 1000b · AB-156: na legenda, o glifo «▮» fica aria-hidden (o leitor de tela lê só «orçamento»)
-  const w = m.gasto / escala * 100, wp = m.proj / escala * 100, mo = orc / escala * 100;
-  const acima = m.proj > orc * 1.02, noLimite = !acima && m.proj >= orc * .98;
+  // plano 1500c · AC-225: nos primeiros dias (DIAS_MIN_PROJECAO, como o Órbita e o WhatsApp) a projeção é ruído — sem barra de projeção
+  const cedo = m.cedo || m.pass < DIAS_MIN_PROJECAO;
+  const w = m.gasto / escala * 100, wp = cedo ? w : m.proj / escala * 100, mo = orc / escala * 100;
   // plano 1000b · AB-225: quanto investir por dia daqui até o fim do mês para fechar no orçamento — (orçamento − gasto) ÷ dias restantes
   const sug = diarioSugerido(orc, m.gasto, m.restam);
-  const txtSug = sug == null ? "" : sug > 0 ? ` Orçamento diário sugerido: ${brl(sug)} (somando as plataformas).` : " O orçamento do mês já foi todo usado.";
-  const msg = m.restam === 0 ? `Mês fechado em ${brl0(m.gasto)}.`
-    // plano 1000 (AD-198): frase neutra — o painel não sabe se o aviso do radar saiu (antes «O radar já sugeriu…» sem aviso nenhum)
-    : acima ? `No ritmo atual o mês fecha ${brl0(m.proj - orc)} acima do orçamento. Segurar ${brl((m.proj - orc) / m.restam)} por dia fecha dentro.${txtSug}`
-    : noLimite ? `No limite: o mês deve fechar em ${brl0(m.proj)}, praticamente no orçamento.`
-    : `Dentro do orçamento: o mês deve fechar em ${brl0(m.proj)} (sobram ${brl0(orc - m.proj)}).`;
+  // plano 1500c · AC-226: orçamento esgotado tem frase própria (antes «Segurar R$ X por dia…» junto com «já foi todo usado»)
+  const { msg, aten } = msgRitmo({ ...m, cedo }, orc, sug);
   $("#ritmo").innerHTML = `
     <div class="ritmo-num"><strong data-n="${m.gasto}" data-f="brl0" data-k="rit">${brl0(m.gasto)}</strong><span>investidos de ${brl0(orc)}</span></div>
     <div class="pbar" style="--w:${w.toFixed(1)}%;--w0:${w.toFixed(1)}%;--w1:${Math.max(0, wp - w).toFixed(1)}%;--m:${mo.toFixed(1)}%"><i></i><u></u><b title="orçamento"></b></div>
-    <div class="ritmo-leg"><span>gasto até ontem</span><span>projeção ${brl0(m.proj)}</span><span><span aria-hidden="true">▮</span> orçamento</span></div>
-    <p class="ritmo-msg${acima ? " aten" : ""}">${msg}</p>`;
+    <div class="ritmo-leg"><span>investido até ontem</span><span>${!cedo ? `projeção ${brl0(m.proj)}` : "cedo para projetar"}</span><span><span aria-hidden="true">▮</span> orçamento</span></div>
+    <p class="ritmo-msg${!aten ? "" : " aten"}">${msg}</p>`;   // plano 1500c · AC-271: «investido», não «gasto», para o dono
 }
 
 /* ============================================================
@@ -1255,7 +1369,9 @@ const VAL_CAMP = {
   ag: r => r.k.agendadas, fe: r => r.k.fecharam, rec: r => r.k.receita, roas: r => r.roas,
 };
 // AD-116: sem meta (0) o ponto fica neutro (antes toda campanha virava vermelha)
-const pontoCpa = cpa => !(M.CFG.cpaAlvo > 0) ? "dot-neutro" : !fin(cpa) ? "dot-bad" : cpa <= M.CFG.cpaAlvo ? "dot-ok" : cpa <= M.CFG.cpaAlvo * 1.35 ? "dot-warn" : "dot-bad";
+// plano 1500c · AC-224: a meta da campanha (própria) ou da plataforma dela — Google com cpaAlvoGoogle, nunca a meta de conversa do Meta
+const metaDe = camp => (camp && typeof M.metaDaCampanha === "function" ? M.metaDaCampanha(camp) : camp && camp.plat === "google" ? (M.CFG.cpaAlvoGoogle > 0 ? +M.CFG.cpaAlvoGoogle : null) : M.CFG.cpaAlvo);
+const pontoCpa = (cpa, camp) => nivelCpa(cpa, metaDe(camp));
 /** plano 1000b · AB-152: o ponto de cor do CPA também em texto (para leitor de tela). */
 const NIVEL_CPA = { "dot-ok": "dentro da meta", "dot-warn": "um pouco acima da meta", "dot-bad": "acima da meta", "dot-neutro": "sem meta definida" };
 
@@ -1281,16 +1397,18 @@ function renderCampanhas() {
   // plano 1000b · AB-141: campanha sem gasto há 3 dias ou mais ganha o chip «pausada · último gasto dd/mm» (como o Órbita, AD-108)
   const ultG = ultimoGastoCamp(M.LINHAS, M.R);
   rows.forEach(r => { const u = ultG.get(r.c.id); r.pausaDe = u != null && M.R - u >= DIAS_PAUSADA ? u : null; });
+  // plano 1500c · AC-232: agendou/fechou com int() (separador de milhar, como as outras colunas); AC-224: a cor pela meta da campanha
+  S.csvCamp = rows;   // plano 1500c · AC-248: o botão «Baixar CSV» exporta exatamente o que a tabela mostra
   $("#tbl-campanhas").innerHTML = rows.length ? `<table>
     <caption class="sr-only">Campanhas nos últimos ${S.dias} dias</caption>
     <thead><tr>${th}</tr></thead>
     <tbody>${rows.map((r, n) => `<tr style="--i:${n}" data-camp="${esc(r.c.id)}">
-      <td><div class="nm"><span class="dot ${pontoCpa(r.t.cpa)}" title="custo por conversa vs. meta" aria-hidden="true"></span><span class="sr-only">${esc(NIVEL_CPA[pontoCpa(r.t.cpa)])}: </span><div class="nm-t"><span>${esc(r.c.nome)}</span><small><span class="chip chip-${classePlat(r.c.plat)}">${nomePlat(r.c.plat)}</span>${r.pausaDe !== null ? ` <span class="chip chip-neutro" title="Sem investimento desde ${esc(M.ddmm(r.pausaDe))}">pausada · último gasto ${esc(M.ddmm(r.pausaDe))}</span>` : ""}</small></div></div></td>
+      <td><div class="nm"><span class="dot ${pontoCpa(r.t.cpa, r.c)}" title="custo por ${r.c.plat === "google" ? "conversão" : "conversa"} vs. meta" aria-hidden="true"></span><span class="sr-only">${esc(NIVEL_CPA[pontoCpa(r.t.cpa, r.c)])}: </span><div class="nm-t"><span>${esc(r.c.nome)}</span><small><span class="chip chip-${classePlat(r.c.plat)}">${nomePlat(r.c.plat)}</span>${r.pausaDe !== null ? ` <span class="chip chip-neutro" title="Sem investimento desde ${esc(M.ddmm(r.pausaDe))}">pausada · último gasto ${esc(M.ddmm(r.pausaDe))}</span>` : ""}</small></div></div></td>
       ${td("gasto", brl0(r.t.gasto))}${td("conv", esc(fmtConv(r.t.conversoes)))}${td("cpa", brl(r.t.cpa))}${td("ctr", pc(r.t.ctr, 2))}
-      ${td("ag", r.k.agendadas)}${td("fe", r.k.fecharam)}${td("rec", brl0(r.k.receita))}${td("roas", fin(r.roas) ? dec(r.roas, 1) + "x" : "—")}
+      ${td("ag", int(r.k.agendadas))}${td("fe", int(r.k.fecharam))}${td("rec", brl0(r.k.receita))}${td("roas", fin(r.roas) ? dec(r.roas, 1) + "x" : "—")}
     </tr>`).join("")}</tbody>
     <tfoot><tr><th scope="row">Total</th>${td("gasto", brl0(T.gasto))}${td("conv", esc(fmtConv(T.conversoes)))}${td("cpa", brl(T.cpa))}${td("ctr", pc(T.ctr, 2))}
-      ${td("ag", K.ag)}${td("fe", K.fe)}${td("rec", brl0(K.rec))}${td("roas", T.gasto ? dec(K.rec / T.gasto, 1) + "x" : "—")}</tr></tfoot>
+      ${td("ag", int(K.ag))}${td("fe", int(K.fe))}${td("rec", brl0(K.rec))}${td("roas", T.gasto ? dec(K.rec / T.gasto, 1) + "x" : "—")}</tr></tfoot>
   </table>` : `<p class="vazio">Nenhuma campanha com investimento nos últimos ${S.dias} dias${S.plat ? " no " + nomePlat(S.plat) : ""}.</p>`;
 
   // a situação vem do radar (janela recente), não da média do período — senão a
@@ -1299,14 +1417,17 @@ function renderCampanhas() {
   const freqLim = (M.LIM && M.LIM.freqMax > 0) ? M.LIM.freqMax : 3;
   const cris = Object.values(M.CRI).filter(k => k.plat && (!S.plat || k.plat === S.plat)).map(k => ({ k, t: M.consolidar(M.linhasDe(de, M.R, { cri: k.id })) }))
     .filter(x => x.t.gasto > 0).sort((a, b) => b.t.gasto - a.t.gasto);
+  // plano 1500c · AC-233: no Google é «conversão»; com as duas plataformas, «contato» (antes «Conversas» para tudo)
+  const gCri = cris.some(x => x.k.plat === "google"), mCri = cris.some(x => x.k.plat !== "google");
+  const rotConvCri = gCri && !mCri ? ["Conversões", "Custo/conversão"] : gCri ? ["Conversas e conversões", "Custo/contato"] : ["Conversas", "Custo/conversa"];
   $("#tbl-criativos").innerHTML = cris.length ? `<table>
     <caption class="sr-only">Criativos nos últimos ${S.dias} dias</caption>
-    <thead><tr><th scope="col">Criativo</th><th scope="col">Investido</th><th scope="col">Impressões</th><th scope="col">CTR</th><th scope="col" title="Frequência: quantas vezes, em média, a mesma pessoa viu o anúncio">Freq.</th><th scope="col">Conversas</th><th scope="col">Custo/conversa</th><th scope="col">Situação agora</th></tr></thead>
+    <thead><tr><th scope="col">Criativo</th><th scope="col">Investido</th><th scope="col">Impressões</th><th scope="col">CTR</th><th scope="col" title="Frequência: quantas vezes, em média, a mesma pessoa viu o anúncio">Freq.</th><th scope="col">${esc(rotConvCri[0])}</th><th scope="col">${esc(rotConvCri[1])}</th><th scope="col">Situação agora</th></tr></thead>
     <tbody>${cris.map(({ k, t }, n) => {
       const s = sitDe(k.id), a4 = s.find(a => a.regra.id === "r4"), a3 = s.find(a => a.regra.id === "r3");
       const sit = (a4 ? `<span class="chip chip-bad" title="frequência nos últimos ${a4.regra.janela} dias">fadiga · ${dec(a4.valor, 1)} em ${a4.regra.janela}d</span> ` : "")
         + (a3 ? `<span class="chip chip-warn" title="CTR nos últimos ${a3.regra.janela} dias">CTR ${pc(a3.valor, 2)} em ${a3.regra.janela}d</span>` : "")
-        || `<span class="chip chip-ok">ok</span>`;
+        || `<span class="chip chip-ok">dentro dos limites</span>`;   // plano 1500c · AC-234: «ok» dizia pouco
       // plano 1000b · AB-157: a barra enche em limite × 1,33 (o limite é configurável, cfg.radar.freqMax) e a marca (a 75%) é o limite
       const fq = fin(t.freq)
         ? `<span class="fq" title="limite de ${dec(freqLim, 1)} vezes"><span class="fq-bar${a4 ? " alto" : ""}"><i style="--w:${Math.min(100, t.freq / (freqLim * 1.33) * 100)}%"></i><b></b></span>${dec(t.freq, 1)}</span>`
@@ -1368,7 +1489,7 @@ function cardLead(L, col, n) {
   const val = vd ? `<span class="val">${vd.semValor ? "sem valor" : brl0(vd.valor)}</span>` : "";
   return `<button type="button" class="lead${S.destacar.has(String(L.id)) ? " destaque" : ""}" data-lead="${esc(String(L.id))}" data-col="${col}" style="--i:${n}" aria-haspopup="dialog" aria-describedby="k-dica">
     <span class="av" style="--c:${AVC[hash(L.nome) % AVC.length]}" aria-hidden="true">${esc(ini)}</span>
-    <span class="l-txt"><span class="l-nome"><strong>${esc(L.nome)}</strong>${etq}${val}</span><span class="lp${q.atraso ? " atrasada" : ""}">${esc(L.servico)} · ${esc(q.txt)}</span></span>
+    <span class="l-txt"><span class="l-nome"><strong>${esc(OCULTAR_NOMES ? nomeExibido(L.nome, true) : L.nome)}</strong>${etq}${val}</span><span class="lp${q.atraso ? " atrasada" : ""}">${esc(L.servico)} · ${esc(q.txt)}</span></span>
     <span class="chips">${origem}</span></button>`;
 }
 
@@ -1507,7 +1628,7 @@ function abrirGaveta(L, o = {}) {
   gv.antes = L ? M.etapa(L) : null;
   const b = (L && L.bruto) || {};
   const e = o.etapa || (L ? M.etapa(L) : "nova");
-  $("#gv-titulo").textContent = L ? L.nome : "Novo paciente";
+  $("#gv-titulo").textContent = L ? (OCULTAR_NOMES ? nomeExibido(L.nome, true) : L.nome) : "Novo paciente";   // AC-245
   $("#gv-eyebrow").textContent = L ? `Conversa de ${M.dataBR(L.i)}` : "Cadastro manual";
   $("#gv-demo").hidden = !S.demo;
   $("#gv-erro").textContent = ""; $("#gv-erro").classList.remove("nota");
@@ -1618,7 +1739,7 @@ async function moverLead(L, etapa) {
   if (S.demo) {
     aplicarEtapaMem(L, etapa);
     depoisDeMover(L, antes);
-    toast(`Movido: ${nomeCurto(L.nome)} → ${rotEt} · só nesta tela`, "nota", { rotulo: "Desfazer", fn: () => { const f = fotoLead(L); restaurarLead(L, antes); depoisDeMover(L, f); } });
+    toast(`Movido: ${nomeTela(L.nome)} → ${rotEt} · só nesta tela`, "nota", { rotulo: "Desfazer", fn: () => { const f = fotoLead(L); restaurarLead(L, antes); depoisDeMover(L, f); } });
     return true;
   }
   const b = L.bruto || {}, hoje = hojeDados(), p = { id: L.id, etapa };
@@ -1627,7 +1748,7 @@ async function moverLead(L, etapa) {
   const volta = { id: L.id, etapa: b.etapa || antes.etapa, data_agenda: b.data_agenda || "", data_consulta: b.data_consulta || "" };
   try { await api.leadSalvar(S.token, S.clienteId, p); }
   catch (err) { if (err.codigo !== "sessao_invalida") toast(api.mensagemErro(err), "erro"); return false; }
-  toast(`Movido: ${nomeCurto(L.nome)} → ${rotEt}`, "ok", { rotulo: "Desfazer", fn: async () => {
+  toast(`Movido: ${nomeTela(L.nome)} → ${rotEt}`, "ok", { rotulo: "Desfazer", fn: async () => {
     try { await api.leadSalvar(S.token, S.clienteId, volta); toast("Desfeito ✓"); await carregarDados({ entrada: false }); }
     catch (err) { if (err.codigo !== "sessao_invalida") toast(api.mensagemErro(err), "erro"); }
   } });
@@ -1650,7 +1771,7 @@ function menuParou(L, x, y) {
   return new Promise(res => {
     const m = $("#menu-parou"), volta = document.activeElement;
     const motivos = PAROU_DE[colunaDe(L)] || Object.keys(MOTIVOS_PAROU);
-    m.innerHTML = `<p class="mp-t">${esc(nomeCurto(L.nome))} não seguiu porque…</p>` +
+    m.innerHTML = `<p class="mp-t">${esc(nomeTela(L.nome))} não seguiu porque…</p>` +
       motivos.map(v => [v, MOTIVOS_PAROU[v]])
         .map(([v, l]) => `<button type="button" role="menuitem" data-mp="${v}">${l}</button>`).join("") +
       `<button type="button" role="menuitem" class="mp-x" data-mp="">Cancelar</button>`;
@@ -1684,7 +1805,7 @@ function celebrar(L) {
   const vd = M.valorDe(L), d = M.dataDe(M.R), ini = Math.max(0, M.R - (d.getDate() - 1));
   const soma = M.crmTot(ini, M.R).receita, mes = MESES[d.getMonth()];
   const el = $("#celebra");
-  el.innerHTML = `<p class="cb-t">Paciente novo!</p><p class="cb-l">${esc(nomeCurto(L.nome))} fechou ${esc(L.servico)}${vd.semValor ? "" : ` · <b>${brl0(vd.valor)}</b>`}</p>` +
+  el.innerHTML = `<p class="cb-t">Paciente novo!</p><p class="cb-l">${esc(nomeTela(L.nome))} fechou ${esc(L.servico)}${vd.semValor ? "" : ` · <b>${brl0(vd.valor)}</b>`}</p>` +
     (soma > 0 ? `<p class="cb-s">${mes.charAt(0).toUpperCase() + mes.slice(1)} agora soma <b>${brl0(soma)}</b></p>` : "");
   clearTimeout(el._t);
   el.hidden = false;
@@ -1781,8 +1902,9 @@ function condLeiga(r) {
   const lim = r.limite(), janela = `olhando ${r.janela} dias`, meta = r.plat ? " · anúncios do Instagram e Facebook" : "";
   if (r.metrica === "cpa") return `Avisa quando cada conversa passa de ${brl(lim)} (${janela}, por campanha)`;
   if (r.metrica === "conversoes") return `Avisa quando um anúncio gasta mais de ${brl0(r.minGasto || 0)} em ${r.janela} dias sem nenhuma conversa`;
-  if (r.metrica === "ctr") return `Avisa quando menos de ${Math.max(1, Math.round(lim))} em cada 100 que viram tocaram no anúncio (${janela}${r.minImpr ? `, a partir de ${r.minImpr} vezes na tela` : ""}${meta})`;
-  if (r.metrica === "freq") return `Avisa quando a mesma pessoa já viu o anúncio mais de ${dec(lim, 0)} vezes (${janela}${meta})`;
+  // plano 1500c · AC-235/AC-236: 0,9% é «9 em cada 1.000» (antes «1 em cada 100»); frequência 2,5 não vira «3»
+  if (r.metrica === "ctr") return `Avisa quando ${ctrLeigo(lim)} que viram tocaram no anúncio (${janela}${r.minImpr ? `, a partir de ${r.minImpr} vezes na tela` : ""}${meta})`;
+  if (r.metrica === "freq") return `Avisa quando a mesma pessoa já viu o anúncio mais de ${vezesLeigo(lim)} vezes (${janela}${meta})`;
   return `${ROT_MET[r.metrica] || r.metrica} ${OPS[r.op]} ${M.FMT_MET[r.metrica](lim)}`;
 }
 /** Depois de "CTR de 0,83%" (texto do núcleo), a clínica lê a conta: "(de cada 100 que viram, menos de 1 tocou)". */
@@ -1797,7 +1919,8 @@ function traducaoCTR(msg, tag = "span") {
 }
 const SEV_NOME = { critico: "crítico", alerta: "alerta", info: "informativo" };
 let radarCtl = null, radarChega = false;   // varredura em canvas (cinema.js), se houver
-const horaCheia = () => `${p2(new Date().getHours())}:00`;
+// plano 1500c · AC-237: a hora de São Paulo (antes a do aparelho — gestor viajando via «07:00» às 11h de Brasília)
+const horaCheia = () => `${FMT_HORA.format(new Date()).slice(0, 2)}:00`;
 const ultimoSync = () => ultimaLeitura((S.dados && S.dados.integracoes) || []);   // plano 1000b · AB-076: pelo maior instante
 
 function alertasServidor() {
@@ -2042,13 +2165,14 @@ function renderRadar() {
       return itemEnvio({ titulo: esc(nome), sub: esc(a.mensagem || "") + traducaoCTR(a.mensagem, "span"), x: a, tipo: "alerta",
         antes: `<span class="sev sev-${sev}${a.regra === "integracao" ? " sev-ic" : ""}" role="img" aria-label="${SEV_NOME[sev]}">${ic}</span>` });
     }).join("");
-  atualizarBadge(nAtivos);
+  // plano 1500c · AC-238: o número no ícone não conta os informativos (ritmo) — como o Órbita (AD-045); a lista segue mostrando tudo
+  atualizarBadge(atuais.filter(a => a.sev !== "info").length + conexoesCaidas());
 }
 
 /** Conexões com Meta/Google caídas agora (a regra "integracao" só o servidor conhece): contam como alerta ativo. */
 const conexoesCaidas = () => (S.demo && !SIMULAR_INTEG ? 0 : estadoInteg().erros.length);
 function atualizarBadge(n) {
-  if (n == null) n = (M && !semAnuncios() ? M.avaliar(M.R, true).length : 0) + (M ? conexoesCaidas() : 0);
+  if (n == null) n = (M && !semAnuncios() ? M.avaliar(M.R, true).filter(a => a.sev !== "info").length : 0) + (M ? conexoesCaidas() : 0);   // AC-238
   $$("[data-badge]").forEach(b => {
     const antes = b.textContent;
     b.textContent = n; b.hidden = !n;
@@ -2381,7 +2505,7 @@ async function carregarAjustes() {
 
 const linhaTicket = (s = "", v = "") => `<div class="tk-row">
   <input type="text" aria-label="Tratamento" value="${esc(s)}" placeholder="Tratamento" data-tk-s>
-  <input type="number" aria-label="Valor de ${esc(s || "tratamento")} em reais" value="${esc(v)}" min="0" step="10" inputmode="decimal" placeholder="R$" data-tk-v>
+  <input type="text" aria-label="Valor de ${esc(s || "tratamento")} em reais" value="${esc(numCampo(v))}" inputmode="decimal" autocomplete="off" placeholder="R$" data-tk-v>
   <button class="tk-x" type="button" aria-label="Remover ${esc(s || "tratamento")}" data-tk-x>×</button></div>`;
 
 function renderFormCliente() {
@@ -2403,9 +2527,13 @@ function renderFormCliente() {
     </div>
     <h3>Metas</h3>
     <div class="form-3">
-      <label class="campo"><span>Custo por conversa (R$)</span><input type="number" id="cl-cpa" min="1" step="0.5" inputmode="decimal" value="${esc(cfg.cpaAlvo)}" placeholder="sem meta"></label>
-      <label class="campo"><span>Orçamento do mês (R$)</span><input type="number" id="cl-orc" min="0" step="50" inputmode="decimal" value="${esc(cfg.orcamento)}" placeholder="não definido"></label>
-      <label class="campo"><span>Gestão mensal (R$)</span><input type="number" id="cl-fee" min="0" step="1" inputmode="decimal" value="${esc(cfg.fee)}"></label>
+      <label class="campo"><span>Custo por conversa (R$)</span><input type="text" id="cl-cpa" inputmode="decimal" autocomplete="off" value="${esc(numCampo(cfg.cpaAlvo))}" placeholder="sem meta"></label>
+      <label class="campo"><span>Orçamento do mês (R$)</span><input type="text" id="cl-orc" inputmode="decimal" autocomplete="off" value="${esc(numCampo(cfg.orcamento))}" placeholder="não definido"></label>
+      <label class="campo"><span>Gestão mensal (R$)</span><input type="text" id="cl-fee" inputmode="decimal" autocomplete="off" value="${esc(numCampo(cfg.fee))}"></label>
+    </div>
+    <div class="form-2">
+      <label class="campo"><span>Custo por conversão do Google (R$)</span><input type="text" id="cl-cpag" inputmode="decimal" autocomplete="off" value="${esc(numCampo(cfg.cpaAlvoGoogle))}" placeholder="sem meta (o Google fica fora do alerta)"><small>A conversão de pesquisa costuma custar 2 a 3 vezes a conversa do Meta: meta própria.</small></label>
+      <p class="campo nota-sm">Limites do radar (CTR, frequência, gasto mínimo), metas por campanha e endereço do painel: <a href="${esc(ORBITA_URL)}#/config/anuncios" target="_blank" rel="noopener">ajustar no Órbita</a>.</p>
     </div>
     <h3>Valor de cada tratamento</h3>
     <p class="nota-sm">Estima o resultado quando a clínica não informa o valor fechado — e só para os tratamentos desta lista. Sem a lista, entra na conta apenas o valor informado em cada ficha.</p>
@@ -2437,9 +2565,10 @@ async function salvarCliente(ev) {
   if (!nome) { $("#cl-nome").focus(); return avisoForm(st, "Informe o nome do cliente.", true); }
   const slug = $("#cl-slug").value.trim().toLowerCase() || slugDe(nome);
   if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) { $("#cl-slug").focus(); return avisoForm(st, "Identificador: use só letras minúsculas, números e hífen.", true); }
-  const num = (sel, pad) => { const v = parseFloat(String($(sel).value).replace(",", ".")); return Number.isFinite(v) && v >= 0 ? v : pad; };
+  // plano 1500c · AC-275: o mesmo leitor do aviso (valorMeta) — vírgula, milhar com ponto e «R$»
+  const num = (sel, pad) => { const v = valorMeta($(sel).value); return v.ok && v.valor != null ? v.valor : pad; };
   // plano 1000b · AB-147: meta, orçamento ou gestão negativos (ou texto) param o salvamento com aviso — antes −15 apagava a meta calado
-  for (const [sel, rotulo] of [["#cl-cpa", "Custo por conversa"], ["#cl-orc", "Orçamento do mês"], ["#cl-fee", "Gestão mensal"]]) {
+  for (const [sel, rotulo] of [["#cl-cpa", "Custo por conversa"], ["#cl-orc", "Orçamento do mês"], ["#cl-fee", "Gestão mensal"], ["#cl-cpag", "Custo por conversão do Google"]]) {
     const v = valorMeta($(sel).value);
     if (!v.ok) { $(sel).focus(); return avisoForm(st, `${rotulo}: ${v.erro}.`, true); }
   }
@@ -2451,14 +2580,22 @@ async function salvarCliente(ev) {
     return avisoForm(st, `WhatsApp «${inv[0]}» inválido: use DDD + número (ex.: 12 99999-8888).`, true);
   }
   const ticket = {};
-  $$("#cl-tickets .tk-row").forEach(r => {
-    const s = $("[data-tk-s]", r).value.trim(), v = parseFloat(String($("[data-tk-v]", r).value).replace(",", "."));
-    if (s && Number.isFinite(v)) ticket[s] = v;
+  // plano 1500c · AC-239: valor sem o nome do serviço avisa (antes sumia calado ao salvar)
+  const tkLinhas = $$("#cl-tickets .tk-row").map(r => [$("[data-tk-s]", r).value, $("[data-tk-v]", r).value]);
+  if (ticketsSemNome(tkLinhas)) {
+    const r = $$("#cl-tickets .tk-row").find(x => !$("[data-tk-s]", x).value.trim() && $("[data-tk-v]", x).value.trim());
+    if (r) $("[data-tk-s]", r).focus();
+    return avisoForm(st, `Dê um nome ao ${M ? M.VOC.servico : "serviço"} que tem valor (ou apague a linha).`, true);
+  }
+  tkLinhas.forEach(([s0, v0]) => {
+    const s = String(s0).trim(), v = valorMeta(v0);
+    if (s && v.ok && v.valor != null) ticket[s] = v.valor;
   });
   const cfgAntes = cfgCom((c && !novo && c.cfg) || {});
   const cfg = {
     nomeCurto: $("#cl-curto").value.trim(),
     cpaAlvo: num("#cl-cpa", CFG_PADRAO.cpaAlvo), orcamento: num("#cl-orc", CFG_PADRAO.orcamento), fee: num("#cl-fee", CFG_PADRAO.fee),
+    cpaAlvoGoogle: num("#cl-cpag", null),   // plano 1500c · AC-240: a meta própria do Google também pelo clássico
     ticket, waGestor: waG.ok, waCliente: waC.ok,
     // plano 1000b · AB-022: salva o que foi digitado (vazio = resumo sem assinatura); nada de repor «Equipe Nexus» por conta própria
     assinatura: $("#cl-assinatura").value.trim(),
@@ -2493,12 +2630,14 @@ async function salvarCliente(ev) {
 function htmlCanal(canal) {
   const d = CANAIS[canal], lista = Array.isArray(S.aj.integ) ? S.aj.integ : [];
   const st = lista.find(i => i.canal === canal) || {}, pre = new Set(st.preenchidos || []);
+  // plano 1500c · AC-241: o status cru («erro — invalid_grant…») vira frase com o que fazer; o técnico fica no title
+  const ex = explicarStatusInteg(st.status);
   const status = !st.canal ? "Ainda não configurada."
-    : st.ultimo_sync ? `Última leitura ${quandoSP(st.ultimo_sync)}${st.status ? " · " + st.status : ""}` : (st.status || "Ainda não leu os anúncios.");
+    : st.ultimo_sync ? `Última leitura ${quandoSP(st.ultimo_sync)}${ex.texto ? " · " + ex.texto : ""}` : (ex.texto || "Ainda não leu os anúncios.");
   const cls = /^erro/i.test(st.status || "") ? " erro" : /^ok/i.test(st.status || "") ? " ok" : "";
   return `<form class="integ" data-canal="${canal}" novalidate>
     <div class="integ-h"><h3>${d.nome}</h3><span class="sw-l"><span id="ig-${canal}-l">Ligada</span><button class="sw" type="button" role="switch" data-ig-ativo aria-checked="${!!st.ativo}" aria-labelledby="ig-${canal}-l"></button></span></div>
-    <p class="integ-st${cls}">${esc(status)}</p>
+    <p class="integ-st${cls}"${!ex.tecnico ? "" : ` title="${esc(ex.tecnico)}"`}>${esc(status)}</p>
     ${d.campos.map(([k, rot, secreto, ph]) => `<label class="campo"><span>${rot}${pre.has(k) ? `<b class="ok-preenchido">✓ preenchido</b>` : ""}</span>
       <input type="${secreto ? "password" : "text"}" name="${k}" id="ig-${canal}-${k}" autocomplete="${secreto ? "new-password" : "off"}" spellcheck="false" autocapitalize="off" placeholder="${pre.has(k) ? "em branco = mantém o atual" : esc(ph || "")}"></label>`).join("")}
     <div class="aj-pe"><button class="pill pill-ink" type="submit">Salvar ${d.curto}</button></div>
@@ -2528,7 +2667,7 @@ async function salvarIntegracao(form) {
   const antes = (Array.isArray(S.aj.integ) ? S.aj.integ : []).find(i => i.canal === canal) || {};
   if (antes.ativo && !ativo) {
     const nomeC = (CANAIS[canal] || {}).curto || canal;
-    if (!confirm(`Desligar a integração do ${nomeC}? As leituras de hora em hora e o radar do ${nomeC} param até você ligar de novo. Os números já lidos continuam no painel.`)) return;
+    if (!(await confirmar(`Desligar a integração do ${nomeC}? As leituras de hora em hora e o radar do ${nomeC} param até você ligar de novo. Os números já lidos continuam no painel.`, { ok: "Desligar" }))) return;   // plano 1500c · AC-242
   }
   ocupado(btn, true);
   try {
@@ -2712,7 +2851,7 @@ async function salvarConfig(ev) {
   }
   // apagar o que estava preenchido só com confirmação (painel_url, número da Nexus, endereço do Órbita)
   const apagando = ["painel_url", "wa_phone_number_id", "saas_url"].filter(k => k in cfg && !cfg[k] && String(atual[k] || "").trim());
-  if (apagando.length && !confirm(`Apagar ${apagando.map(k => ROTULO_CFG[k]).join(", ")}? O servidor fica sem esse valor até você preencher de novo.`)) {
+  if (apagando.length && !(await confirmar(`Apagar ${apagando.map(k => ROTULO_CFG[k]).join(", ")}? O servidor fica sem esse valor até você preencher de novo.`, { ok: "Apagar" }))) {   // AC-242
     return avisoForm(st, "Nada foi salvo.", false);
   }
   ocupado(btn, true);
@@ -2733,7 +2872,7 @@ async function removerSegredo(k, btn) {
   const st = $("#cf-status"), flag = SEGREDOS[k];
   if (!flag) return;
   const rot = (btn.getAttribute("aria-label") || "Remover segredo").replace(/^Remover /, "");
-  if (!confirm(`Remover ${rot} do servidor? O que depende dele para de funcionar até você gravar um novo.`)) return;
+  if (!(await confirmar(`Remover ${rot} do servidor? O que depende dele para de funcionar até você gravar um novo.`, { ok: "Remover" }))) return;   // AC-242
   ocupado(btn, true);
   try {
     const r = await api.configSalvar(S.token, { [k]: null });
@@ -2768,7 +2907,13 @@ function campeao(de, ate, f = {}) {
     .map(k => ({ k, t: M.consolidar(M.linhasDe(de, ate, { cri: k.id })) })).sort((a, b) => b.t.conversoes - a.t.conversoes)[0];
   return { camp: top.c, k: top.k, cri: cri ? cri.k : null };
 }
-const mesDoPeriodo = () => { const d = M.dataDe(M.R); return { de: janela().de, ate: M.R, mes: d.getMonth(), ano: d.getFullYear() }; };
+// plano 1500c · AC-243: o mês do «até» do período com os limites DELE (antes «de» era o início da janela de 30 dias, que caía no mês
+// anterior, com o rótulo do mês do «até»: o relMensal não achava o mês anterior para comparar)
+const mesDoPeriodo = () => {
+  const m = M.mesesDados().find(x => x.de <= M.R && x.ate >= M.R);
+  if (m) return m;
+  const d = M.dataDe(M.R); return { de: janela().de, ate: M.R, mes: d.getMonth(), ano: d.getFullYear() };
+};
 
 /* ---------- o curta (curta.js) ---------- */
 function ctxCurta() {
@@ -2820,6 +2965,7 @@ async function abrirFolhaMes(iso) {
     M, m, nome: nomeCliente(), marca: { ...MARCA }, demo: S.demo, avatarMarca, corServ,
     meses: lista.map(x => ({ ...x, fecharam: M.crmTot(x.de, x.ate).fecharam })),
     proximos: proximosPassos(m), campeao: campeao(m.de, m.ate), volta: document.activeElement,
+    editavel: S.demo || gestor(),   // plano 1500c · AC-265: o gestor reescreve «Para o próximo mês» antes de imprimir
   });
 }
 
@@ -2890,6 +3036,17 @@ function marcosAtuais() {
   return l.filter(m => m && /^\d{4}-\d{2}-\d{2}$/.test(m.d) && typeof m.t === "string" && m.t.trim()).slice(-40);
 }
 const marcoDoDia = i => marcosAtuais().find(m => iDeIso(m.d) === i) || null;
+/** plano 1500c · AC-272: a lista de marcos do cliente (gestor, modo real) com «Remover» em cada um — antes só dava para tirar um marco
+    clicando no dia certo do gráfico (e o de fora do período não tinha como sair). */
+function renderMarcosLista() {
+  const box = $("#marcos-lista");
+  if (!box) return;
+  const l = !S.demo && gestor() ? marcosAtuais().slice().sort((a, b) => b.d.localeCompare(a.d)) : [];
+  box.hidden = !l.length;
+  if (!l.length) return;
+  $("#marcos-lista-s").textContent = `Marcos no gráfico (${l.length})`;
+  $("#marcos-lista-ul").innerHTML = l.map(m => `<li><span><b>${esc(dataIso(m.d))}</b> — ${esc(m.t)}</span><button class="link-b" type="button" data-marco-rm="${esc(m.d)}" aria-label="Remover o marco de ${esc(dataIso(m.d))}: ${esc(m.t)}">Remover</button></li>`).join("");
+}
 function abrirMarco(i) {
   const f = $("#marco-form");
   if (!gestor() || i == null) { f.hidden = true; return; }
@@ -2929,6 +3086,7 @@ async function salvarMarco(remover) {
     toast(remover ? "Marco removido ✓" : t ? "Marco salvo ✓" : "Marco removido ✓");
     fecharMarco(true);
     desenharChart(null);
+    renderMarcosLista();   // AC-272
   } catch (err) { if (err.codigo !== "sessao_invalida") toast(api.mensagemErro(err), "erro"); }
 }
 
@@ -2949,7 +3107,7 @@ function renderDesdeVisita() {
   // plano 1000b · AB-160: «cliente novo» para oficina e loja (M.VOC.novo), não «paciente novo» fixo
   box.innerHTML = `<div class="desde-q"><p class="eyebrow">Desde a sua última visita</p>
       <h2 id="desde-h"><b>${esc(plural(novos.length, M.VOC.novo[0], M.VOC.novo[1]))}</b>${total > 0 ? ` · ${brl0(total)}` : ""}</h2>
-      <ul class="desde-l">${novos.slice(0, 5).map(L => `<li><b>${esc(nomeCurto(L.nome))}</b><span>${esc(L.servico)} · ${M.valorDe(L).semValor ? "sem valor" : brl0(M.valorLead(L))}</span></li>`).join("")}${novos.length > 5 ? `<li><span>e mais ${novos.length - 5}</span></li>` : ""}</ul></div>
+      <ul class="desde-l">${novos.slice(0, 5).map(L => `<li><b>${esc(nomeTela(L.nome))}</b><span>${esc(L.servico)} · ${M.valorDe(L).semValor ? "sem valor" : brl0(M.valorLead(L))}</span></li>`).join("")}${novos.length > 5 ? `<li><span>e mais ${novos.length - 5}</span></li>` : ""}</ul></div>
     <div class="acoes"><button class="pill pill-bronze" type="button" data-desde="ver">Ver no quadro</button><button class="pill pill-ghost" type="button" data-desde="ok">Ok</button></div>`;
   box.setAttribute("aria-labelledby", "desde-h");
   box._ids = ids; box._novos = novos.map(L => String(L.id));
@@ -2974,7 +3132,7 @@ async function abrirPaleta() {
   if (!m) return;
   m.abrir({
     abas: Object.entries(ABAS).filter(([k]) => k !== "ajustes" || gestor()).map(([k, v]) => ({ k, nome: v[0] })),
-    leads: M ? M.LEADS.filter(L => colunaDe(L) || M.etapa(L) === "nova").sort((a, b) => b.i - a.i).map(L => ({ id: String(L.id), nome: nomeCurto(L.nome), sub: `${L.servico} · ${NOME_ETAPA[M.etapa(L)] || ""}` })) : [],
+    leads: M ? M.LEADS.filter(L => colunaDe(L) || M.etapa(L) === "nova").sort((a, b) => b.i - a.i).map(L => ({ id: String(L.id), nome: nomeTela(L.nome), sub: `${L.servico} · ${NOME_ETAPA[M.etapa(L)] || ""}` })) : [],
     campanhas: M ? Object.values(M.CAMP).filter(c => c.plat && !c.semCampanha).map(c => ({ id: c.id, nome: c.nome, sub: nomePlat(c.plat) })) : [],
     acoes: [
       ...[7, 30, 60].map(d => ({ k: `d${d}`, nome: `${d} dias`, sub: "período", fn: () => $(`#seg-periodo [data-v="${d}"]`).click() })),
@@ -3015,7 +3173,7 @@ function ligarArrasto() {
       colunas: COLS_K.map(c => c[0]),
       nomeColuna: k => ((colsK().find(c => c[0] === k) || [])[1] || k).replace(/\s*\(.*\)$/, ""),
       lead: id => (M ? M.LEADS.find(x => String(x.id) === String(id)) : null),
-      nome: L => nomeCurto(L.nome),
+      nome: L => nomeTela(L.nome),
       soltar: (L, col, o) => soltarNaColuna(L, col, o),
       anunciar: msg => { const v = $("#k-vivo"); v.textContent = ""; setTimeout(() => { v.textContent = msg; }, 30); },
     });
@@ -3287,6 +3445,8 @@ function mostrarTela(t) {
 function bootMsg(msg, comAcoes = false) {
   $("#boot-msg").textContent = msg;
   $("#boot-acoes").hidden = !comAcoes;
+  // plano 1500c · AC-287: falhou ao abrir — o foco vai para «Tentar de novo» (teclado e leitor de tela chegam na saída sem procurar)
+  if (comAcoes) requestAnimationFrame(() => { const b = $("#boot-tentar"); if (b && !$("#boot").hidden) b.focus({ preventScroll: true }); });
 }
 
 function authModo(modo, msg = "") {
@@ -3488,6 +3648,7 @@ async function carregarDados(o = {}) {
     const r = await api.dados(S.token, id, DIAS_JANELA) || {};
     if (n !== cargaN || id !== S.clienteId) return;
     S.dados = r;
+    if (!r.hoje) r.hoje = hojeSP();   // plano 1500c · AC-068: o dia da carga fica guardado (a virada da meia-noite recarrega)
     const c = clienteAtual();
     if (c && r.cliente) { c.cfg = r.cliente.cfg || c.cfg; c.nome = r.cliente.nome || c.nome; }
     montarDe(datasetDeLinhas({ metricas: r.metricas || [], leads: r.leads || [], cliente: r.cliente || c || {}, hoje: r.hoje || hojeSP(), dias: DIAS_JANELA }));
@@ -3511,7 +3672,8 @@ async function carregarDados(o = {}) {
       estadoApp("erro", { erro: est.erro, titulo: esc(est.titulo), texto: esc(est.texto),
         botoes: (est.orbita ? `<a class="pill pill-bronze" href="${ORBITA_URL}" rel="noopener">Abrir no Órbita</a>` : "")
           + `<button class="pill pill-ink" type="button" data-acao="recarregar">Tentar de novo</button>` });
-    } else toast(api.mensagemErro(e), "erro");
+    // plano 1500c · AC-270: recarga que falhou (com o painel já aberto) oferece «Tentar de novo» no próprio aviso
+    } else toast(api.mensagemErro(e), "erro", { rotulo: "Tentar de novo", fn: () => carregarDados() });
   } finally {
     if (n === cargaN) $("#main").classList.remove("recarregando");
   }
@@ -3613,6 +3775,11 @@ function ligarEventos() {
       s.classList.add("com-dia");
     });
   });
+  // plano 1500c · AC-068: painel aberto da noite para o dia — ao voltar para a aba depois da meia-noite (SP), recarrega (o «ontem» mudou)
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden || S.demo || !M || !S.dados || !S.token) return;
+    if (diaVirou(S.dados.hoje, hojeSP())) carregarDados();
+  });
   $("#sel-cliente").addEventListener("change", e => trocarCliente(e.target.value));
   $("#sel-cliente-m").addEventListener("change", e => trocarCliente(e.target.value));
   // botões dos estados vazios e atalhos entre abas
@@ -3639,6 +3806,19 @@ function ligarEventos() {
     renderCampanhas();
     const nb = $(`#tbl-campanhas [data-sort="${k}"]`);
     if (nb) nb.focus();
+  });
+  // plano 1500c · AC-248: «Baixar planilha (CSV)» — o que a tabela mostra (período, plataforma e ordem), com os rótulos da vertical
+  const btnCsv = $("#btn-csv-camp");
+  if (btnCsv) btnCsv.addEventListener("click", () => {
+    const rows = S.csvCamp || [];
+    if (!M || !rows.length) return toast("Nenhuma campanha com investimento no período para baixar.", "nota");
+    const V = M.VOC, cab = ["Campanha", "Plataforma", "Investido (R$)", "Conversas/conversões", "Custo por contato (R$)", "CTR (%)", capt(V.agendada[1]), capt(V.novo[1]), `${V.receita} (R$)`, "Retorno (x)"];
+    const csv = csvDe([cab, ...rows.map(r => [r.c.nome, nomePlat(r.c.plat), r.t.gasto, r.t.conversoes, r.t.cpa, r.t.ctr, r.k.agendadas, r.k.fecharam, r.k.receita, r.roas])]);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    a.download = `campanhas-${slugDe(nomeCliente()) || "cliente"}-${isoI(M.R)}-${S.dias}d.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   });
 
   /* ---------- pacientes ---------- */
@@ -3851,6 +4031,14 @@ function ligarEventos() {
     const b = e.target.closest("[data-marco]");
     if (!b) return;
     if (b.dataset.marco === "remover") salvarMarco(true); else fecharMarco(true);
+  });
+  // plano 1500c · AC-272: «Remover» na lista de marcos
+  const ml = $("#marcos-lista");
+  if (ml) ml.addEventListener("click", e => {
+    const b = e.target.closest("[data-marco-rm]");
+    if (!b || !gestor() || !M) return;
+    S.marcoFixo = iDeIso(b.dataset.marcoRm);
+    salvarMarco(true);
   });
   // atalhos: Ctrl/⌘+K abre a busca; P apresenta; 1/2/3 = 7/30/60 dias — nunca dentro de um campo de texto
   addEventListener("keydown", e => {

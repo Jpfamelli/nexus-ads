@@ -149,7 +149,9 @@ async function kitDe(ctx) {
     /** cria etiqueta (atendente+) e já põe no catálogo em memória */
     async criarEtiqueta(nome) {
       const paleta = ctx.paleta || [];
-      const cor = paleta.length ? paleta[k.base.etiquetas.length % paleta.length] : null;
+      // plano 1500c · RC-068: a cor da paleta MENOS usada no catálogo (depois de excluir uma, a próxima não repete a última)
+      const cor = k.L && typeof k.L.corMenosUsada === "function" ? k.L.corMenosUsada(paleta, (k.base.etiquetas || []).map(e => e.cor))
+        : paleta.length ? paleta[k.base.etiquetas.length % paleta.length] : null;
       const e = await ctx.api.rpcC("nx_etiqueta_salvar", { p_etiqueta: { nome, ...(ui.corOk(cor) ? { cor } : {}) } });
       if (e && e.id && !k.base.etiquetas.some(x => x.id === e.id)) k.base.etiquetas = [...k.base.etiquetas, e].sort((a, b) => String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR"));   // plano 1000b · RB-192: etiqueta sem nome não quebra
       return e;
@@ -365,7 +367,9 @@ export async function montar(ctx) {
 
   // decide a tela
   let tipo, chave;
-  if (modulo === "crm") { tipo = "kanban"; chave = `kanban|${r.query && r.query.funil || ""}|${r.query && r.query.busca || ""}`; }   // plano 1000 (CR-185): ?busca nova remonta o quadro
+  // plano 1500c · UC-028: o atalho «Importar planilha» do Início/ajuda aponta para #/crm?importar=1 — abre a importação (não o quadro)
+  if (modulo === "crm" && r.query && String(r.query.importar) === "1" && !partes[0]) { tipo = "importar"; chave = "importar"; }
+  else if (modulo === "crm") { tipo = "kanban"; chave = `kanban|${r.query && r.query.funil || ""}|${r.query && r.query.busca || ""}`; }   // plano 1000 (CR-185): ?busca nova remonta o quadro
   else if (modulo === "contatos" && partes[0] === "importar") { tipo = "importar"; chave = "importar"; }
   else if (modulo === "contatos" && partes[0]) { tipo = "ficha"; chave = `ficha|${partes[0]}`; }
   else if (modulo === "contatos") { tipo = "contatos"; chave = `contatos|${JSON.stringify(r.query || {})}`; }   // plano 1000: filtro de link novo (?busca, ?empresa, ?origem) remonta a lista
@@ -373,6 +377,8 @@ export async function montar(ctx) {
   else if (modulo === "empresas") { tipo = "empresas"; chave = "empresas"; }
   else if (modulo === "tarefas") { tipo = "tarefas"; chave = "tarefas"; }
   else { tipo = "kanban"; chave = "kanban|"; }
+  // plano 1500c · RC-067: #/crm/negocio/ID sem ?funil/?busca abre a gaveta SOBRE o quadro que já está aberto (herda funil e busca) — não refaz o quadro
+  if (tipo === "kanban" && partes[0] === "negocio" && !(r.query && (r.query.funil || r.query.busca)) && telaAtual && telaAtual.tipo === "kanban") chave = telaAtual.chave;
 
   // plano 1000 (CR-040): #/contatos/abc e #/empresas/xyz não viram erro técnico (Number("abc") = null no servidor) — «não encontrado», nenhuma RPC
   if ((tipo === "ficha" || tipo === "empresa") && !/^\d+$/.test(String(partes[0]))) {

@@ -332,3 +332,191 @@ details.ini-canal-erro p { margin: .25rem 0 0; font-size: var(--fs-12); color: v
 }
 /* RB-166/RB-180: «Trocar indicadores» fica aberto; «Voltar ao padrão» e «Pronto» lado a lado, a nota de que fica neste aparelho */
 .ini-kpis-esc-acoes { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--esp-2); }
+
+
+/* ============================================================
+   Plano 1500c (21/10/2026) — frente inicio. Só tokens.
+   ============================================================ */
+/* plano 1500c · RC-221: a data curta («ter, 21 out») no celular; a longa no resto */
+.ini-data-curta { display: none; }
+@media (max-width: 400px) {
+  .ini-data-longa { display: none; }
+  .ini-data-curta { display: inline; }
+}
+/* plano 1500c · RC-223: a idade âmbar avisa que dá para tocar em Atualizar */
+.ini-idade.ini-velho { cursor: help; }
+/* plano 1500c · RC-298: puxar para atualizar (só aparece durante o gesto) */
+.ini-puxar {
+  display: flex; align-items: center; justify-content: center; gap: var(--esp-2); height: var(--puxe, 0px); min-height: 0; overflow: hidden;
+  color: var(--c-texto-3); font-size: var(--fs-13); transition: height var(--t-micro) var(--e-out);
+}
+.ini-puxar .ic { width: 16px; height: 16px; transition: transform var(--t-ui) var(--e-out); }
+.ini-puxar.pronto { color: var(--c-prim-luz); }
+.ini-puxar.pronto .ic { transform: rotate(180deg); }
+
+/* plano 1500c · IC-001: «Cada R$ 1 virou R$ X» — o destaque de venda, largo e editorial */
+.ini-roi {
+  position: relative; display: grid; gap: var(--esp-2); padding: var(--esp-5) var(--esp-5) var(--esp-4); border-radius: var(--r-g);
+  border: 1px solid color-mix(in srgb, var(--c-prim-luz) 30%, var(--c-borda)); background: linear-gradient(135deg, var(--c-prim-suave), var(--c-sup) 70%); overflow: hidden;
+}
+.ini-roi-olho { margin: 0; }
+.ini-roi-frase { margin: 0; font: 500 var(--fs-25)/1.15 var(--f-titulo); letter-spacing: -.01em; color: var(--c-texto); text-wrap: balance; }
+.ini-roi-um { font-family: var(--f-mono); color: var(--c-texto-2); }
+.ini-roi-n { font-family: var(--f-mono); font-size: var(--fs-num-xl); line-height: 1; letter-spacing: -.03em; color: var(--c-ok); white-space: nowrap; }
+.ini-roi-baixo .ini-roi-n { color: var(--c-aten); }
+.ini-roi-frase .narr { display: block; margin-top: var(--esp-1); font-size: var(--fs-17); color: var(--c-texto-2); }
+.ini-roi-conta { margin: 0; }
+.ini-roi .rel-link { justify-self: start; }
+@media (max-width: 760px) {
+  .ini-roi { padding: var(--esp-4); }
+  .ini-roi-frase { font-size: var(--fs-20); }
+  .ini-roi-n { font-size: var(--fs-num-l); }
+}
+
+/* plano 1500c · IC-002 + RC-229: primeiros passos do cliente novo e o modo EXEMPLO */
+.ini-guia { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ini-guia-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--esp-2) var(--esp-3); align-items: center; padding: var(--esp-3) 0; border-top: 1px solid var(--c-borda); }
+.ini-guia-item:first-child { border-top: 0; }
+.ini-guia-n { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--c-sup-2); border: 1px solid var(--c-borda-2); font: 600 var(--fs-14)/1 var(--f-mono); color: var(--c-texto-2); }
+.ini-guia-item.feito .ini-guia-n { background: var(--c-ok-suave); border-color: transparent; color: var(--c-ok); }
+.ini-guia-n .ic { width: 16px; height: 16px; }
+.ini-guia-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ini-guia-item.feito .ini-guia-txt b { color: var(--c-texto-2); text-decoration: line-through; text-decoration-color: var(--c-texto-3); }
+.ini-guia-item .bt { min-height: 40px; }
+@container (max-width: 26rem) { .ini-guia-item { grid-template-columns: auto minmax(0, 1fr); } .ini-guia-item .bt { grid-column: 2; justify-self: start; } }
+.ini-guia-cartao { container-type: inline-size; }
+.ini-exemplo-faixa {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-2) var(--esp-3); padding: var(--esp-3) var(--esp-4); border-radius: var(--r);
+  border: 1px dashed color-mix(in srgb, var(--c-info) 55%, var(--c-borda)); background: var(--c-info-suave);
+}
+.ini-exemplo-selo { display: inline-block; padding: 2px var(--esp-2); border-radius: var(--r-pp); background: var(--c-info); color: var(--c-fundo); font: 700 var(--fs-12)/1.4 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; }
+.ini-exemplo-txt { flex: 1 1 16rem; min-width: 0; margin: 0; }
+.ini-exemplo-faixa .bt { margin-left: auto; min-height: 40px; }
+.ini-exemplo .ini-kpi, .ini-exemplo .rel-cartao, .ini-exemplo .ini-roi { outline: 1px dashed color-mix(in srgb, var(--c-info) 35%, transparent); outline-offset: -1px; }
+
+/* plano 1500c · RC-196: a diferença em reais do mês */
+.ini-mes-dif { margin: 0; font: 600 var(--fs-14)/1.3 var(--f-mono); }
+.ini-dif-cima { color: var(--c-ok-txt); }
+.ini-dif-baixo { color: var(--c-ruim-txt); }
+/* plano 1500c · RC-195: a previsão com o «i» do lado (fora do link) */
+.ini-numero-env { position: relative; display: grid; min-width: 0; }
+.ini-numero-env > .ini-numero { padding-right: 2.25rem; }
+.ini-i-bt { position: absolute; top: 0; right: 0; width: 32px; height: 32px; display: inline-grid; place-items: center; border-radius: var(--r-pp); color: var(--c-texto-2); }
+.ini-i-bt .ic { width: 14px; height: 14px; }
+.ini-i-bt:focus-visible { outline: var(--foco-largura, 2px) solid var(--c-foco); outline-offset: 2px; }
+
+/* plano 1500c · RC-192/RC-193: «Amanhã» nas tarefas e o atraso em negrito */
+.ini-tf-atraso { font-weight: 700; }
+.ini-tf-adiar { margin-left: auto; flex: none; min-height: 36px; }
+/* plano 1500c · RC-213/RC-214: testar o número e copiar o erro */
+.ini-canal-acoes { display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-2); margin-left: auto; }
+.ini-canal-teste { min-height: 1.3em; }
+details.ini-canal-erro .bt { margin-top: var(--esp-1); min-height: 32px; }
+/* plano 1500c · RC-218: o funil contra o mês passado */
+.ini-funil-cmp { display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-1); margin: 0 0 var(--esp-3); }
+/* plano 1500c · RC-341/RC-243/RC-246: etapa com link, o «i» da taxa e «Copiar tabela» (no Início; o global vai no relatorios.css) */
+.ini .g-flink { color: inherit; text-decoration: underline; text-decoration-color: var(--c-borda-2); text-underline-offset: 3px; }
+.ini .g-flink:hover { color: var(--c-prim-luz); text-decoration-color: currentColor; }
+.ini .g-flink:focus-visible { outline: var(--foco-largura, 2px) solid var(--c-foco); outline-offset: 2px; border-radius: var(--r-pp); }
+.ini .g-fdica-bt { display: inline-grid; place-items: center; width: 24px; height: 24px; margin-left: var(--esp-1); border-radius: 50%; border: 1px solid var(--c-borda-2); background: none; color: var(--c-texto-2); font: 600 var(--fs-12)/1 var(--f-mono); cursor: pointer; }
+.ini .g-fdica-txt { grid-column: 1 / -1; font-size: var(--fs-12); color: var(--c-texto-2); }
+.ini .g-copiar-tabela { min-height: 36px; padding: .3rem .8rem; margin-left: var(--esp-2); border-radius: 999px; border: 1px solid var(--c-borda-2); background: none; color: var(--c-texto-2); font: 600 var(--fs-13)/1 var(--f-corpo); cursor: pointer; }
+.ini .g-tabela:focus-visible { outline: var(--foco-largura, 2px) solid var(--c-foco); outline-offset: 2px; }
+
+/* plano 1500c · RC-201: consultas que passaram sem presença; RC-202: a de amanhã não confirmada */
+.ini-sempres { margin-top: var(--esp-3); padding: var(--esp-3); border-radius: var(--r-p); background: var(--c-info-suave); border: 1px solid var(--c-borda); display: flex; flex-direction: column; gap: var(--esp-1); min-width: 0; }
+.ini-sempres-t { margin: 0; display: flex; align-items: center; gap: var(--esp-2); font-weight: 600; }
+.ini-sempres-t .ic { flex: none; color: var(--c-info); }
+.ini-sempres-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ini-sempres-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--esp-1) var(--esp-3); align-items: center; padding: var(--esp-2) 0; border-top: 1px solid var(--c-borda); }
+.ini-sempres-item:first-child { border-top: 0; }
+.ini-sempres-h { font-size: var(--fs-14); color: var(--c-texto-2); }
+.ini-sempres-nome { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.ini-sempres-item .bt { min-height: 40px; }
+.ini-prox-conf { margin: 2px 0 0; display: inline-flex; align-items: center; gap: var(--esp-1); font-size: var(--fs-12); font-weight: 600; color: var(--c-aten); }
+.ini-prox-conf .ic { width: 13px; height: 13px; }
+/* plano 1500c · RC-204: as três faixas da espera (o texto acompanha a cor) */
+.ini-espera-aten .ini-espera-t { color: var(--c-aten); }
+.ini-espera-ruim .ini-espera-t { color: var(--c-ruim); }
+.ini-espera-fx { font-weight: 700; }
+/* plano 1500c · RC-197/RC-198: o «0» discreto e a barra que abre a agenda */
+.ini-bv-n0 { bottom: 7px; opacity: .55; color: var(--c-texto-3); }
+.ini-bv-link { cursor: pointer; }
+/* plano 1500c · RC-235/RC-234: «vs. ontem» à vista e a legenda da linha quando ela mede outra coisa */
+.ini-kpi-vs-dia { align-self: center; font-size: var(--fs-12); color: var(--c-texto-3); white-space: nowrap; }
+.ini-kpi-sp-leg { display: block; margin-top: 2px; font-size: var(--fs-12); color: var(--c-texto-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* plano 1500c · RC-232: «Usar +10%» sob os campos da meta */
+.ini-metas-sug-l { display: flex; flex-wrap: wrap; gap: var(--esp-2); margin-top: calc(var(--esp-2) * -1); }
+/* plano 1500c · RC-233: Meta e Google na barra de origem */
+.ini-origem-t2 i { position: absolute; top: 0; bottom: 0; left: var(--x, 0%); width: var(--w); }
+.ini-origem-t2 i:first-child { left: 0; border-radius: 999px 0 0 999px; }
+.ini-origem-meta { background: var(--c-meta); }
+.ini-origem-google { background: var(--c-google); }
+/* plano 1500c · RC-254: «Resumo do mês» ao lado de «Trocar indicadores» */
+.ini-kpis-rod { gap: var(--esp-2); flex-wrap: wrap; }
+.ini-resumo-bt .ic, .ini-kpis-trocar .ic { width: 14px; height: 14px; }
+
+/* plano 1500c · RC-339: esfriando; RC-219: equipe; RC-325: desde que você começou; RC-338: aniversariantes */
+.ini-esfr-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ini-esfr-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--esp-1) var(--esp-3); align-items: center; padding: var(--esp-2) 0; border-top: 1px solid var(--c-borda); }
+.ini-esfr-item:first-child { border-top: 0; }
+.ini-esfr-txt { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ini-esfr-nome { margin: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ini-esfr-item .bt { min-height: 40px; }
+.ini-equipe-rol { overflow-x: auto; overscroll-behavior-x: contain; }
+.ini-equipe-tab { width: 100%; border-collapse: collapse; font-size: var(--fs-14); }
+.ini-equipe-tab th, .ini-equipe-tab td { padding: var(--esp-2) var(--esp-2); border-top: 1px solid var(--c-borda); text-align: left; white-space: nowrap; }
+.ini-equipe-tab thead th { border-top: 0; font-size: var(--fs-12); font-weight: 600; color: var(--c-texto-3); }
+.ini-equipe-tab .num { text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.ini-equipe-top th[scope="row"] { color: var(--c-prim-luz); }
+.ini-equipe-coroa { font: 700 var(--fs-12)/1 var(--f-mono); }
+.ini-equipe-rapido { color: var(--c-ok-txt); font-weight: 700; }
+.ini-desde-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--esp-3); }
+.ini-desde-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--esp-3); align-items: baseline; }
+.ini-desde-r { font-weight: 600; }
+.ini-desde-v { grid-row: span 2; font-size: var(--fs-17); color: var(--c-texto); white-space: nowrap; }
+.ini-desde-antes { color: var(--c-texto-3); text-decoration-thickness: 1px; }
+.ini-desde-sel { font-size: var(--fs-12); font-weight: 600; }
+.ini-desde-item.melhor .ini-desde-sel, .ini-desde-item.melhor .ini-desde-v b { color: var(--c-ok-txt); }
+.ini-desde-item.pior .ini-desde-sel { color: var(--c-ruim-txt); }
+.ini-aniv { margin-top: var(--esp-3); padding: var(--esp-3); border-radius: var(--r-p); background: var(--c-sec-suave); display: flex; flex-direction: column; gap: var(--esp-1); }
+.ini-aniv-t { margin: 0; font-weight: 600; }
+.ini-aniv-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--esp-1); }
+.ini-aniv-lista li { display: flex; align-items: center; justify-content: space-between; gap: var(--esp-2); min-width: 0; }
+.ini-aniv-nome { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* plano 1500c · RC-254: a folha do resumo — por cima da tela, e sozinha na impressão (A4) */
+.ini-resumo-folha {
+  position: fixed; inset: var(--esp-4); z-index: 60; margin: auto; max-width: 40rem; max-height: calc(100dvh - 2 * var(--esp-4)); overflow: auto;
+  display: flex; flex-direction: column; gap: var(--esp-4); padding: var(--esp-6); border-radius: var(--r-g); background: var(--c-sup); border: 1px solid var(--c-borda); box-shadow: 0 24px 60px var(--c-sombra);
+}
+.ini-resumo-folha:focus-visible { outline: var(--foco-largura, 2px) solid var(--c-foco); outline-offset: 2px; }
+.ini-resumo-cab p { margin: 0; }
+.ini-resumo-titulo { margin: var(--esp-1) 0; font: 500 var(--fs-31)/1.1 var(--f-titulo); letter-spacing: -.01em; }
+.ini-resumo-lista { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--esp-3); margin: 0; }
+.ini-resumo-l { display: flex; flex-direction: column; gap: 2px; padding: var(--esp-3); border-radius: var(--r-p); border: 1px solid var(--c-borda); }
+.ini-resumo-l dt { font-size: var(--fs-13); color: var(--c-texto-2); }
+.ini-resumo-l dd { margin: 0; font-size: var(--fs-20); color: var(--c-texto); }
+.ini-resumo-destaque { grid-column: 1 / -1; background: var(--c-ok-suave); border-color: transparent; }
+.ini-resumo-destaque dd { font-size: var(--fs-31); color: var(--c-ok-txt); }
+.ini-resumo-rod { margin: 0; }
+.ini-resumo-acoes { display: flex; flex-wrap: wrap; gap: var(--esp-2); }
+.ini-resumo-acoes .bt { min-height: 44px; }
+@media (max-width: 520px) {
+  .ini-resumo-folha { inset: 0; max-height: 100dvh; border-radius: 0; padding: var(--esp-4); }
+  .ini-resumo-lista { grid-template-columns: minmax(0, 1fr); }
+}
+@media print {
+  html.ini-imprimindo body > *:not(.ini-resumo-folha) { display: none !important; }
+  html.ini-imprimindo .ini-resumo-folha { position: static; inset: auto; max-width: none; max-height: none; overflow: visible; box-shadow: none; border: 0; padding: 0; }
+  html.ini-imprimindo .ini-resumo-acoes { display: none !important; }
+}
+
+/* toque: alvos de 44 px nas peças novas */
+@media (pointer: coarse), (max-width: 760px) {
+  .ini-tf-adiar, .ini-guia-item .bt, .ini-exemplo-faixa .bt, .ini-sempres-item .bt, .ini-esfr-item .bt, .ini-canal-acoes .bt, .ini-aniv .bt, .ini-metas-sug-l .bt,
+  details.ini-canal-erro .bt, .ini .g-copiar-tabela { min-height: 44px; }
+  .ini-i-bt { width: 44px; height: 44px; }
+  .ini-numero-env > .ini-numero { padding-right: 2.75rem; }
+  .ini .g-fdica-bt { width: 44px; height: 44px; }
+}

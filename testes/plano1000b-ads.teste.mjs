@@ -158,7 +158,8 @@ test("AB-072 · período do Anúncios guardado por cliente (a chave global antig
   assert.equal(A.periodoGuardado(lerL, "cli-A"), "mes_ant");
   assert.equal(A.periodoGuardado(lerL, "cli-B"), 7, "o «Mês passado» do A não vaza para o B");
   assert.match(ADS, /S\.dias = periodoGuardado\(lerLocal, ctx\.cliente\.id\);/);
-  assert.equal((ADS.match(/gravarLocal\(chaveDias\(ctx\.cliente\.id\)/g) || []).length, 2, "barra e folha gravam por cliente");
+  // plano 1500c: o vazio de Campanhas (AC-110) também amplia o período — 3 lugares gravam, todos por cliente
+  assert.equal((ADS.match(/gravarLocal\(chaveDias\(ctx\.cliente\.id\)/g) || []).length, 3, "barra, folha e «Ampliar» gravam por cliente");
   assert.doesNotMatch(ADS, /gravarLocal\("nx-app-ads-dias"/);
 });
 
@@ -401,7 +402,9 @@ test("AB-085/AB-098 · «Atualizar» do mesmo recorte mantém os números; falha
   assert.match(CSS, /\.relat-atualizando \{ opacity: \.55;/);
 });
 test("AB-223 · legenda do período só é reescrita quando muda", () => {
-  assert.match(REL, /if \(legenda\.textContent !== textoLegenda\) legenda\.textContent = textoLegenda;/);
+  // plano 1500c: a legenda sai de textoLegenda() (AC-155: a janela que o servidor comparou) — a regra de só reescrever quando muda continua
+  assert.match(REL, /if \(legenda\.textContent !== textoLegenda0\) legenda\.textContent = textoLegenda0;/);
+  assert.match(REL, /if \(legenda\.textContent !== t\) legenda\.textContent = t;/);
 });
 test("AB-097 · Relatórios com o cache do shell ao alternar Vendas/Atendimento", () => {
   assert.match(REL, /const opcCache = \{ cache: true, aoCache: rc => \{/);
@@ -411,7 +414,8 @@ test("AB-097 · Relatórios com o cache do shell ao alternar Vendas/Atendimento"
 test("AB-091/AB-094/AB-258 · «mensagens» por extenso, CSV com o rótulo da tabela e a previsão ponderada explicada", () => {
   assert.match(REL, /\$\{int\(f\.total\)\} \$\{\+f\.total === 1 \? "mensagem" : "mensagens"\}/);
   assert.doesNotMatch(REL, /msgs ·/);
-  assert.match(REL, /colunas: \["Responsável", "Criados", "Ganhos", "Receita", "Ticket médio", "Abertos agora"\],/);
+  // plano 1500c: + «Conversão» (AC-159) — o CSV continua com o mesmo rótulo da tabela
+  assert.match(REL, /colunas: \["Responsável", "Criados", "Ganhos", "Conversão %", "Receita", "Ticket médio", "Abertos agora"\],/);
   assert.match(REL, /Previsão ponderada = valor de cada negócio × chance de fechar da etapa em que ele está\./);
 });
 
@@ -427,7 +431,8 @@ test("AB-103 · serviço sem nome ou com valor inválido para o salvamento com o
   assert.deepEqual(AC.lerTickets([{ s: "", v: "300" }]).erro, { indice: 0, campo: "s", msg: "Dê um nome a este serviço (ou apague o valor)." });
   assert.equal(AC.lerTickets([{ s: "Implante", v: "1.500" }, { s: "Limpeza", v: "abc" }]).erro.indice, 1);
   assert.deepEqual(AC.lerTickets([{ s: "Implante", v: "1.500" }, { s: "", v: "" }]), { ticket: { Implante: 1500 } }, "linha vazia é ignorada");
-  assert.match(ADSCFG, /alvoErr\.setAttribute\("aria-invalid", "true"\)/);
+  // plano 1500c: aria-invalid + aria-describedby pela marcarInvalido (AC-153)
+  assert.match(ADSCFG, /if \(alvoErr\) \{ marcarInvalido\(alvoErr, "cfga-tk-erro"\); alvoErr\.focus\(\); \}/);
 });
 test("AB-109 · sugestões de serviço incluem os já salvos no valor por serviço", () => {
   assert.deepEqual(AC.servicosUsados([{ servico: "Limpeza" }], 40, ["Implante", "limpeza"]), ["Implante", "Limpeza"]);
@@ -835,7 +840,8 @@ test("AB-082 · no dia 1º «Este mês» e «Mês passado» dizem o nome do mês
   assert.equal(L.rotuloPeriodo("mes_ant", Md15).titulo, "Mês passado");
   assert.equal(L.rotuloPeriodo("mes").titulo, "Este mês", "sem M: como antes");
   assert.equal(L.numerosPeriodo(Md1, { dias: "mes" }).rotulo.titulo, "Setembro (até ontem)");
-  assert.match(ADSb, /L\.rotuloPeriodo\(S\.dias, M\)\.titulo\}\$\{S\.plat/);
+  // plano 1500c: o cabeçalho de impressão saiu para cabecalhoImpressaoAds (AC-128) — o período continua com o nome do mês
+  assert.match(ADSb, /periodo: L\.rotuloPeriodo\(S\.dias, M\)\.titulo,/);
 });
 test("AB-199 · «enviado» sem confirmação há mais de 24 h vira «sem confirmação de entrega»", () => {
   const agora = Date.now();
@@ -1338,7 +1344,9 @@ test("AB-219/AB-222/AB-225/AB-245 · prévia de outro dia, link para a regra, di
   assert.match(ADSc, /h\("li", \{ id: idRegra\(r\.id\), tabindex: "-1" \}/);
   assert.match(ADSc, /on: \{ click: \(\) => irParaRegra\(e\.regra\) \} \}, "Ver a regra"\)/);
   assert.equal(A.diarioSugerido(3000, 2500, 5), 100); assert.equal(A.diarioSugerido(3000, 3100, 5), 0); assert.equal(A.diarioSugerido(3000, 100, 0), null);
-  assert.match(ADSc, /Orçamento diário sugerido: \$\{N\.brl\(diarioSugerido\(orc, m\.gasto, m\.restam\)\)\}/);
+  // plano 1500c: a frase do ritmo saiu para textoRitmo (AC-080) — o diário sugerido continua lá
+  assert.match(ADSc, /const sug = diarioSugerido\(orc, m\.gasto, m\.restam\);/);
+  assert.match(ADSc, /Orçamento diário sugerido: \$\{brl\(sug\)\}/);
   assert.match(ADSc, /h\("button", \{ type: "button", class: "ads-rank-abrir", "aria-haspopup": "dialog"/);
   assert.match(CSSc, /\.ads-rank-abrir \{ all: unset;/);
 });

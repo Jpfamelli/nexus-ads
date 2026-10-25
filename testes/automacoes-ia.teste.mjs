@@ -211,8 +211,9 @@ test("montar: o pedido à Anthropic — modelo, esforço, schema do catálogo e 
   const p = ia.pedidos[0];
   assert.equal(p.chave, CHAVE_IA);
   assert.equal(p.modelo, "claude-opus-5-5", "o modelo é o de nx_config (padrão do código: claude-opus-5-5)");
-  assert.equal(p.esforco, "medium");
-  assert.equal(p.maxTokens, 12000, "folga para o raciocínio + o JSON");
+  // plano 1500c · SC-090: effort low e 6000 tokens (12000 só se a resposta vier cortada); antes medium/12000
+  assert.equal(p.esforco, "low");
+  assert.equal(p.maxTokens, 6000, "plano 1500c: 6000 na 1ª tentativa");
   assert.equal(p.timeoutMs, IA.TIMEOUT_MONTAR_MS);
   assert.equal(IA.TIMEOUT_MONTAR_MS, 110_000);
   assert.equal(p.retentativas, 0, "o tempo total (110 s) cabe na Edge Function: sem retentativa");
@@ -588,7 +589,8 @@ test("decidir: classificar_etapa válida → o banco recebe só {etapa_id, motiv
   const p = ia.pedidos[0];
   assert.equal(p.esforco, "low");
   // plano 100 (E178): 35 s por decisão e SEM retentativa do SDK — a fila reprocessa; 3 em paralelo cabem no teto da função
-  assert.deepEqual([p.maxTokens, p.timeoutMs, p.retentativas], [6000, IA.PRAZO_DECISAO_MS, 0]);
+  // plano 1500c · SC-091: a decisão devolve um JSON pequeno — 1000 tokens (antes 6000)
+  assert.deepEqual([p.maxTokens, p.timeoutMs, p.retentativas], [1000, IA.PRAZO_DECISAO_MS, 0]);
   assert.equal(IA.PRAZO_DECISAO_MS, 35_000);
   assert.deepEqual(p.schema.properties.etapa_id.enum, CTX_CLASSIFICAR.etapas.map(e => e.id), "as opções são as etapas oferecidas pelo banco (e só elas)");
   assert.equal(p.schema.additionalProperties, false);
@@ -822,14 +824,15 @@ test("ia.js estruturarClaude: opus-5-5 com saída estruturada, effort e reserva 
   const mod = await carregarIa();
   globalThis.__ia3r = () => ({ model: "claude-opus-5-5", stop_reason: "end_turn", usage: { input_tokens: 500, output_tokens: 70 },
                                content: [{ type: "thinking", thinking: "" }, { type: "text", text: "{\"a\":\"oi\"}" }] });
-  const r = await mod.estruturarClaude({ chave: "k", sistema: "S", usuario: "U", schema: SCHEMA, esforco: "medium", maxTokens: 8000, timeoutMs: 60000 });
+  // plano 1500c · SC-085: o padrão do código virou o Haiku 5.5 — o Opus 5.5 (reserva de modelo) vem configurado
+  const r = await mod.estruturarClaude({ chave: "k", modelo: "claude-opus-5-5", sistema: "S", usuario: "U", schema: SCHEMA, esforco: "medium", maxTokens: 8000, timeoutMs: 60000 });
   assert.equal(typeof r.ms, "number", "latência medida (contrato 7)");
   assert.deepEqual({ ...r, ms: undefined }, { json: { a: "oi" }, texto: "{\"a\":\"oi\"}", modelo: "claude-opus-5-5", tokens_in: 500, tokens_cache_escrita: null, tokens_cache_leitura: null, tokens_out: 70, stop_reason: "end_turn", ms: undefined });
   assert.equal(globalThis.__ia3[0].ctor.timeout, 60000);
   assert.equal(globalThis.__ia3[0].ctor.maxRetries, 1, "1 retentativa por padrão");
   const { t, p } = globalThis.__ia3[1];
   assert.equal(t, "beta");
-  assert.equal(p.model, "claude-opus-5-5", "padrão claude-opus-5-5");
+  assert.equal(p.model, "claude-opus-5-5", "o configurado (plano 1500c: o padrão é o Haiku 5.5)");
   assert.equal(p.max_tokens, 8000);
   assert.deepEqual(p.output_config, { format: { type: "json_schema", schema: SCHEMA }, effort: "medium" });
   assert.deepEqual(p.betas, ["server-side-fallback-2026-07-01"]);

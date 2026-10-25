@@ -15,7 +15,9 @@ export function controlesVisoes(k, { tipo, obterDados, aplicar } = {}) {
   const salvar = h("button", { type: "button", class: "bt bt-sec bt-p crm-visoes-salvar", on: { click: abrirSalvar } }, "Salvar filtro");
   // plano 1000 (CR-209): sem filtro escolhido o «Excluir» some (desligado, parecia texto solto ao lado do seletor)
   const excluir = h("button", { type: "button", class: "bt bt-fant bt-p crm-visoes-excluir", hidden: true, disabled: true, on: { click: removerSelecionada } }, "Excluir filtro");
-  const raiz = h("div", { class: "crm-visoes", "aria-label": "Filtros salvos do CRM" }, seletor, salvar, excluir);
+  // plano 1500c · RC-139: «Renomear» o filtro escolhido sem precisar salvar por cima
+  const renomear = h("button", { type: "button", class: "bt bt-fant bt-p crm-visoes-renomear", hidden: true, on: { click: renomearSelecionada } }, "Renomear");
+  const raiz = h("div", { class: "crm-visoes", "aria-label": "Filtros salvos do CRM" }, seletor, salvar, renomear, excluir);
 
   function dadosAtuais() {
     try { return obterDados(); } catch { return null; }
@@ -27,6 +29,7 @@ export function controlesVisoes(k, { tipo, obterDados, aplicar } = {}) {
     for (const v of visoes) seletor.appendChild(h("option", { value: v.id, selected: v.id === selecionada }, v.nome));
     excluir.disabled = !selecionada;
     excluir.hidden = !selecionada;
+    renomear.hidden = !selecionada;
     excluir.setAttribute("aria-label", selecionada ? `Excluir o filtro salvo ${visoes.find(v => v.id === selecionada)?.nome || ""}`.trim() : "Nenhum filtro salvo selecionado");
   }
   function persistir(novas) {
@@ -53,7 +56,8 @@ export function controlesVisoes(k, { tipo, obterDados, aplicar } = {}) {
     }
     const form = h("form", { class: "crm-form", novalidate: true },
       ui.campo({ rotulo: "Nome do filtro", nome: "nome", valor: existente?.nome || "", max: 32, autocomplete: "off", placeholder: tipo === "kanban" ? "Ex.: Retornos desta semana" : "Ex.: Leads sem oportunidade" }),
-      h("p", { class: "campo-ajuda" }, "Fica salvo somente neste dispositivo, para esta empresa e sua conta."));
+      // plano 1500c · RC-145: quantos dos 12 já foram usados (o limite não pega de surpresa no 13º)
+      h("p", { class: "campo-ajuda" }, `Fica salvo somente neste dispositivo, para esta empresa e sua conta.${existente ? "" : ` ${visoes.length} de ${L.LIMITE_VISOES_CRM || 12} usados.`}`));
     await ui.modal({ titulo: existente ? "Atualizar filtro salvo" : "Salvar os filtros atuais", corpo: form, largura: "p", acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: null },
       { rotulo: existente ? "Atualizar" : "Salvar filtro", tipo: "primario", fn: api => {
@@ -73,13 +77,32 @@ export function controlesVisoes(k, { tipo, obterDados, aplicar } = {}) {
     ] });
   }
 
+  // plano 1500c · RC-138: atalho local e barato — exclui na hora e oferece «Desfazer» (volta à mesma posição), sem diálogo de confirmação
   async function removerSelecionada() {
     const atual = L.visaoCorrespondenteCRM(visoes, tipo, dadosAtuais());
     const item = visoes.find(v => v.id === atual);
     if (!item) return;
-    if (!(await ui.confirmar({ titulo: `Excluir o filtro salvo «${item.nome}»?`, perigo: true,
-      texto: "Isso remove apenas o atalho salvo neste dispositivo. Contatos, negócios e filtros do servidor não são alterados." }))) return;
-    if (persistir(L.excluirVisaoCRM(visoes, tipo, item.id))) ui.toast("Filtro salvo removido deste dispositivo.", { tipo: "ok" });
+    const pos = visoes.indexOf(item);
+    if (!persistir(L.excluirVisaoCRM(visoes, tipo, item.id))) return;
+    ui.acaoComDesfazer({ texto: `Filtro «${item.nome}» excluído`, reverter: () => { persistir(L.reporVisaoCRM(visoes, tipo, item, pos)); } });
+  }
+
+  async function renomearSelecionada() {
+    const atual = L.visaoCorrespondenteCRM(visoes, tipo, dadosAtuais());
+    const item = visoes.find(v => v.id === atual);
+    if (!item) return;
+    const form = h("form", { class: "crm-form", novalidate: true },
+      ui.campo({ rotulo: "Nome do filtro", nome: "nome", valor: item.nome, max: 32, autocomplete: "off" }));
+    await ui.modal({ titulo: "Renomear filtro salvo", corpo: form, largura: "p", acoes: [
+      { rotulo: "Cancelar", tipo: "neutro", valor: null },
+      { rotulo: "Renomear", tipo: "primario", fn: api => {
+        const r = L.renomearVisaoCRM(visoes, tipo, item.id, ui.lerForm(form).nome);
+        if (!r.ok) { api.erro(r.codigo === "nome_duplicado" ? "Já existe um filtro salvo com esse nome." : "Use um nome de 2 a 32 caracteres."); return false; }
+        if (!persistir(r.visoes)) return false;
+        ui.toast("Filtro renomeado.", { tipo: "ok" });
+        return true;
+      } },
+    ] });
   }
 
   render();
@@ -110,11 +133,17 @@ export function grupoFiltroCampo(k, { entidade, funilId = null, atual = null } =
     const ops = L.opsDoCampo(c.tipo);
     const opAtual = primeira && atual && ops.includes(atual.op) ? atual.op : ops[0];
     for (const op of ops) selOp.appendChild(h("option", { value: op, selected: op === opAtual }, L.rotuloOpCampo(op, c.tipo)));      // plano 1000b · RB-197: «inclui» no campo multi
-    const v0 = primeira && atual && atual.valor != null ? String(atual.valor) : "";
+    let v0 = primeira && atual && atual.valor != null ? String(atual.valor) : "";
+    // plano 1500c · RC-142: data salva no formato antigo («31/12/2026») vira AAAA-MM-DD; se não der, avisa já no campo (antes sumia calada)
+    let avisoData = null;
+    if (c.tipo === "data" && v0) { const iso = L.dataParaFiltro(v0); if (!iso) avisoData = `O valor salvo «${v0}» não é uma data válida. Escolha a data de novo.`; v0 = iso; }
     if (c.tipo === "opcao" || c.tipo === "multi") ctlValor = h("select", { class: "sel", "aria-label": `Valor de ${c.rotulo}` }, (c.opcoes || []).map(o => h("option", { value: o, selected: o === v0 }, o)));
     else if (c.tipo === "sim_nao") ctlValor = h("select", { class: "sel", "aria-label": `Valor de ${c.rotulo}` }, h("option", { value: "true", selected: v0 !== "false" }, "Sim"), h("option", { value: "false", selected: v0 === "false" }, "Não"));
-    else ctlValor = h("input", { type: c.tipo === "data" ? "date" : "text", inputmode: ["numero", "moeda"].includes(c.tipo) ? "decimal" : null, "aria-label": `Valor de ${c.rotulo}`, placeholder: "Valor", value: v0 });
+    // plano 1500c · RC-143: o exemplo segue o tipo («Ex.: 1.500,00» na moeda) — a leitura é a do lerNumero
+    else ctlValor = h("input", { type: c.tipo === "data" ? "date" : "text", inputmode: ["numero", "moeda"].includes(c.tipo) ? "decimal" : null, "aria-label": `Valor de ${c.rotulo}`,
+      placeholder: L.exemploValorFiltro ? L.exemploValorFiltro(c.tipo) : "Valor", value: v0, "aria-invalid": avisoData ? "true" : null });
     caixaValor.appendChild(ctlValor);
+    if (avisoData) caixaValor.appendChild(h("small", { class: "ed-erro crm-fc-aviso", role: "alert" }, avisoData));
     mostrarValor();
   }
   function mostrarValor() { caixaValor.hidden = !def() || ["vazio", "preenchido"].includes(selOp.value); }
@@ -143,6 +172,9 @@ export function buscaEtiquetas(k, opsEt, { limite = 12 } = {}) {
   const norm = s => (L && L.semAcento ? L.semAcento(String(s || "")) : String(s || "").toLowerCase()).trim();
   const campo = h("input", { type: "search", class: "crm-fe-busca", placeholder: "Buscar etiqueta", "aria-label": "Buscar etiqueta", autocomplete: "off" });
   const nada = h("small", { class: "crm-fe-nada", hidden: true }, "Nenhuma etiqueta com esse nome.");
+  // plano 1500c · RC-144: quantas sobraram, dito ao leitor (com pausa — não a cada letra)
+  const contagem = h("small", { class: "sr-only crm-fe-cont", role: "status" });
+  let tCont = null;
   campo.addEventListener("input", () => {
     const q = norm(campo.value);
     let vis = 0;
@@ -153,6 +185,8 @@ export function buscaEtiquetas(k, opsEt, { limite = 12 } = {}) {
       if (mostra) vis++;
     }
     nada.hidden = vis > 0;
+    clearTimeout(tCont);
+    tCont = setTimeout(() => { contagem.textContent = vis ? `${vis} ${vis === 1 ? "etiqueta" : "etiquetas"}` : ""; }, 400);
   });
-  return h("div", { class: "crm-fe-buscar" }, campo, nada);
+  return h("div", { class: "crm-fe-buscar" }, campo, nada, contagem);
 }

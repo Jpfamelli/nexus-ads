@@ -45,12 +45,19 @@ export async function montar(ctx) {
   }
   desmontar();
   const v = encodeURIComponent(ctx.versao || "dev");
-  const [L, mLista, mChat, mComposer, mLateral, , G] = await Promise.all([
-    import(`./cv-logica.js?v=${v}`), import(`./cv-lista.js?v=${v}`), import(`./cv-chat.js?v=${v}`),
-    import(`./cv-composer.js?v=${v}`), import(`./cv-lateral.js?v=${v}`),
-    ctx.ui.carregarCss("conversas"),
-    import(`./graficos.js?v=${v}`).catch(() => null),      // mini-gráfico da lateral (plano 50 · 35): sem ele a lateral mostra só os contadores
-  ]);
+  let L, mLista, mChat, mComposer, mLateral, G;
+  try {
+    [L, mLista, mChat, mComposer, mLateral, , G] = await Promise.all([
+      import(`./cv-logica.js?v=${v}`), import(`./cv-lista.js?v=${v}`), import(`./cv-chat.js?v=${v}`),
+      import(`./cv-composer.js?v=${v}`), import(`./cv-lateral.js?v=${v}`),
+      ctx.ui.carregarCss("conversas"),
+      import(`./graficos.js?v=${v}`).catch(() => null),      // mini-gráfico da lateral (plano 50 · 35): sem ele a lateral mostra só os contadores
+    ]);
+  } catch (e) {
+    // plano 1500c · CC-015: um pedaço da central que não baixou (deploy no meio, rede ruim) não deixa a tela em branco
+    if (ctx.alvo) { ctx.ui.limpar(ctx.alvo); ctx.alvo.appendChild(ctx.ui.erroCartao(e, () => montar(ctx))); }
+    return;
+  }
   const { ui } = ctx;
   A = {
     ctx, ui, api: ctx.api, L, G, icone: (n, c) => icone(n, c),
@@ -143,7 +150,10 @@ export async function montar(ctx) {
   }
   // D3: voltar à aba com a conversa aberta marca como lida o que chegou enquanto ela estava escondida
   // plano 1000 · CA-244: e a lista/conversa se atualizam NA HORA (antes ficavam velhas até o 1º pulso depois de voltar)
-  const aoVisivel = () => { if (!A || document.hidden) return; if (A.ver) marcarLida(); aoPulso(); };
+  const aoVisivel = () => {
+    if (!A || document.hidden) return; if (A.ver) marcarLida(); aoPulso();
+    if (Date.now() - (A.baseEm || 0) > 5 * 60000) carregarBase().catch(() => {});   // plano 1500c · CC-014: a base vencida é relida ao voltar
+  };
   document.addEventListener("visibilitychange", aoVisivel);
   A.limpar.push(() => document.removeEventListener("visibilitychange", aoVisivel));
   // D10: «Enviar agora» acompanha a conexão (desligado sem internet, com o motivo)
@@ -152,7 +162,8 @@ export async function montar(ctx) {
   window.addEventListener("offline", aoRede);
   A.limpar.push(() => { window.removeEventListener("online", aoRede); window.removeEventListener("offline", aoRede); });
   A.timers.push(setInterval(() => { if (!document.hidden) { A.lista.render(); A.chat.renderCabecalho(); A.composer.atualizar(); } }, 60000));
-  A.timers.push(setInterval(() => { if (Date.now() - (A.baseEm || 0) > 5 * 60000) carregarBase().catch(() => {}); }, 60000));
+  // plano 1500c · CC-014: com a aba escondida a base não é relida (dezenas de abas abertas na recepção); o visibilitychange relê ao voltar
+  A.timers.push(setInterval(() => { if (!document.hidden && Date.now() - (A.baseEm || 0) > 5 * 60000) carregarBase().catch(() => {}); }, 60000));
 
   await listaInicial;
   await aplicarRota(ctx.rota);
@@ -182,7 +193,7 @@ function lerPreferencia(k, padrao) { try { return localStorage.getItem(`nx-cv-${
 function gravarPreferencia(k, v) { try { localStorage.setItem(`nx-cv-${k}`, v); } catch { /* sem storage */ } }
 /** plano 1000 · CA-229: o filtro da lista lembrado por navegador e por empresa (os ids de departamento/número/etiqueta são dela); só as
     chaves conhecidas e com o formato certo voltam. */
-const CHAVES_FILTRO = ["departamento_id", "canal_id", "atendente", "etiquetas", "nao_lidas"];
+const CHAVES_FILTRO = ["departamento_id", "canal_id", "atendente", "etiquetas", "nao_lidas", "origem"];   // plano 1500c · CC-008: + origem
 const chaveFiltro = cliente => `nx-cv-filtro:${cliente || "-"}`;
 function lerFiltroGuardado(cliente) {
   try {
@@ -371,8 +382,9 @@ async function carregarLista({ reset = false, mais = false } = {}) {
 function lerAvisos() {
   // plano 1000b · CB-049: semFoco (ligado por padrão) — avisa também com a janela visível mas sem foco (Órbita atrás do sistema da clínica)
   // plano 1000b · CB-050: quem (ligado por padrão) — desligado, a tela bloqueada não mostra o nome do paciente
-  try { const p = JSON.parse(localStorage.getItem("nx-cv-avisos") || "{}"); return { som: p.som !== false, tela: p.tela === true, texto: p.texto === true, semFoco: p.semFoco !== false, quem: p.quem !== false }; }
-  catch { return { som: true, tela: false, texto: false, semFoco: true, quem: true }; }
+  // plano 1500c · CC-065: foraHorario (desligado por padrão) — sem som com a empresa fechada (o computador da recepção fica ligado)
+  try { const p = JSON.parse(localStorage.getItem("nx-cv-avisos") || "{}"); return { som: p.som !== false, tela: p.tela === true, texto: p.texto === true, semFoco: p.semFoco !== false, quem: p.quem !== false, foraHorario: p.foraHorario === true }; }
+  catch { return { som: true, tela: false, texto: false, semFoco: true, quem: true, foraHorario: false }; }
 }
 function gravarAvisos(p) { try { localStorage.setItem("nx-cv-avisos", JSON.stringify(p)); } catch { /* sem storage */ } }
 
@@ -407,22 +419,29 @@ function avisarNovidades(antes, depois, nlAntes, nlDepois) {
   const semFoco = typeof document.hasFocus === "function" && !document.hasFocus();
   if (!document.hidden && !(semFoco && lerAvisos().semFoco)) return;
   const mapa = new Map((antes || []).map(x => [x.id, x]));
-  const chegaram = (depois || []).filter(c => c.ultima_msg_dir === "in" && !c.oculta
+  const todas = (depois || []).filter(c => c.ultima_msg_dir === "in" && !c.oculta
     && (Number(c.nao_lidas) || 0) > (Number((mapa.get(c.id) || {}).nao_lidas) || 0));
-  if (!chegaram.length && !(Number(nlDepois) > Number(nlAntes))) return;
+  // plano 1500c · CC-058: conversa silenciada (no ⋮) não toca nem avisa
+  const chegaram = todas.filter(c => !conversaSilenciada(c.id));
+  if (!chegaram.length && (todas.length || !(Number(nlDepois) > Number(nlAntes)))) return;
   const pref = lerAvisos();
-  if (pref.som) tocarSom();
+  if (pref.som && !somCaladoAgora(pref)) tocarSom();
   if (pref.tela && "Notification" in window && Notification.permission === "granted") {
-    const c = chegaram[0];
+    // plano 1500c · CC-017: várias conversas juntas viram UMA notificação «3 conversas novas: Ana, Bruno e Carla» (antes só a 1ª avisava)
+    // plano 1000 · CA-123 / plano 1000b · CB-050: o texto e o nome do paciente só com as preferências ligadas
+    const t = A.L.textoNotificacao(chegaram, pref, c => nomeContato(c.contato));
     try {
-      // plano 1000 · CA-123: o texto do paciente só vai para a tela bloqueada se a pessoa ligou «Mostrar o texto da mensagem no aviso»
-      // plano 1000b · CB-050: «Mostrar quem escreveu» desligado → título neutro (nada do paciente na tela bloqueada)
-      const n = new Notification(c && pref.quem ? nomeContato(c.contato) : c ? "Mensagem nova na central" : "Mensagem nova", {
-        body: c ? (pref.texto ? String(c.ultima_msg_resumo || "Mensagem nova").slice(0, 140) : "Mensagem nova") : "Chegou mensagem nova na central.",
-        tag: c ? `nx-cv-${c.id}` : "nx-cv", silent: true });
-      n.addEventListener("click", () => { try { window.focus(); } catch { /* ok */ } if (c && A) abrir(c.id); n.close(); });
+      // plano 1500c · CC-018: o ícone do Órbita (no Windows aparecia o genérico do navegador)
+      const n = new Notification(t.titulo, { body: t.corpo, tag: t.tag, silent: true, icon: "/app/icones/icon-192.png", badge: "/app/icones/icon-192.png" });
+      n.addEventListener("click", () => { try { window.focus(); } catch { /* ok */ } if (t.id && A) abrir(t.id); n.close(); });
     } catch { /* navegador sem suporte */ }
   }
+}
+/** plano 1500c · CC-065: «Sem som fora do horário de atendimento» ligado e o departamento padrão fechado agora (o mesmo horário do SLA). */
+function somCaladoAgora(pref = lerAvisos()) {
+  if (!A || !pref.foraHorario) return false;
+  const hor = A.L.horarioDoDepartamento(A.base, null);
+  return hor !== undefined && hor !== null && !A.L.horarioAberto(hor, new Date());
 }
 async function menuAvisos(ancora) {
   const ui = A.ui;
@@ -446,6 +465,12 @@ async function menuAvisos(ancora) {
         else ui.toast("O navegador bloqueou os avisos deste site. Libere em Configurações do site (cadeado ao lado do endereço).", { tipo: "info", ms: 8000 });
         if (A) A.lista.render();
       } },
+    // plano 1500c · CC-065: silêncio fora do horário de atendimento
+    { rotulo: pref.foraHorario ? "Sem som fora do horário de atendimento: ligado" : "Sem som fora do horário de atendimento: desligado", icone: "relogio", fn: () => {
+      const p = lerAvisos(); p.foraHorario = !p.foraHorario; gravarAvisos(p);
+      const temHorario = A.L.horarioDoDepartamento(A.base, null) !== undefined && A.L.horarioDoDepartamento(A.base, null) !== null;
+      ui.toast(p.foraHorario ? (temHorario ? "Com a empresa fechada o som não toca (o aviso na tela continua)." : "Ligado — mas o departamento padrão não tem horário de atendimento: o som segue tocando.") : "O som toca a qualquer hora.", { tipo: "info" });
+    } },
     // plano 1000b · CB-049: a preferência «com a janela sem foco» (ligada por padrão)
     { rotulo: pref.semFoco ? "Avisar também com a janela sem foco: ligado" : "Avisar também com a janela sem foco: desligado", icone: "sino", fn: () => {
       const p = lerAvisos(); p.semFoco = !p.semFoco; gravarAvisos(p);
@@ -487,9 +512,11 @@ async function buscarMensagens() {
   A.buscaMsgs = { q, carregando: true, itens: [], erro: null };
   A.lista.render();
   try {
-    const r = await A.api.rpcC("nx_cv_buscar_msgs", { p_q: q, p_limite: 20 });
+    const r = await A.api.rpcC("nx_cv_buscar_msgs", { p_q: q, p_limite: BUSCA_MSGS_PAGINA });
     if (!A || seq !== A.seqMsgs) return;
-    A.buscaMsgs = { q, carregando: false, itens: Array.isArray(r) ? r : [], erro: null };
+    const itens = Array.isArray(r) ? r : [];
+    // plano 1500c · CC-009: página cheia = pode haver mais (o «Ver mais mensagens» pede com p_antes_id)
+    A.buscaMsgs = { q, carregando: false, itens, erro: null, temMais: itens.length >= BUSCA_MSGS_PAGINA };
   } catch (e) {
     if (!A || seq !== A.seqMsgs) return;
     A.buscaMsgs = { q, carregando: false, itens: [], erro: e };
@@ -503,17 +530,48 @@ async function buscarMensagens() {
   }
 }
 
+const BUSCA_MSGS_PAGINA = 20;
+/** plano 1500c · CC-009: a página seguinte da busca nas mensagens (ids menores que o último achado), acrescentada ao bloco. */
+async function maisMensagens() {
+  if (!A) return;
+  const b = A.buscaMsgs;
+  if (!b || b.carregando || b.carregandoMais || !b.temMais || !b.itens.length) return;
+  const E = A, seq = A.seqMsgs, q = b.q;
+  const ultimo = b.itens[b.itens.length - 1];
+  b.carregandoMais = true; A.lista.render();
+  try {
+    const r = await E.api.rpcC("nx_cv_buscar_msgs", { p_q: q, p_limite: BUSCA_MSGS_PAGINA, p_antes_id: ultimo.mensagem_id });
+    if (A !== E || seq !== A.seqMsgs || A.buscaMsgs !== b) return;
+    const novos = (Array.isArray(r) ? r : []).filter(x => !b.itens.some(y => y.mensagem_id === x.mensagem_id));
+    A.buscaMsgs = { ...b, itens: [...b.itens, ...novos], carregandoMais: false, temMais: (Array.isArray(r) ? r.length : 0) >= BUSCA_MSGS_PAGINA && novos.length > 0 };
+    A.lista.render();
+    A.ui.anunciar(novos.length ? `Mais ${novos.length} ${novos.length === 1 ? "mensagem" : "mensagens"} com «${q}».` : "Não há mais mensagens.");
+  } catch (e) {
+    if (A !== E || A.buscaMsgs !== b) return;
+    b.carregandoMais = false; A.lista.render();
+    tratarErro(e);
+  }
+}
+
 /** Abre a conversa já na mensagem (resultado da busca): carrega páginas anteriores até achar. */
 async function irParaMensagem(mid) {
   if (!A || !mid) return;
   const conv = A.selId;
+  let achou = false;
   for (let i = 0; i < 8 && A && A.selId === conv; i++) {
-    if (A.msgs.some(m => Number(m.id) === mid)) break;
+    if (A.msgs.some(m => Number(m.id) === mid)) { achou = true; break; }
     if (!A.temMaisAntes) break;
     await carregarAntes();
   }
   if (!A || A.selId !== conv) return;
+  if (!achou) achou = A.msgs.some(m => Number(m.id) === mid);
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  if (!achou) {
+    // plano 1500c · CC-016: antes desistia calado (o clique no resultado parecia quebrado)
+    A.ui.toast("A mensagem é muito antiga para abrir aqui: role para cima ou exporte a conversa (⋮ → Exportar).", { tipo: "info", ms: 8000 });
+    if (typeof A.chat.rolarTopo === "function") A.chat.rolarTopo();
+    return;
+  }
   A.chat.destacar(mid);
 }
 
@@ -988,6 +1046,15 @@ const acoes = {
     }
   },
   atualizarIA: () => carregarEstadoIA(),
+  // plano 1500c · CC-005/006/007/055/056/057/058/009
+  marcarNaoLida: (id, o) => marcarNaoLida(id, o),
+  naoLidaLote: ids => naoLidaLote(ids), assumirLote: ids => assumirLote(ids), pendenteLote: ids => pendenteLote(ids),
+  fixadas: () => lerFixadas(), alternarFixar: id => alternarFixar(id),
+  silenciada: id => conversaSilenciada(id), silenciar: (id, horas) => silenciarConversa(id, horas),
+  maisMensagens: () => maisMensagens(),
+  colocarTexto: texto => colocarTextoPronto(A.selId, texto),   // plano 1500c · CC-050: «Lembrar» da consulta
+  encaminhar: m => encaminharMensagem(m),                       // plano 1500c · CC-070
+  tarefaDeMensagem: m => { if (A && A.lateral && typeof A.lateral.novaTarefa === "function") A.lateral.novaTarefa({ titulo: A.L.tituloTarefaDeMensagem(m) }); },   // CC-071
   transferir: () => transferir(),
   resolver: botao => resolverComDesfazer(botao),
   atenderProximo: botao => atenderProximo(botao),
@@ -1086,6 +1153,7 @@ const acoes = {
   lidaComDesfazer: id => lidaComDesfazer(id),                                // CA-109: deslizar a linha
   podeMarcarLida: c => !!A && A.L.podeMarcarLida(c, A.eu, A.podeEscrever),   // plano 1000b · CB-007: o gesto só aparece quando vale
   exportar: () => exportarConversa(),                                        // CA-232
+  exportarPdf: () => exportarConversa({ pdf: true }),                        // plano 1500c · CC-121
   mostrarSistema: () => lerPreferencia("sistema", "1") !== "0",              // CA-231
   definirMostrarSistema: sim => gravarPreferencia("sistema", sim ? "1" : "0"),
   enviar: (...a) => enviar(...a),
@@ -1207,23 +1275,26 @@ async function transferir() {
   const ui = A.ui;
   const conv = A.ver && A.ver.conversa;
   if (!conv) return;
-  const pessoas = (A.base.usuarios || []).filter(u => u.papel !== "leitura" && u.aprovado !== false);
+  const pessoas = A.L.ordenarPessoasTransferir((A.base.usuarios || []).filter(u => u.papel !== "leitura" && u.aprovado !== false));   // plano 1500c · CC-081: fora do rodízio por último
   const deps = A.base.departamentos || [];
   const eu = A.eu && A.eu.id;
   const conta = conv.atribuida_a || "", dep = conv.departamento_id || "";
   const sPessoa = ui.h("select", { class: "sel", id: "cv-tr-pessoa", "aria-label": "Pessoa" },
     ui.h("option", { value: "" }, "Sem responsável (fila do departamento)"),
-    pessoas.map(u => ui.h("option", { value: u.id, selected: u.id === conta }, u.id === eu ? `${u.nome} (você)` : u.nome)));
+    pessoas.map(u => ui.h("option", { value: u.id, selected: u.id === conta }, A.L.rotuloPessoaTransferir(u, eu))));
+  // plano 1500c · CC-010: a 1ª opção mantém o departamento (antes a conversa sem departamento ia para o 1º da lista sem a pessoa pedir)
+  const depAtual = deps.find(d => d.id === dep);
   const sDep = ui.h("select", { class: "sel", id: "cv-tr-dep", "aria-label": "Departamento" },
-    deps.map(d => ui.h("option", { value: d.id, selected: d.id === dep }, d.nome)));
+    ui.h("option", { value: "", selected: true }, depAtual ? `Manter: ${depAtual.nome}` : "Manter (sem departamento)"),
+    deps.filter(d => d.id !== dep).map(d => ui.h("option", { value: d.id }, d.nome)));
   const avisoMinhas = ui.h("p", { class: "aviso aviso-aten cv-tr-aviso", role: "status", hidden: true }, ui.icone("info"),
     ui.h("span", null, "A conversa sai da sua aba Minhas. Por 7 segundos dá para desfazer no aviso."));
   // plano 1000 · CA-026: a pessoa escolhida não atende o departamento escolhido — marca na lista e avisa antes de confirmar
   const avisoDep = ui.h("p", { class: "aviso aviso-aten cv-tr-dep-aviso", role: "status", hidden: true }, ui.icone("alerta"), ui.h("span", null, ""));
-  const nomeOpcao = u => `${u.id === eu ? `${u.nome} (você)` : u.nome}`;
+  const nomeOpcao = u => A.L.rotuloPessoaTransferir(u, eu);   // plano 1500c · CC-081
   const conferir = () => {
     avisoMinhas.hidden = !(conta && conta === eu && (sPessoa.value || "") !== eu);
-    const depId = deps.length ? (sDep.value || null) : null;
+    const depId = deps.length ? (sDep.value || dep || null) : null;   // CC-010: «Manter» confere com o departamento atual
     for (const op of sPessoa.querySelectorAll("option")) {
       const u = pessoas.find(x => String(x.id) === String(op.value));
       if (u) op.textContent = depId && !A.L.atendeDepartamento(u, depId) ? `${nomeOpcao(u)} (não atende este departamento)` : nomeOpcao(u);
@@ -1243,12 +1314,32 @@ async function transferir() {
   });
   // CA-054: recado opcional para quem recebe (vira nota interna «Transferência: …»)
   const recado = ui.h("textarea", { id: "cv-tr-recado", rows: 2, maxlength: 500, placeholder: "Ex.: quer remarcar para sexta de manhã" });
+  // plano 1500c · CC-311: «Avisar o cliente» — a mensagem sai já (antes da transferência), só quando dá para escrever agora
+  const provedor = (conv.canal && conv.canal.provedor) || ((A.base && A.base.canais) || []).find(k => k.id === conv.canal_id)?.provedor || "meta";
+  const podeAvisar = A.podeEscrever && conv.status !== "resolvida" && !!conv.canal_id && (!A.L.canalTemJanela(provedor) || A.L.janela(conv).aberta);
+  const chkAviso = podeAvisar ? ui.h("input", { type: "checkbox", id: "cv-tr-avisar" }) : null;
+  const txtAviso = podeAvisar ? ui.h("textarea", { id: "cv-tr-aviso", rows: 2, maxlength: 1000, "aria-label": "Mensagem para o cliente", hidden: true }) : null;
+  let avisoEditado = false;
+  const textoAvisoPadrao = () => {
+    const u = pessoas.find(x => String(x.id) === String(sPessoa.value));
+    const d = deps.find(x => x.id === (sDep.value || dep));
+    return A.L.textoAvisoTransferencia({ pessoa: u && u.id !== eu ? u.nome : null, departamento: d ? d.nome : null });
+  };
+  if (podeAvisar) {
+    txtAviso.value = textoAvisoPadrao();
+    txtAviso.addEventListener("input", () => { avisoEditado = true; });
+    chkAviso.addEventListener("change", () => { txtAviso.hidden = !chkAviso.checked; if (chkAviso.checked) txtAviso.focus(); });
+    const reescrever = () => { if (!avisoEditado) txtAviso.value = textoAvisoPadrao(); };
+    sPessoa.addEventListener("change", reescrever);
+    sDep.addEventListener("change", reescrever);
+  }
   conferir();
   const corpo = ui.h("div", { class: "pilha" },
     ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-tr-pessoa" }, "Pessoa"), buscaPessoa, sPessoa),
     deps.length ? ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-tr-dep" }, "Departamento"), sDep) : null,
     avisoMinhas, avisoDep,
-    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-tr-recado" }, "Recado para quem recebe (opcional)"), recado),
+    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-tr-recado" }, "Recado para quem recebe (opcional)"), chipsRecado(recado), recado),
+    podeAvisar ? ui.h("div", { class: "campo cv-tr-avisar" }, ui.h("label", { class: "chip-check", for: "cv-tr-avisar" }, chkAviso, "Avisar o cliente (a mensagem sai agora)"), txtAviso) : null,
     ui.h("p", { class: "sub" }, "Quem recebe é avisado no sino. Fica registrado no histórico da conversa."));
   const escolha = await ui.modal({
     titulo: "Transferir conversa", corpo, largura: "p",
@@ -1256,9 +1347,17 @@ async function transferir() {
       conta: sPessoa.value || null,
       dep: deps.length && sDep.value && sDep.value !== conv.departamento_id ? sDep.value : null,
       recado: String(recado.value || "").trim(),
+      aviso: chkAviso && chkAviso.checked ? String(txtAviso.value || "").trim() : "",
     }) }],
   });
   if (!escolha || !A || !A.ver || A.ver.conversa.id !== conv.id) return;
+  lembrarRecado(escolha.recado);   // CC-146
+  // CC-311: o aviso sai pela fila de sempre, antes da transferência (depois dela quem transferiu pode não poder mais escrever)
+  if (escolha.aviso && ((escolha.conta || null) !== (conv.atribuida_a || null) || escolha.dep)) {
+    try { await enviarTexto({ tipo: "texto", texto: escolha.aviso }); }
+    catch (e) { tratarErro(e); }
+    if (!A || !A.ver || A.ver.conversa.id !== conv.id) return;
+  }
   if ((escolha.conta || null) === (conv.atribuida_a || null) && !escolha.dep) {
     // plano 1000b · CB-047: sem mudança mas com recado — o recado não se perde: vira só a nota interna
     if (escolha.recado) {
@@ -1385,15 +1484,15 @@ async function transferirLote(ids) {
   const ui = A.ui;
   const lista = ids.map(id => A.itens.find(x => x.id === id)).filter(Boolean);
   if (!lista.length) return false;
-  const pessoas = (A.base.usuarios || []).filter(u => u.papel !== "leitura" && u.aprovado !== false);
+  const pessoas = A.L.ordenarPessoasTransferir((A.base.usuarios || []).filter(u => u.papel !== "leitura" && u.aprovado !== false));   // plano 1500c · CC-081: fora do rodízio por último
   const deps = A.base.departamentos || [];
   const eu = A.eu && A.eu.id;
   const sPessoa = ui.h("select", { class: "sel", id: "cv-trl-pessoa" }, ui.h("option", { value: "" }, "Sem responsável (fila do departamento)"),
-    pessoas.map(u => ui.h("option", { value: u.id }, u.id === eu ? `${u.nome} (você)` : u.nome)));
+    pessoas.map(u => ui.h("option", { value: u.id }, A.L.rotuloPessoaTransferir(u, eu))));
   const sDep = ui.h("select", { class: "sel", id: "cv-trl-dep" }, ui.h("option", { value: "" }, "Manter o departamento de cada uma"), deps.map(d => ui.h("option", { value: d.id }, d.nome)));
   // plano 1000b · CB-048: os avisos do transferir único — quem não atende o departamento escolhido (CA-026), busca com mais de 10
   // pessoas (CA-055) e o recado opcional (vira nota «Transferência: …» em cada conversa, antes do nx_cv_atribuir, como no CA-054)
-  const nomeOpcao = u => (u.id === eu ? `${u.nome} (você)` : u.nome);
+  const nomeOpcao = u => A.L.rotuloPessoaTransferir(u, eu);   // plano 1500c · CC-081
   const avisoDep = ui.h("p", { class: "aviso aviso-aten cv-tr-dep-aviso", role: "status", hidden: true }, ui.icone("alerta"), ui.h("span", null, ""));
   const conferir = () => {
     const depId = deps.length ? (sDep.value || null) : null;
@@ -1420,13 +1519,14 @@ async function transferirLote(ids) {
     ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-trl-pessoa" }, "Pessoa"), buscaPessoa, sPessoa),
     deps.length ? ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-trl-dep" }, "Departamento"), sDep) : null,
     avisoDep,
-    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-trl-recado" }, "Recado para quem recebe (opcional)"), recado));
+    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-trl-recado" }, "Recado para quem recebe (opcional)"), chipsRecado(recado), recado));   // plano 1500c · CC-146
   const escolha = await ui.modal({ titulo: `Transferir ${lista.length} ${lista.length === 1 ? "conversa" : "conversas"}`, corpo, largura: "p",
     acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Transferir", tipo: "primario", fn: () => ({ conta: sPessoa.value || null, dep: deps.length && sDep.value ? sDep.value : null, recado: String(recado.value || "").trim() }) }] });
   if (!escolha || !A) return false;
+  lembrarRecado(escolha.recado);   // plano 1500c · CC-146
   const u = escolha.conta ? pessoas.find(x => x.id === escolha.conta) : null;
   const d = escolha.dep ? deps.find(x => x.id === escolha.dep) : null;
-  const api = A.api, cliente = A.ctx.cliente && A.ctx.cliente.id;
+  const api = A.api, cliente = A.ctx.cliente && A.ctx.cliente.id, Lx = A.L;
   const naMesmaEmpresa = () => !!A && (A.ctx.cliente && A.ctx.cliente.id) === cliente;
   const pends = lista.map(c => [c.id, { antes: { atribuida_a: c.atribuida_a || null, atribuida_nome: c.atribuida_nome || null, departamento_id: c.departamento_id || null },
     depois: { atribuida_a: escolha.conta, atribuida_nome: u ? u.nome : null, ...(d ? { departamento_id: d.id } : {}) }, cancelado: false }]);
@@ -1451,10 +1551,14 @@ async function transferirLote(ids) {
         if (p.cancelado) continue;
         p.firmando = true;
         if (escolha.recado) {   // plano 1000b · CB-048: o recado antes da transferência (depois dela quem transferiu pode não enxergar mais a conversa)
-          try { await api.rpc("nx_cv_nota", { p_cliente: cliente, p_conversa: id, p_texto: `Transferência: ${escolha.recado}` }, saindo ? { keepalive: true } : {}); }
+          // plano 1500c · CC-312: «Transferida para Ana (Financeiro): …» — no histórico se sabe o destino (sem departamento escolhido, o de cada uma)
+          const depNome = d ? d.nome : (deps.find(x => x.id === p.antes.departamento_id) || {}).nome || null;
+          const textoNota = Lx.textoRecadoTransferencia({ pessoa: u ? u.nome : null, departamento: depNome, recado: escolha.recado });
+          try { await api.rpc("nx_cv_nota", { p_cliente: cliente, p_conversa: id, p_texto: textoNota }, saindo ? { keepalive: true } : {}); }
           catch { recadoFalhou++; /* o recado é opcional: a transferência segue (aviso único no fim) */ }
         }
-        try { await api.rpc("nx_cv_atribuir", { p_cliente: cliente, p_conversa: id, p_conta: escolha.conta, p_departamento: escolha.dep }, saindo ? { keepalive: true } : {}); }
+        // plano 1500c · CC-326: «Manter o departamento de cada uma» = p_departamento null (função pura testada)
+        try { await api.rpc("nx_cv_atribuir", { p_cliente: cliente, p_conversa: id, ...Lx.argumentosTransferir(escolha) }, saindo ? { keepalive: true } : {}); }
         catch (e) { erro = erro || e; if (naMesmaEmpresa()) atualizarItemLista({ id, ...p.antes }); }
         if (_pendTransferir.get(id) === p) _pendTransferir.delete(id);
         p.cancelado = true;
@@ -1492,9 +1596,17 @@ async function etiquetarLote(ids) {
   if (!escolhidas || !A) return false;
   const E = A;
   let ok = 0, jaTinham = 0;   // plano 1000b · CB-094: as que já tinham as etiquetas não contam como «etiquetadas»
+  let puladas = 0;
   for (const id of ids) {
     const it = E.itens.find(x => x.id === id);
-    const atuais = (it && it.etiquetas) || [];
+    let atuais = it && Array.isArray(it.etiquetas) ? it.etiquetas : null;
+    // plano 1500c · CC-011: conversa que saiu da página (delta) — lê as etiquetas atuais antes de gravar; sem a leitura, pula
+    // (antes gravava só as escolhidas por cima das que ela já tinha)
+    if (!atuais) {
+      try { const v = await E.api.rpcC("nx_cv_ver", { p_id: id }); atuais = v && v.conversa && Array.isArray(v.conversa.etiquetas) ? v.conversa.etiquetas : null; }
+      catch { atuais = null; }
+      if (!atuais) { puladas++; continue; }
+    }
     const novas = [...new Set([...atuais, ...escolhidas])];
     if (novas.length === atuais.length) { jaTinham++; continue; }
     try {
@@ -1505,7 +1617,7 @@ async function etiquetarLote(ids) {
   }
   if (A !== E) return true;
   carregarLista({});
-  ui.toast(textoEtiquetadas(ok, jaTinham), { tipo: "ok" });
+  ui.toast(textoEtiquetadas(ok, jaTinham) + (puladas ? ` ${puladas} não ${puladas === 1 ? "pôde ser lida e ficou" : "puderam ser lidas e ficaram"} como estava${puladas === 1 ? "" : "m"}.` : ""), { tipo: puladas ? "info" : "ok" });
   return true;
 }
 
@@ -1529,14 +1641,196 @@ async function lidaComDesfazer(id) {
   });
 }
 
+/* ============================================================ plano 1500c · frente conv — lote, fixar, silenciar, não lida */
+/** Roda `fn` em cada item com no máximo `limite` ao mesmo tempo. */
+async function comLimite(itens, limite, fn) {
+  const fila = [...itens];
+  const trab = Array.from({ length: Math.min(limite, fila.length) }, async () => { while (fila.length) await fn(fila.shift()); });
+  await Promise.all(trab);
+}
+/** Chave local por empresa + conta (fixadas e silenciadas são da pessoa naquele aparelho). */
+function chaveLocal(nome) {
+  const cli = (A && A.ctx.cliente && A.ctx.cliente.id) || "-";
+  const conta = (A && ((A.eu && A.eu.id) || (A.ctx.sessao && A.ctx.sessao.conta && A.ctx.sessao.conta.id))) || "-";
+  return `nx-cv-${nome}:${cli}:${conta}`;
+}
+/** plano 1500c · CC-146: os 4 últimos recados de transferência (neste aparelho, desta conta) viram atalhos acima do campo. */
+const RECADOS_CHAVE = "recados-transferir";
+function chipsRecado(ta) {
+  const lista = (lerJsonLocal(RECADOS_CHAVE, []) || []).filter(x => typeof x === "string" && x.trim()).slice(0, 4);
+  if (!lista.length) return null;
+  return A.ui.h("div", { class: "cv-tr-recados", role: "group", "aria-label": "Recados usados antes" },
+    lista.map(t => A.ui.h("button", { type: "button", class: "chip cv-tr-recado-chip", title: t, on: { click: () => { ta.value = t; ta.focus(); } } }, t.length > 40 ? `${t.slice(0, 39)}…` : t)));
+}
+function lembrarRecado(t) {
+  const s = String(t || "").trim();
+  if (!s) return;
+  const lista = (lerJsonLocal(RECADOS_CHAVE, []) || []).filter(x => typeof x === "string" && x !== s);
+  gravarJsonLocal(RECADOS_CHAVE, [s, ...lista].slice(0, 4));
+}
+function lerJsonLocal(nome, padrao) { try { const v = JSON.parse(localStorage.getItem(chaveLocal(nome)) || "null"); return v ?? padrao; } catch { return padrao; } }
+function gravarJsonLocal(nome, v) { try { localStorage.setItem(chaveLocal(nome), JSON.stringify(v)); } catch { /* sem storage */ } }
+/** plano 1500c · CC-057: ids fixados no topo (até 5). */
+function lerFixadas() { const v = lerJsonLocal("fixadas", []); return Array.isArray(v) ? v.map(Number).filter(Number.isFinite).slice(0, A ? A.L.MAX_FIXADAS : 5) : []; }
+function alternarFixar(id) {
+  if (!A) return;
+  const r = A.L.alternarFixada(lerFixadas(), id);
+  if (!r.ok) { A.ui.toast(`Dá para fixar até ${A.L.MAX_FIXADAS} conversas. Desafixe uma antes.`, { tipo: "info" }); return; }
+  gravarJsonLocal("fixadas", r.fixadas);
+  A.ui.toast(r.fixou ? "Conversa fixada no topo da lista." : "Conversa desafixada.", { tipo: "ok" });
+  A.lista.render();
+  if (A.ver) A.chat.renderCabecalho();
+}
+/** plano 1500c · CC-058: conversas silenciadas {id: até_ms | 0 = sempre}. */
+function conversaSilenciada(id) { return !!A && A.L.estaSilenciada(lerJsonLocal("silenciadas", {}), id); }
+function silenciarConversa(id, horas) {
+  if (!A) return;
+  gravarJsonLocal("silenciadas", A.L.silenciar(lerJsonLocal("silenciadas", {}), id, horas));
+  const txt = horas === null ? "Som e avisos desta conversa ligados de novo." : horas === 0 ? "Conversa silenciada até você reativar." : `Conversa silenciada por ${horas === 24 ? "1 dia" : `${horas} horas`}.`;
+  A.ui.toast(txt, { tipo: "ok" });
+  A.lista.render();
+  if (A.ver) A.chat.renderCabecalho();
+}
+
+/** plano 1500c · CC-005/CC-007: «Marcar como não lida» (nx_cv_marcar_nao_lida, CB-208) — volta para a lista com o destaque aceso. */
+async function marcarNaoLida(id = A && A.selId, { voltar = false } = {}) {
+  if (!A || !id) return false;
+  const E = A;
+  try { await E.api.rpcC("nx_cv_marcar_nao_lida", { p_conversa: id }); }
+  catch (e) {
+    if (A !== E) return false;
+    if (E.L.rpcAusente(e)) E.ui.toast("«Marcar como não lida» ainda não está disponível neste servidor.", { tipo: "info" });
+    else tratarErro(e);
+    return false;
+  }
+  if (A !== E) return true;
+  const it = A.itens.find(x => x.id === id);
+  atualizarItemLista({ id, nao_lidas: Math.max(1, Number(it && it.nao_lidas) || 0) });
+  _lida = { id: null, em: 0 };   // abrir de novo marca como lida outra vez
+  A.ui.toast("Marcada como não lida.", { tipo: "ok" });
+  if (voltar && A.selId === id) A.ctx.navegar("#/conversas");
+  carregarLista({});
+  return true;
+}
+/** plano 1500c · CC-006: várias como não lidas, com Desfazer que marca como lidas de novo. → {restantes} */
+async function naoLidaLote(ids) {
+  if (!A || !ids || !ids.length) return { restantes: [] };
+  const E = A, api = A.api, cliente = A.ctx.cliente && A.ctx.cliente.id;
+  const doItem = id => A.itens.find(x => x.id === id) || { id };
+  const meus = ids.filter(id => A.L.podeMarcarLida(doItem(id), A.eu, A.podeEscrever));
+  if (ids.length - meus.length) A.ui.toast(`${ids.length - meus.length} ${ids.length - meus.length === 1 ? "conversa de colega ficou" : "conversas de colegas ficaram"} como estava${ids.length - meus.length === 1 ? "" : "m"}.`, { tipo: "info" });
+  if (!meus.length) return { restantes: [] };
+  const antes = new Map(meus.map(id => [id, Number(doItem(id).nao_lidas) || 0]));
+  const restantes = [];
+  await A.ui.acaoComDesfazer({
+    texto: `${meus.length} ${meus.length === 1 ? "conversa marcada" : "conversas marcadas"} como não lida${meus.length === 1 ? "" : "s"}`,
+    aplicar: () => { for (const id of meus) atualizarItemLista({ id, nao_lidas: Math.max(1, antes.get(id)) }); },
+    firmar: async ({ saindo = false } = {}) => {
+      let erro = null;
+      await comLimite(meus, 4, async id => {
+        try { await api.rpc("nx_cv_marcar_nao_lida", { p_cliente: cliente, p_conversa: id }, saindo ? { keepalive: true } : {}); }
+        catch (e) { erro = erro || e; restantes.push(id); }
+      });
+      if (A === E) {
+        for (const id of restantes) atualizarItemLista({ id, nao_lidas: antes.get(id) });
+        if (erro) A.ui.toast(E.L.rpcAusente(erro) ? "«Marcar como não lida» ainda não está disponível neste servidor." : `${restantes.length} ${restantes.length === 1 ? "conversa ficou" : "conversas ficaram"} sem marcar: ${A.ui.mensagemErro(erro)}.`, { tipo: "erro" });
+        carregarLista({});
+      }
+    },
+    reverter: () => { if (A === E) { for (const [id, n] of antes) atualizarItemLista({ id, nao_lidas: n }); carregarLista({}); } },
+  });
+  return { restantes };
+}
+/** plano 1500c · CC-055: assumir várias da fila de uma vez; o Desfazer devolve à fila (nada vai ao servidor antes do aviso fechar). */
+async function assumirLote(ids) {
+  if (!A || !ids || !ids.length || !A.eu) return { restantes: [] };
+  const E = A, api = A.api, cliente = A.ctx.cliente && A.ctx.cliente.id, eu = A.eu;
+  const lista = ids.map(id => A.itens.find(x => x.id === id) || { id }).filter(c => c.atribuida_a !== eu.id);
+  if (!lista.length) { aviso("Essas conversas já estão com você."); return { restantes: [] }; }
+  const antes = new Map(lista.map(c => [c.id, { atribuida_a: c.atribuida_a || null, atribuida_nome: c.atribuida_nome || null }]));
+  const restantes = [];
+  await A.ui.acaoComDesfazer({
+    texto: `${lista.length} ${lista.length === 1 ? "conversa assumida" : "conversas assumidas"}`,
+    aplicar: () => { for (const c of lista) atualizarItemLista({ id: c.id, atribuida_a: eu.id, atribuida_nome: eu.nome || null }); },
+    firmar: async ({ saindo = false } = {}) => {
+      let erro = null;
+      await comLimite(lista, 4, async c => {
+        try { await api.rpc("nx_cv_atribuir", { p_cliente: cliente, p_conversa: c.id, p_conta: eu.id }, saindo ? { keepalive: true } : {}); }
+        catch (e) { erro = erro || e; restantes.push(c.id); }
+      });
+      if (A === E) {
+        for (const id of restantes) atualizarItemLista({ id, ...antes.get(id) });
+        if (erro) A.ui.toast(`${restantes.length} ${restantes.length === 1 ? "conversa não foi assumida" : "conversas não foram assumidas"}: ${A.ui.mensagemErro(erro)}.`, { tipo: "erro" });
+        carregarLista({});
+      }
+    },
+    reverter: () => { if (A === E) { for (const [id, a] of antes) atualizarItemLista({ id, ...a }); carregarLista({}); } },
+  });
+  return { restantes };
+}
+/** plano 1500c · CC-056: várias como «Pendente» (o mesmo nx_cv_status do menu da conversa), com Desfazer. */
+async function pendenteLote(ids) {
+  if (!A || !ids || !ids.length) return { restantes: [] };
+  const E = A, api = A.api, cliente = A.ctx.cliente && A.ctx.cliente.id;
+  const lista = ids.map(id => A.itens.find(x => x.id === id)).filter(c => c && c.status === "aberta");
+  if (!lista.length) { aviso("Nada para marcar: as escolhidas não estão abertas."); return { restantes: [] }; }
+  const antes = new Map(lista.map(c => [c.id, { status: c.status }]));
+  const restantes = [];
+  await A.ui.acaoComDesfazer({
+    texto: `${lista.length} ${lista.length === 1 ? "conversa marcada" : "conversas marcadas"} como pendente${lista.length === 1 ? "" : "s"}`,
+    aplicar: () => { for (const c of lista) atualizarItemLista({ id: c.id, status: "pendente" }); },
+    firmar: async ({ saindo = false } = {}) => {
+      let erro = null;
+      await comLimite(lista, 4, async c => {
+        try { await api.rpc("nx_cv_status", { p_cliente: cliente, p_conversa: c.id, p_status: "pendente" }, saindo ? { keepalive: true } : {}); }
+        catch (e) { erro = erro || e; restantes.push(c.id); }
+      });
+      if (A === E) {
+        for (const id of restantes) atualizarItemLista({ id, ...antes.get(id) });
+        if (erro) A.ui.toast(`${restantes.length} ${restantes.length === 1 ? "conversa não mudou" : "conversas não mudaram"}: ${A.ui.mensagemErro(erro)}.`, { tipo: "erro" });
+        carregarLista({});
+      }
+    },
+    reverter: () => { if (A === E) { for (const [id, a] of antes) atualizarItemLista({ id, ...a }); carregarLista({}); } },
+  });
+  return { restantes };
+}
+
+/** plano 1500c · CC-070: «Encaminhar» — escolhe outra conversa (da lista carregada, com busca) e abre com o texto pronto no campo, sem enviar. */
+async function encaminharMensagem(m) {
+  if (!A || !m || !m.corpo) return;
+  const ui = A.ui, E = A;
+  const opcoes = A.itens.filter(c => c.id !== A.selId && c.status !== "resolvida");
+  if (!opcoes.length) { ui.toast("Não há outra conversa aberta na lista. Abra a conversa de destino e cole o texto (ele foi copiado).", { tipo: "info" }); ui.copiar(m.corpo); return; }
+  const busca = ui.h("input", { type: "search", id: "cv-enc-busca", placeholder: "Buscar conversa", "aria-label": "Buscar conversa", autocomplete: "off" });
+  const sel = ui.h("select", { class: "sel", id: "cv-enc-sel", size: Math.min(8, opcoes.length), "aria-label": "Conversa de destino" },
+    opcoes.map((c, i) => ui.h("option", { value: c.id, selected: i === 0 }, nomeContato(c.contato) || `Conversa ${c.id}`)));
+  busca.addEventListener("input", () => {
+    const q = A.L.semAcento(busca.value.trim());
+    for (const op of sel.querySelectorAll("option")) op.hidden = !!q && !A.L.semAcento(op.textContent).includes(q);
+  });
+  const corpo = ui.h("div", { class: "pilha" }, ui.h("p", { class: "sub" }, "O texto vai para o campo da conversa escolhida. Você revisa e envia."),
+    busca, sel, ui.h("blockquote", { class: "cv-enc-previa" }, A.L.resumoMensagem(m, 280)));
+  const destino = await ui.modal({ titulo: "Encaminhar mensagem", corpo, largura: "p",
+    acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Abrir com o texto", tipo: "primario", fn: () => Number(sel.value) || null }] });
+  if (!destino || A !== E) return;
+  // o texto do paciente não vai para o endereço (histórico do navegador): a conversa abre e o texto entra direto no campo
+  const texto = String(m.corpo).slice(0, 4000);
+  A.ctx.navegar(`#/conversas/${destino}`);
+  if (await esperarConversa(destino) && A === E) colocarTextoPronto(destino, texto);
+  else if (A === E) copiarTextoPronto(texto, { id: destino });
+}
+
 /** CA-232: «Exportar conversa (.txt)» — carrega as páginas anteriores (até 40, ~2.000 mensagens) e baixa «data hora · quem: texto», sem notas internas. */
 const EXPORTAR_PAGINAS = 40;
-async function exportarConversa() {
+async function exportarConversa({ pdf = false } = {}) {
   if (!A || !A.ver || !A.selId) return;
   const E = A, id = A.selId;
   // plano 1000b · CB-130: o .txt tem dados do paciente e fica no computador (recepção compartilhada) — confirma antes de baixar
-  const seguir = await A.ui.confirmar({ titulo: "Exportar a conversa", rotulo: "Exportar",
-    texto: "O arquivo tem dados do paciente e fica neste computador. Guarde em local seguro e apague depois." });
+  // plano 1500c · CC-121: o PDF vale o mesmo aviso (sai pela janela de impressão do navegador)
+  const seguir = await A.ui.confirmar({ titulo: pdf ? "Imprimir ou salvar em PDF" : "Exportar a conversa", rotulo: pdf ? "Abrir a impressão" : "Exportar",
+    texto: pdf ? "A página tem dados do paciente. No PDF salvo, guarde em local seguro (prontuário) e apague as cópias soltas."
+      : "O arquivo tem dados do paciente e fica neste computador. Guarde em local seguro e apague depois." });
   if (!seguir || A !== E || A.selId !== id || !A.ver) return;
   // plano 1000b · CB-054: as páginas anteriores vêm direto da RPC para um array local — o chat não é redesenhado a cada página
   let paginas = 0, temMais = !!A.temMaisAntes;
@@ -1569,8 +1863,13 @@ async function exportarConversa() {
   const nome = nomeContato(A.ver.contato) || "Cliente";
   const conv = A.ver.conversa || {};
   const titulo = `Conversa com ${nome}${conv.protocolo ? ` · protocolo ${conv.protocolo}` : ""} · exportada em ${A.ui.dataHoraBR(new Date().toISOString())}`;
-  const texto = A.L.textoExportacao(coletadas, { contato: nome, titulo });
+  // plano 1500c · CC-097: quem atendeu, o departamento e o número (o período a lógica calcula)
+  const dep = conv.departamento ? conv.departamento.nome : ((A.base && A.base.departamentos) || []).find(d => d.id === conv.departamento_id)?.nome;
+  const cabecalho = [`Responsável: ${(conv.atribuida && conv.atribuida.nome) || conv.atribuida_nome || "sem dono"}`, dep ? `Departamento: ${dep}` : null,
+    conv.canal && conv.canal.nome ? `Número: ${conv.canal.nome}` : null];
+  const texto = A.L.textoExportacao(coletadas, { contato: nome, titulo, cabecalho });
   const n = coletadas.filter(m => m && !m.local && m.tipo !== "nota").length;
+  if (pdf) { imprimirPagina(A.L.htmlImpressao({ titulo, empresa: (A.ctx.cliente && (A.ctx.cliente.nome || A.ctx.cliente.razao_social)) || "", texto }), n, temMais); return; }
   let url = null;
   try {
     url = URL.createObjectURL(new Blob([texto], { type: "text/plain;charset=utf-8" }));
@@ -1585,6 +1884,29 @@ async function exportarConversa() {
   } finally { if (url) setTimeout(() => { try { URL.revokeObjectURL(url); } catch { /* ok */ } }, 4000); }
 }
 
+/** plano 1500c · CC-121: a página de impressão num iframe escondido (sem janela nova: o bloqueador de pop-up não pega depois dos awaits). */
+function imprimirPagina(html, n, temMais) {
+  const ui = A.ui;
+  let quadro = null;
+  try {
+    quadro = document.createElement("iframe");
+    quadro.className = "cv-impressao";
+    quadro.setAttribute("aria-hidden", "true");
+    quadro.setAttribute("tabindex", "-1");
+    quadro.style.cssText = "position:fixed;width:0;height:0;border:0;right:0;bottom:0;visibility:hidden";
+    quadro.srcdoc = html;
+    quadro.addEventListener("load", () => {
+      try { quadro.contentWindow.focus(); quadro.contentWindow.print(); } catch { ui.toast("Este navegador não abriu a impressão. Use «Exportar conversa (.txt)».", { tipo: "erro" }); }
+      setTimeout(() => { try { quadro.remove(); } catch { /* ok */ } }, 60000);
+    }, { once: true });
+    document.body.appendChild(quadro);
+    ui.toast(`Impressão pronta: ${n} ${n === 1 ? "mensagem" : "mensagens"}${temMais ? " (as mais antigas ficaram de fora)" : ""}, sem notas internas. Escolha «Salvar como PDF» para guardar.`, { tipo: "ok" });
+  } catch {
+    if (quadro) try { quadro.remove(); } catch { /* ok */ }
+    ui.toast("Não foi possível preparar a impressão neste navegador.", { tipo: "erro" });
+  }
+}
+
 async function transferirComDesfazer(conv, { conta, dep, texto = null, recado = "" }) {
   const id = conv.id;
   const u = conta ? (A.base.usuarios || []).find(x => x.id === conta) : null;
@@ -1596,7 +1918,7 @@ async function transferirComDesfazer(conv, { conta, dep, texto = null, recado = 
   const pend = { depois, cancelado: false };
   const nome = nomeContato(A.ver.contato || conv.contato) || "Conversa";
   const para = u ? (u.id === (A.eu && A.eu.id) ? "você" : u.nome) : d ? `a fila de ${d.nome}` : "a fila";
-  const api = A.api, cliente = A.ctx.cliente && A.ctx.cliente.id;
+  const api = A.api, cliente = A.ctx.cliente && A.ctx.cliente.id, L3 = A.L;
   const naMesmaEmpresa = () => !!A && (A.ctx.cliente && A.ctx.cliente.id) === cliente;
   const voltarTela = () => {
     if (pend.cancelado) return;
@@ -1622,11 +1944,14 @@ async function transferirComDesfazer(conv, { conta, dep, texto = null, recado = 
       // CA-054: o recado para quem recebe vira nota interna «Transferência: …». Gravado ANTES do nx_cv_atribuir (revisão 13/10): depois
       // da transferência quem transferiu pode deixar de enxergar a conversa (departamento/ver_todas) e a nota falhava, perdendo o recado
       if (recado) {
-        try { await api.rpc("nx_cv_nota", { p_cliente: cliente, p_conversa: id, p_texto: `Transferência: ${recado}` }, saindo ? { keepalive: true } : {}); }
+        // plano 1500c · CC-312: a nota diz para quem foi («Transferida para Ana (Financeiro): …»)
+        const textoNota = L3.textoRecadoTransferencia({ pessoa: u ? u.nome : null, departamento: d ? d.nome : (antes.departamento && antes.departamento.nome) || null, recado });
+        try { await api.rpc("nx_cv_nota", { p_cliente: cliente, p_conversa: id, p_texto: textoNota }, saindo ? { keepalive: true } : {}); }
         catch (e) { if (naMesmaEmpresa()) A.ui.toast(`O recado não foi gravado (${A.ui.mensagemErro(e)}); a transferência segue.`, { tipo: "erro" }); }
       }
       let r;
-      try { r = await api.rpc("nx_cv_atribuir", { p_cliente: cliente, p_conversa: id, p_conta: conta, p_departamento: dep }, saindo ? { keepalive: true } : {}); }
+      // plano 1500c · CC-326: os argumentos pela função pura (sem departamento escolhido = null, mantém)
+      try { r = await api.rpc("nx_cv_atribuir", { p_cliente: cliente, p_conversa: id, ...L3.argumentosTransferir({ conta, dep }) }, saindo ? { keepalive: true } : {}); }
       catch (e) { if (saindo) voltarTela(); throw e; }      // fora do «saindo» quem devolve a tela é o próprio aviso (reverter)
       if (_pendTransferir.get(id) === pend) _pendTransferir.delete(id);
       pend.cancelado = true;
@@ -1734,22 +2059,45 @@ async function atenderProximo(botao) {
   if (botao) botao.setAttribute("aria-busy", "true");
   try {
     // plano 1000b · CB-121: lê até 3 páginas da aba Aguardando — as 50 mais antigas podiam ser todas de colegas
-    let c = null, antes = null;
-    for (let pag = 0; pag < 3 && !c; pag++) {
-      const r = await A.api.rpcC("nx_cv_listar", { p_filtro: { aba: "aguardando" }, p_limite: 50, p_antes: antes });
+    const procurar = async extra => {
+      let c = null, antes = null;
+      for (let pag = 0; pag < 3 && !c; pag++) {
+        const r = await A.api.rpcC("nx_cv_listar", { p_filtro: { aba: "aguardando", ...extra }, p_limite: 50, p_antes: antes });
+        if (!A) return null;
+        const itens = (r && r.itens) || [];
+        // a que acabou de ser resolvida (o «Desfazer» ainda na tela; o servidor ainda a tem aberta) não volta como «a próxima»
+        c = A.L.proximaParaAtender(itens.filter(x => !_pendResolver.has(x.id)), A.eu && A.eu.id);
+        if (c || !(r && r.tem_mais) || !itens.length) break;
+        const ult = itens[itens.length - 1];
+        antes = ult.ultima_entrada_em || ult.ultima_msg_em || null;
+        if (!antes) break;
+      }
+      return c;
+    };
+    // plano 1500c · CC-012: respeita o departamento/número filtrados (a recepcionista em «Recepção» não recebe uma do Financeiro)
+    const f = A.filtro || {};
+    const extra = {};
+    if (f.departamento_id) extra.departamento_id = f.departamento_id;
+    if (f.canal_id) extra.canal_id = f.canal_id;
+    let c = await procurar(extra);
+    if (!A) return;
+    if (!c && Object.keys(extra).length) {
+      const dep = f.departamento_id ? ((A.base && A.base.departamentos) || []).find(d => d.id === f.departamento_id) : null;
+      const canal = f.canal_id ? ((A.base && A.base.canais) || []).find(k => k.id === f.canal_id) : null;
+      const onde = dep ? `em ${dep.nome}` : canal ? `no número ${canal.nome}` : "no filtro";
+      const outro = await A.ui.confirmar({ titulo: `Ninguém esperando ${onde}`, texto: `Não há conversa esperando ${onde}. Pegar a próxima de outro ${dep ? "departamento" : "número"}?`, rotulo: "Pegar de outro" });
+      if (!outro || !A) return;
+      c = await procurar({});
       if (!A) return;
-      const itens = (r && r.itens) || [];
-      // a que acabou de ser resolvida (o «Desfazer» ainda na tela; o servidor ainda a tem aberta) não volta como «a próxima»
-      c = A.L.proximaParaAtender(itens.filter(x => !_pendResolver.has(x.id)), A.eu && A.eu.id);
-      if (c || !(r && r.tem_mais) || !itens.length) break;
-      const ult = itens[itens.length - 1];
-      antes = ult.ultima_entrada_em || ult.ultima_msg_em || null;
-      if (!antes) break;
     }
     if (!c) { aviso("Ninguém sem dono (nem seu) esperando agora."); return; }
     A.focoAoAbrir = "composer";
     if (A.selId !== c.id) A.ctx.navegar(`#/conversas/${c.id}`);
-    if (!await esperarConversa(c.id)) return;
+    if (!await esperarConversa(c.id)) {
+      // plano 1500c · CC-013: antes saía calado (o botão voltava e parecia que nada aconteceu)
+      if (A) { A.ui.toast("A conversa ainda está chegando. Abrindo…", { tipo: "info" }); A.ctx.navegar(`#/conversas/${c.id}`); }
+      return;
+    }
     const est = A.chat.estadoAcoes() || {};
     if (est.primaria === "assumir_ia") await acoes.assumirIA();
     else if (est.primaria === "assumir") await acoes.assumir();
@@ -2058,7 +2406,16 @@ async function enviarPedido(tmp, o) {
     } else {
       r = await A.api.fn("nx-enviar", { acao: "template", conversa: convId, template_id: o.template.id, parametros: o.parametros || [], client_ref: o.client_ref });
     }
-    if (!A || A.selId !== convId) return;
+    if (r && r.mensagem && r.mensagem.id && r.ambigua !== true) avisarEnviada(convId, o.tipo === "midia" ? "midia" : "template");   // plano 1500c · CX-002
+    if (A && A.selId !== convId) {
+      // plano 1500c · CC-019: a pessoa já trocou de conversa — a linha da conversa de origem ganha a prévia nova mesmo assim
+      const m = r && r.mensagem;
+      if (m) atualizarItemLista({ id: convId, ultima_msg_em: m.criado_em || new Date().toISOString(), ultima_msg_dir: "out",
+        ultima_msg_resumo: L.resumoMensagem(m) });
+      carregarLista({});
+      return;
+    }
+    if (!A) return;
     const msg = r && r.mensagem ? { ...r.mensagem, ...(r.ambigua === true ? { ambigua: true } : {}) } : null;
     A.msgs = A.msgs.filter(m => m.id !== tmp.id);
     if (msg && msg.id) {
@@ -2415,9 +2772,15 @@ function atualizarBolha(it) {
   A.msgs = A.msgs.map(m => { if (m.ref !== it.id) return m; mudou = true; return aplicarEstado({ ...m }, it); });
   if (mudou) A.chat.renderMensagens({ rolar: "manter" });
 }
+/** plano 1500c · CX-002: avisa o resto do app (o «Comece aqui» marca «Responder a primeira conversa») que uma mensagem saiu de verdade. */
+function avisarEnviada(conversa, tipo = "texto") {
+  try { document.dispatchEvent(new CustomEvent("nx:mensagem-enviada", { detail: { conversa, tipo } })); } catch { /* sem DOM */ }
+}
+
 function concluirBolha(it, msg) {
   const L = A.L;
   A.msgs = A.msgs.filter(m => m.ref !== it.id);
+  if (msg && msg.id && !msg.ambigua && msg.status !== "falhou") avisarEnviada(it.conversa, "texto");   // plano 1500c · CX-002
   if (A.selId === it.conversa) {
     if (msg && msg.id) { A.msgs = L.mesclarDelta(A.msgs, [msg]); A.ultimoId = L.ultimoId(A.msgs, A.ultimoId); }
     A.chat.renderMensagens({ rolar: "fim" });
@@ -2668,14 +3031,18 @@ async function novaConversa({ contato = null, telefone: telIni = null, nome: nom
     else { tel.removeAttribute("aria-invalid"); tel.setAttribute("aria-describedby", "cv-nv-tel-ajuda"); }
     return msg;
   };
+  // plano 1500c · CC-149: «Vai para +55 12 99999-0000» — como o número vai ficar (com o 55 que entra sozinho)
+  const telPrevia = ui.h("small", { class: "campo-ajuda cv-nv-tel-previa mono", hidden: true });
+  const pintarPrevia = () => { const t = L.previaTelefone(tel.value); telPrevia.textContent = t; telPrevia.hidden = !t; };
   tel.addEventListener("input", () => {
     const fim = tel.selectionStart == null || tel.selectionStart >= String(tel.value).length;   // só mexe com o cursor no fim (não pula o cursor)
     if (fim) { const m = L.mascaraTelefone(tel.value); if (m !== tel.value) tel.value = m; }
     if (telTocado) mostrarErroTel();
+    pintarPrevia();
   });
   tel.addEventListener("blur", () => { if (String(tel.value).trim()) { telTocado = true; tel.value = L.mascaraTelefone(tel.value); } mostrarErroTel(); });
   const blocoDigitar = ui.h("div", { class: "pilha-p", hidden: true },
-    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-nv-tel" }, "Telefone com DDD"), tel, telErro,
+    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-nv-tel" }, "Telefone com DDD"), tel, telErro, telPrevia,
       ui.h("small", { class: "campo-ajuda", id: "cv-nv-tel-ajuda" }, "Número do Brasil ganha o 55 sozinho. Outro país: comece com + e o código dele (ex.: +1 415 555 1234).")),
     ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-nv-nome" }, "Nome"), nome));
   const blocoEscolhido = ui.h("div", { class: "aviso", hidden: true });
@@ -2685,7 +3052,7 @@ async function novaConversa({ contato = null, telefone: telIni = null, nome: nom
     blocoEscolhido.hidden = !escolhido;
     if (!escolhido) return;
     blocoEscolhido.append(ui.icone("contato"), ui.h("div", null,
-      ui.h("b", null, nomeContato(escolhido)), escolhido.telefone ? ui.h("div", { class: "mono" }, ui.telBR(escolhido.telefone)) : null));
+      ui.h("b", { class: "dado-pessoal" }, nomeContato(escolhido)), escolhido.telefone ? ui.h("div", { class: "mono dado-pessoal" }, ui.telBR(escolhido.telefone)) : null));   // plano 1500c · CX-001
   }
   function trocarModo(m) {
     modo = m;
@@ -2703,7 +3070,7 @@ async function novaConversa({ contato = null, telefone: telIni = null, nome: nom
   /** Um contato da busca: o telefone completo ao lado do nome (homônimos «Maria» se distinguem — CA-238). */
   const opcaoContato = c => {
     const b = ui.h("button", { type: "button", class: "cv-contato-op", "aria-pressed": "false" },
-      ui.avatar(c.nome || c.telefone, c.id), ui.h("span", null, ui.h("b", null, nomeContato(c)), ui.h("small", { class: "mono" }, c.telefone ? ui.telBR(c.telefone) : "sem telefone")));
+      ui.avatar(c.nome || c.telefone, c.id), ui.h("span", null, ui.h("b", { class: "dado-pessoal" }, nomeContato(c)), ui.h("small", { class: "mono dado-pessoal" }, c.telefone ? ui.telBR(c.telefone) : "sem telefone")));   // plano 1500c · CX-001
     b.addEventListener("click", () => { escolhido = c; for (const x of resultados.querySelectorAll(".cv-contato-op")) x.setAttribute("aria-pressed", String(x === b)); desenharEscolhido(); });
     return ui.h("li", null, b);
   };
@@ -2723,7 +3090,7 @@ async function novaConversa({ contato = null, telefone: telIni = null, nome: nom
         statusBusca.textContent = "Nenhum contato encontrado.";
         resultados.appendChild(ui.h("p", { class: "sub" }, "Ninguém com esse nome ou telefone. "));
         const dig = L.normalizarTelefone(q);
-        resultados.appendChild(ui.h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { tel.value = dig ? q : ""; nome.value = dig ? "" : q; trocarModo("digitar"); } } },
+        resultados.appendChild(ui.h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { tel.value = dig ? q : ""; nome.value = dig ? "" : q; pintarPrevia(); trocarModo("digitar"); } } },
           ui.icone("mais"), "Digitar o telefone"));
         return;
       }
@@ -2783,8 +3150,13 @@ async function novaConversa({ contato = null, telefone: telIni = null, nome: nom
 
   // CA-056: o texto acompanha o número escolhido — Meta explica a janela e os modelos; CodeWords é um WhatsApp comum
   const textoCanal = ui.h("p", { class: "sub cv-nv-regra" });
+  // plano 1500c · CC-094: no número do CodeWords a primeira mensagem já vai pronta para o campo (a Meta continua pedindo modelo)
+  const primeira = ui.h("textarea", { id: "cv-nv-primeira", rows: 2, maxlength: 1000, placeholder: "Ex.: Olá! Aqui é da clínica, tudo bem?" });
+  const blocoPrimeira = ui.h("div", { class: "campo cv-nv-primeira", hidden: true }, ui.h("label", { for: "cv-nv-primeira" }, "Primeira mensagem (opcional)"), primeira,
+    ui.h("small", { class: "campo-ajuda" }, "Fica no campo da conversa para você revisar e enviar."));
   const explicarCanal = () => {
     const k = canais.length > 1 ? canais.find(c => String(c.id) === String(sCanal.value)) : canais[0];
+    blocoPrimeira.hidden = !(k && k.provedor === "codewords");
     textoCanal.textContent = k && k.provedor === "codewords"
       ? "Este número é um WhatsApp comum (CodeWords): a mensagem sai como texto normal, sem janela de 24 h e sem modelos."
       : "Número da Meta (WhatsApp oficial): se o cliente não falou com a empresa nas últimas 24 h, só vale um modelo aprovado — o seletor de modelos abre em seguida.";
@@ -2795,11 +3167,11 @@ async function novaConversa({ contato = null, telefone: telIni = null, nome: nom
   // plano 1000 · CA-155: o contato já tem atendimento aberto por OUTRO número — aviso com «Abrir aquele» antes de criar a segunda conversa
   const avisoOutro = ui.h("div", { class: "aviso aviso-aten cv-nv-outro", role: "status", hidden: true });
   let avisadoOutro = null, apiModal = null;
-  const corpo = ui.h("div", { class: "pilha" }, campoCanal, avisoCaido, contato || telIni ? null : alterna, blocoEscolhido, blocoBusca, blocoDigitar, avisoOutro, textoCanal);
+  const corpo = ui.h("div", { class: "pilha" }, campoCanal, avisoCaido, contato || telIni ? null : alterna, blocoEscolhido, blocoBusca, blocoDigitar, avisoOutro, textoCanal, blocoPrimeira);
   desenharEscolhido();
   if (contato) { blocoBusca.hidden = true; }
   // CA-091 / CA-142: veio de uma busca por telefone (ou de um contato recebido): o número já entra digitado
-  if (telIni && !contato) { modo = "digitar"; tel.value = L.mascaraTelefone(String(telIni)); if (nomeIni) nome.value = String(nomeIni); blocoBusca.hidden = true; blocoDigitar.hidden = false; bBuscar.setAttribute("aria-pressed", "false"); bDigitar.setAttribute("aria-pressed", "true"); }
+  if (telIni && !contato) { modo = "digitar"; tel.value = L.mascaraTelefone(String(telIni)); if (nomeIni) nome.value = String(nomeIni); blocoBusca.hidden = true; blocoDigitar.hidden = false; bBuscar.setAttribute("aria-pressed", "false"); bDigitar.setAttribute("aria-pressed", "true"); pintarPrevia(); }
 
   /** O atendimento aberto deste contato por outro número (nx_contato_ver), ou null. */
   async function abertaEmOutroNumero(contatoId, canalId) {
@@ -2852,8 +3224,10 @@ async function novaConversa({ contato = null, telefone: telIni = null, nome: nom
   }).catch(e => { tratarErro(e); return null; });
   if (item && item.abrirExistente) { abrir(item.abrirExistente); return; }       // CA-155
   if (!item || !item.id) return;
+  const textoPrimeira = blocoPrimeira.hidden ? "" : String(primeira.value || "").trim();
   await carregarLista({});
   abrir(item.id);
+  if (textoPrimeira) { const E = A; if (await esperarConversa(item.id) && A === E) colocarTextoPronto(item.id, textoPrimeira); }   // CC-094
   // sem janela → direto para os modelos (só na Meta; o aparelho do CodeWords não tem janela de 24 h)
   const provedorItem = (item.canal && item.canal.provedor) || ((A.base && A.base.canais) || []).find(c => c.id === item.canal_id)?.provedor || "meta";
   if (L.canalTemJanela(provedorItem) && !L.janela(item).aberta) {

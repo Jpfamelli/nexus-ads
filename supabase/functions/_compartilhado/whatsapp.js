@@ -5,7 +5,20 @@
    ============================================================ */
 import { limparErro, cortarTexto, telefoneBorda } from "./comum.js";
 
-export const VERSAO_WA = "v23.0";
+// plano 1500c · SC-063: a versão da Graph do WhatsApp sai do env NX_GRAPH_VERSAO_WA quando houver (troca sem mudar código) e o
+// envio da PLATAFORMA (postar) tenta as versões seguintes da lista do meta.js quando a Meta desliga a atual
+export const VERSOES_WA = ["v23.0", "v24.0", "v25.0", "v26.0"];
+function versaoDoAmbiente() {
+  try { const v = String(globalThis.Deno?.env?.get?.("NX_GRAPH_VERSAO_WA") ?? "").trim(); return /^v\d{2}\.0$/.test(v) ? v : ""; } catch { return ""; }
+}
+export const VERSAO_WA = versaoDoAmbiente() || VERSOES_WA[0];
+/** A Graph recusou a VERSÃO (desligada/desconhecida)? (códigos 2635/2500 da Meta) */
+export const versaoWaIndisponivel = dados => {
+  const e = dados?.error || {};
+  return Number(e.code) === 2635 || /deprecated version|unknown version|unsupported version/i.test(String(e.message ?? ""));
+};
+/** plano 1500c · SC-064: idioma do modelo da plataforma (nx_config.wa_template_idioma quando existir; pt_BR por padrão). */
+export const idiomaTemplate = v => (/^[a-z]{2,3}(_[A-Z]{2})?$/.test(String(v ?? "")) ? String(v) : "pt_BR");
 const PAINEL_PADRAO = "https://jpfamelli.github.io/nexus-ads/";
 const LIMITE = 4096;   // limite de caracteres do texto livre na API
 
@@ -48,13 +61,18 @@ export function foraDaJanela(erro) {
 }
 
 async function postar(f, cfg, corpo) {
-  const r = await f(`https://graph.facebook.com/${VERSAO_WA}/${cfg.wa_phone_number_id}/messages`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${cfg.wa_access_token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(corpo),
-  });
-  const dados = await r.json().catch(() => ({}));
-  return { ok: r.ok && !dados.error, status: r.status, dados };
+  let res = null;
+  for (const v of [...new Set([VERSAO_WA, ...VERSOES_WA])]) {
+    const r = await f(`https://graph.facebook.com/${v}/${cfg.wa_phone_number_id}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cfg.wa_access_token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(corpo),
+    });
+    const dados = await r.json().catch(() => ({}));
+    res = { ok: r.ok && !dados.error, status: r.status, dados };
+    if (res.ok || !versaoWaIndisponivel(dados)) return res;   // plano 1500c · SC-063: só a versão desligada passa para a próxima
+  }
+  return res;
 }
 
 const descrever = res => {
@@ -79,7 +97,7 @@ export async function enviarTemplate(cfg, destino, titulo, { fetch: f = globalTh
     messaging_product: "whatsapp", to: para, type: "template",
     template: {
       name: cfg.wa_template,
-      language: { code: "pt_BR" },
+      language: { code: idiomaTemplate(cfg.wa_template_idioma) },   // plano 1500c · SC-064
       components: [{
         type: "body",
         parameters: [

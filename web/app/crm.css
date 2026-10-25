@@ -22,7 +22,8 @@
 .crm-fita .busca { flex: 1 1 16rem; min-width: 0; max-width: 420px; }
 .crm-fita .busca input { min-height: 40px; }
 .crm-filtro-bt[aria-expanded="true"], .crm-filtro-bt.ativo { border-color: var(--c-prim); color: var(--c-prim-luz); }
-.crm-filtro-n { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 .3rem; border-radius: 999px; background: var(--c-prim); color: var(--c-prim-txt); font-family: var(--f-mono); font-size: var(--fs-11); }
+/* plano 1500c · RC-303: o contador dos filtros com 12 px e 20 px de largura mínima (era 11 px num círculo de 18) */
+.crm-filtro-n { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 .3rem; border-radius: 999px; background: var(--c-prim); color: var(--c-prim-txt); font-family: var(--f-mono); font-size: var(--fs-12); }
 .crm-chips { display: flex; flex-wrap: wrap; gap: .4rem; min-width: 0; }
 .crm-chip {
   display: inline-flex; align-items: center; gap: .35rem; min-height: 30px; max-width: 100%; padding: .2rem .35rem .2rem .75rem; border-radius: 999px;
@@ -328,6 +329,10 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .tf-meta > span { display: inline-flex; align-items: center; gap: .25rem; }
 .tf-meta .atrasada { color: var(--c-ruim); font-weight: 700; }
 .tf-meta .hoje { color: var(--c-aten); font-weight: 700; }
+/* plano 1500c · RC-137: «sem prazo» é um selo neutro */
+.tf-meta .tf-sem-prazo { padding: 0 .4rem; border-radius: 999px; border: 1px dashed var(--c-borda); color: var(--c-texto-3); }
+/* plano 1500c · RC-131: links e telefones dentro da nota */
+.nota p a { color: inherit; text-decoration: underline; overflow-wrap: anywhere; }
 .tf-meta a { display: inline-flex; align-items: center; gap: .25rem; color: var(--c-texto-2); }
 .tf-acoes { display: flex; gap: .1rem; }
 .tf-acoes .bt-icone { width: 32px; height: 32px; }
@@ -335,6 +340,9 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .nota { display: flex; flex-direction: column; gap: .4rem; padding: .75rem .85rem; border-radius: var(--r-p); background: var(--c-nota); border: 1px solid color-mix(in srgb, var(--c-aten) 30%, transparent); color: var(--c-nota-txt); }
 .nota.fixada { box-shadow: inset 3px 0 0 var(--c-aten); }
 .nota p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-14); }
+/* plano 1500c · RC-130: nota longa recolhida em 6 linhas; «Ver mais» com alvo de 44px */
+.nota p.nota-recolhida { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; line-clamp: 6; overflow: hidden; }
+.nota-ver-mais { align-self: flex-start; min-height: 44px; padding: 0 .25rem; color: var(--c-nota-txt); text-decoration: underline; }
 .nota-meta { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; font-size: var(--fs-12); color: var(--c-texto-3); }
 .nota-meta .cresce { flex: 1; }
 .nota-meta .bt-icone { width: 30px; height: 30px; }
@@ -559,7 +567,51 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .fe-etapas.sem-marco .fe-etapa { grid-template-columns: auto auto minmax(0, 1.8fr) minmax(0, 1fr) minmax(0, .7fr) minmax(0, 1.15fr) auto; grid-template-areas: "alca cor nome tipo num sla rem"; }
 .fe-etapas.sem-marco .fe-marco, .fe-cab.sem-marco .fe-marco-cab { display: none; }
 .fe-alca { grid-area: alca; } .fe-cor { grid-area: cor; } .fe-nome-cel { grid-area: nome; } .fe-tipo { grid-area: tipo; }
-.fe-marco { grid-area: marco; } .fe-num { grid-area: num; } .fe-sla { grid-area: sla; } .fe-rem { grid-area: rem; }
+.fe-marco { grid-area: marco; } .fe-num { grid-area: num; } .fe-sla-cel { grid-area: sla; min-width: 0; } .fe-rem { grid-area: rem; }
+/* plano 1500c · RC-147: mini-rótulos «Chance»/«Prazo» só no celular (lá o cabeçalho .fe-cab some) */
+.fe-mini { display: none; font-size: var(--fs-12); color: var(--c-texto-2); font-weight: 600; }
+/* plano 1500c · RC-146: a bolinha da cor continua 26 px no desenho, mas o alvo do toque tem 44 px */
+.fe-cor { position: relative; }
+.fe-cor::after { content: ""; position: absolute; inset: -9px; }
+/* plano 1500c · RC-165/152/154 */
+.crm-cfg-grupo-t { display: block; margin-bottom: .2rem; }
+.crm-cfg-abertos { color: var(--c-texto-3); }
+.fe-modelo-campo { display: flex; flex-direction: column; gap: .25rem; }
+/* plano 1500c · RC-164: a etiqueta que já existia fica destacada por um instante */
+.crm-cfg-item.crm-cfg-destaque { outline: 2px solid var(--c-prim); outline-offset: 2px; }
+.crm-cfg-sugeridos { flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .5rem; }
+/* plano 1500c · RC-289: imprimir a ficha ou o negócio sai só com o conteúdo — sem menu, botões nem gaveta cortada; links com o endereço */
+@media print {
+  body:has(.crm) * { visibility: hidden; }
+  body:has(.crm) .crm, body:has(.crm) .crm * { visibility: visible; }
+  body:has(.crm) .crm { position: absolute; top: 0; left: 0; width: 100%; }
+  body:has(dialog.gaveta[open]) .crm, body:has(dialog.gaveta[open]) .crm * { visibility: hidden; }
+  body:has(dialog.gaveta[open]) dialog.gaveta[open], body:has(dialog.gaveta[open]) dialog.gaveta[open] * { visibility: visible; }
+  dialog.gaveta[open] { position: absolute; inset: 0 auto auto 0; width: 100%; max-width: none; height: auto; max-height: none; overflow: visible; transform: none; box-shadow: none; border: 0; }
+  .crm .bt, .crm .bt-icone, .crm-fab, .crm-kb-ferramentas, .crm-visoes, .crm-sel, .ng-acoes, .ng-nav, .tf-acoes, .tf-check, .nota-meta button, .ng-prev-atalhos, .tf-atalhos, .kb-tour, .kb-sem-rede,
+  dialog.gaveta .bt, dialog.gaveta .bt-icone { display: none !important; }
+  .crm a[href^="http"]::after, dialog.gaveta a[href^="http"]::after { content: " (" attr(href) ")"; font-size: var(--fs-12); }
+}
+/* plano 1500c · RC-312/311: observação da empresa em bloco neutro; valor em aberto no cartão */
+.emp-obs { display: grid; gap: .2rem; padding: .6rem .75rem; border-radius: var(--r-p); border: 1px solid var(--c-borda); background: var(--c-fundo); }
+.emp-obs-txt { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-14); }
+/* plano 1500c · RC-268: «R$» dentro do campo de valor da gaveta */
+.ng-dd-moeda { display: flex; align-items: center; gap: .35rem; }
+.ng-moeda { color: var(--c-texto-3); font-size: var(--fs-13); }
+/* plano 1500c · RC-253: dicas da 1ª visita ao quadro */
+.kb-tour { display: grid; gap: .5rem; margin-bottom: .75rem; }
+.kb-tour-t { font-size: var(--fs-16); }
+.kb-tour-lista { margin: 0; padding-left: 1.2rem; display: grid; gap: .3rem; font-size: var(--fs-14); }
+/* plano 1500c · RC-264: sem internet o arrasto fica desligado */
+.kb-offline .kc { cursor: default; }
+/* plano 1500c · RC-257: «Por pessoa» no resumo do funil */
+.crm-fr-pessoas { margin-top: .75rem; display: grid; gap: .4rem; }
+.crm-fr-pessoas-t { font-size: var(--fs-14); }
+/* plano 1500c · RC-136/173/175/178/177 */
+.tf-horas { margin-top: .25rem; }
+.imp-dono { align-items: center; gap: .4rem; flex-wrap: wrap; }
+.imp-det-regra summary { cursor: pointer; min-height: 44px; display: inline-flex; align-items: center; }
+.imp-abas-prob { margin-bottom: .5rem; }
 .fe-nome-cel { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
 .fe-n { color: var(--c-texto-3); font-size: var(--fs-12);      /* plano 1000b · RB-162 */ font-family: var(--f-mono); padding-left: .2rem; }
 .fe-num { display: flex; align-items: center; gap: .3rem; min-width: 0; color: var(--c-texto-3); font-size: var(--fs-13); }
@@ -683,6 +735,8 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .fe-etapa, .fe-etapas.sem-marco .fe-etapa { grid-template-columns: auto auto minmax(0, 1fr) minmax(0, 1fr) auto;
     grid-template-areas: "alca cor nome nome rem" "alca . tipo marco marco" "alca . num sla sla"; }
   .fe-etapas.sem-marco .fe-etapa { grid-template-areas: "alca cor nome nome rem" "alca . tipo tipo tipo" "alca . num sla sla"; }
+  .fe-mini { display: inline; }      /* plano 1500c · RC-147 */
+  .fe-sla-cel { display: flex; flex-direction: column; gap: .15rem; }
   .crm-cfg-item > span { flex-basis: calc(100% - 3rem); }
 }
 @media (max-width: 760px), (pointer: coarse) {
@@ -1248,7 +1302,25 @@ fieldset.crm-filtros-grupo > legend.rotulo { padding: 0; margin-bottom: .45rem; 
 /* CR-212: a 1ª etiqueta com o nome no desktop; no celular volta a ser ponto */
 .kc-etq1 { display: inline-block; max-width: 7.5rem; padding: .05rem .45rem; border-radius: var(--r-p); background: var(--c-sup-2); border: 1px solid var(--cor, var(--c-borda-2)); color: var(--c-texto-2); font-size: var(--fs-12); font-weight: 600; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kc-ponto-1 { display: none; }
-@media (max-width: 760px) { .kc-etq1 { display: none; } .kc-ponto-1 { display: inline-block; } }
+/* plano 1500c · RC-073/074/084/086: motivo da perda, valor final do ganho, legenda da pontuação e cartão sem contato */
+.kc-motivo { display: block; margin-top: .15rem; font-size: var(--fs-12); color: var(--c-texto-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kc-valor-final { color: var(--c-ok, inherit); }
+.kc-score-un { margin-left: .1rem; font-size: var(--fs-12); font-weight: 500; opacity: .8; }
+.kc-sem-contato { flex: none; }
+/* plano 1500c · RC-065/066: previsão de fechamento no cartão e soma dos perdidos (o que deixou de entrar) */
+.kc-previsao { display: inline-flex; align-items: center; gap: .2rem; font-size: var(--fs-12); color: var(--c-texto-2); }
+.kc-previsao.vencida { color: var(--c-ruim); font-weight: 600; }
+.kb-col-soma-perdida { text-decoration: line-through; text-decoration-thickness: 1px; color: var(--c-texto-2); }
+/* plano 1500c · RC-087: modo apresentação do quadro (reunião/TV) — sem ferramentas, letra maior, fundo da página */
+.crm.kb-apresentacao { background: var(--c-fundo, var(--c-sup)); padding: 1rem; overflow: auto; }
+.crm.kb-apresentacao .crm-kb-ferramentas, .crm.kb-apresentacao .crm-fab, .crm.kb-apresentacao .crm-novo, .crm.kb-apresentacao .crm-sel,
+.crm.kb-apresentacao .kc-rapidas, .crm.kb-apresentacao .kc-mover, .crm.kb-apresentacao .kb-col-mais, .crm.kb-apresentacao .kb-col-sel { display: none !important; }
+.crm.kb-apresentacao .kc-t { font-size: var(--fs-16); }
+.crm.kb-apresentacao .kb-col-nome { font-size: var(--fs-20); } /* plano 1500c · RX-002: só token de letra */
+.crm-apresentar[aria-pressed="true"] { background: var(--c-prim-suave); }
+@media (max-width: 760px) { .crm-apresentar { display: none; } }
+/* plano 1500c · RC-076: no celular a 1ª etiqueta continua com o NOME (mais curta) — pontos sem nome não diziam nada ao toque */
+@media (max-width: 760px) { .kc-etq1 { max-width: 5rem; } }
 /* CR-213: o avatar do responsável é um botão (filtra o quadro por ele) */
 .kc-dono { display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: none; color: inherit; cursor: pointer; }
 .kc-dono:hover .avatar { box-shadow: 0 0 0 2px var(--c-prim); }
@@ -1357,3 +1429,18 @@ fieldset.crm-filtros-grupo > legend.rotulo { padding: 0; margin-bottom: .45rem; 
 /* plano 1000b · RB-125: semana no celular — os dias livres viram uma linha só («Livres: qua, qui, sáb») */
 .tfp-livres { display: none; margin: 0 0 .5rem; }
 @media (max-width: 760px) { .tfp-dia.tfp-dia-livre { display: none; } .tfp-livres { display: block; } }
+/* plano 1500c · RC-310: período dos fechados no cabeçalho da coluna */
+.kb-col-periodo { font-size: var(--fs-12); color: var(--c-texto-3); }
+.kb-col-periodo::before { content: "· "; }
+/* plano 1500c · RC-330: busca na folha «Mover para…» com muitas etapas */
+.kb-mover-com-busca { display: grid; gap: .5rem; }
+.kb-mover-busca { width: 100%; min-height: 44px; padding: .35rem .6rem; border: 1px solid var(--c-borda-2); border-radius: var(--r-p); background: var(--c-sup); color: var(--c-texto); font: inherit; }
+.kb-mover-busca:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 1px; }
+.kb-mover li[hidden] { display: none !important; }
+/* plano 1500c · RC-305 / RC-307 / RC-327 */
+.imp-so-mapeadas { justify-self: start; min-height: 44px; }
+.imp-mapa-l[hidden] { display: none !important; }
+.tfp-csv { min-height: 44px; margin-inline-start: auto; }
+.crm-filtros-link { justify-self: start; min-height: 44px; }
+/* plano 1500c · RC-294: a tabela «Previsão por mês» usa o mesmo desenho da «Por pessoa» */
+.crm-fr-meses { margin-top: .75rem; }

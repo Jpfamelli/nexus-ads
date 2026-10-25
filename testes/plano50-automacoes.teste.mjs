@@ -357,7 +357,9 @@ test("barraTaxa: role=meter com texto legível e nível pela faixa", async () =>
     assert.ok(b.classList.contains("au-taxa-aten"));
     const v = P.barraTaxa({ pct: null, total: 0 });
     assert.ok(v.classList.contains("au-taxa-vazia"));
-    assert.match(v.getAttribute("aria-valuetext"), /ainda sem execuções/);
+    // plano 1500c: UCA-080 — sem execuções não é medidor (alguns leitores liam «0 por cento»): o texto vai em sr-only
+    assert.equal(v.getAttribute("role"), null);
+    assert.match(v.textContent, /ainda sem execuções/);
   } finally { d.fim(); }
 });
 

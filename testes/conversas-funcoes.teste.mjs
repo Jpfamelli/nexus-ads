@@ -2165,7 +2165,7 @@ test("nx-ia sugerir: prompt com delimitador aleatório (16 hex) em volta da conv
   assert.equal(p.chave, "sk-ant-teste");
   assert.equal(p.modelo, "claude-opus-5");
   assert.equal(p.esforco, "low");
-  assert.equal(p.maxTokens, 4000);
+  assert.equal(p.maxTokens, 1000, "plano 1500c · SC-088: sugestão/resumo com teto de 1000 (antes 4000)");
   const delim = p.usuario.split("\n")[0];
   assert.match(delim, /^[0-9a-f]{16}$/);
   assert.ok(p.usuario.endsWith(`\n${delim}`));
@@ -2292,7 +2292,7 @@ test("ia.js perguntarClaude: opus-5 com fallback e effort low, recusa lança, us
   const { t, p } = globalThis.__ia2[1];
   assert.equal(t, "beta");
   assert.equal(p.model, "claude-opus-5");
-  assert.equal(p.max_tokens, 4000);
+  assert.equal(p.max_tokens, 1000, "plano 1500c · SC-089: teto padrão do ia.js 1000 (antes 4000)");
   assert.deepEqual(p.output_config, { effort: "low" });
   assert.deepEqual(p.betas, ["server-side-fallback-2026-07-01"]);
   assert.equal(p.fallbacks, "default");

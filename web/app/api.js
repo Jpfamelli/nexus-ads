@@ -131,8 +131,35 @@ export const MENSAGENS = {
   http_500: "O servidor falhou ao concluir o pedido. Tente de novo em instantes; se continuar, fale com o suporte.",
   http_502: "O servidor está fora do ar neste momento. Tentamos de novo sozinhos; se continuar, avise o suporte.",
   http_503: "O servidor está fora do ar neste momento. Tentamos de novo sozinhos; se continuar, avise o suporte.",
-  http_504: "O servidor demorou demais para responder. Se tentou salvar ou enviar, confira o resultado antes de repetir.",
+  http_504: "O servidor demorou; confira se salvou antes de repetir.",   // plano 1500c · UCC-002: 504 de uma escrita (a leitura vira tempo_esgotado)
+  // plano 1500c · UCC-003: a função ainda não foi instalada no servidor (PostgREST 404 · PGRST202/203) — nunca o inglês técnico
+  funcao_ausente: "Esta função ainda não foi instalada no servidor; avise o suporte.",
 };
+
+/** plano 1500c · UCC-003: o PostgREST respondeu que a função não existe (404 + PGRST202/PGRST203 ou «Could not find the function»)? O código
+    do erro continua o de sempre (as telas detectam por ele e escondem a novidade); só a frase muda. */
+export function ehFuncaoAusente(e) {
+  if (!e) return false;
+  if (e.funcaoAusente) return true;
+  const code = String((e.resposta && e.resposta.code) || "").toUpperCase();
+  return code === "PGRST202" || code === "PGRST203" || /could not find the function/i.test(String(e.codigo || e.message || ""));
+}
+
+/** plano 1500c · UCC-007: o caminho de venda de um erro de plano — {rotulo, hash} para um botão no aviso (null quando não há). */
+export function acaoDoErro(e) {
+  const c = String((e && (e.codigo || e.message)) || "");
+  if (c === "teste_expirado") return { rotulo: "Ver planos", hash: "#/config/plano" };
+  if (c === "modulo_desligado" || c === "limite_plano") return { rotulo: "Ver Plano e uso", hash: "#/config/plano" };
+  return null;
+}
+
+/** plano 1500c · UCC-004: «espere 7 s» a partir do Retry-After (só quando o servidor disse quanto). */
+function esperaDoErro(e) {
+  const ms = Number(e && e.retryAfterMs);
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const s = Math.max(1, Math.ceil(ms / 1000));
+  return s >= 90 ? `espere ${Math.ceil(s / 60)} min` : `espere ${s} s`;
+}
 
 /**
  * Mensagens por contexto (M14), só para erros criados por um api com `contexto: true` (o shell liga): leitura offline não fala em
@@ -241,8 +268,14 @@ export function mensagemErro(e) {
       if (d === "conversa_vazia") return "Ainda não há mensagens nesta conversa para a IA ler.";
       break;
     }
+    case "muitos_pedidos": case "http_429": case "limite_taxa": {   // plano 1500c · UCC-004: com Retry-After, quanto esperar
+      const espera = esperaDoErro(e);
+      if (espera) return c === "limite_taxa" ? `Muitos envios em pouco tempo; ${espera} e tente de novo.` : `Muitos pedidos seguidos; ${espera} e tente de novo.`;
+      break;
+    }
     default: break;
   }
+  if (ehFuncaoAusente(e)) return MENSAGENS.funcao_ausente;   // plano 1500c · UCC-003
   if (!MENSAGENS[c] && /_nao_encontrad[oa]$/.test(String(c || ""))) return "Não encontramos esse registro — ele pode ter sido removido.";
   if (MENSAGENS[c]) return MENSAGENS[c];
   // plano 1000 (AS-255): código desconhecido — a equipe da plataforma (super) vê o código cru; as demais pessoas, uma frase com o caminho
@@ -260,17 +293,62 @@ let _codigoTecnico = false;
 export function mostrarCodigoTecnico(sim) { _codigoTecnico = !!sim; }
 
 /** RPCs que só LEEM (podem ser repetidas sem efeito colateral). Tudo que não está aqui é tratado como escrita. */
-const LEITURA_SUFIXOS = /_(listar|ver|base|kanban|coluna|buscar)$/;
+// plano 1500c · UCC-005: _estado, _resumo, _contar e _historico também só leem (ganham retentativa, cache e a frase de leitura)
+const LEITURA_SUFIXOS = /_(listar|ver|base|kanban|coluna|buscar|estado|resumo|contar|historico)$/;
 const LEITURA_NOMES = new Set(["nx_pulso", "nx_app_sessao", "nx_marca_publica", "nx_inicio", "nx_agenda_dia", "nx_agenda_livres", "nx_dados",
   "nx_cv_mensagens", "nx_cv_ia_estado", "nx_cv_buscar_msgs", "nx_automacao_execucoes", "nx_cliente_tema", "nx_integracoes_status", "nx_uso_plano",
   // plano 1000 (AS-181): consultas do Admin, das Automações e do Início que eram tratadas como escrita (offline diziam «nada foi salvo» e não repetiam)
   "nx_automacao_execucoes_dia", "nx_ia_uso_dia", "nx_onboarding_estado", "nx_clientes_admin",
   // plano 1000b · UB-153: a saúde da operação (Admin) e o «Testar» do editor de automação (simula sem gravar) também só leem
   "nx_saude", "nx_auto_simular"]);
+/** plano 1500c · UCC-005: os «_contar» do servidor que SOMAM contadores (Edge Functions) são escrita — repetir contaria duas vezes. */
+const ESCRITAS_COM_SUFIXO_DE_LEITURA = new Set(["nx_canal_contar", "nx_codewords_contar"]);
 export function ehLeitura(nome) {
   const n = String(nome || "");
+  if (ESCRITAS_COM_SUFIXO_DE_LEITURA.has(n)) return false;
   return LEITURA_NOMES.has(n) || LEITURA_SUFIXOS.test(n) || /^nx_rel_/.test(n);
 }
+
+/* ---- plano 1500c · UCC-134: os últimos erros (no máximo 20) ficam na memória desta aba (e na sessão da aba) para o «Copiar diagnóstico».
+   Só código, status, nome da chamada e hora: nada de parâmetro, corpo ou mensagem do servidor (podem ter nome e telefone). ---- */
+export const MAX_ERROS_RECENTES = 20;
+const _erros = [];
+const CHAVE_ERROS = "nx-erros-recentes";
+export function guardarErroRecente(e, nome = null, agora = Date.now()) {
+  if (!e || e.codigo === "cancelado") return;
+  const item = { em: new Date(agora).toISOString(), codigo: String(e.codigo || e.message || "erro").slice(0, 60), status: Number(e.status) || null,
+    fn: nome ? String(nome).replace(/[^a-z0-9_:-]/gi, "").slice(0, 60) : null };
+  _erros.push(item);
+  while (_erros.length > MAX_ERROS_RECENTES) _erros.shift();
+  try { if (typeof sessionStorage !== "undefined" && sessionStorage) sessionStorage.setItem(CHAVE_ERROS, JSON.stringify(_erros)); } catch { /* sem storage */ }
+}
+export function errosRecentes() {
+  if (!_erros.length) {
+    try {
+      const v = typeof sessionStorage !== "undefined" && sessionStorage ? JSON.parse(sessionStorage.getItem(CHAVE_ERROS) || "[]") : [];
+      if (Array.isArray(v)) for (const x of v.slice(-MAX_ERROS_RECENTES)) if (x && typeof x.codigo === "string") _erros.push({ em: String(x.em || ""), codigo: x.codigo, status: Number(x.status) || null, fn: x.fn || null });
+    } catch { /* ok */ }
+  }
+  return _erros.map(x => ({ ...x }));
+}
+export function limparErrosRecentes() { _erros.length = 0; try { sessionStorage.removeItem(CHAVE_ERROS); } catch { /* ok */ } }
+
+/* ---- plano 1500c · UCC-136: diferença entre o relógio do servidor (cabeçalho Date da última resposta) e o do aparelho. A pílula do teste e a
+   conta de dias usam agoraServidor(): um aparelho com a data errada não mostra «faltam 40 dias» num teste que acaba amanhã. ---- */
+let _desvioRelogio = 0;
+export function lerRelogioDoServidor(r, agora = Date.now()) {
+  try {
+    const d = r && r.headers && typeof r.headers.get === "function" ? r.headers.get("date") : null;
+    const t = d ? Date.parse(d) : NaN;
+    if (!Number.isFinite(t)) return _desvioRelogio;
+    const desvio = t - agora;
+    // o cabeçalho tem resolução de 1 s e o caminho leva alguns décimos: menos de 1 min de diferença é ruído, não relógio errado
+    _desvioRelogio = Math.abs(desvio) < 60_000 ? 0 : desvio;
+  } catch { /* ok */ }
+  return _desvioRelogio;
+}
+export function desvioRelogio() { return _desvioRelogio; }
+export function agoraServidor(agora = Date.now()) { return agora + _desvioRelogio; }
 
 /** Cria um Error no padrão da API. */
 export function erroApi(codigo, extra = {}) {
@@ -363,6 +441,7 @@ export function criarApi(o) {
   const prazoRpc = normalizarPrazo(o.prazoMs ?? o.prazoRpcMs, 20_000);
   const prazoFn = normalizarPrazo(o.prazoMs ?? o.prazoFnMs, 75_000);
 
+  let _semEvento = false, _semErroCliente = false, _errosEnviados = 0;   // plano 1500c · UCC-104/UCC-135
   const rede = o.rede || null;                 // M14
   const contexto = !!o.contexto;               // M14: mensagens por contexto (leitura × escrita) nos erros de conexão
   const lentoMs = Number.isFinite(Number(o.lentoMs)) && Number(o.lentoMs) > 0 ? Number(o.lentoMs) : 4000;
@@ -392,9 +471,15 @@ export function criarApi(o) {
   async function buscarComPrazo(url, init, ms, sinal = null) {
     const controller = typeof AbortController === "function" ? new AbortController() : null;
     // plano 1000 (pedido de Automações): quem chamou pode desistir («Parar de esperar») — o sinal dele cancela o fetch na hora
+    // plano 1500c · UCC-006: o ouvinte sai do sinal quando a chamada termina (um sinal da tela inteira acumulava uma closure por chamada)
+    let soltarSinal = () => {};
     if (sinal && controller) {
       if (sinal.aborted) controller.abort();
-      else if (typeof sinal.addEventListener === "function") sinal.addEventListener("abort", () => controller.abort(), { once: true });
+      else if (typeof sinal.addEventListener === "function") {
+        const aoAbortar = () => controller.abort();
+        sinal.addEventListener("abort", aoAbortar, { once: true });
+        soltarSinal = () => { try { sinal.removeEventListener("abort", aoAbortar); } catch { /* ok */ } };
+      }
     }
     let timer, expirou = false;
     const rede = (async () => {
@@ -410,7 +495,7 @@ export function criarApi(o) {
     });
     try {
       return await Promise.race([rede.catch(e => { if (expirou) throw erroApi("tempo_rede"); throw e; }), limite]);
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); soltarSinal(); }
   }
 
   /** UMA tentativa: devolve os dados ou lança Error (.codigo, .status, .hint…). Não fala com o rede.js nem com a sessão. */
@@ -430,6 +515,7 @@ export function criarApi(o) {
       if (contexto) e.contexto = { leitura: !!meta.leitura };
       throw e;
     }
+    lerRelogioDoServidor(r);   // plano 1500c · UCC-136
     const dados = lerCorpo(txt);
     const obj = dados && typeof dados === "object" && !Array.isArray(dados) ? dados : null;
     if (!r.ok) {
@@ -440,18 +526,23 @@ export function criarApi(o) {
         else if (obj.message) { codigo = String(obj.message); hint = obj.hint ?? null; }
         else if (obj.erro) codigo = String(obj.erro);
       }
-      if (!codigo) codigo = r.status === 504 ? "tempo_esgotado" : `http_${r.status}`;
+      // plano 1500c · UCC-002: 504 sem corpo numa ESCRITA não é «operação grande demais» (frase de período): é http_504, «confira se salvou»
+      if (!codigo) codigo = r.status === 504 ? (meta.leitura ? "tempo_esgotado" : "http_504") : `http_${r.status}`;
       // .resposta = corpo inteiro (ex.: nx-enviar devolve {ok:false, erro, detalhe, mensagem} e a F5 precisa da mensagem gravada)
       const e = erroApi(codigo, { status: r.status, hint, detalhe, detalhe_texto: typeof detalhe === "string" ? detalhe : null, resposta: obj });
       const ra = r.headers && typeof r.headers.get === "function" ? lerRetryAfter(r.headers.get("retry-after"), agora()) : null;
       if (ra !== null) e.retryAfterMs = ra;
       if (contexto) e.contexto = { leitura: !!meta.leitura };
+      if (ehFuncaoAusente(e)) e.funcaoAusente = true;   // plano 1500c · UCC-003
+      const acao = acaoDoErro(e); if (acao) e.acao = acao;   // plano 1500c · UCC-007
       throw e;
     }
     // único caso de erro "por retorno": {ok:false, erro} (nx_convite_aceitar e Edge Functions)
     if (obj && obj.ok === false && obj.erro) {
-      throw erroApi(String(obj.erro), { status: r.status, hint: obj.hint ?? null, detalhe: obj.detalhe ?? null,
+      const e = erroApi(String(obj.erro), { status: r.status, hint: obj.hint ?? null, detalhe: obj.detalhe ?? null,
         detalhe_texto: typeof obj.detalhe === "string" ? obj.detalhe : null, resposta: obj });
+      const acao = acaoDoErro(e); if (acao) e.acao = acao;
+      throw e;
     }
     return dados;
   }
@@ -501,6 +592,7 @@ export function criarApi(o) {
           if (espera !== null) { repeticoes += 1; await esperar(espera); continue; }
           if (repeticoes) e.tentativas = repeticoes + 1;
           if (meta.req) e.req = meta.req;
+          guardarErroRecente(e, meta.nome);   // plano 1500c · UCC-134
           relatarErro(e);
           if (typeof o.aoErro === "function") { try { o.aoErro(e, meta); } catch { /* o shell decide; o erro sobe do mesmo jeito */ } }
           throw e;
@@ -515,11 +607,12 @@ export function criarApi(o) {
    * `e.comCache = true`: a tela mantém o que já mostra e não troca por um cartão de erro. Nunca guarda o que não é cacheável, nem a
    * resposta de uma chamada que começou com outra conta ou outro token (Sair ou troca de conta com a leitura em voo).
    */
-  async function comCache(nome, params, opcoes, executar, cliente = o.cliente ? o.cliente() : null) {
+  async function comCache(nome, params, opcoes, executar, cliente = o.cliente ? o.cliente() : null, { publica = false } = {}) {
     // quem pediu: se a conta ou o token mudarem no meio, a resposta desta chamada não volta para o aparelho (o limpar() já rodou)
     const contaIni = o.conta ? o.conta() : null, tokenIni = o.token ? o.token() : null;
-    const mesmoDono = () => (o.conta ? o.conta() : null) === contaIni && (o.token ? o.token() : null) === tokenIni;
-    const chave = o.cache.chaveDe(nome, params, { conta: contaIni, cliente });
+    const mesmoDono = () => publica || ((o.conta ? o.conta() : null) === contaIni && (o.token ? o.token() : null) === tokenIni);
+    // plano 1500c · UCC-008: pública → «pub» no lugar da conta e nenhuma empresa (uma entrada só, igual para quem estiver logado ou não)
+    const chave = publica ? o.cache.chaveDe(nome, params, { conta: "pub", cliente: null }) : o.cache.chaveDe(nome, params, { conta: contaIni, cliente });
     let resolvida = false, local = null, servido = false;
     const redeP = executar().then(d => { resolvida = true; return d; }, e => { resolvida = true; throw e; });
     redeP.catch(() => {});                                   // a leitura do cache pode demorar mais que um erro imediato: sem aviso de promessa sem dono
@@ -562,7 +655,7 @@ export function criarApi(o) {
     rpc(nome, params = {}, opcoes = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
       const { params: p, req } = prepararReq(params, opcoes);
-      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, ...p }), prazoRpc, { leitura: ehLeitura(nome), req, keepalive: saindo(opcoes) });
+      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, ...p }), prazoRpc, { leitura: ehLeitura(nome), req, keepalive: saindo(opcoes), nome });
       return querCache(nome, opcoes) ? comCache(nome, params, opcoes, executar) : executar();
     },
     /** RPC com p_token e p_cliente (empresa ativa). opcoes: {req:true|uuid}, {cache:true, aoCache} e {keepalive:true}, como em rpc. */
@@ -571,14 +664,15 @@ export function criarApi(o) {
       const { params: p, req } = prepararReq(params, opcoes);
       // a empresa é lida UMA vez: uma repetição (M15) depois de a pessoa trocar de empresa não busca os dados da outra nem os guarda na chave desta
       const cli = o.cliente ? o.cliente() : null;
-      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, p_cliente: cli, ...p }), prazoRpc, { leitura: ehLeitura(nome), req, keepalive: saindo(opcoes) });
+      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, p_cliente: cli, ...p }), prazoRpc, { leitura: ehLeitura(nome), req, keepalive: saindo(opcoes), nome });
       return querCache(nome, opcoes) ? comCache(nome, params, opcoes, executar, cli) : executar();
     },
     /** RPC pública (sem token): nx_marca_publica, nx_convite_ver, nx_convite_aceitar, nx_senha_redefinir, nx_entrar. */
     publica(nome, params = {}, opcoes = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
-      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, params, prazoRpc, { leitura: ehLeitura(nome) });
-      return querCache(nome, opcoes) ? comCache(nome, params, opcoes, executar) : executar();
+      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, params, prazoRpc, { leitura: ehLeitura(nome), nome });
+      // plano 1500c · UCC-008: resposta pública (sem sessão) não é de conta nem de empresa — a chave fica «pub:-:nome:…», a mesma para todos
+      return querCache(nome, opcoes) ? comCache(nome, params, opcoes, executar, null, { publica: true }) : executar();
     },
     /**
      * Edge Function: POST /functions/v1/<funcao> com {token, cliente, ...corpo}.
@@ -592,7 +686,24 @@ export function criarApi(o) {
       // plano 1000b · UB-154: a empresa é lida UMA vez (como no rpcC): a repetição não vai para outra empresa se a pessoa trocar no meio
       const cli = o.cliente ? o.cliente() : null;
       return chamar(`${base}/functions/v1/${funcao}`, () => ({ token: o.token ? o.token() : null, cliente: cli, ...corpo }), prazoDaChamada(opcoes, chave),
-        { leitura: fnLeitura(funcao, corpo, opcoes), keepalive: saindo(opcoes), sinal: opcoes && opcoes.sinal ? opcoes.sinal : null });
+        { leitura: fnLeitura(funcao, corpo, opcoes), keepalive: saindo(opcoes), sinal: opcoes && opcoes.sinal ? opcoes.sinal : null, nome: chave });
+    },
+    /** plano 1500c · UCC-104: registra um evento leve para o comercial (clique em «Conhecer», «Ver planos»…) por nx_evento_registrar.
+        Melhor esforço: nunca lança, nunca repete, e depois que o servidor disser que a função não existe (404) não tenta mais nesta aba. */
+    evento(tipo, dados = {}) {
+      if (_semEvento || !/^[a-z0-9_.-]{2,40}$/.test(String(tipo || ""))) return Promise.resolve(false);
+      return api.rpc("nx_evento_registrar", { p_tipo: String(tipo), p_dados: dados && typeof dados === "object" ? dados : {} })
+        .then(() => true, e => { if (ehFuncaoAusente(e) || Number(e && e.status) === 404) _semEvento = true; return false; });
+    },
+    /** plano 1500c · UCC-135: resumo de um erro do aparelho para o relatório central (nx_erro_cliente_registrar) — só código, tela e versão,
+        nada de dado pessoal. Mesmo melhor esforço do evento(); no máximo 10 por aba. */
+    erroCliente(resumo = {}) {
+      if (_semErroCliente || _errosEnviados >= 10) return Promise.resolve(false);
+      _errosEnviados += 1;
+      const limpo = { codigo: String(resumo.codigo || "erro").slice(0, 60), tela: String(resumo.tela || "").replace(/[^a-z0-9/_-]/gi, "").slice(0, 60),
+        versao: String(resumo.versao || "").slice(0, 30), navegador: String(resumo.navegador || "").slice(0, 60) };
+      return api.rpc("nx_erro_cliente_registrar", { p_erro: limpo }, { keepalive: !!resumo.saindo })
+        .then(() => true, e => { if (ehFuncaoAusente(e) || Number(e && e.status) === 404) _semErroCliente = true; return false; });
     },
     mensagemErro,
     minutosDoHint,   // o login lê os minutos do bloqueio por tentativas (A9)

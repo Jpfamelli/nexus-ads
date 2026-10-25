@@ -78,7 +78,8 @@ const VV = {
   min: k => String(VV.v[k] || k).toLowerCase(),
   art: () => "a", um: () => "uma", conc: (k, m, f) => f,
 };
-const TIPOS_GATILHO = new Set(["canal", "departamento", "funil", "estagio", "etiqueta", "numero", "palavras", "sim_nao", "campo_data", "hora", "dias_semana"]);
+// plano 1500c: UCA-002 — «Tarefa vencida» filtra por tipo (opcoes) e por pessoa (pessoa), como o nx_auto_normalizar já aceita
+const TIPOS_GATILHO = new Set(["canal", "departamento", "funil", "estagio", "etiqueta", "numero", "palavras", "sim_nao", "campo_data", "hora", "dias_semana", "opcoes", "pessoa"]);
 const TIPOS_ACAO = new Set(["texto", "texto_longo", "numero", "opcoes", "estagio", "funil", "etiqueta", "pessoa", "dono", "para", "template", "parametros",
   "departamento", "sim_nao", "alvo_etiqueta", "modo_atribuir", "duracao", "tarefa_ia", "campo_contato"]);
 

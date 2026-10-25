@@ -3,12 +3,13 @@
    Carregado por import() dinâmico (botão "Folha do mês" em
    Relatórios, créditos do curta, ?folha=AAAA-MM). Uma página A4 de
    papel com a marca da clínica — para deixar na mesa do dentista ou
-   mandar em PDF pelo WhatsApp. A Nexus assina no rodapé.
+   mandar em PDF pelo WhatsApp. A agência assina no rodapé (a Nexus só quando não há
+   outra marca — plano 1500c · AC-262).
    Mesmo número em todo lugar: M.consolidar(M.linhasDe(m.de, m.ate)) e
    M.crmTot(m.de, m.ate) — os MESMOS do resumo mensal do WhatsApp.
    Gráficos em SVG inline (nunca canvas: sai nítido no PDF).
    ============================================================ */
-import { brl, brl0, int, esc, fin, MESES, MES3 } from "./nucleo.js";
+import { brl, brl0, int, esc, fin, MESES, MES3, retornoInvestimento, plural, pluralDec, nomePlat, varPct, variacao } from "./nucleo.js";
 
 /** PURO: os números da folha de um mês (iguais aos do relMensal). O "Cada R$ 1 investido virou"
     usa a MESMA base do herói e do curta — tratamentos ÷ (anúncios + gestão do mês) —, porque é a
@@ -17,7 +18,8 @@ export function dadosFolha(M, m) {
   const t = M.consolidar(M.linhasDe(m.de, m.ate)), c = M.crmTot(m.de, m.ate);
   const fee = (M.CFG && M.CFG.fee) || 0, custo = t.gasto + fee;
   return {
-    t, c, roas: t.gasto ? c.receita / t.gasto : null, fee, custo, retorno: custo ? c.receita / custo : null,
+    // plano 1500c · AC-016: a mesma função do resumo mensal e do herói do painel
+    t, c, roas: t.gasto ? c.receita / t.gasto : null, fee, custo, retorno: retornoInvestimento({ receita: c.receita, gasto: t.gasto, fee }),
     serv: Object.entries(c.serv).sort((a, b) => b[1].v - a[1].v).map(([nome, s]) => ({ nome, n: s.n, v: s.v })),
   };
 }
@@ -68,17 +70,46 @@ function grafServ(serv, total) {
     <p class="fl-mini">${total ? `${Math.round(lin[0].v / total * 100)}% do mês veio de ${esc(lin[0].nome.toLowerCase())}.` : ""}</p>`;
 }
 
+/** Plano 1500c · AC-258/AC-259: os contatos do mês separados — conversas no WhatsApp (Meta e outras) × conversões do Google (que não são
+    «conversas no WhatsApp»; antes tudo saía como conversa). PURO. → {conversas, google, frase, rotulo} */
+export function contatosFolha(M, m) {
+  const ls = M.linhasDe(m.de, m.ate);
+  let conversas = 0, google = 0;
+  for (const l of ls) { if (l.plat === "google") google += +l.conversoes || 0; else conversas += +l.conversoes || 0; }
+  const frase = google > 0
+    ? `<b>${plural(conversas, "conversa", "conversas")}</b> no WhatsApp e <b>${pluralDec(google, "contato", "contatos")}</b> pelo Google`
+    : `<b>${plural(conversas, "conversa", "conversas")}</b> no WhatsApp`;
+  return { conversas, google, total: conversas + google, frase, rotulo: google > 0 ? (conversas > 0 ? "conversas e contatos do Google" : "contatos pelo Google") : "conversas no WhatsApp" };
+}
+/** Plano 1500c · AC-262: quem assina a folha — a marca da agência quando o cliente/org tem (cfg.agenciaNome/agenciaCidade, ou
+    ctx.agencia {nome, cidade}); só sem nenhuma marca vale a Nexus (com Taubaté-SP). Revenda não imprime «Nexus». PURO. */
+export function assinaturaFolha(cfg = {}, agencia = null) {
+  const nome = String((agencia && agencia.nome) || cfg.agenciaNome || (cfg.agencia && cfg.agencia.nome) || "").trim();
+  if (!nome) return { nome: "Nexus", cidade: "Taubaté-SP", nexus: true };
+  const cidade = String((agencia && agencia.cidade) || cfg.agenciaCidade || (cfg.agencia && cfg.agencia.cidade) || "").trim();
+  return { nome: nome.slice(0, 60), cidade: cidade.slice(0, 40), nexus: /^nexus\b/i.test(nome) };
+}
+/** Plano 1500c · AC-261: o nome da plataforma na folha — o Meta é «Instagram e Facebook» para o dono; as outras pelo nome próprio. */
+export const platFolha = p => (p === "meta" ? "Instagram e Facebook" : nomePlat(p));
+
 function montar() {
   const M = ctx.M, d = dadosFolha(M, m), { t, c, roas, retorno, fee } = d;
   T = textosFolha(M.vertical);
   const est = (+c.receitaEstimada || 0) > 0;
   const mesNome = MESES[m.mes], hoje = new Date();
-  const cp = ctx.campeao;
+  const cp = ctx.campeao, k = contatosFolha(M, m), ass = assinaturaFolha(M.CFG || {}, ctx.agencia);
+  // plano 1500c · AC-258/AC-259: conversa no WhatsApp ≠ conversão do Google, com plural certo («1 conversa»)
   const frase = c.fecharam
-    ? `Em ${mesNome}, os anúncios apareceram ${int(t.impressoes)} vezes, trouxeram <b>${int(t.conversoes)} ${Math.round(t.conversoes) === 1 ? "conversa" : "conversas"}</b> no WhatsApp, <b>${int(c.agendadas)} ${c.agendadas === 1 ? T.marcada[0] : T.marcada[1]}</b> e <b>${int(c.fecharam)} ${c.fecharam === 1 ? T.novo[0] : T.novo[1]}</b> — ${brl0(c.receita)} ${T.receitaEm}.`
-    : `Em ${mesNome}, os anúncios apareceram ${int(t.impressoes)} vezes e trouxeram <b>${int(t.conversoes)} conversas</b> no WhatsApp e <b>${int(c.agendadas)} ${c.agendadas === 1 ? T.marcada[0] : T.marcada[1]}</b>.`;
-  const etapas = [[t.impressoes, "vezes na tela"], [t.cliques, "tocaram no anúncio"], [t.conversoes, "conversas no WhatsApp"],
+    ? `Em ${mesNome}, os anúncios apareceram ${int(t.impressoes)} vezes, trouxeram ${k.frase}, <b>${int(c.agendadas)} ${c.agendadas === 1 ? T.marcada[0] : T.marcada[1]}</b> e <b>${int(c.fecharam)} ${c.fecharam === 1 ? T.novo[0] : T.novo[1]}</b> — ${brl0(c.receita)} ${T.receitaEm}.`
+    : `Em ${mesNome}, os anúncios apareceram ${int(t.impressoes)} vezes e trouxeram ${k.frase} e <b>${int(c.agendadas)} ${c.agendadas === 1 ? T.marcada[0] : T.marcada[1]}</b>.`;
+  const etapas = [[t.impressoes, "vezes na tela"], [t.cliques, "tocaram no anúncio"], [k.total, k.rotulo],
     [c.agendadas, T.marcaram], [c.compareceram, T.vieram], [c.fecharam, T.fecharam]];
+  // plano 1500c · AC-263: o mês anterior ao lado (fechamentos), quando a lista de meses tem o anterior
+  const iM = (ctx.meses || []).findIndex(x => x.de === m.de), ant = iM > 0 ? ctx.meses[iM - 1] : null;
+  const vsAnt = ant ? `vs. ${MESES[ant.mes]}: ${ant.fecharam} → ${c.fecharam}${ant.fecharam > 0 ? ` (${varPct(variacao(c.fecharam, ant.fecharam))})` : ""}` : "";
+  // plano 1500c · AC-264: as mudanças anotadas (marcos) do mês
+  const marcos = typeof M.marcosEntre === "function" ? M.marcosEntre(m.de, m.ate).slice(0, 5) : [];
+  const passos = ctx.proximos.length ? ctx.proximos : ["Seguir como está."];
   folha.innerHTML = `
     <header class="fl-faixa bloco">
       <div class="fl-cli"><span class="selo-av fl-av" data-av></span><div><b>${esc(ctx.nome)}</b><small>Relatório do mês · tráfego pago</small></div></div>
@@ -87,8 +118,8 @@ function montar() {
     <p class="fl-resumo bloco">${frase}</p>
     <ol class="fl-trilha bloco">${etapas.map(([v, l], k) => `<li${k === etapas.length - 1 ? ` class="fim"` : ""}><b>${int(v)}</b><span>${l}</span></li>`).join("")}</ol>
     <div class="fl-blocos">
-      <div class="bloco"><span class="fl-rot">Investido em anúncios</span><b>${brl0(t.gasto)}</b><small>${int(t.conversoes)} conversas · ${brl(t.cpa)} cada</small></div>
-      <div class="bloco"><span class="fl-rot">${esc(T.receita)}${est ? " (estimativa)" : ""}</span><b>${brl0(c.receita)}</b><small>${int(c.fecharam)} ${c.fecharam === 1 ? T.novo[0] : T.novo[1]}</small></div>
+      <div class="bloco"><span class="fl-rot">Investido em anúncios</span><b>${brl0(t.gasto)}</b><small>${k.google > 0 ? pluralDec(k.total, "contato", "contatos") : plural(k.total, "conversa", "conversas")}${fin(t.cpa) ? ` · ${brl(t.cpa)} cada` : ""}</small></div>
+      <div class="bloco"><span class="fl-rot">${esc(T.receita)}${est ? " (estimativa)" : ""}</span><b>${brl0(c.receita)}</b><small>${int(c.fecharam)} ${c.fecharam === 1 ? T.novo[0] : T.novo[1]}${vsAnt ? ` · ${esc(vsAnt)}` : ""}</small></div>
       <div class="bloco fl-ret"><span class="fl-rot">Retorno</span><b>${fin(retorno) && c.receita ? `Cada R$ 1 investido virou ${brl(retorno)}` : `Ainda sem ${T.servico} fechado`}</b><small>${fee ? `${T.receita.toLowerCase()} ÷ (anúncios + gestão)` : `${T.receita.toLowerCase()} ÷ investimento em anúncios`}${fee && fin(roas) && c.receita ? ` · só anúncio: ${brl(roas)}` : ""}</small></div>
     </div>
     <div class="fl-duo">
@@ -97,15 +128,17 @@ function montar() {
     </div>
     <div class="fl-duo">
       <section class="bloco"><h2 class="fl-h">O anúncio que mais trouxe ${esc(T.pessoa[1])}</h2>
-        ${cp ? `<p class="fl-camp">${esc(cp.camp.nome)}</p><p class="fl-camp-q">${cp.camp.plat === "google" ? "Google" : "Instagram e Facebook"} · ${int(cp.k.conversas)} conversas · ${int(cp.k.fecharam)} ${cp.k.fecharam === 1 ? T.pessoa[0] : T.pessoa[1]} · ${brl0(cp.k.receita)} ${T.receitaEm}</p>
+        ${cp ? `<p class="fl-camp">${esc(cp.camp.nome)}</p><p class="fl-camp-q">${esc(platFolha(cp.camp.plat))} · ${plural(cp.k.conversas, "conversa", "conversas")} · ${int(cp.k.fecharam)} ${cp.k.fecharam === 1 ? T.pessoa[0] : T.pessoa[1]} · ${brl0(cp.k.receita)} ${T.receitaEm}</p>
           ${cp.cri ? `<p class="fl-mini">Criativo que mais chamou gente: ${esc(cp.cri.nome)}</p>` : ""}` : `<p class="fl-vazio">Sem anúncio com ${esc(T.pessoa[0])} no mês.</p>`}
       </section>
       <section class="bloco"><h2 class="fl-h">Para o próximo mês</h2>
-        ${ctx.proximos.length ? `<ol class="fl-passos">${ctx.proximos.map(p => `<li>${esc(p)}</li>`).join("")}</ol>` : `<p class="fl-vazio">Seguir como está.</p>`}
+        ${ctx.editavel ? `<p class="fl-dica">Toque no texto para editar antes de imprimir.</p>` : ""}
+        <ol class="fl-passos"${ctx.editavel ? ` contenteditable="true" spellcheck="true" aria-label="Para o próximo mês — dá para editar antes de imprimir"` : ""}>${passos.map(p => `<li>${esc(p)}</li>`).join("")}</ol>
       </section>
     </div>
+    ${marcos.length ? `<section class="bloco fl-marcos"><h2 class="fl-h">O que mudamos no mês</h2><ul class="fl-passos">${marcos.map(x => `<li><b>${esc(M.ddmm(x.i))}</b> — ${esc(x.t)}</li>`).join("")}</ul></section>` : ""}
     <footer class="fl-pe bloco">
-      <p class="fl-assina"><svg class="nx-mono" aria-hidden="true"><use href="#nx-mono"/></svg><span>Preparado pela <b>Nexus</b> · gestão de tráfego · Taubaté-SP</span></p>
+      <p class="fl-assina">${ass.nexus ? `<svg class="nx-mono" aria-hidden="true"><use href="#nx-mono"/></svg>` : ""}<span>Preparado pela <b>${esc(ass.nome)}</b> · gestão de tráfego${ass.cidade ? ` · ${esc(ass.cidade)}` : ""}</span></p>
       <p class="fl-meta">Gerado em ${p2(hoje.getDate())}/${p2(hoje.getMonth() + 1)}/${hoje.getFullYear()}${est ? ` · valores de ${esc(T.servico)} estimados pela tabela ${esc(T.local)}` : ""}</p>
     </footer>
     ${ctx.demo ? `<p class="fl-agua" aria-hidden="true">DEMONSTRAÇÃO · números ilustrativos</p>` : ""}`;
@@ -138,7 +171,7 @@ function tecla(e) {
   if (modal.hidden) return;
   if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); fechar(); }
   else if (e.key === "Tab") {
-    const f = [...modal.querySelectorAll("button")].filter(b => b.offsetParent !== null);
+    const f = [...modal.querySelectorAll('button, [contenteditable="true"]')].filter(b => b.offsetParent !== null);   // AC-265: o texto editável entra no ciclo do Tab
     const i = f.indexOf(document.activeElement);
     if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
     else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }

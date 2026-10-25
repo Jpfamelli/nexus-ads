@@ -447,8 +447,9 @@ async function montarNumeros(ctx, alvo) {
           // plano 1000 · AS-135: os IDs da Meta só interessam a quem configura — recolhidos
           h("details", { class: "cfg-hist cfg-tecnicos" }, h("summary", null, ui.icone("info"), h("span", null, "Dados técnicos")),
             h("dl", { class: "cfg-ign-lista" },
-              h("dt", null, h("span", null, "Phone number ID"), h("b", { class: "mono" }, c.phone_number_id || "—")),
-              h("dt", null, h("span", null, "WhatsApp Business Account (WABA)"), h("b", { class: "mono" }, c.waba_id || "—"))))),
+              // plano 1500c · CC-159: rótulos em português com o nome da Meta entre parênteses (é como aparece no painel dela)
+              h("dt", { title: "No painel da Meta: WhatsApp › Configuração da API" }, h("span", null, "ID do número na Meta (Phone number ID)"), h("b", { class: "mono" }, c.phone_number_id || "—")),
+              h("dt", { title: "No painel da Meta: WhatsApp › Configuração da API" }, h("span", null, "Conta do WhatsApp Business (WABA)"), h("b", { class: "mono" }, c.waba_id || "—"))))),
         h("div", { class: "cfg-canal-acoes" }, bTestar, bInscr, bSync, bMais)));
     }
   }
@@ -504,8 +505,10 @@ async function montarNumeros(ctx, alvo) {
   }
   async function excluir(c) {
     const impacto = await impactoDoNumero(c);
-    const ok = await ui.confirmar({ titulo: `Excluir o número ${c.nome}?`, perigo: true, digitar: "excluir",
-      texto: `${impacto ? `${impacto} ` : ""}As conversas e mensagens continuam guardadas, mas deixam de receber e enviar por este número. O token e o app secret são apagados do cofre.` });
+    // plano 1500c · CC-158: confirma digitando os 4 últimos dígitos DO número (não exclui o errado); sem número conhecido, «excluir»
+    const final = L.finalNumero(c);
+    const ok = await ui.confirmar({ titulo: `Excluir o número ${c.nome}?`, perigo: true, digitar: final || "excluir",
+      texto: `${impacto ? `${impacto} ` : ""}As conversas e mensagens continuam guardadas, mas deixam de receber e enviar por este número. O token e o app secret são apagados do cofre.${final ? ` Para confirmar, digite os 4 últimos dígitos do número (${final}).` : ""}` });
     if (!ok) return;
     try {
       await ctx.api.rpcC("nx_canal_excluir", { p_id: c.id, p_confirmacao: "excluir" });
@@ -531,7 +534,9 @@ async function montarNumeros(ctx, alvo) {
   /** plano 1000 · AS-247: «Sincronizado há…» diz o que é — a recuperação periódica das mensagens que o aparelho guardou. */
   function pilulaSync(sync) {
     const p = ui.pilula(`Sincronizado ${ui.relativo(sync.em)}`, sync.erro ? "aten" : "neutra");
-    const caixa = h("span", { class: "cfg-pil-dica cfg-sync" }, p);
+    // plano 1500c · CC-316: com erro, a linha fica à vista com o próximo passo (antes só na dica)
+    const caixa = h("span", { class: "cfg-pil-dica cfg-sync" }, p,
+      sync.erro ? h("small", { class: "cfg-sync-erro", role: "status" }, `A última recuperação falhou: ${sync.erro}. Toque em «Reconferir agora».`) : null);
     if (typeof ui.dica === "function") ui.dica(p, `Última recuperação de mensagens do aparelho: o Órbita busca no CodeWords as mensagens que possam ter se perdido no caminho.${sync.erro ? ` Deu erro: ${sync.erro}` : ""}`);
     return caixa;
   }
@@ -735,6 +740,7 @@ async function montarNumeros(ctx, alvo) {
       if (precisa && !polling) {
         desdePolling = Date.now();
         polling = setInterval(() => {
+          if (!form.isConnected) { pararPolling(); return; }   // plano 1500c · CC-107: o modal saiu da tela (fechou por erro antes do fechado=true)
           if (document.hidden) return;
           if (Date.now() - desdePolling > 5 * 60000) { pararPolling(); statusAtual.textContent = "Parei de consultar sozinho. Toque em «Conferir agora» quando o celular estiver pronto."; return; }
           consultar({ silencioso: true });
@@ -862,6 +868,7 @@ async function montarNumeros(ctx, alvo) {
     bJaPareei.addEventListener("click", async () => { await ui.carregando(bJaPareei, consultar()); });
     let relogioParear = null;
     const rotuloParear = bParear.lastChild && bParear.lastChild.nodeType === 3 ? bParear.lastChild : null;
+    let relogioExpira = null;   // plano 1500c · CC-105
     function esperarNovoCodigo(seg) {   // CB-101: «Gerar outro código em 90 s» no botão até o servidor deixar
       clearInterval(relogioParear);
       let resta = seg;
@@ -874,13 +881,25 @@ async function montarNumeros(ctx, alvo) {
       if (!await guardarAntesDaAcao()) return;
       const r = await acaoCodeWords("parear"); if (!r) return;
       const copiarCodigo = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("copiar"), "Copiar código");
+      // plano 1500c · CC-105: quanto falta para o código expirar (expira_em do servidor ou 3 min a partir de agora)
+      const prazoCodigo = h("p", { class: "sub cfg-cw-prazo" }, "O código vale por poucos minutos; se expirar, gere outro.");
+      const contarExpiracao = expira => {
+        clearInterval(relogioExpira);
+        const fim = Number.isFinite(Date.parse(expira || "")) ? Date.parse(expira) : Date.now() + 3 * 60000;
+        const pintar = () => { const s = Math.max(0, Math.round((fim - Date.now()) / 1000)); prazoCodigo.textContent = s > 0 ? `O código expira em ${L.textoContagem(s)}. Se expirar, gere outro.` : "O código expirou: gere outro."; return s; };
+        pintar();
+        relogioExpira = setInterval(() => { if (!prazoCodigo.isConnected || pintar() <= 0) clearInterval(relogioExpira); }, 1000);
+        if (relogioExpira && typeof relogioExpira.unref === "function") relogioExpira.unref();
+      };
       copiarCodigo.addEventListener("click", () => ui.copiar(r.codigo, { aviso: "Código copiado. Digite-o no WhatsApp do número cadastrado." }));
       ui.limpar(codigoPareamento); codigoPareamento.hidden = false;
       codigoPareamento.append(h("p", { class: "rotulo" }, "Pareamento do WhatsApp"),
-        h("p", { class: "cfg-cw-code", "aria-label": `Código de pareamento ${r.codigo}` }, r.codigo),
+        // plano 1500c · CC-106: o leitor de tela lê letra por letra («A B C D 1 2 3 4»), não «mil duzentos e trinta e quatro»
+        h("p", { class: "cfg-cw-code", "aria-label": `Código de pareamento: ${String(r.codigo || "").replace(/[\s-]/g, "").split("").join(" ")}` }, r.codigo),
         h("p", { class: "sub" }, r.instrucoes || "No WhatsApp do celular, abra Aparelhos conectados, escolha Conectar aparelho e depois Conectar com número de telefone."),
         // plano 1000b · CB-101: o código expira em poucos minutos e o servidor só gera outro depois de 90 s — a tela diz e conta
-        h("p", { class: "sub cfg-cw-prazo" }, "O código vale por poucos minutos; se expirar, gere outro."), copiarCodigo);
+        prazoCodigo, copiarCodigo);
+      contarExpiracao(r.expira_em);
       esperarNovoCodigo(90);
       aguardandoCodigo = true;
       desenharPassos();
@@ -1377,7 +1396,9 @@ async function montarRespostas(ctx, alvo) {
     const r = lerImportacaoRespostas(texto, respostas);
     if (r.erro) { ui.toast(r.erro, { tipo: "erro" }); return; }
     if (!r.novas.length) { ui.toast(r.repetidas.length ? "Todos os atalhos do arquivo já existem aqui." : "Nenhuma resposta válida no arquivo.", { tipo: "info" }); return; }
-    const fora = [r.repetidas.length ? `${r.repetidas.length} com atalho que já existe` : "", r.invalidas ? `${r.invalidas} incompleta(s)` : ""].filter(Boolean).join(" e ");
+    // plano 1500c · CC-157: a conferência diz QUAIS atalhos ficam de fora (os que já existem nunca são sobrescritos)
+    const nomesRep = r.repetidas.slice(0, 6).map(a => `/${a}`).join(", ") + (r.repetidas.length > 6 ? ` e mais ${r.repetidas.length - 6}` : "");
+    const fora = [r.repetidas.length ? `${r.repetidas.length} com atalho que já existe (${nomesRep}; as daqui continuam como estão)` : "", r.invalidas ? `${r.invalidas} incompleta(s)` : ""].filter(Boolean).join(" e ");
     if (!(await ui.confirmar({ titulo: `Importar ${r.novas.length} ${r.novas.length === 1 ? "resposta" : "respostas"}?`, rotulo: "Importar",
       texto: `Elas valem para todos os departamentos.${fora ? ` Ficam de fora: ${fora}.` : ""}` }))) return;
     let ok = 0;
@@ -1414,7 +1435,8 @@ async function montarRespostas(ctx, alvo) {
         { chave: "corpo", rotulo: "Prévia", render: r => h("span", { class: "cfg-resp-corpo", title: r.corpo }, L.aplicarVariaveis(r.corpo, exemplo())) },
         { chave: "departamento_id", rotulo: "Departamento", render: r => depNome(r.departamento_id) },
         { chave: "usos", rotulo: "Usos", render: r => h("span", { class: "mono" }, String(r.usos || 0)), alinhar: "dir", ordenavel: true },
-        { chave: "ativo", rotulo: "Situação", render: r => ui.pilula(r.ativo === false ? "Desligada" : "Ativa", r.ativo === false ? "neutra" : "ok") },
+        // plano 1500c · CC-088: liga/desliga direto na linha (resposta sazonal) — grava só {id, ativo}
+        { chave: "ativo", rotulo: "Situação", render: r => (podeEditar ? botaoAtiva(r) : ui.pilula(r.ativo === false ? "Desligada" : "Ativa", r.ativo === false ? "neutra" : "ok")) },
       ],
       linhas, vazio: filtroDep ? "Nenhuma resposta deste departamento com essa busca." : "Nenhuma resposta com essa busca.",
       aoClicar: podeEditar ? r => editar(r) : null,
@@ -1422,16 +1444,36 @@ async function montarRespostas(ctx, alvo) {
     caixa.appendChild(t.el);
   }
 
-  async function editar(r) {
+  /** plano 1500c · CC-088: o interruptor da linha (não abre o editor). */
+  function botaoAtiva(r) {
+    const ligada = r.ativo !== false;
+    const b = h("button", { type: "button", role: "switch", class: "cfg-resp-ativa", "aria-checked": String(ligada), "aria-label": `/${r.atalho} ${ligada ? "ativa" : "desligada"}`, dataset: { ligada: ligada ? "1" : "0" } },
+      h("span", { class: "cfg-resp-ativa-trilho", "aria-hidden": "true" }), ligada ? "Ativa" : "Desligada");
+    b.addEventListener("click", async ev => {
+      ev.stopPropagation(); ev.preventDefault();
+      if (b.disabled) return;
+      b.disabled = true;
+      try {
+        await ctx.api.rpcC("nx_resposta_salvar", { p_resposta: { id: r.id, ativo: !ligada } });
+        r.ativo = !ligada;
+        ui.toast(!ligada ? `/${r.atalho} ligada: volta a aparecer no /.` : `/${r.atalho} desligada: some do / até você ligar.`, { tipo: "ok" });
+        desenhar();
+      } catch (e) { b.disabled = false; ui.toast(ui.mensagemErro(e), { tipo: "erro" }); }
+    });
+    return b;
+  }
+
+  async function editar(r, { copia = false } = {}) {   // plano 1500c · CC-087: copia = nova resposta a partir de outra
+    const nova = !r || copia;
     const deps = (base && base.departamentos) || [];
     const f = h("form", { class: "pilha", novalidate: true });
-    const cAtalho = ui.campo({ rotulo: "Atalho", nome: "atalho", valor: r ? r.atalho : "", obrigatorio: true, max: 31, placeholder: "ola", ajuda: "Letras minúsculas, números, - e _. No chat: /atalho" });
+    const cAtalho = ui.campo({ rotulo: "Atalho", nome: "atalho", valor: r ? (copia ? L.atalhoDeCopia(r.atalho, respostas) : r.atalho) : "", obrigatorio: true, max: 31, placeholder: "ola", ajuda: "Letras minúsculas, números, - e _. No chat: /atalho" });
     // plano 1000 · AS-142: atalho que já existe avisa enquanto digita (antes só o servidor recusava ao salvar)
     const inpAtalho = cAtalho.querySelector("input");
     const avisoAtalho = h("small", { class: "campo-erro cfg-atalho-repetido", role: "status", hidden: true });
     cAtalho.appendChild(avisoAtalho);
     const conferirAtalho = () => {
-      const outra = atalhoRepetido(respostas, inpAtalho.value, r ? r.id : null);
+      const outra = atalhoRepetido(respostas, inpAtalho.value, !nova ? r.id : null);
       avisoAtalho.hidden = !outra;
       avisoAtalho.textContent = outra ? `Já existe /${outra.atalho} («${outra.titulo}»). Escolha outro atalho.` : "";
       if (outra) inpAtalho.setAttribute("aria-invalid", "true"); else inpAtalho.removeAttribute("aria-invalid");
@@ -1450,8 +1492,11 @@ async function montarRespostas(ctx, alvo) {
     const prev = h("div", { class: "cv-previa", "aria-live": "polite" });
     function previa() {
       prev.textContent = L.aplicarVariaveis(ta.value || "…", exemplo());
-      cont.textContent = `${ta.value.length} / 4096`;
-      cont.dataset.alerta = ta.value.length > 4096 ? "1" : "0";
+      // plano 1500c · CC-091: com a assinatura ligada o servidor soma «*Nome:*» na frente — o editor diz quanto cabe de verdade
+      const comAss = !!(base && base.cfg && base.cfg.assinatura);
+      const tetoAss = comAss ? L.tetoTexto({ assinatura: true, nome: (ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.nome) || "" }) : 4096;
+      cont.textContent = comAss && tetoAss < 4096 ? `${ta.value.length} / 4096 · cabem ${tetoAss.toLocaleString("pt-BR")} com a assinatura` : `${ta.value.length} / 4096`;
+      cont.dataset.alerta = ta.value.length > tetoAss ? "1" : "0";
     }
     ta.addEventListener("input", previa);
     const cDep = deps.length ? ui.campo({ rotulo: "Departamento", nome: "departamento_id", tipo: "select", valor: r ? r.departamento_id || "" : "",
@@ -1460,7 +1505,9 @@ async function montarRespostas(ctx, alvo) {
     f.append(h("div", { class: "grade-2" }, cAtalho, cTitulo), cCorpo, vars, cont, h("p", { class: "rotulo" }, "Prévia"), prev, cDep, cAtivo);
     previa();
     const acoes = [{ rotulo: "Cancelar", tipo: "neutro" }];
-    if (r) acoes.unshift({ rotulo: "Excluir", tipo: "perigo", fn: async () => {
+    // plano 1500c · CC-087: «Duplicar» abre a nova resposta com o texto desta e o atalho «-copia»
+    if (!nova) acoes.unshift({ rotulo: "Duplicar", tipo: "neutro", valor: "duplicar" });
+    if (!nova) acoes.unshift({ rotulo: "Excluir", tipo: "perigo", fn: async () => {
       if (!(await ui.confirmar({ titulo: `Excluir /${r.atalho}?`, texto: "A resposta some do / para toda a equipe.", perigo: true }))) return false;
       await ctx.api.rpcC("nx_resposta_excluir", { p_id: r.id });
       ui.toast("Resposta excluída.", { tipo: "ok" });
@@ -1471,11 +1518,11 @@ async function montarRespostas(ctx, alvo) {
       ui.marcarErro(f, null);
       const atalho = String(d.atalho || "").replace(/^\/+/, "").trim().toLowerCase();
       if (!/^[a-z0-9_-]{1,30}$/.test(atalho)) { ui.marcarErro(f, "atalho", "Use só letras minúsculas sem acento, números, - e _ (até 30)."); return false; }
-      if (atalhoRepetido(respostas, atalho, r ? r.id : null)) { avisoAtalho.hidden = true; ui.marcarErro(f, "atalho", "Esse atalho já existe."); return false; }
+      if (atalhoRepetido(respostas, atalho, !nova ? r.id : null)) { avisoAtalho.hidden = true; ui.marcarErro(f, "atalho", "Esse atalho já existe."); return false; }
       if (!d.titulo) { ui.marcarErro(f, "titulo", "Dê um título."); return false; }
       if (!d.corpo) { ui.marcarErro(f, "corpo", "Escreva o texto."); return false; }
       try {
-        await ctx.api.rpcC("nx_resposta_salvar", { p_resposta: { id: r ? r.id : undefined, atalho, titulo: d.titulo, corpo: d.corpo,
+        await ctx.api.rpcC("nx_resposta_salvar", { p_resposta: { id: !nova ? r.id : undefined, atalho, titulo: d.titulo, corpo: d.corpo,
           departamento_id: d.departamento_id || null, ativo: d.ativo !== false } });
       } catch (e) {
         if (e && e.codigo === "atalho_em_uso") { ui.marcarErro(f, "atalho", "Esse atalho já existe."); return false; }
@@ -1485,7 +1532,8 @@ async function montarRespostas(ctx, alvo) {
       ui.toast("Resposta salva.", { tipo: "ok" });
       return true;
     } });
-    const res = await ui.modal({ titulo: r ? `Editar /${r.atalho}` : "Nova resposta rápida", corpo: f, largura: "m", acoes });
+    const res = await ui.modal({ titulo: !nova ? `Editar /${r.atalho}` : copia ? `Nova resposta (cópia de /${r.atalho})` : "Nova resposta rápida", corpo: f, largura: "m", acoes });
+    if (res === "duplicar") { await editar(r, { copia: true }); return; }
     if (res) carregar();
   }
 
@@ -1568,8 +1616,14 @@ async function montarDepartamentos(ctx, alvo) {
       const ab = L.horarioAberto(x.d.horario, agora);
       if (x.el.dataset.aberto === (ab ? "1" : "0")) continue;
       x.el.dataset.aberto = ab ? "1" : "0";
-      x.el.replaceChildren(ui.pilula(ab ? "Aberto agora" : "Fechado agora", ab ? "ok" : "neutra"));
+      x.el.replaceChildren(ui.pilula(rotuloAgora(x.d.horario, ab, agora), ab ? "ok" : "neutra"));
     }
+  }
+  /** plano 1500c · CC-103: «Fechado · abre seg 08:00» (antes só «Fechado agora», sem dizer quando abre). */
+  function rotuloAgora(horario, aberto, agora = new Date()) {
+    if (aberto) return "Aberto agora";
+    const prox = L.proximaAbertura(horario, agora);
+    return prox ? `Fechado · abre ${prox}` : "Fechado agora";
   }
   const relogioAgora = setInterval(() => { if (!caixa.isConnected) { clearInterval(relogioAgora); return; } atualizarAgora(); }, 60_000);
   ui.limpar(alvo);
@@ -1614,6 +1668,8 @@ async function montarDepartamentos(ctx, alvo) {
       bMais.addEventListener("click", () => ui.menu(bMais, [
         { rotulo: "Tornar padrão", icone: "check", fn: () => salvarRapido(d, { padrao: true }, `${d.nome} agora recebe as conversas novas.`), desabilitado: d.padrao || !d.ativo, motivo: motivos.padrao },
         { rotulo: d.ativo ? "Desligar" : "Religar", icone: d.ativo ? "relogio" : "raio", fn: () => salvarRapido(d, { ativo: !d.ativo }, d.ativo ? "Departamento desligado." : "Departamento religado."), desabilitado: d.padrao, motivo: motivos.ativo },
+        // plano 1500c · CC-160: «Duplicar» abre o editor com tudo deste (horário, distribuição, mensagem) e o nome «(cópia)»
+        { rotulo: "Duplicar", icone: "copiar", fn: () => editar(d, { copia: true }) },
         "-",
         { rotulo: "Excluir", icone: "lixeira", perigo: true, fn: () => excluir(d), desabilitado: d.padrao, motivo: motivos.excluir },
       ]));
@@ -1624,11 +1680,12 @@ async function montarDepartamentos(ctx, alvo) {
         "aria-label": `Pessoas do ${d.nome}: ${pessoas.map(p => p.nome).join(", ")}. Abrir em Usuários.` },
         pessoas.slice(0, 4).map(p => ui.avatar(p.nome, p.id, p.avatar || null, { tamanho: "p" })),
         pessoas.length > 4 ? h("span", { class: "cfg-dep-mais mono" }, `+${pessoas.length - 4}`) : null) : null;
-      const agoraEl = d.horario ? h("span", { class: "cfg-dep-agora", dataset: { aberto: aberto ? "1" : "0" } }, ui.pilula(aberto ? "Aberto agora" : "Fechado agora", aberto ? "ok" : "neutra")) : null;
+      const agoraEl = d.horario ? h("span", { class: "cfg-dep-agora", dataset: { aberto: aberto ? "1" : "0" } }, ui.pilula(rotuloAgora(d.horario, aberto), aberto ? "ok" : "neutra")) : null;
       if (agoraEl) pilulasAgora.push({ d, el: agoraEl });
       const msgInfo = !d.horario ? null
         : d.msg_fora_horario ? h("span", { class: "cfg-dep-msg" }, ui.icone("chat"), "Mensagem fora do horário ligada")
-        : h("span", { class: "cfg-dep-msg", dataset: { alerta: "1" } }, ui.icone("alerta"), "Sem mensagem fora do horário");
+        // plano 1500c · CC-104: o alerta vira o atalho para ligar a mensagem (abre o editor já no campo)
+        : h("button", { type: "button", class: "cfg-dep-msg cfg-dep-msg-bt", dataset: { alerta: "1" }, on: { click: () => editar(d, { foco: "msg_fora_horario" }) } }, ui.icone("alerta"), "Sem mensagem fora do horário · Ligar");
       caixa.appendChild(h("article", { class: "cartao cfg-dep", style: cor ? { "--cor": cor } : null, dataset: { inativo: d.ativo ? "0" : "1" } },
         h("div", { class: "cfg-dep-cab" },
           h("span", { class: "cfg-dep-cor", "aria-hidden": "true" }),
@@ -1641,6 +1698,11 @@ async function montarDepartamentos(ctx, alvo) {
           d.distribuicao === "rodizio" ? " — vai para quem está com menos conversas abertas." : " — fica na fila até alguém assumir.",
           d.manter_atendente ? " Cliente que volta fica com quem atendeu antes." : ""),
         h("div", { class: "cfg-dep-hor" }, ui.icone("relogio"), h("span", null, L.resumoHorario(d.horario), d.horario ? h("small", { class: "fraco" }, " · horário de Brasília") : null), agoraEl),
+        // plano 1500c · CC-315: rodízio sem ninguém — as conversas caem num departamento que ninguém recebe
+        d.ativo && d.distribuicao === "rodizio" && !pessoas.length && !(Number(d.pessoas) > 0)
+          ? h("p", { class: "aviso aviso-aten cfg-dep-ninguem", role: "status" }, ui.icone("alerta"),
+            h("span", null, "Ninguém recebe as conversas deste departamento. ", h("a", { href: `#/config/usuarios?dep=${encodeURIComponent(d.id)}` }, "Escolher pessoas em Usuários")))
+          : null,
         h("div", { class: "cfg-dep-rod" },
           msgInfo,
           rostos,
@@ -1676,7 +1738,9 @@ async function montarDepartamentos(ctx, alvo) {
   }
 
   /* ---------------- editor */
-  async function editar(d) {
+  async function editar(dOrig, { foco = null, copia = false } = {}) {   // plano 1500c · CC-104: foco = campo que já abre focado
+    // plano 1500c · CC-160: a cópia nasce do original (sem id, sem ser padrão, ligada) e grava como departamento novo
+    const d = copia && dOrig ? { ...dOrig, id: null, nome: `${String(dOrig.nome || "").slice(0, 31)} (cópia)`, padrao: false, ativo: true } : dOrig;
     const f = h("form", { class: "pilha", novalidate: true });
     const cNome = ui.campo({ rotulo: "Nome", nome: "nome", valor: d ? d.nome : "", obrigatorio: true, max: 40, placeholder: "Ex.: Recepção, Comercial, Financeiro" });
     const cCor = ui.campo({ rotulo: "Cor", nome: "cor", tipo: "cor", valor: d ? d.cor : (ctx.paleta || [])[deps.length % Math.max(1, (ctx.paleta || []).length)] || null, paleta: ctx.paleta });
@@ -1733,7 +1797,7 @@ async function montarDepartamentos(ctx, alvo) {
     blocoGrade.prepend(predef);
     // AS-149: a grade vale no horário de Brasília (o servidor confere no fuso de São Paulo)
     const cHorario = h("fieldset", { class: "campo", dataset: { campo: "horario" } },
-      h("legend", null, "Horário de atendimento ", h("small", { class: "fraco cfg-fuso" }, "· horário de Brasília (São Paulo)")), alterna, blocoGrade, resumo, erroHor);
+      h("legend", null, "Horário de atendimento ", h("small", { class: "fraco cfg-fuso" }, "· horário de Brasília") /* plano 1500c · CC-049: um nome só para o fuso */), alterna, blocoGrade, resumo, erroHor);
 
     function clonar(x) { const r = {}; for (let i = 0; i < 7; i++) r[i] = ((x[i] ?? x[String(i)]) || []).map(fx => [fx[0], fx[1] === "24:00" ? "23:59" : fx[1]]); return r; }
     function lerGrade() {
@@ -1885,7 +1949,7 @@ async function montarDepartamentos(ctx, alvo) {
       h("div", { class: "pilha-p" }, cMsg, varsMsg, contMsg, prevMsg, notaMsg), cPadrao, cAtivo);
     modoHorario(!!grade);
 
-    const acoes = [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: d ? "Salvar" : "Criar departamento", tipo: "primario", fn: async () => {
+    const acoes = [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: d && !copia ? "Salvar" : "Criar departamento", tipo: "primario", fn: async () => {
       const dados = ui.lerForm(f);
       ui.marcarErro(f, null);
       if (!dados.nome) { ui.marcarErro(f, "nome", HINT_DEP.nome[1]); return false; }
@@ -1894,7 +1958,7 @@ async function montarDepartamentos(ctx, alvo) {
       if (String(dados.msg_fora_horario || "").length > 1000) { ui.marcarErro(f, "msg_fora_horario", HINT_DEP.msg_fora_horario[1]); return false; }
       const payload = { nome: dados.nome, cor: dados.cor || null, distribuicao: dados.distribuicao || "rodizio", manter_atendente: !!dados.manter_atendente,
         horario: v.horario, msg_fora_horario: dados.msg_fora_horario || null };
-      if (d) payload.id = d.id;
+      if (d && !copia) payload.id = d.id;   // CC-160: a cópia é departamento novo
       if (!ehPadrao) { payload.padrao = !!dados.padrao; payload.ativo = dados.ativo !== false; }
       try {
         return await ctx.api.rpcC("nx_departamento_salvar", { p_departamento: payload });
@@ -1906,8 +1970,9 @@ async function montarDepartamentos(ctx, alvo) {
         throw e;
       }
     } }];
-    const r = await ui.modal({ titulo: d ? `Departamento ${d.nome}` : "Novo departamento", corpo: f, largura: "g", acoes });
-    if (r) { ui.toast(d ? "Departamento salvo." : "Departamento criado.", { tipo: "ok" }); carregar(); }
+    const r = await ui.modal({ titulo: copia ? "Duplicar departamento" : d ? `Departamento ${d.nome}` : "Novo departamento", corpo: f, largura: "g", acoes,
+      aoAbrir: foco ? () => setTimeout(() => { const x = f.querySelector(`[name="${foco}"]`); if (x) { try { x.scrollIntoView({ block: "center" }); x.focus(); } catch { /* ok */ } } }, 60) : undefined });
+    if (r) { ui.toast(d && !copia ? "Departamento salvo." : "Departamento criado.", { tipo: "ok" }); carregar(); }
   }
 
   await carregar();
@@ -1970,7 +2035,7 @@ async function montarAtendimento(ctx, alvo) {
     return { el, atualizar() {
       ui.limpar(el);
       if (cfg.assinatura) el.append(h("b", null, `${nome}:`), "\n");
-      el.append("Olá! Sua avaliação ficou para quinta às 9h. Até lá!");
+      el.append("Olá! Já separei as informações que você pediu. Qualquer dúvida, é só chamar.");   // plano 1500c · CC-130: frase que serve para qualquer negócio
     } };
   }
 
@@ -1980,7 +2045,8 @@ async function montarAtendimento(ctx, alvo) {
     ass.atualizar();
     caixa.append(
       opcao("recibo_leitura", "Confirmação de leitura",
-        "Quando alguém da equipe abre a conversa, o cliente vê no WhatsApp dele que a mensagem foi lida. Desligado, a leitura fica só aqui na central."),
+        // plano 1500c · CC-335: o efeito por tipo de número (no CodeWords o Órbita não marca como lida; quem decide é o aparelho)
+        "Quando alguém da equipe abre a conversa, o cliente vê no WhatsApp dele que a mensagem foi lida. Desligado, a leitura fica só aqui na central. Vale para os números da Meta. No número do CodeWords o Órbita e a IA não mandam a confirmação de leitura, ligada ou desligada."),
       opcao("assinatura", "Assinar com o nome de quem atende",
         "Cada mensagem sai com o primeiro nome de quem respondeu na primeira linha, em negrito — o cliente sabe com quem está falando.", ass));
   }
@@ -2010,6 +2076,17 @@ async function montarIA(ctx, alvo) {
   const [L] = await Promise.all([logica(ctx), ui.carregarCss("conversas")]);
   const caixa = h("div", { class: "pilha" });
   let haAlteracao = () => false;      // plano 1000 · AS-082: o hub pergunta antes de trocar de seção com alteração não salva
+  /** plano 1500c · CC-129: um número CodeWords — copia o prompt novo (mesma receita do assistente do número); vários — abre Números. */
+  function copiarPromptAtualizado(cws) {
+    if (cws.length !== 1) { ctx.navegar("#/config/numeros"); return; }
+    const texto = ctx.api.fn("nx-codewords", { acao: "receita", canal: cws[0].id })
+      .then(r => { const t = r && r.ok !== false ? String(r.prompt || "") : ""; if (!t) throw new Error("sem_prompt"); return t; });
+    texto.catch(() => { /* o aviso sai abaixo */ });
+    const copiando = typeof ui.copiarDepois === "function" ? ui.copiarDepois(texto, { aviso: null }) : texto.then(t => ui.copiar(t, { aviso: null }));
+    Promise.resolve(copiando).then(ok => ui.toast(ok === true ? "Prompt copiado. Cole só no CodeWords: ele tem o endereço secreto deste número."
+      : "Não deu para copiar sozinho. Use «Copiar prompt» em Configurações › Números.", { tipo: ok === true ? "ok" : "erro" }),
+    () => ui.toast("Não foi possível gerar o prompt agora. Use «Copiar prompt» em Configurações › Números.", { tipo: "erro" }));
+  }
   ui.limpar(alvo);
   alvo.append(
     h("header", { class: "cab-pag" },
@@ -2064,7 +2141,34 @@ async function montarIA(ctx, alvo) {
         max: k === "memoria_aprovada" ? 3000 : L.IA_MAX, valor: cfg[k] || "", placeholder: ph });
       tas[k] = c.querySelector("textarea");
       tas[k].addEventListener("input", () => { contar(); atualizarPrevia(); });
+      // plano 1500c · CC-125/CC-126: horário e serviços vêm da agenda (a IA não diz um horário e a agenda oferece outro)
+      if (k === "horarios" || k === "servicos") {
+        const b = h("button", { type: "button", class: "bt bt-fant bt-p cfg-ia-da-agenda", dataset: { campo: k } }, ui.icone("calendario"),
+          k === "horarios" ? "Usar o horário da agenda" : "Trazer serviços da agenda");
+        b.addEventListener("click", () => trazerDaAgenda(k, b));
+        c.appendChild(b);
+      }
       f.appendChild(c);
+    }
+    async function trazerDaAgenda(k, b) {
+      let cfgAg = null;
+      try { cfgAg = ((await ui.carregando(b, ctx.api.rpcC("nx_agenda_config_ver", {}))) || {}).config || null; }
+      catch (e) { ui.toast(ui.mensagemErro(e), { tipo: "erro" }); return; }
+      if (!cfgAg) { ui.toast("A agenda ainda não tem configuração.", { tipo: "info" }); return; }
+      const ta = tas[k];
+      if (k === "horarios") {
+        const novo = L.textoHorarioIA(cfgAg.horario, cfgAg.intervalos);
+        if (ta.value.trim() && ta.value.trim() !== novo && !(await ui.confirmar({ titulo: "Trocar o texto dos horários?", rotulo: "Trocar",
+          texto: `Fica assim: «${novo}». O texto atual sai.` }))) return;
+        ta.value = novo;
+      } else {
+        const linhas = L.linhasServicosIA(cfgAg.duracoes, ta.value);
+        if (!linhas.length) { ui.toast(Object.keys(cfgAg.duracoes || {}).length ? "Os serviços da agenda já estão no texto." : "A agenda ainda não tem serviços com duração (Configurações › Agenda).", { tipo: "info" }); return; }
+        ta.value = `${ta.value.replace(/\s+$/, "")}${ta.value.trim() ? "\n" : ""}${linhas.join("\n")}`;
+        ui.toast(`${linhas.length} ${linhas.length === 1 ? "serviço trazido" : "serviços trazidos"} da agenda.`, { tipo: "ok" });
+      }
+      contar(); atualizarPrevia();
+      try { ta.focus(); } catch { /* ok */ }
     }
     const opTom = (valor, titulo, texto) => {
       const id = `cfg-tom-${valor}`;
@@ -2126,7 +2230,9 @@ async function montarIA(ctx, alvo) {
 
     f.addEventListener("submit", async ev => {
       ev.preventDefault();
-      if (contar() > L.IA_MAX) { ui.toast("Passou de 15.000 caracteres. Resuma algum texto.", { tipo: "erro" }); return; }
+      // plano 1500c · CC-128: o limite do aviso vem do L.IA_MAX (o mesmo da conta), não escrito à mão
+      const textoLimite = `Passou de ${L.IA_MAX.toLocaleString("pt-BR")} caracteres. Resuma algum texto.`;
+      if (contar() > L.IA_MAX) { ui.toast(textoLimite, { tipo: "erro" }); return; }
       const d = ui.lerForm(f);
       // plano 1000 · AS-153: a memória aprovada vai para o agente — CPF, telefone, e-mail ou data de nascimento ali pedem confirmação
       const pessoais = dadosPessoaisNoTexto(d.memoria_aprovada);
@@ -2141,9 +2247,12 @@ async function montarIA(ctx, alvo) {
       try {
         await ui.carregando(salvar, ctx.api.rpcC("nx_ia_config_salvar", { p_ia: payload }));
         sujo.hidden = true;
-        ui.toast("Assistente salvo.", { tipo: "ok" });
+        // plano 1500c · CC-129: só vale depois de atualizar o prompt do CodeWords — o aviso já oferece copiar o prompt novo
+        const cws = ((base && base.canais) || []).filter(k => k && k.provedor === "codewords");
+        ui.toast(cws.length ? "Assistente salvo. Atualize o prompt no CodeWords para valer no WhatsApp." : "Assistente salvo.", { tipo: "ok",
+          acao: cws.length ? { rotulo: cws.length === 1 ? "Copiar prompt atualizado" : "Abrir Números", fn: () => copiarPromptAtualizado(cws) } : null });
       } catch (e) {
-        if (e && e.codigo === "dados_invalidos" && e.hint === "tamanho") ui.toast("Passou de 15.000 caracteres. Resuma algum texto.", { tipo: "erro" });
+        if (e && e.codigo === "dados_invalidos" && e.hint === "tamanho") ui.toast(textoLimite, { tipo: "erro" });
         else ui.toast(ui.mensagemErro(e), { tipo: "erro" });
       }
     });

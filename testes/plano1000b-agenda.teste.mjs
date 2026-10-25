@@ -353,7 +353,8 @@ test("CB-146 · bloqueio de 45 dias confere as consultas em blocos de 31 dias (a
   porTexto(C.alvo, "button", "Bloquear horário").click();
   await esperar(12);
   assert.match(erros[0] || "", /Há 1 consulta marcada/);
-  assert.equal(C.reg.chamadas.filter(c => c.nome === "nx_agenda_dia").length, 2);
+  // plano 1500c: a prévia do horário herdado lê hoje (CC-235, p_dias 1); a conta é a das leituras do bloqueio
+  assert.equal(C.reg.chamadas.filter(c => c.nome === "nx_agenda_dia" && c.p.p_data !== hojeSP()).length, 2);
 });
 
 test("CB-148 / CB-254 · dia que já passou: «Livre» sem «Marcar» no celular e sem «+» na semana", async () => {
@@ -408,8 +409,11 @@ test("CB-155 · os rótulos da linha de serviço acompanham o nome digitado", as
 
 test("CB-158 · «Copiar para os dias úteis» com Desfazer: as faixas de terça voltam", async () => {
   const desf = [];
-  const C = await montarConfig({ cfg: { ...cfgValidaB, horario_fonte: "agenda", horario: { 1: [["08:00", "12:00"]], 2: [["09:00", "11:00"]] } }, uiExtra: { acaoComDesfazer: o => { desf.push(o); } } });
+  // plano 1500c: «Copiar para…» abre a escolha dos dias (CC-231) com os úteis marcados — confirmar sem mexer = dias úteis
+  const C = await montarConfig({ cfg: { ...cfgValidaB, horario_fonte: "agenda", horario: { 1: [["08:00", "12:00"]], 2: [["09:00", "11:00"]] } }, uiExtra: { acaoComDesfazer: o => { desf.push(o); } },
+    modal: async o => primaria(o).valor });
   C.alvo.querySelector('.agc-dia[data-dia="1"] .agc-copiar').click();
+  await esperar(4);
   const faixas = id => C.alvo.querySelectorAll(`.agc-dia[data-dia="${id}"] .agc-faixa`).map(l => l.querySelectorAll("input").map(i => i.value));
   assert.deepEqual(faixas("2"), [["08:00", "12:00"]]);
   assert.equal(desf.length, 1);

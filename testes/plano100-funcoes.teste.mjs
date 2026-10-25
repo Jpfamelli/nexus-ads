@@ -754,7 +754,7 @@ test("S-F13 [D147] nx-midia subir valida nome (≤ 200, sem caractere de control
 
 /* ================================================================== S-F14 IA: um padrão só */
 test("S-F14 comum: modelo padrão único, effort/reserva por modelo, custo estimado e tradução de erros com «plataforma»", () => {
-  assert.equal(MODELO_PADRAO, "claude-opus-5-5");
+  assert.equal(MODELO_PADRAO, "claude-haiku-5-5", "plano 1500c · SC-085: o padrão do código é o Haiku 5.5 (antes Opus 5.5)");
   assert.equal(SEM_EFFORT.test("claude-haiku-5-5"), false, "Haiku 5.5 aceita effort");
   assert.equal(SEM_EFFORT.test("claude-haiku-4-5"), true);
   assert.ok(COM_RESERVA.has("claude-sonnet-5-5") && COM_RESERVA.has("claude-opus-5-5"));
@@ -801,7 +801,7 @@ const CFG_IA = { anthropic_api_key: CHAVE_IA, modelo_ia: null };
 const painelIa = (s, corpo, deps) => nxIa(new Request(`${FN}/nx-ia`, { method: "POST", headers: { "content-type": "application/json", ...(deps?.cron ? { "x-nx-cron": "cron-secreto" } : {}) },
   body: JSON.stringify({ token: "tok-adm", cliente: CLI_A, ...corpo }) }), ENV, { fetch: s.fetch, ia: deps?.ia });
 
-test("S-F14 [E3][E6][E183] nx-ia sugerir: modelo padrão claude-opus-5-5, custo/stop_reason/ms registrados e erro da API traduzido (sem o texto do provedor)", async () => {
+test("S-F14 [E3][E6][E183] nx-ia sugerir: modelo padrão (plano 1500c: claude-haiku-5-5), custo/stop_reason/ms registrados e erro da API traduzido (sem o texto do provedor)", async () => {
   const pedidos = [];
   const base = () => dbFalso({ config: CFG_IA, rpcs: { nx_fn_ctx: () => ({ conta_id: "c-at", papel: "atendente" }),
     nx_ia_contexto: () => ({ empresa: "Clínica Alfa", atendente_nome: "Ana", ia: {}, mensagens: [{ dir: "in", texto: "oi", em: "2026-10-08T14:00:00Z" }] }),
@@ -809,7 +809,7 @@ test("S-F14 [E3][E6][E183] nx-ia sugerir: modelo padrão claude-opus-5-5, custo/
   const s = base();
   const r = await ler(await painelIa(s, { acao: "sugerir", conversa: 601 }, { ia: async () => ({ perguntarClaude: async p => { pedidos.push(p); return { texto: "Olá!", modelo: "claude-opus-5-5", tokens_in: 1000, tokens_out: 100, stop_reason: "end_turn", ms: 321 }; } }) }));
   assert.equal(r.corpo.ok, true);
-  assert.equal(pedidos[0].modelo, "claude-opus-5-5", "antes: claude-opus-5 (25 % mais caro e diferente das automações)");
+  assert.equal(pedidos[0].modelo, "claude-haiku-5-5", "plano 1500c · SC-085: sem modelo configurado, o Haiku (antes claude-opus-5-5)");
   assert.deepEqual(s.de("nx_ia_registrar_reserva")[0].corpo, { p_reserva: "r-9", p_modelo: "claude-opus-5-5", p_in: 1000, p_out: 100, p_ok: true, p_custo_usd: 0.006, p_stop_reason: "end_turn", p_ms: 321 });
   const s2 = base();
   const e = await ler(await painelIa(s2, { acao: "sugerir", conversa: 601 }, { ia: async () => ({ perguntarClaude: async () => { throw Object.assign(new Error(`Anthropic 401: invalid x-api-key ${CHAVE_IA}`), { status: 401 }); } }) }));
@@ -926,7 +926,7 @@ test("S-F14 ia.js: system em blocos vira cache_control no bloco fixo; modelo pad
   globalThis.__p100r = () => ({ model: "claude-opus-5-5", stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 }, content: [{ type: "text", text: "{\"a\":1}" }] });
   const r = await mod.estruturarClaude({ chave: "k", sistema: "S", blocos: [{ texto: "FIXO", cache: true }, { texto: "VAR" }], usuario: "U", schema: { type: "object" } });
   assert.deepEqual(globalThis.__p100[1].p.system, [{ type: "text", text: "FIXO", cache_control: { type: "ephemeral" } }, { type: "text", text: "VAR" }]);
-  assert.equal(globalThis.__p100[1].p.model, "claude-opus-5-5", "sem modelo configurado vale o padrão único");
+  assert.equal(globalThis.__p100[1].p.model, "claude-haiku-5-5", "plano 1500c · SC-085: sem modelo configurado vale o padrão (Haiku 5.5)");
   assert.equal(r.stop_reason, "end_turn"); assert.equal(typeof r.ms, "number");
   globalThis.__p100 = [];
   const t = await mod.perguntarClaude({ chave: "k", sistema: "S", usuario: "U" });
@@ -934,7 +934,7 @@ test("S-F14 ia.js: system em blocos vira cache_control no bloco fixo; modelo pad
   assert.equal(t.stop_reason, "end_turn");
   globalThis.__p100 = [];
   await mod.leituraIA({ chave: "k", tipo: "diario", contexto: { a: 1 } });
-  assert.equal(globalThis.__p100[1].p.model, "claude-opus-5-5", "antes: claude-opus-5");
+  assert.equal(globalThis.__p100[1].p.model, "claude-haiku-5-5", "plano 1500c · SC-087: diário no Haiku 5.5");
   // Haiku 5.5 aceita effort; Sonnet 5.5 tem reserva de modelo
   globalThis.__p100 = [];
   await mod.perguntarClaude({ chave: "k", modelo: "claude-haiku-5-5", sistema: "S", usuario: "U" });
@@ -1277,7 +1277,7 @@ test("S-F16 modelo padrão único e envio anonimizado no resumo do relatório", 
   let recebido = null;
   const s = cenarioCiclo({ config: { anthropic_api_key: "sk-ant-teste", modelo_ia: null }, tabelas: { nx_metricas_dia: semana() } });
   const r = await ler(await s.cron(relatorio, { tipo: "diario" }, { ia: async o => { recebido = o; return "• Tudo estável."; } }));
-  assert.equal(recebido.modelo, "claude-opus-5-5", "antes: claude-opus-5");
+  assert.equal(recebido.modelo, "claude-haiku-5-5", "plano 1500c · SC-087: diário sem modelo configurado no Haiku 5.5 (antes Opus 5.5)");
   assert.equal(r.corpo.clientes[0].envio[0].destino, "*********2222");
   assert.deepEqual(s.tab("nx_relatorios")[0].destinos, ["5512911112222"], "o banco guarda o destino de verdade");
 });

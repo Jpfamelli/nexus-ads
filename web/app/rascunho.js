@@ -116,19 +116,42 @@ export function criarRascunhos(o = {}) {
     if (ok) {
       indice.set(k, { em: agora(), bytes: (k.length + bruto.length) * 2 });
       if (agora() - ultimaVarredura >= intervaloVarrer) varrer(); else aparar();
-    } else { varrer(); seguro(() => storage.setItem(k, bruto)); }
-    return ok;
+      return true;
+    }
+    // plano 1500c · CC-021: a cota cheia varre e tenta de novo — se a 2ª deu certo, o rascunho FOI salvo (e entra no índice, senão o
+    // aparar seguinte não o conhecia); antes devolvia false mesmo assim
+    varrer();
+    const ok2 = seguro(() => { storage.setItem(k, bruto); return true; }, false);
+    if (ok2) indice.set(k, { em: agora(), bytes: (k.length + bruto.length) * 2 });
+    return ok2;
   }
 
-  function criarSelo(aoDescartar) {
+  /** plano 1500c · CC-023: «descartar» vira «Rascunho descartado · desfazer» por 7 s (um toque errado no celular não perde o texto). */
+  const DESFAZER_MS = 7000;
+  function criarSelo(aoDescartar, aoDesfazer, aoFim) {
     if (!doc || typeof doc.createElement !== "function") return null;
     const p = doc.createElement("p");
     p.className = "rascunho-selo";
     p.setAttribute("role", "status");
-    p.appendChild(doc.createTextNode("Rascunho restaurado · "));
+    const txt = doc.createTextNode("Rascunho restaurado · ");
+    p.appendChild(txt);
     const b = doc.createElement("button");
     b.type = "button"; b.className = "link"; b.textContent = "descartar";
-    b.addEventListener("click", () => aoDescartar());
+    let modo = "restaurado", t = null;
+    b.addEventListener("click", () => {
+      if (modo === "restaurado") {
+        aoDescartar();
+        if (typeof aoDesfazer !== "function") { if (aoFim) aoFim(); return; }
+        modo = "descartado";
+        txt.data = "Rascunho descartado · "; if (typeof txt.textContent === "string") txt.textContent = "Rascunho descartado · ";
+        b.textContent = "desfazer";
+        t = agendar(() => { t = null; modo = "fim"; if (aoFim) aoFim(); }, DESFAZER_MS);
+      } else if (modo === "descartado") {
+        if (t) { cancelar(t); t = null; }
+        modo = "fim";
+        aoDesfazer();
+      }
+    });
     p.appendChild(b);
     return p;
   }
@@ -156,12 +179,19 @@ export function criarRascunhos(o = {}) {
       const guardado = ler(k);
       if (guardado && venceu(k, guardado)) apagarChave(k);
       else if (guardado && !valor().trim()) {
-        campo.value = guardado.t;
+        // plano 1500c · CC-022: campo contentEditable (editor de nota rica) recebe o texto em textContent
+        const porTexto = t => { if (campo.isContentEditable && campo.value === undefined) campo.textContent = t; else campo.value = t; };
+        porTexto(guardado.t);
         restaurado = true;
         nosso = true;
         try { campo.dispatchEvent(new (globalThis.Event || function Ev(t) { this.type = t; })("input", { bubbles: true })); } catch { /* sem DOM */ }
         nosso = false;
-        selo = criarSelo(() => { campo.value = ""; nosso = true; try { campo.dispatchEvent(new (globalThis.Event || function Ev(t) { this.type = t; })("input", { bubbles: true })); } catch { /* ok */ } nosso = false; apagarChave(k); tirarSelo(); });
+        const disparar = () => { nosso = true; try { campo.dispatchEvent(new (globalThis.Event || function Ev(t) { this.type = t; })("input", { bubbles: true })); } catch { /* ok */ } nosso = false; };
+        const textoGuardado = guardado.t;
+        selo = criarSelo(
+          () => { porTexto(""); disparar(); apagarChave(k); },
+          () => { if (!valor().trim()) { porTexto(textoGuardado); disparar(); gravar(k, textoGuardado); } tirarSelo(); },   // CC-023: o Desfazer devolve o texto
+          () => tirarSelo());
         const alvo = opcoes.seloEm || null;
         if (selo) {
           if (alvo && typeof alvo.appendChild === "function") alvo.appendChild(selo);

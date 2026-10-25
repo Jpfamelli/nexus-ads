@@ -63,6 +63,8 @@ export const variacao = (a, b) => (!fin(a) || !fin(b)) ? null : b === 0 ? (a ===
 /** Chip de variação: sentido 'cima' (mais é melhor), 'baixo' (menos é melhor) ou 'neutro'. */
 export function chipVar(atual, anterior, sentido = "cima") {
   const v = variacao(atual, anterior);
+  // plano 1000b → plano 1500c · AC-179: antes 0 e agora algo é «novo» (antes «sem base», que parecia dado faltando)
+  if (v == null && fin(atual) && atual > 0 && anterior === 0) return { v: null, txt: "novo", cls: "neutro", seta: "", novo: true };
   if (v == null) return { v: null, txt: "sem base", cls: "neutro", seta: "" };
   const bom = sentido === "cima" ? v >= 0 : sentido === "baixo" ? v <= 0 : null;
   const cls = bom == null || Math.abs(v) < 1 ? "neutro" : bom ? "bom" : "ruim";
@@ -154,15 +156,17 @@ export function ultimoGastoPorCampanha(M) {
   return ult;
 }
 export function linhasCampanhas(M, { dias = 30, plat = "" } = {}) {
-  const { de, ate } = janela(M, dias);
+  const { de, ate, deA, ateA } = janela(M, dias);
   const ult = ultimoGastoPorCampanha(M);
   const linhas = Object.values(M.CAMP).filter(c => c.plat && !c.semCampanha && (!plat || c.plat === plat)).map(c => {
     const t = M.consolidar(M.linhasDe(de, ate, { camp: c.id }));
     if (!t.gasto) return null;
     const k = M.crmTot(de, ate, { camp: c.id });
     const ultimo = ult.has(c.id) ? ult.get(c.id) : null;
+    // plano 1500c · AC-135: o custo por conversão do período anterior (a coluna «Δ CPA»; cair é bom)
+    const ta = deA <= ateA && ateA >= 0 ? M.consolidar(M.linhasDe(Math.max(0, deA), ateA, { camp: c.id })) : null;
     return {
-      c, t, k,
+      c, t, k, ta, dcpa: ta ? variacao(t.cpa, ta.cpa) : null,
       cpp: k.fecharam ? t.gasto / k.fecharam : null,
       cpag: k.agendadas ? t.gasto / k.agendadas : null,
       roas: t.gasto ? k.receita / t.gasto : null,
@@ -235,6 +239,8 @@ export function semCampanhaTot(M, de, ate, { plat = "" } = {}) {
 export const VAL_CAMP = {
   nome: r => r.c.nome, plat: r => r.c.plat, gasto: r => r.t.gasto, conv: r => r.t.conversoes, cpa: r => r.t.cpa, ctr: r => r.t.ctr,
   ag: r => r.k.agendadas, fe: r => r.k.fecharam, rec: r => r.k.receita, roas: r => r.roas,
+  // plano 1500c · AC-082/AC-083/AC-135: as colunas extras também ordenam
+  cpag: r => r.cpag, cpp: r => r.cpp, imp: r => r.t.impressoes, cpm: r => r.t.cpm, dcpa: r => r.dcpa,
 };
 /** Ordena como o painel: texto por localeCompare; número com vazio sempre no fim. */
 export function ordenarCampanhas(linhas, chave = "gasto", dir = -1) {
@@ -288,11 +294,25 @@ export function crmPorCriativo(M, de, ate, { plat = "" } = {}) {
   }
   return out;
 }
-export const RANK_CRI = [["receita", "Mais receita"], ["fechados", "Mais fechados"], ["cpa", "Menor custo por conversa"]];
+// plano 1500c · AC-114: «Menor custo por agendamento» (investimento do criativo ÷ agendamentos do CRM) — o dono quer quem traz agenda
+export const RANK_CRI = [["receita", "Mais receita"], ["fechados", "Mais fechados"], ["cpa", "Menor custo por conversa"], ["cpag", "Menor custo por agendamento"]];
 /** Plano 1000b · AB-044: com o filtro Google o ranking fala de «conversão» (o Google conta conversões, não conversas no WhatsApp). */
 export const unidadeConv = plat => (plat === "google" ? { um: "conversão", varios: "conversões" } : { um: "conversa", varios: "conversas" });
 export const rankCriPorPlat = plat => RANK_CRI.map(([k, rot]) => [k, k === "cpa" ? `Menor custo por ${unidadeConv(plat).um}` : rot]);
 export const MIN_CONV_CPA = 3;   // custo por conversa só entra no ranking com pelo menos 3 conversas (senão R$ 4 de teste "ganha")
+/** Plano 1500c · AC-113: abaixo disto o custo por conversa ainda oscila muito — o criativo leva o selo «amostra pequena». */
+export const AMOSTRA_PEQUENA = 10;
+/** Plano 1500c · AC-115: a régua de cada plataforma para comparar custo de conversa (Meta) com custo de conversão (Google) — a meta da
+    plataforma quando existe; senão a mediana do custo dos criativos dela. → {meta: n|null, google: n|null}. */
+export function reguaCustoPlat(itens = [], cfg = {}) {
+  const med = l => { const v = l.filter(fin).sort((a, b) => a - b); return v.length ? (v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2) : null; };
+  const out = {};
+  for (const p of ["meta", "google"]) {
+    const meta = p === "google" ? +(cfg && cfg.cpaAlvoGoogle) : +(cfg && cfg.cpaAlvo);
+    out[p] = meta > 0 ? meta : med((itens || []).filter(x => x && x.k && x.k.plat === p).map(x => x.t && x.t.cpa));
+  }
+  return out;
+}
 /** Ranking de criativos do período (P1): investimento do Ads + resultado do CRM por criativo.
     por = 'receita' | 'fechados' | 'cpa'. Criativo sem investimento no período fica de fora. */
 export function rankingCriativos(M, { dias = 30, plat = "", por = "receita", n = 8, reserva = false } = {}) {
@@ -307,22 +327,33 @@ export function rankingCriativos(M, { dias = 30, plat = "", por = "receita", n =
     const c = crm.get(k.id) || ZERO;
     return { k, camp: M.CAMP[k.camp] || null, t, c, roas: t.gasto ? c.receita / t.gasto : null };
   }).filter(x => x.t.gasto > 0);
-  const cpa = x => (fin(x.t.cpa) ? x.t.cpa : Infinity);
+  // plano 1500c · AC-114: custo por agendamento do CRM; AC-113: selo de amostra pequena
+  for (const x of todos) { x.cpag = x.c.agendadas > 0 ? x.t.gasto / x.c.agendadas : null; x.amostraPequena = x.t.conversoes < AMOSTRA_PEQUENA; }
+  // plano 1500c · AC-115: sem filtro de plataforma, o custo do Meta (conversa) e o do Google (conversão) não estão na mesma régua — cada
+  // um é dividido pela régua da sua plataforma (a meta dela, ou a mediana dos criativos dela) antes de ordenar
+  const plats = new Set(todos.map(x => x.k.plat));
+  const misto = !plat && plats.has("meta") && plats.has("google");
+  const regua = misto ? reguaCustoPlat(todos.filter(x => x.t.conversoes >= MIN_CONV_CPA), M.CFG) : null;
+  const cpaRel = x => { const r = regua && regua[x.k.plat]; return fin(x.t.cpa) ? (r > 0 ? x.t.cpa / r : x.t.cpa) : Infinity; };
+  const cpa = x => (misto ? cpaRel(x) : fin(x.t.cpa) ? x.t.cpa : Infinity);
+  const cpag = x => (fin(x.cpag) ? x.cpag : Infinity);
   const ORD = {
     receita: (a, b) => b.c.receita - a.c.receita || b.c.fecharam - a.c.fecharam || cpa(a) - cpa(b),
     fechados: (a, b) => b.c.fecharam - a.c.fecharam || b.c.receita - a.c.receita || cpa(a) - cpa(b),
     cpa: (a, b) => cpa(a) - cpa(b) || b.t.conversoes - a.t.conversoes,
+    cpag: (a, b) => cpag(a) - cpag(b) || b.c.agendadas - a.c.agendadas,
   };
   const ordenar = chave => {
     // receita/fechados: só quem trouxe resultado (zero não é ranking); custo por conversa: com volume mínimo
     const base = chave === "cpa" ? todos.filter(x => x.t.conversoes >= MIN_CONV_CPA)
+      : chave === "cpag" ? todos.filter(x => x.c.agendadas > 0)
       : chave === "fechados" ? todos.filter(x => x.c.fecharam > 0) : todos.filter(x => x.c.receita > 0);
     const lista = base.slice().sort(ORD[chave]).slice(0, n);
-    const valor = x => (chave === "receita" ? x.c.receita : chave === "fechados" ? x.c.fecharam : x.t.cpa);
+    const valor = x => (chave === "receita" ? x.c.receita : chave === "fechados" ? x.c.fecharam : chave === "cpag" ? x.cpag : chave === "cpa" && misto ? cpaRel(x) : x.t.cpa);
     const topo = lista.length ? Math.max(...lista.map(valor).filter(fin)) : 0;
-    // barra: receita/fechados proporcionais ao 1º; custo por conversa: o MENOR enche a barra
-    const barra = x => { const v = valor(x); if (!fin(v) || !(topo > 0)) return 0; return chave === "cpa" ? Math.min(1, lista[0].t.cpa / v) : v / topo; };
-    return { por: chave, de, ate, total: todos.length, lista: lista.map((x, i) => ({ ...x, pos: i + 1, barra: barra(x) })) };
+    // barra: receita/fechados proporcionais ao 1º; custo (por conversa ou por agendamento): o MENOR enche a barra
+    const barra = x => { const v = valor(x); if (!fin(v) || !(topo > 0)) return 0; return chave === "cpa" || chave === "cpag" ? Math.min(1, valor(lista[0]) / v) : v / topo; };
+    return { por: chave, de, ate, total: todos.length, normalizado: chave === "cpa" && misto, lista: lista.map((x, i) => ({ ...x, pos: i + 1, barra: barra(x), cpaRel: misto && fin(cpaRel(x)) ? cpaRel(x) : null })) };   // plano 1500c · AC-115
   };
   const chave = ORD[por] ? por : "receita";
   const r = ordenar(chave);
@@ -666,7 +697,12 @@ export function tokensWa(txt) {
 export const MAX_DIAS = 366;                         // p_ate − p_de ≤ 366 (periodo_grande no servidor)
 export const PRESETS = [7, 30, 90];
 /** Período dos últimos `dias` terminando HOJE (SP): 30 dias = hoje e os 29 anteriores. */
-export function periodoPreset(dias, hoje = hojeSP()) { return { de: somarDias(hoje, -(dias - 1)), ate: hoje }; }
+/** Plano 1500c · AC-156/AC-117: por padrão os atalhos terminam ONTEM (dias inteiros contra dias inteiros — com hoje pela metade a
+    comparação «caía» de manhã); `incluirHoje` volta ao período que termina hoje (dia parcial, com o aviso na legenda). */
+export function periodoPreset(dias, hoje = hojeSP(), { incluirHoje = false } = {}) {
+  const ate = incluirHoje ? hoje : somarDias(hoje, -1);
+  return { de: somarDias(ate, -(dias - 1)), ate };
+}
 /** Confere um período personalizado antes de chamar o servidor. */
 export function validarPeriodo(de, ate, hoje = hojeSP()) {
   const re = /^\d{4}-\d{2}-\d{2}$/;
@@ -763,13 +799,26 @@ export function textoConversao(e) {
     · texto que começa com = + - @ tab ou CR ganha um apóstrofo na frente: nome de atendente,
       etapa ou motivo é digitado por usuário e não pode virar FÓRMULA no Excel de quem baixa
       (injeção de CSV — "=HIPERLINK(...)" no nome da conta). */
+/** Plano 1500c · AC-163: número no CSV com no máximo 2 casas e nunca em notação científica (0,1 + 0,2 saía «0,30000000000000004»,
+    1e-7 saía «1e-7»); a vírgula é o separador decimal. */
+export function numeroCsv(v) {
+  if (!fin(v)) return "";
+  const r = Math.round(v * 100) / 100;
+  const t = Number.isInteger(r) ? r.toFixed(0) : r.toFixed(2).replace(/0+$/, "");
+  return (t === "-0" ? "0" : t).replace(".", ",");
+}
+/** Plano 1500c · AC-164: texto que o Excel leria como fórmula — começa com = ou @, tab/CR, ou + / - (também depois de espaços), A NÃO SER
+    que o texto inteiro seja só telefone/número («+55 (11) 99999-0000», «-5»): esses não ganham mais o apóstrofo. «-2+3+cmd|…» continua
+    protegido (tem letra/símbolo de fórmula). */
+const SO_NUMERO_CSV = /^\s*[+-]?[\d\s().,/-]+$/;
+export const pareceFormula = s => /^[=@\t\r]/.test(s) || (/^\s*[=+\-@]/.test(s) && !(/^\s*[+-]/.test(s) && SO_NUMERO_CSV.test(s)));
 export function csv(colunas, linhas) {
   const q = v => {
     let s;
     if (v == null) s = "";
-    else if (typeof v === "number") s = Number.isFinite(v) ? String(v).replace(".", ",") : "";
+    else if (typeof v === "number") s = numeroCsv(v);   // plano 1500c · AC-163
     // plano 1000 (AD-261): o teste vale depois dos espaços do começo — « =HIPERLINK(…)» passava e o Excel apara o espaço
-    else { s = String(v); if (/^[=+\-@\t\r]/.test(s) || /^[=+\-@]/.test(s.replace(/^\s+/, ""))) s = `'${s}`; }
+    else { s = String(v); if (pareceFormula(s)) s = `'${s}`; }   // plano 1500c · AC-164
     return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return "﻿" + [colunas, ...linhas].map(l => l.map(q).join(";")).join("\r\n");
@@ -1112,8 +1161,9 @@ export function textoChipRelatorios({ preset = 30, de = null, ate = null, aba = 
 
 /** Série do gráfico de tendência: por dia da janela, investimento (Ads), conversões da plataforma e o que o CRM registrou
     (conversas, agendamentos, fechamentos, receita) — conversas pela data da conversa, as outras pela data do próprio evento. */
-export function serieTendencia(M, { dias = 30, plat = "" } = {}) {
-  const { de, ate } = janela(M, dias);
+export function serieTendencia(M, { dias = 30, plat = "", anterior = false } = {}) {
+  // plano 1500c · AC-088: `anterior` = a mesma série na janela de comparação (a curva tracejada do período anterior)
+  const j = janela(M, dias), de = anterior ? j.deA : j.de, ate = anterior ? j.ateA : j.ate;
   const sd = M.porDia(plat);
   const conv = new Array(M.DIAS).fill(0);
   for (const Ld of M.LEADS) { if (!Ld.plat || (plat && Ld.plat !== plat)) continue; if (Ld.i >= 0 && Ld.i < conv.length) conv[Ld.i]++; }
@@ -1135,6 +1185,8 @@ export function funilPorPlataforma(M, { dias = 30 } = {}) {
       { id: "convAds", rotulo: "Conversões do anúncio", v: Number(t.conversoes) || 0 },
       { id: "conversas", rotulo: "Conversas no CRM", v: Number(c.conversas) || 0 },
       { id: "agendadas", rotulo: "Agendaram", v: Number(c.agendadas) || 0 },
+      // plano 1500c · AC-097: a etapa «compareceram» (antes pulava de agendou para fechou, sem ver quem faltou)
+      { id: "compareceram", rotulo: "Compareceram", v: Number(c.compareceram) || 0 },
       { id: "fecharam", rotulo: "Fecharam", v: Number(c.fecharam) || 0 },
     ];
     const taxas = etapas.slice(1).map((e, k) => ({ de: etapas[k].id, para: e.id, pct: taxa(e.v, etapas[k].v) }));
@@ -1181,8 +1233,10 @@ export function calorSemanal(M, { dias = 30, plat = "", campo = "conversas" } = 
   }
   // dia da semana mais forte somando todas as semanas (a frase do cartão)
   const porDow = matriz.map(l => l.reduce((s, x) => s + x, 0)), topo = Math.max(...porDow);
-  const melhorDow = topo > 0 ? porDow.indexOf(topo) : null;
-  return { matriz, semanas, max, pico, campo, porDow, melhorDow };
+  // plano 1500c · AC-143: empate no topo não elege o domingo (o 1º índice) — melhorDow null e `empate` com os dias empatados
+  const empatados = topo > 0 ? porDow.map((v, d) => (v === topo ? d : -1)).filter(d => d >= 0) : [];
+  const melhorDow = empatados.length === 1 ? empatados[0] : null;
+  return { matriz, semanas, max, pico, campo, porDow, melhorDow, empate: empatados.length > 1 ? empatados : null };
 }
 const ddmmDe = (M, i) => (typeof M.ddmm === "function" ? M.ddmm(i) : String(i));
 
@@ -1219,9 +1273,11 @@ export function faixasCalor(m) {
 /** Nome do arquivo exportado: orbita-[<cliente>-]<base>-<de>-a-<ate>.<ext>, só letras/números/traço.
     Plano 1000 (AD-103/AD-143): com o nome do cliente (a agência baixa de vários clientes e misturava os arquivos). */
 const slugArquivo = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-export function nomeArquivoExport(base, de, ate, ext = "png", cliente = "") {
-  const limpo = slugArquivo, cli = limpo(cliente).slice(0, 40).replace(/-$/, "");
-  return `orbita-${cli ? `${cli}-` : ""}${limpo(base) || "grafico"}${de ? `-${limpo(de)}` : ""}${ate ? `-a-${limpo(ate)}` : ""}.${limpo(ext) || "png"}`;
+/** Plano 1500c · AC-077: `sufixo` (a plataforma filtrada: «meta», «google») vai DEPOIS das datas — antes o Anúncios passava «30dias» e
+    «tudo» no lugar das datas («…-30dias-a-tudo.csv»). */
+export function nomeArquivoExport(base, de, ate, ext = "png", cliente = "", sufixo = "") {
+  const limpo = slugArquivo, cli = limpo(cliente).slice(0, 40).replace(/-$/, ""), suf = limpo(sufixo);
+  return `orbita-${cli ? `${cli}-` : ""}${limpo(base) || "grafico"}${de ? `-${limpo(de)}` : ""}${ate ? `-a-${limpo(ate)}` : ""}${suf ? `-${suf}` : ""}.${limpo(ext) || "png"}`;
 }
 /** Plano 1000 (AD-120): as linhas do cabeçalho do PNG exportado (o SVG sozinho saía sem título, período nem cliente). */
 export function cabecalhoPng({ titulo = "", periodo = "", cliente = "" } = {}) {
@@ -1255,7 +1311,13 @@ export function agruparOutros(lista = [], { max = 6, valor = x => +x.qtd || 0, n
 export const ESTILOS_SVG_EXPORT = Object.freeze(["fill", "stroke", "stroke-width", "stroke-dasharray", "stroke-linecap", "stroke-linejoin", "opacity", "font-family", "font-size", "font-weight", "text-anchor", "visibility"]);
 
 /** Explicação em linguagem simples de cada regra do radar: o que é, por que importa e o que fazer. */
-export function explicarRegra(id) {
+/** Plano 1500c · AC-145: com `ativa: false` a explicação diz que a regra está desligada (o radar não avisa) — antes o texto genérico
+    falava como se ela estivesse valendo. */
+export function explicarRegra(id, { ativa = true } = {}) {
+  const ex = explicarRegraBase(id);
+  return ativa === false ? { ...ex, oQue: `${ex.oQue} (desligada: o radar não avisa disso agora)`, desligada: true } : ex;
+}
+function explicarRegraBase(id) {
   const E = {
     r1: { oQue: "Cada conversa vinda desta campanha está custando mais do que a meta.", porque: "O dinheiro rende menos: mais investimento para o mesmo número de pessoas.", acao: "Revise o público e o anúncio; se não melhorar em alguns dias, pause e redistribua a verba." },
     r2: { oQue: "A campanha gastou e ninguém chamou.", porque: "Pode ser anúncio sem botão de WhatsApp, público errado ou link quebrado.", acao: "Abra o anúncio como cliente e teste o caminho até a conversa." },

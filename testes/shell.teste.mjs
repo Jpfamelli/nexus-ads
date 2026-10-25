@@ -99,10 +99,14 @@ await teste("antes.js: injeta o modulepreload da tela do endereço (8 telas + lo
     "automacoes.js": ["modulepreload:auto-logica.js?v=VTESTE", "modulepreload:auto-pecas.js?v=VTESTE", "preload:automacoes.css?v=VTESTE"],
     "config.js": ["modulepreload:crm-config.js?v=VTESTE", "modulepreload:cv-config.js?v=VTESTE", "modulepreload:ads-config.js?v=VTESTE", "modulepreload:agenda-config.js?v=VTESTE",
       "modulepreload:rastreio-config.js?v=VTESTE", "preload:config.css?v=VTESTE"],
+    // plano 1500c: UCC-065 — Agenda, Anúncios e Relatórios também aquecem a lógica e o CSS que pedem ao abrir
+    "agenda.js": ["modulepreload:crm-logica.js?v=VTESTE", "modulepreload:graficos.js?v=VTESTE", "preload:agenda.css?v=VTESTE"],
+    "anuncios.js": ["modulepreload:rel-logica.js?v=VTESTE", "modulepreload:graficos.js?v=VTESTE", "modulepreload:../nucleo.js?v=VTESTE", "preload:relatorios.css?v=VTESTE"],
+    "relatorios.js": ["modulepreload:rel-logica.js?v=VTESTE", "modulepreload:graficos.js?v=VTESTE", "modulepreload:anuncios.js?v=VTESTE", "preload:relatorios.css?v=VTESTE"],
   };
   for (const [hash, arq] of casos) assert.deepEqual(rodarAntes({ hash, token: "t" }).preloads, [`modulepreload:${arq}?v=VTESTE`, ...(extras[arq] || [])], hash);
   assert.deepEqual(rodarAntes({ hash: "", token: "t" }).preloads, ["modulepreload:inicio.js?v=VTESTE", ...extras["inicio.js"]], "sem rota: Início");
-  assert.deepEqual(rodarAntes({ hash: "", search: "?produto=ads", token: "t" }).preloads, ["modulepreload:anuncios.js?v=VTESTE"], "entrada do Nexus Ads");
+  assert.deepEqual(rodarAntes({ hash: "", search: "?produto=ads", token: "t" }).preloads, ["modulepreload:anuncios.js?v=VTESTE", ...extras["anuncios.js"]], "entrada do Nexus Ads");
   assert.deepEqual(rodarAntes({ hash: "", search: "?produto=atendimento", token: "t" }).preloads, ["modulepreload:conversas.js?v=VTESTE", ...extras["conversas.js"]]);
   assert.deepEqual(rodarAntes({ hash: "", search: "?produto=crm", token: "t" }).preloads, ["modulepreload:crm.js?v=VTESTE", ...extras["crm.js"]]);
 });
@@ -206,10 +210,9 @@ await teste("sw.js: cross-origin, POST, ambiente fictício e versao.json passam 
     m.req("", { url: "https://dtjznipitihnwmcgpzqh.supabase.co/rest/v1/rpc/nx_pulso" }),
     m.req("/app/app.js?v=V1", { method: "POST" }),
     m.req("/__dev_falso/boot.js"),
-    m.req("/app/versao.json"),
-    m.req("/app/versao.json?t=1"),
+    // plano 1500c: UCC-050 — o versao.json agora passa pelo sw (sempre da rede, no-store; sem rede, 503 em JSON)
     m.req("/app/sw.js?v=V1"),
-    m.req("/app/manifest.webmanifest"),
+    // plano 1500c: UCC-045 — o manifesto (sem ?v=) agora é servido do cache desta versão (testes/plano1500c-sis)
     m.req("/app/api.js"),                                   // sem ?v=: não é arquivo versionado
     m.req("/app/", { mode: "navigate", url: "https://outro.test/app/" }),
   ];
@@ -1351,7 +1354,7 @@ await teste("app.js (M16): sessão guardada pinta o shell e a rede revalida; sel
     // plano 1000b: o sair() espera a limpeza (UB-135: await limparComPrazo(), que chama limparDadosDoAparelho)
     assert.match(corpo, /limparDadosDoAparelho\(\)|await limparComPrazo\(\)/, `${nome} limpa o cache`);
   }
-  assert.match(/async function pedirLoginNaTela\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0], /if \(r === "outra"\) \{[\s\S]*?limparDadosDoAparelho\(\);/, "troca de conta limpa o cache");
+  assert.match(/async function pedirLoginNaTela\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0], /if \(r === "outra"\) \{[\s\S]*?await limparComPrazo\(1500\);/, "troca de conta limpa o cache");   // plano 1500c: UCC-027 — espera a limpeza (com prazo) antes do reload
   assert.match(APP_JS, /function limparDadosDoAparelho\(\) \{\s*const feito = E\.cache \? E\.cache\.limpar\(\)\.catch\(\(\) => \{\}\) : Promise\.resolve\(\);/);
   assert.match(APP_JS, /Mostrando dados de \$\{hora\} · atualizando…/);
   assert.match(APP_JS, /reiniciarSelo\(\);\s*marcarMenu\(r\.modulo\);/, "o selo recomeça a cada tela");
@@ -1504,7 +1507,8 @@ await teste("app.js (revisão R119): a rede devolveu OUTRA conta → limpa o apa
   assert.equal(r.E.sessao, guardada, "a sessão da outra conta não é misturada à tela da anterior");
   const limpar = fnDoApp("limparERecarregar");
   assert.match(limpar, /await limparComPrazo\(\); location\.reload\(\);/);
-  assert.match(fnDoApp("limparComPrazo"), /Promise\.race\(\[limparDadosDoAparelho\(\), new Promise\(r => setTimeout\(r, 800\)\)\]\)/, "a limpeza do IndexedDB não é cortada pelo recarregamento");
+  // plano 1500c: UCC-027 — o prazo virou parâmetro (800 ms por padrão; a troca de conta espera 1,5 s)
+  assert.match(fnDoApp("limparComPrazo"), /function limparComPrazo\(ms = 800\) \{\s*return Promise\.race\(\[limparDadosDoAparelho\(\), new Promise\(r => setTimeout\(r, ms\)\)\]\)/, "a limpeza do IndexedDB não é cortada pelo recarregamento");
   const dados = fnDoApp("limparDadosDoAparelho");
   assert.match(dados, /LS\.apagar\(CHAVE_CONTA\);\s*E\.sessaoGuardada = null;\s*return feito;/, "sem CHAVE_CONTA a próxima abertura lê a sessão da rede (não há laço de recarga)");
 });
@@ -1538,7 +1542,8 @@ await teste("app.js (revisão R119): empresa removida → cache dela apagado, ou
 });
 
 await teste("app.js (revisão R119): entrar ou aceitar convite com outra conta aberta não adota a sessão antiga; rota pública não dispara a sessão antecipada", () => {
-  const entrar = /async aoEntrar\(token, \{ cliente_id(?:, compartilhado)? \} = \{\}\) \{[\s\S]*?\n    \},/.exec(APP_JS)[0];
+  // plano 1500c: UCC-030/UC-019/UCB-054 — o aoEntrar recebe também expira_em, boasVindas e demo
+  const entrar = /async aoEntrar\(token, \{ cliente_id(?:, compartilhado)?(?:, expira_em, boasVindas, demo)? \} = \{\}\) \{[\s\S]*?\n    \},/.exec(APP_JS)[0];
   assert.match(entrar, /E\.sessaoPromessa = null; E\.sessaoGuardada = null;\s*limparDadosDoAparelho\(\);\s*E\.M\.dados\.guardarToken\(token\);/, "zera a antecipada e a guardada e limpa o aparelho ANTES de guardar o token e navegar");
   assert.ok(entrar.indexOf("limparDadosDoAparelho()") < entrar.indexOf("navegar(destino"), "limpa antes de navegar");
   const iniciar = /async function iniciar\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
@@ -1683,7 +1688,8 @@ await teste("app.js (M22): ctx.atalhosDeRegiao, alvo resolvido na hora do clique
   assert.match(APP_JS, /if \(alvo\) focarElemento\(alvo\); else E\.ui\.anunciar\("Essa área não está disponível agora\."\);/);
   assert.match(APP_JS, /b\.el\.hidden = !resolverAlvo\(b\.alvo\)/, "alvo que não existe agora não ganha atalho");
   const montar = /async function montarNoShell\([\s\S]*?\nfunction focarVista/.exec(APP_JS)[0];
-  assert.equal([...montar.matchAll(/if \(doUsuario\) focarTitulo\(seq\);/g)].length, 2, "as duas saídas de montarNoShell focam o título");
+  // plano 1500c: UCC-075 — na saída da tela montada, só quando a TELA mudou (abrir item na mesma tela não move o foco)
+  assert.equal([...montar.matchAll(/if \(doUsuario(?: && trocouDeTela)?\) focarTitulo\(seq\);/g)].length, 2, "as duas saídas de montarNoShell focam o título");
   assert.doesNotMatch(montar, /if \(doUsuario\) focarVista\(\);/, "nada de focar o <main> direto");
   const f = /function focarTitulo\(seq\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
   assert.match(f, /h1\.setAttribute\("tabindex", "-1"\)/); assert.match(f, /E\.ui\.anunciar\(`\$\{nome\}, carregado`\)/);
@@ -1921,7 +1927,9 @@ await teste("ações do catálogo filtradas por papel e produto (aceite do M18)"
   assert.ok(!at.includes("nova-oportunidade") && !at.includes("nova-tarefa"), "no Atendimento não há CRM (oportunidade, tarefa)");
   // Anúncios: só o que vale em qualquer lugar
   const ads = idsDe(ambiente({ workspace: "ads" }));
-  assert.deepEqual(ads.filter(i => !["alternar-tema", "abrir-produto", "atalhos", "sair", "primeiros-passos"].includes(i)), [], "em Anúncios nenhuma ação de CRM/Conversas/Agenda");
+  // plano 1500c: UCC-082…085 — Central de ajuda, Ver plano, tour, recarregar e notificações valem em qualquer produto
+  // plano 1500c: UC-028/UC-038 — «Convidar pessoa» (admin) e «Situação dos serviços» também valem em qualquer produto
+  assert.deepEqual(ads.filter(i => !["alternar-tema", "abrir-produto", "atalhos", "sair", "primeiros-passos", "central-ajuda", "ver-plano", "tour", "recarregar", "notificacoes", "convidar-pessoa", "situacao-servicos"].includes(i)), [], "em Anúncios nenhuma ação de CRM/Conversas/Agenda");
   // papel: leitura não cria nada; atendente cria mas não vê Primeiros passos (é do admin)
   const leitura = idsDe(ambiente({ papel: "leitura" }));
   assert.deepEqual(leitura.filter(i => i.startsWith("nova-") || i === "marcar-consulta" || i === "primeiros-passos"), [], "papel leitura: sem ações de criar");

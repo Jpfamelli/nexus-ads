@@ -694,7 +694,8 @@ test("C8 Funis (DOM): funil dos anúncios sem etapa «Faltou» ganha o aviso inl
     for (let i = 0; i < 4; i++) await tique();
     const aviso = alvo.querySelector(".fe-marcos");
     assert.ok(aviso && !aviso.hidden, "falta a etapa de marco «Faltou»");
-    assert.match(aviso.textContent, /^Faltou sem etapa: a presença «Faltou» da consulta não vai mover o negócio/);
+    // plano 1500c: RC-017 — o aviso fala o termo da vertical («a oportunidade»), não «o negócio» fixo
+    assert.match(aviso.textContent, /^Faltou sem etapa: a presença «Faltou» da consulta não vai mover a oportunidade/);
     const marcoAvaliou = alvo.querySelectorAll(".fe-marco")[2];
     marcoAvaliou.value = "faltou"; marcoAvaliou.dispara("change");
     assert.ok(alvo.querySelector(".fe-marcos").hidden, "com o marco escolhido o aviso some");

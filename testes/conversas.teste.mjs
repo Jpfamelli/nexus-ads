@@ -1105,7 +1105,8 @@ await teste("Atendimento follow-up: modelo é validado de novo com status e cons
   assert.match(erros.join(" "), /não receber marketing/i);
 });
 
-await teste("Atendimento follow-up: colar várias imagens informa que só a primeira será anexada", async () => {
+// plano 1500c: CC-048 — várias imagens coladas vão pelo fluxo de várias fotos (um modal com as duas; antes só a 1ª era anexada)
+await teste("Atendimento follow-up: colar várias imagens abre o envio de várias fotos", async () => {
   const t = await montarCompositor(); t.selecionar(77);
   const criar = URL.createObjectURL, revogar = URL.revokeObjectURL, bitmap = globalThis.createImageBitmap;
   URL.createObjectURL = () => "blob:paste-followup"; URL.revokeObjectURL = () => {};
@@ -1115,9 +1116,9 @@ await teste("Atendimento follow-up: colar várias imagens informa que só a prim
     const ev = { type: "paste", clipboardData: { items: imagens.map(f => ({ kind: "file", type: f.type, getAsFile: () => f })) }, preventDefault() { this.defaultPrevented = true; } };
     t.ta.dispatchEvent(ev); await new Promise(r => setTimeout(r, 15));
     assert.equal(ev.defaultPrevented, true);
-    assert.match(t.toasts.join(" "), /2 imagens|somente a primeira/i);
-    assert.equal(t.enviados.length, 1);
-    assert.equal(t.enviados[0].arquivo.name, "um.png");
+    assert.doesNotMatch(t.toasts.join(" "), /somente a primeira/i);
+    assert.equal(t.enviados.length, 2, "as duas fotos saem");
+    assert.deepEqual(t.enviados.map(e => e.arquivo.name), ["um.png", "dois.png"]);
   } finally { URL.createObjectURL = criar; URL.revokeObjectURL = revogar; if (bitmap === undefined) delete globalThis.createImageBitmap; else globalThis.createImageBitmap = bitmap; }
 });
 
@@ -1568,7 +1569,9 @@ await teste("CodeWords tela: nenhum texto diz mais que o canal é «só texto»;
   assert.match(colagem, /const arquivos = itens\.filter\(i => i\.kind === "file"\);/);
   assert.match(colagem, /arquivos\[0\]\.getAsFile\(\)/, "a colagem só anexa o primeiro arquivo da área de transferência");
   assert.match(colagem, /getAsFile\(\)[\s\S]*new File\(/);
-  assert.match(colagem, /somente a primeira será anexada/);
+  // plano 1500c: CC-048 — várias IMAGENS coladas vão pelo anexarVarios; só arquivos mistos ficam no aviso de «somente o primeiro»
+  assert.match(colagem, /somente o primeiro será anexado/);
+  assert.match(colagem, /anexarVarios\(fs\)/);
   // resposta ambígua (timeout/5xx do aparelho): a mensagem gravada entra marcada e a bolha avisa, sem reenviar sozinha
   assert.match(conv, /const msg = r && r\.mensagem \? \{ \.\.\.r\.mensagem, \.\.\.\(r\.ambigua === true \? \{ ambigua: true \} : \{\}\) \} : null;\s*A\.msgs = A\.msgs\.filter\(m => m\.id !== tmp\.id\);/);
   assert.match(conv, /if \(tmp\.midia && tmp\.midia\.local_url && msg\.midia && msg\.midia\.path\) A\.midia\.set\(msg\.midia\.path, \{ url: null, local: tmp\.midia\.local_url/, "a prévia local segue na bolha gravada");
@@ -1803,7 +1806,8 @@ await teste("M35: a tela liga o teclado (um ouvinte que sai ao desmontar, sem se
   assert.match(cv, /def\("atender", "Atender o próximo"/); assert.match(cv, /def\("nova", "Nova conversa"/);
   assert.match(cv, /"Alt\+Shift\+R"/);
   // Atender o próximo: a fila «aguardando», a regra pura, abre, e assume (a IA do CodeWords pausa pelo mesmo caminho do botão)
-  assert.match(cv, /rpcC\("nx_cv_listar", \{ p_filtro: \{ aba: "aguardando" \}/);
+  // plano 1500c: CC-012 — a fila pedida leva também o departamento/número filtrados (…extra)
+  assert.match(cv, /rpcC\("nx_cv_listar", \{ p_filtro: \{ aba: "aguardando", \.\.\.extra \}/);
   // plano 1000b: CB-121 — até 3 páginas da aba Aguardando (a 1ª podia ser toda de colegas); a mesma regra pura e o mesmo filtro do Desfazer
   assert.match(cv, /c = A\.L\.proximaParaAtender\(itens\.filter\(x => !_pendResolver\.has\(x\.id\)\), A\.eu && A\.eu\.id\);/,
     "a regra pura escolhe; a recém-resolvida (Desfazer ainda na tela) fica de fora");

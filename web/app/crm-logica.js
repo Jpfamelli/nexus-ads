@@ -27,7 +27,106 @@ export function idUnico(prefixo = "crm") {
 /** plano 1000b · RB-122: o começo de um texto numa linha (para rótulos de botão): espaços juntados, até `max` caracteres com «…». */
 export function resumoTexto(s, max = 30) {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
-  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+  const cps = Array.from(t);      // plano 1500c · RX-011: conta por caractere (emoji não vira «�» cortado ao meio)
+  return cps.length > max ? `${cps.slice(0, max - 1).join("").trimEnd()}…` : t;
+}
+
+/** plano 1500c · RC-082: o que o «Duplicar» leva para o negócio novo (o que se repete num orçamento parecido; nada do histórico). */
+export function dadosDuplicar(n, contato = null) {
+  const x = n || {};
+  const titulo = String(x.titulo || "").trim();
+  return {
+    ...(contato && contato.id != null ? { contato_id: contato.id } : x.contato_id != null ? { contato_id: x.contato_id } : {}),
+    funil_id: x.funil_id ?? null, estagio_id: null,
+    titulo: titulo ? `${titulo} (cópia)`.slice(0, 120) : "", servico: x.servico || "", valor_previsto: x.valor_previsto ?? null,
+    etiquetas: Array.isArray(x.etiquetas) ? x.etiquetas.slice() : [], campos: x.campos && typeof x.campos === "object" ? Object.fromEntries(Object.entries(x.campos).filter(([kk]) => kk !== "presenca" && !/^score/.test(kk))) : null,
+  };
+}
+
+/** plano 1500c · RC-098: a mensagem do telefone recusado — número de outro país provável sugere o «+código». */
+export function textoTelefoneInvalido(v) {
+  return telefoneSemPais(v) ? "Número de outro país? Comece com + e o código do país (ex.: +1 212 555 1234)." : "Telefone inválido. Use DDD + número.";
+}
+
+/** plano 1500c · RC-097: atalhos da previsão de fechamento a partir do dia de SP → [{id, rotulo, valor AAAA-MM-DD}] (15 dias, fim do mês, fim do próximo mês). */
+export function atalhosPrevisao(hojeIso) {
+  const [a, m, d] = String(hojeIso || "").slice(0, 10).split("-").map(Number);
+  if (!a || !m || !d) return [];
+  const iso = x => x.toISOString().slice(0, 10);
+  return [
+    { id: "15d", rotulo: "Em 15 dias", valor: iso(new Date(Date.UTC(a, m - 1, d + 15))) },
+    { id: "fim_mes", rotulo: "Fim do mês", valor: iso(new Date(Date.UTC(a, m, 0))) },
+    { id: "fim_prox", rotulo: "Fim do próximo mês", valor: iso(new Date(Date.UTC(a, m + 1, 0))) },
+  ];
+}
+
+/** plano 1500c · RC-100: o instante da mensagem mais recente entre os atendimentos (ultima_msg_em / ultima_mensagem_em) → ISO | null. */
+export function ultimaMensagemEm(conversas) {
+  let melhor = null, ms = -Infinity;
+  for (const c of conversas || []) {
+    const v = c && (c.ultima_msg_em || c.ultima_mensagem_em);
+    const t = Date.parse(v);
+    if (Number.isFinite(t) && t > ms) { ms = t; melhor = v; }
+  }
+  return melhor;
+}
+
+/** plano 1500c · RC-078: taxa de ganho do quadro (as colunas de ganho e perda trazem só os fechados do período). → {ganhos, perdidos, taxa|null} */
+export function taxaGanho(colunas, estagios) {
+  const tipo = new Map((estagios || []).map(e => [e.id, e.tipo]));
+  let ganhos = 0, perdidos = 0;
+  for (const c of colunas || []) {
+    const n = Number(c && c.total) || 0;
+    if (tipo.get(c.estagio_id) === "ganho") ganhos += n; else if (tipo.get(c.estagio_id) === "perdido") perdidos += n;
+  }
+  return { ganhos, perdidos, taxa: ganhos + perdidos ? ganhos / (ganhos + perdidos) : null };
+}
+
+/** plano 1500c · RC-068: a cor da paleta menos usada (empate: a primeira da paleta). Paleta vazia → null. */
+export function corMenosUsada(paleta, usadas) {
+  const p = (paleta || []).filter(Boolean);
+  if (!p.length) return null;
+  const conta = new Map(p.map(c => [String(c).toLowerCase(), 0]));
+  for (const c of usadas || []) { const x = String(c || "").toLowerCase(); if (conta.has(x)) conta.set(x, conta.get(x) + 1); }
+  let melhor = p[0];
+  for (const c of p) if (conta.get(String(c).toLowerCase()) < conta.get(String(melhor).toLowerCase())) melhor = c;
+  return melhor;
+}
+
+/** plano 1500c · RC-093: «Etiqueta «A» adicionada», «3 etiquetas adicionadas: A, B e C», «1 adicionada, 1 removida». */
+export function textoEtiquetasMudaram(mais = [], menos = []) {
+  const m = (mais || []).filter(Boolean), r = (menos || []).filter(Boolean);
+  const lista = l => juntarE(l.map(x => `«${x}»`));
+  if (m.length && r.length) return `${m.length} ${m.length === 1 ? "adicionada" : "adicionadas"} (${lista(m)}), ${r.length} ${r.length === 1 ? "removida" : "removidas"} (${lista(r)})`;
+  if (m.length === 1) return `Etiqueta «${m[0]}» adicionada`;
+  if (m.length > 1) return `${m.length} etiquetas adicionadas: ${lista(m)}`;
+  if (r.length === 1) return `Etiqueta «${r[0]}» removida`;
+  if (r.length > 1) return `${r.length} etiquetas removidas: ${lista(r)}`;
+  return "";
+}
+
+/** plano 1500c · RC-088: corta em `max` caracteres no fim de uma palavra («Implante dentário…», não «Implante dent…»). */
+export function cortarNaPalavra(s, max = 48) {
+  const t = String(s ?? "").replace(/\s+/g, " ").trim();
+  const cps = Array.from(t);      // plano 1500c · RX-012: emoji (2 unidades UTF-16) não é cortado ao meio
+  if (cps.length <= max) return t;
+  const corte = cps.slice(0, max - 1).join("");
+  const esp = corte.lastIndexOf(" ");
+  return `${(esp >= max * 0.6 ? corte.slice(0, esp) : corte).replace(/[\s,.;:–—-]+$/, "")}…`;
+}
+
+/**
+ * plano 1500c · RC-280: quanto falta para o prazo da etapa (sla em horas): «faltam 5 h para o prazo», «falta 1 dia para o prazo»,
+ * «prazo vencido há 2 dias». Sem prazo ou sem data → "".
+ */
+export function textoFaltaPrazo(estagioEm, slaHoras, agora = Date.now()) {
+  const t = Date.parse(estagioEm), sla = Number(slaHoras);
+  if (!Number.isFinite(t) || !Number.isFinite(sla) || sla <= 0) return "";
+  const resta = (t + sla * 3600000 - Number(agora)) / 3600000;
+  // plano 1500c · RX-010: 23,6 h arredonda para 24 → «1 dia» (não «24 h»)
+  const fmt = h => (Math.round(Math.abs(h)) >= 24 ? (d => `${d} ${d === 1 ? "dia" : "dias"}`)(Math.round(Math.abs(h) / 24)) : `${Math.max(1, Math.round(Math.abs(h)))} h`);
+  if (resta > 0) { const f = fmt(resta); return `falta${/^1 /.test(f) ? "" : "m"} ${f} para o prazo`; }
+  return `prazo vencido há ${fmt(resta)}`;
 }
 
 /** plano 1000b · RB-117: tarefa atrasada = não concluída e (o servidor disse atrasada OU o prazo já passou agora). */
@@ -122,7 +221,7 @@ export function mesmoTelefone(a, b) {
 }
 
 /* ------------------------------------------------------------ CSV */
-const SEPARADORES = [";", ",", "\t"];
+const SEPARADORES = [";", ",", "\t", "|"];      // plano 1500c · RX-014: barra vertical (exportação de sistema antigo/ERP)
 
 /** Conta separadores FORA de aspas numa linha (para detectar o separador). */
 function contarFora(linha, sep) {
@@ -220,6 +319,8 @@ export function lerCSV(texto, { separador, limite = 20000 } = {}) {
  * "=HYPERLINK(…)" ali não pode virar fórmula na planilha exportada (injeção de CSV, OWASP).
  */
 function pareceFormula(s) {
+  // plano 1500c · RC-021: telefone de fora («+1 415 555 0100») só tem dígitos, espaço, parênteses e hífen — não executa nada (sem o apóstrofo visível)
+  if (/^\+[\d\s()-]+$/.test(s) && !/^\+[\d\s()-]*[+]/.test(s) && /\d{6}/.test(s.replace(/\D/g, ""))) return false;
   return /^[=+\-@\t\r]/.test(s) && !/^[+-]?\d+([.,]\d+)*$/.test(s);
 }
 /** Escapa um valor para CSV com ";" (o que o Excel brasileiro abre direto); fórmula ganha um ' na frente. */
@@ -227,6 +328,21 @@ export function csvCampo(v) {
   let s = v === null || v === undefined ? "" : String(v);
   if (pareceFormula(s)) s = `'${s}`;
   return /[";\r\n]/.test(s) || /^\s|\s$/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+/**
+ * plano 1500c · RC-307: tarefas da tela → {cabecalho, linhas} para gerarCSV (título, tipo, prazo, responsável, contato, negócio, situação).
+ * prazo(iso) formata o vencimento (a tela passa o fuso de SP); agora (ms) decide «Atrasada».
+ */
+export function csvTarefas(itens, { nomeDono = () => "", prazo = iso => String(iso || ""), agora = Date.now(), rotNegocio = "Negócio" } = {}) {
+  const TIPOS = ROTULO_TAREFA;
+  const cabecalho = ["Título", "Tipo", "Prazo", "Responsável", "Contato", rotNegocio, "Situação"];
+  const linhas = (itens || []).filter(Boolean).map(t => {
+    const vence = t.vence_em ? Date.parse(t.vence_em) : NaN;
+    const situacao = t.concluida || t.concluida_em ? "Concluída" : Number.isFinite(vence) && vence < agora ? "Atrasada" : "Aberta";
+    return [t.titulo || "", TIPOS[t.tipo] || t.tipo || "", t.vence_em ? prazo(t.vence_em) : "Sem prazo", t.dono_id != null ? nomeDono(t.dono_id) || "" : "",
+      (t.contato && t.contato.nome) || "", (t.negocio && t.negocio.titulo) || "", situacao];
+  });
+  return { cabecalho, linhas };
 }
 /** Linhas → texto CSV com BOM (acentos certos no Excel). */
 export function gerarCSV(cabecalho, linhas) {
@@ -252,6 +368,7 @@ export function modeloImportacao(campos = []) {
 /** Destinos fixos da importação (chaves da linha de nx_contatos_importar). */
 export const DESTINOS_IMPORTACAO = Object.freeze([
   { chave: "nome", rotulo: "Nome" },
+  { chave: "sobrenome", rotulo: "Sobrenome (junta ao nome)" },      // plano 1500c · RC-007
   { chave: "telefone", rotulo: "Telefone / WhatsApp" },
   { chave: "email", rotulo: "E-mail" },
   { chave: "empresa", rotulo: "Empresa" },
@@ -268,9 +385,13 @@ export const DESTINOS_IMPORTACAO = Object.freeze([
 ]);
 
 const SINONIMOS = [
-  ["nome", ["nome", "nome completo", "cliente", "paciente", "contato", "name", "full name", "razao social"]],
-  ["telefone", ["telefone", "celular", "whatsapp", "whats", "fone", "tel", "telefone 1", "celular 1", "phone", "mobile", "numero", "zap"]],
-  ["email", ["email", "e-mail", "e mail", "mail", "correio eletronico"]],
+  // plano 1500c · RC-007/041: primeiro nome e os cabeçalhos de exportação do RD Station, Kommo, Pipedrive, Google e Outlook
+  ["nome", ["nome", "nome completo", "cliente", "paciente", "contato", "name", "full name", "razao social", "first name", "primeiro nome", "given name",
+    "nome do lead", "lead name", "person name", "contact name", "contato principal"]],
+  ["sobrenome", ["sobrenome", "last name", "family name", "surname", "ultimo nome"]],
+  ["telefone", ["telefone", "celular", "whatsapp", "whats", "fone", "tel", "telefone 1", "celular 1", "phone", "mobile", "numero", "zap",
+    "celular do lead", "telefone do lead", "person phone", "mobile phone", "work phone", "telefone celular", "telefone comercial"]],
+  ["email", ["email", "e-mail", "e mail", "mail", "correio eletronico", "email do lead", "e mail do lead", "person email", "work email", "email comercial"]],
   ["empresa", ["empresa", "companhia", "organizacao", "company", "convenio"]],
   ["cidade", ["cidade", "municipio", "city"]],
   ["uf", ["uf", "estado", "state"]],
@@ -280,12 +401,16 @@ const SINONIMOS = [
   ["obs", ["observacao", "observacoes", "obs", "nota", "notas", "anotacao", "comentario", "comentarios"]],
   ["origem", ["origem", "fonte", "canal", "source"]],
   ["etiquetas", ["etiquetas", "etiqueta", "tags", "tag", "marcadores", "grupo"]],
-  ["negocio_titulo", ["titulo", "negocio", "oportunidade", "orcamento", "procedimento", "servico", "tratamento"]],
-  ["negocio_valor", ["valor", "preco", "valor do negocio", "valor previsto", "ticket", "total"]],
-  ["estagio", ["etapa", "estagio", "fase", "status", "situacao"]],
+  ["negocio_titulo", ["titulo", "negocio", "oportunidade", "orcamento", "procedimento", "servico", "tratamento", "deal title", "titulo do negocio",
+    "nome da oportunidade", "nome do negocio"]],
+  ["negocio_valor", ["valor", "preco", "valor do negocio", "valor previsto", "ticket", "total", "deal value", "valor da oportunidade", "valor do lead"]],
+  ["estagio", ["etapa", "estagio", "fase", "status", "situacao", "deal stage", "stage", "etapa do funil", "pipeline stage"]],
 ];
 
-function chaveTexto(s) { return semAcento(s).replace(/[_\-./]+/g, " ").replace(/\s+/g, " ").trim(); }
+// plano 1500c · RC-042: BOM grudado e caracteres invisíveis de formatação (zero-width) não atrapalham o cabeçalho
+function chaveTexto(s) { return semAcento(String(s ?? "").replace(/\p{Cf}/gu, "")).replace(/[_\-./]+/g, " ").replace(/\s+/g, " ").trim(); }
+/** plano 1500c · RC-006: «Phone 1 - Type» / «E-mail 1 - Label» (Google/Outlook) trazem «Mobile», «Home» — não são o número nem o e-mail. */
+const colunaDeTipo = col => /\s-\s*(type|label|tipo|rotulo)\s*$/.test(semAcento(String(col ?? "").replace(/\p{Cf}/gu, "")).trim());
 
 /**
  * sugerirMapeamento(cabecalho, campos?) → lista (uma por coluna) de destino: chave fixa,
@@ -296,7 +421,7 @@ export function sugerirMapeamento(cabecalho, campos = []) {
   const personal = (campos || []).filter(c => c && c.entidade === "contato");
   return (cabecalho || []).map(col => {
     const k = chaveTexto(col);
-    if (!k) return null;
+    if (!k || colunaDeTipo(col)) return null;
     let achou = null;
     for (const [dest, lista] of SINONIMOS) {
       if (usados.has(dest)) continue;
@@ -358,7 +483,7 @@ export function rotulosColunas(cabecalho) {
 export function opcoesUnicas(lista) {
   const vistos = new Set(), opcoes = [];
   for (const x of lista || []) {
-    const t = String(x ?? "").trim();
+    const t = String(x ?? "").trim().replace(/\s+/g, " ");      // plano 1500c · RC-045: «Unimed  Plus» = «Unimed Plus»
     if (!t) continue;
     const n = semAcento(t);
     if (vistos.has(n)) continue;
@@ -392,8 +517,60 @@ export function montarLinhas(linhas, mapa, campos = null) {
       // plano 1000b · RB-249: nascimento legível vai em AAAA-MM-DD já com o século certo («05/03/28» → 1928-03-05); ilegível fica como veio (a prévia avisa)
       if (o[dest] === undefined) o[dest] = dest === "uf" ? ufDaPlanilha(v) : dest === "origem" ? origemDaPlanilha(v) : dest === "nascimento" ? (lerData(v, { passado: true }) || v) : v;
     });
-    return o;
+    return arrumarLinhaPlanilha(o);
   });
+}
+
+/** plano 1500c · RC-046: limite da observação que vai ao servidor (a linha não falha inteira por um texto longo). */
+export const LIMITE_OBS_IMPORTACAO = 2000;
+const RE_EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+/**
+ * plano 1500c · RC-037/039/040: o telefone da célula sem o ramal e, com vários números na mesma célula («12 99999-0000 / 12 98888-1111»),
+ * o primeiro que vale; os outros vão para a observação. → {telefone, extras, ramal}
+ */
+export function telefoneDaCelula(v) {
+  const semRamal = s => String(s).replace(/\s*(?:ramal|ext\.?|r\.)\s*:?\s*\d+.*$/i, "").trim();
+  const txt = String(v ?? "").trim();
+  const ramal = /(?:ramal|ext\.?|r\.)\s*:?\s*\d/i.test(txt);
+  const partes = txt.split(/\s*(?:\/|;|\||,|\bou\b|\se\s)\s*/i)      // plano 1500c · RX-013: «12 99830-3030 e 12 98888-1111» também são dois números.map(semRamal).filter(p => p.replace(/\D/g, "").length >= 8);
+  if (partes.length < 2) return { telefone: semRamal(txt), extras: [], ramal };
+  const i = Math.max(0, partes.findIndex(p => normalizarTelefone(p)));
+  return { telefone: partes[i], extras: partes.filter((_, j) => j !== i), ramal };
+}
+/** plano 1500c · RC-038/039: e-mail sem espaço e em minúsculas; vários na célula → o primeiro válido e os outros para a observação. */
+export function emailDaCelula(v) {
+  // plano 1500c · RX-007: «Ana <ana@x.com>» (copiado do e-mail), «mailto:ana@x.com» e o ponto final da frase («ana@x.com.») viram só o endereço
+  const limpar = p => p.replace(/^mailto:/, "").replace(/^[<("'[]+|[>)"'\]]+$/g, "").replace(/[.,;:!?]+$/, "");
+  const bruto = String(v ?? "").trim().toLowerCase();
+  const partes = bruto.replace(/[^;,<>]*<([^<>\s]+@[^<>\s]+)>/g, " $1 ").split(/[;,\s]+/).map(limpar).filter(Boolean);
+  if (!partes.length) return { email: "", extras: [] };
+  const i = partes.findIndex(p => RE_EMAIL.test(p));
+  if (i < 0) return { email: partes.join(" "), extras: [] };
+  return { email: partes[i], extras: partes.filter((p, j) => j !== i && RE_EMAIL.test(p)) };
+}
+function arrumarLinhaPlanilha(o) {
+  const avisos = [];
+  const obsExtra = [];
+  // plano 1500c · RC-007: «Nome» + «Sobrenome» em colunas separadas viram o nome inteiro
+  if (o.sobrenome !== undefined) { o.nome = [o.nome, o.sobrenome].filter(Boolean).join(" "); delete o.sobrenome; }
+  if (o.telefone) {
+    const t = telefoneDaCelula(o.telefone);
+    o.telefone = t.telefone;
+    if (t.ramal) avisos.push("Ramal ignorado no telefone");
+    if (t.extras.length) { obsExtra.push(`Outros telefones: ${t.extras.join(", ")}`); avisos.push("Mais de um telefone: o 1º entra, os outros vão para a observação"); }
+  }
+  if (o.email) {
+    const e = emailDaCelula(o.email);
+    o.email = e.email;
+    if (e.extras.length) { obsExtra.push(`Outros e-mails: ${e.extras.join(", ")}`); avisos.push("Mais de um e-mail: o 1º entra, os outros vão para a observação"); }
+  }
+  if (obsExtra.length) o.obs = [o.obs, ...obsExtra].filter(Boolean).join(" · ");
+  if (o.obs && [...o.obs].length > LIMITE_OBS_IMPORTACAO) {
+    o.obs = [...o.obs].slice(0, LIMITE_OBS_IMPORTACAO).join("");
+    avisos.push(`Observação cortada em ${LIMITE_OBS_IMPORTACAO.toLocaleString("pt-BR")} caracteres`);
+  }
+  if (avisos.length) Object.defineProperty(o, "_avisos", { value: avisos, enumerable: false });      // não vai ao servidor (não enumerável)
+  return o;
 }
 
 const UF_POR_NOME = Object.freeze({ acre: "AC", alagoas: "AL", amapa: "AP", amazonas: "AM", bahia: "BA", ceara: "CE", "distrito federal": "DF", "espirito santo": "ES",
@@ -409,7 +586,11 @@ export function ufValida(v) {
 export function ufDaPlanilha(v) {
   const t = String(v ?? "").trim();
   if (/^[A-Za-z]{2}$/.test(t)) return t.toUpperCase();
+  // plano 1500c · RC-009: «S.P.», «sp.», «R J» — tirando pontos e espaços sobra a sigla
+  if (/^[A-Za-z.\s]+$/.test(t) && t.replace(/[^A-Za-z]/g, "").length === 2) return t.replace(/[^A-Za-z]/g, "").toUpperCase();
   const n = semAcento(t).replace(/^estado d[eoa]s?\s+/, "").replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
+  // plano 1500c · RX-018: «Estado de SP», «SP - São Paulo», «São Paulo (SP)» → a sigla que aparece no texto, se for UF
+  if (!UF_POR_NOME[n]) { const sig = /(?:^|[^A-Za-z])([A-Za-z]{2})(?:$|[^A-Za-z])/.exec(t.replace(/^estado\s+d[eoa]s?\s+/i, "")); if (sig && ufValida(sig[1]) && (n.length === 2 || /[()\-–]/.test(t) || /^estado/i.test(t))) return sig[1].toUpperCase(); }
   return UF_POR_NOME[n] || t;
 }
 const ORIGEM_POR_TEXTO = Object.freeze({ anuncio: "anuncio", "anuncio pago": "anuncio", trafego: "anuncio", "trafego pago": "anuncio", whatsapp: "whatsapp", whats: "whatsapp",
@@ -430,8 +611,8 @@ export function origemDaPlanilha(v) {
 export const LINHA_VAZIA = "Linha sem nome, telefone e e-mail — será ignorada";
 export const linhaVazia = problemas => Array.isArray(problemas) && problemas.length === 1 && problemas[0] === LINHA_VAZIA;
 /** Problemas de uma linha montada (antes de mandar): [] = ok. Linha sem nome, telefone e e-mail → [LINHA_VAZIA]. */
-export function checarLinha(o, { campos = [] } = {}) {
-  const erros = [];
+export function checarLinha(o, { campos = [], agora = Date.now() } = {}) {
+  const erros = [...((o && o._avisos) || [])];      // plano 1500c · RC-037/039/040/046: o que a montagem ajustou (ramal, telefones/e-mails a mais, observação cortada)
   // plano 1000 (CR-232): campo personalizado com valor que o tipo não aceita («x» fora das opções, data inválida) avisa na prévia, linha a linha
   for (const [chave, v] of Object.entries((o && o.campos) || {})) {
     const def = (campos || []).find(c => c && c.chave === chave);
@@ -441,14 +622,14 @@ export function checarLinha(o, { campos = [] } = {}) {
   if (!o.nome && !o.telefone && !o.email) return [LINHA_VAZIA];
   // C7: número de outro país digitado sem o «+» não vira número brasileiro — a linha entra sem telefone e a pessoa sabe como corrigir
   if (o.telefone && !normalizarTelefone(o.telefone)) erros.push(telefoneSemPais(o.telefone) ? "Telefone sem DDD brasileiro: se for de fora do Brasil, escreva com +código do país" : "Telefone inválido");
-  if (o.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(o.email)) erros.push("E-mail inválido");
+  if (o.email && !RE_EMAIL.test(String(o.email).trim().toLowerCase())) erros.push("E-mail inválido");      // plano 1500c · RC-038: « Ana@X.com » vale
   // plano 1000b · RB-074: «XX» tem 2 letras mas não é estado — confere contra as 27 UFs
   if (o.uf && !ufValida(o.uf)) erros.push(/^[A-Za-z]{2}$/.test(String(o.uf).trim()) ? "UF não existe: use a sigla do estado (SP, RJ…)" : "UF deve ter 2 letras");
   if (o.nascimento) {
     // plano 1000b · RB-249: nascimento no futuro é recusado na prévia (e «05/03/28» é 1928, não 2028)
-    const nasc = lerData(o.nascimento, { passado: true });
+    const nasc = lerData(o.nascimento, { passado: true, agora: new Date(agora) });
     if (!nasc) erros.push("Nascimento: use DD/MM/AAAA");
-    else if (nasc > new Date().toISOString().slice(0, 10)) erros.push("Nascimento no futuro: confira a data");
+    else if (nasc > fmtDiaSP.format(new Date(agora))) erros.push("Nascimento no futuro: confira a data");      // plano 1500c · RC-005: o dia de São Paulo, não o UTC
   }
   if (o.negocio_valor && lerNumero(o.negocio_valor) === null) erros.push("Valor inválido");
   else if (o.negocio_valor && lerNumero(o.negocio_valor) < 0) erros.push("Valor não pode ser negativo");      // plano 1000b · RB-075
@@ -470,15 +651,23 @@ export function metadeLote(n) { return Math.max(10, Math.floor(n / 2)); }
 export function lerNumero(s) {
   if (s === null || s === undefined || s === "") return null;
   if (typeof s === "number") return Number.isFinite(s) ? s : null;
-  let t = String(s).replace(/[R$\s ]/g, "");
+  let t = String(s).replace(/[R$\s ]/g, "").replace(/^[−–]/, "-");      // plano 1500c · RX-015: o sinal de menos tipográfico («−150», do Word/Excel) é negativo
   if (!t) return null;
+  // plano 1500c · RC-003: negativo contábil «(1.500,00)» (planilha de sistema financeiro) = −1500
+  let negativo = false;
+  const par = /^\((.*)\)$/.exec(t);
+  if (par) { negativo = true; t = par[1]; }
   // plano 1000 (CR-114): com vírgula E ponto, o separador decimal é o ÚLTIMO dos dois — «1.234,56» (Brasil) e «1,234.56» (planilha em inglês) = 1234,56
   const ultVirgula = t.lastIndexOf(","), ultPonto = t.lastIndexOf(".");
   if (ultVirgula >= 0 && ultPonto >= 0) t = ultVirgula > ultPonto ? t.replace(/\./g, "").replace(",", ".") : t.replace(/,/g, "");
-  else if (ultVirgula >= 0) t = /^-?\d{1,3}(,\d{3}){2,}$/.test(t) ? t.replace(/,/g, "") : t.replace(",", ".");
-  else if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, "");
+  // plano 1500c · RC-001: grupo de milhar nunca começa com «0» sozinho — «0.500» é meio real, não 500
+  else if (ultVirgula >= 0) t = /^-?[1-9]\d{0,2}(,\d{3}){2,}$/.test(t) ? t.replace(/,/g, "") : t.replace(",", ".");
+  else if (/^-?[1-9]\d{0,2}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, "");
+  // plano 1500c · RC-002: só dígitos com um separador decimal — «1e5», «0x10», «Infinity» e «12,5%» não são dinheiro
+  if (!/^[-+]?\d+(\.\d+)?$/.test(t)) return null;
   const n = Number(t);
-  return Number.isFinite(n) ? n : null;
+  if (!Number.isFinite(n)) return null;
+  return negativo ? -Math.abs(n) : n;
 }
 
 /** O texto de um campo de dinheiro tem algo escrito que NÃO vira número («abc»)? Vazio não é inválido: é «sem valor». */
@@ -494,15 +683,19 @@ export function dinheiroInvalido(s) {
 export function lerData(s, { passado = false, agora = new Date() } = {}) {
   const t = String(s ?? "").trim();
   let a, m, d;
-  let r = /^(\d{4})-(\d{2})-(\d{2})/.exec(t);
-  if (r) { a = +r[1]; m = +r[2]; d = +r[3]; }
-  else if ((r = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})$/.exec(t))) {
+  // plano 1500c · RX-008: também «2026/10/21» (planilha exportada de sistema) e «21/10/2026 14:30» (data com hora) — a hora é ignorada
+  let r = /^(\d{4})([-/])(\d{1,2})\2(\d{1,2})(?:[T\s].*)?$/.exec(t);       // plano 1500c · RC-004: depois da data só hora — «1990-12-31abc» não é data
+  if (r) { a = +r[1]; m = +r[3]; d = +r[4]; }
+  else if ((r = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})(?:,?\s+\d{1,2}:\d{2}(?::\d{2})?h?)?$/.exec(t))) {
     d = +r[1]; m = +r[2]; a = +r[3];
     // plano 1000b · RB-249: data que só pode estar no passado (nascimento): ano de 2 dígitos acima do ano atual é do século passado («05/03/28» → 1928)
     if (r[3].length === 2) a += passado ? (a > new Date(agora).getUTCFullYear() % 100 ? 1900 : 2000) : (a >= 30 ? 1900 : 2000);
-  } else if (/^\d{5}$/.test(t) && +t > 20000 && +t < 80000) {
+  } else if (/^\d{5}$/.test(t) && (passado ? +t >= 10000 : (+t > 20000 && +t < 80000))) {
     const dt = new Date(Date.UTC(1899, 11, 30) + Number(t) * 86400000);     // série do Excel: dias desde 30/12/1899
-    return dt.toISOString().slice(0, 10);
+    const iso = dt.toISOString().slice(0, 10);
+    // plano 1500c · RC-012: data que só pode estar no passado (nascimento) aceita a série de 1900 até hoje — fora disso não é data
+    if (passado && (iso < "1900-01-01" || iso > fmtDiaSP.format(new Date(agora)))) return null;
+    return iso;
   } else return null;
   const dt = new Date(Date.UTC(a, m - 1, d));
   if (dt.getUTCFullYear() !== a || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
@@ -642,7 +835,10 @@ export function alvoDoPonto(alvos, x, y) {
 export function descricaoOrigem(c) {
   if (!c || typeof c !== "object") return "";
   const rastreio = c.rastreio && typeof c.rastreio === "object" ? c.rastreio : {};
-  const plataforma = c.plataforma === "google" ? "Google Ads" : c.plataforma === "meta" ? "Meta Ads" : c.plataforma ? "Anúncio" : null;
+  // plano 1500c · RC-033: «Anúncio · Instagram» / «Anúncio · Facebook» em vez de «Anúncio» genérico
+  const NOME_PLAT = { instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok", youtube: "YouTube", linkedin: "LinkedIn" };
+  const plataforma = c.plataforma === "google" ? "Google Ads" : c.plataforma === "meta" ? "Meta Ads"
+    : c.plataforma ? `Anúncio · ${NOME_PLAT[String(c.plataforma).toLowerCase()] || String(c.plataforma)}` : null;
   const campanha = c.campanha_nome || c.campanha || c.campanha_ext || rastreio.utm_campaign;
   const anuncio = c.anuncio_nome || c.anuncio_ext || rastreio.utm_content;
   const origem = !plataforma && c.origem ? (ROTULO_ORIGEM[c.origem] || c.origem) : null;
@@ -787,6 +983,12 @@ export function textoMotivoPerda(nome, texto) {
 /** O compromisso da vertical: consulta (clínica), visita (oficina), entrega (loja). */
 export function nomeCompromisso(vertical) {
   return { odonto: "consulta", oficina: "visita", loja: "entrega" }[vertical] || "consulta";
+}
+/** plano 1500c · RC-014/017/051: o compromisso em minúsculas a partir do vocab (ou «consulta» sem vocab). */
+export function palavraCompromisso(vocab) {
+  if (!vocab) return "consulta";
+  if (vocab.compromisso) return String(vocab.compromisso).toLowerCase();
+  return nomeCompromisso(vocab.vertical);
 }
 
 /** O que a tela aplica ao cartão/negócio ANTES de o servidor gravar: status do destino, valor final (ganho) e a data da consulta (agendada). */
@@ -933,6 +1135,12 @@ export function pontuacao(x) {
 /** Quando a pontuação foi atribuída, para a tela: «2026-10-01T14:03» (hora de São Paulo, como o servidor grava) → «01/10/2026 às 14:03». Outro formato volta como veio. */
 export function quandoPontuacao(em) {
   const t = String(em ?? "").trim();
+  // plano 1500c · RC-034: ISO com Z/deslocamento é um instante — mostra na hora de São Paulo (antes: a hora UTC, «00h» do dia seguinte)
+  if (/[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/.test(t) && Number.isFinite(Date.parse(t))) {
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
+      .formatToParts(new Date(t)).map(x => [x.type, x.value]));
+    return `${p.day}/${p.month}/${p.year} às ${String(p.hour).replace(/^24$/, "00")}:${p.minute}`;
+  }
   const r = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(t);
   if (!r) return t;
   return `${r[3]}/${r[2]}/${r[1]}${r[4] ? ` às ${r[4]}:${r[5]}` : ""}`;
@@ -973,6 +1181,20 @@ export function ganhosDoQuadro(colunas, estagios) {
 }
 function round2(n) { return Math.round(n * 100) / 100; }
 
+/**
+ * plano 1500c · RC-333: depois da recarga, os movimentos ainda não confirmados voltam ao destino (a tela não «pula»).
+ * Pendente cujo cartão não veio na recarga (outra pessoa excluiu/moveu de funil) é deixado de fora — nunca recria o cartão.
+ * → {colunas, sumidos:[ids]}
+ */
+export function reaplicarPendentes(colunas, pendentes) {
+  let cols = colunas;
+  const sumidos = [];
+  for (const mov of pendentes || []) {
+    if (!mov || !(cols || []).some(c => (c.itens || []).some(x => x.id === mov.id))) { if (mov) sumidos.push(mov.id); continue; }
+    cols = moverLocal(cols, mov.id, mov.estagioId, mov.pos, mov.ordem, mov.patch);
+  }
+  return { colunas: cols, sumidos };
+}
 /**
  * Move um cartão entre colunas em memória (otimista), ajustando total e somas das duas colunas.
  * colunas: [{estagio_id, total, soma_previsto, soma_valor, itens:[Card]}]. Devolve NOVAS colunas.
@@ -1020,6 +1242,31 @@ export function filtroVazio(f) {
    As visões ficam neste navegador e são isoladas por empresa, usuário e tela. Não são
    sincronizadas para outras pessoas e nunca substituem os filtros enviados ao servidor. */
 const LIMITE_VISOES_CRM = 12;
+export { LIMITE_VISOES_CRM };      // plano 1500c · RC-145: o modal de salvar diz «N de 12 usados»
+/** plano 1500c · RC-139: renomeia um filtro salvo sem mexer nos dados dele → o mesmo formato de salvarVisaoCRM. */
+export function renomearVisaoCRM(visoes, tela, id, nome, o = {}) {
+  const item = normalizarVisoesCRM(visoes, tela).find(v => v.id === id);
+  if (!item) return { ok: false, codigo: "nao_encontrada", visoes: normalizarVisoesCRM(visoes, tela) };
+  return salvarVisaoCRM(visoes, tela, { id, nome, dados: item.dados }, o);
+}
+/** plano 1500c · RC-138: devolve um filtro salvo excluído à MESMA posição (o «Desfazer»). */
+export function reporVisaoCRM(visoes, tela, item, posicao) {
+  const atuais = normalizarVisoesCRM(visoes, tela).filter(v => v.id !== (item && item.id));
+  if (!item) return atuais;
+  const i = Math.max(0, Math.min(Number.isInteger(posicao) ? posicao : atuais.length, atuais.length));
+  return normalizarVisoesCRM([...atuais.slice(0, i), item, ...atuais.slice(i)], tela);
+}
+/** plano 1500c · RC-143: o exemplo do valor do filtro de campo pelo tipo. */
+export function exemploValorFiltro(tipo) {
+  return { moeda: "Ex.: 1.500,00", numero: "Ex.: 10", telefone: "Ex.: 12 99999-0000", email: "Ex.: ana@", url: "Ex.: site.com" }[tipo] || "Valor";
+}
+/** plano 1500c · RC-142: valor de filtro de campo data — aceita o formato antigo «31/12/2026» e devolve AAAA-MM-DD (ou "" se não for data). */
+export function dataParaFiltro(v) {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return lerData(s) || "";
+}
 const ORIGENS_VISAO = new Set(["anuncio", "whatsapp", "indicacao", "organico", "manual", "site", "importacao"]);
 const ORDEM_VISAO_CONTATOS = new Set(["recentes", "nome", "ultimo_contato"]);
 const idVisaoSeguro = v => (typeof v === "number" && Number.isSafeInteger(v) && v > 0)   // nx_empresas.id é bigint
@@ -1039,17 +1286,20 @@ function filtroDaVisao(f, tela) {
   // plano 1000b · RB-234: a busca digitada (nome/telefone do paciente) NUNCA vai para a visão guardada no aparelho (regra do CR-024)
   if (f.dono === "eu" || f.dono === "sem" || idVisaoSeguro(f.dono)) o.dono = f.dono;
   if (f.etiquetas && typeof f.etiquetas === "object") {
-    const ids = Array.isArray(f.etiquetas.ids) ? [...new Set(f.etiquetas.ids.filter(idVisaoSeguro))].slice(0, 30) : [];
+    // plano 1500c · RC-030: ids em ordem fixa — marcar Retorno e depois Urgência casa com a visão Urgência+Retorno
+    const ids = Array.isArray(f.etiquetas.ids) ? [...new Set(f.etiquetas.ids.filter(idVisaoSeguro))].slice(0, 30).sort((x, y) => String(x).localeCompare(String(y), "en", { numeric: true })) : [];
     if (ids.length) o.etiquetas = { op: ["alguma", "todas", "nenhuma"].includes(f.etiquetas.op) ? f.etiquetas.op : "alguma", ids };
   }
   if (Array.isArray(f.origem)) {
-    const origem = [...new Set(f.origem.filter(x => ORIGENS_VISAO.has(x)))];
+    const origem = [...new Set(f.origem.filter(x => ORIGENS_VISAO.has(x)))].sort();      // plano 1500c · RC-030
     if (origem.length) o.origem = origem;
   }
   if (tela === "kanban") {
     for (const k of ["valor_min", "valor_max"]) if (f[k] !== "" && f[k] != null && Number.isFinite(Number(f[k])) && Number(f[k]) >= 0) o[k] = Number(f[k]);
     if (o.valor_min != null && o.valor_max != null && o.valor_min > o.valor_max) { delete o.valor_min; delete o.valor_max; }
-    if ([3, 7, 15, 30].includes(Number(f.parado_dias))) o.parado_dias = Number(f.parado_dias);
+    if (o.valor_min === 0) delete o.valor_min;      // plano 1500c · RC-059/273: mínimo zero não filtra nada
+    // plano 1500c · RC-324: ciclos longos (60/90 dias)
+    if ([3, 7, 15, 30, 60, 90].includes(Number(f.parado_dias))) o.parado_dias = Number(f.parado_dias);
     if (dataISOVisao(f.criado_de)) o.criado_de = f.criado_de;
     if (dataISOVisao(f.criado_ate)) o.criado_ate = f.criado_ate;
   } else {
@@ -1083,7 +1333,7 @@ export function normalizarVisoesCRM(valor, tela) {
   const saida = [], ids = new Set(), nomes = new Set();
   for (const item of valor.slice(0, 100)) {
     if (!item || !idVisaoSeguro(item.id) || ids.has(item.id)) continue;
-    const nome = typeof item.nome === "string" ? item.nome.trim().slice(0, 32) : "";
+    const nome = typeof item.nome === "string" ? item.nome.trim().replace(/\s+/g, " ").slice(0, 32) : "";      // plano 1500c · RC-047
     const chaveNome = semAcento(nome);
     const dados = dadosDaVisao(item.dados, tela);
     if (!nome || !chaveNome || nomes.has(chaveNome) || !dados) continue;
@@ -1095,11 +1345,35 @@ export function normalizarVisoesCRM(valor, tela) {
 }
 
 /** Valida título antes de gravar; duplicidade ignora acentos e maiúsculas. */
+/**
+ * plano 1500c · RC-327: «Copiar link com estes filtros» — o filtro do quadro (já limpo por filtroDaVisao: sem a busca digitada, só ids e datas)
+ * vira um texto base64url para o ?f= da rota. → "" quando não há filtro.
+ */
+export function filtroParaLink(filtro) {
+  const f = filtroDaVisao(filtro, "kanban");
+  if (!Object.keys(f).length) return "";
+  const bytes = new TextEncoder().encode(JSON.stringify(f));
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+/** plano 1500c · RC-327: o ?f= do link → filtro do quadro (passado de novo por filtroDaVisao); texto estranho → null. */
+export function filtroDoLink(texto) {
+  if (typeof texto !== "string" || !texto || texto.length > 4000 || !/^[A-Za-z0-9_-]+$/.test(texto)) return null;
+  try {
+    const b64 = texto.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((texto.length + 3) % 4);
+    const bin = atob(b64);
+    const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+    const f = filtroDaVisao(JSON.parse(new TextDecoder().decode(bytes)), "kanban");
+    return Object.keys(f).length ? f : null;
+  } catch { return null; }
+}
 export function validarNomeVisaoCRM(nome, visoes = [], ignorarId = null) {
   const limpo = String(nome ?? "").trim().replace(/\s+/g, " ");
   if (limpo.length < 2 || limpo.length > 32) return { ok: false, codigo: "nome_invalido" };
   const chave = semAcento(limpo);
-  if (visoes.some(v => v.id !== ignorarId && semAcento(v.nome) === chave)) return { ok: false, codigo: "nome_duplicado" };
+  // plano 1500c · RC-047: o nome guardado também com espaços juntados («Retorno  semana» = «Retorno semana»)
+  if (visoes.some(v => v.id !== ignorarId && semAcento(String(v.nome || "").trim().replace(/\s+/g, " ")) === chave)) return { ok: false, codigo: "nome_duplicado" };
   return { ok: true, nome: limpo };
 }
 
@@ -1171,7 +1445,8 @@ export function filtrar(cards, filtro = {}, { eu } = {}) {
         const k = telChave(normalizarTelefone(dig)) || dig;
         if (!tel.includes(dig) && !tel.includes(k)) return false;
       } else {
-        const alvo = semAcento([c.titulo, c.nome, c.servico, c.contato && c.contato.nome].filter(Boolean).join(" "));
+        // plano 1500c · RC-079: também o e-mail do contato e o nome da empresa (o servidor precisa da mesma regra em nx_negocios_kanban)
+        const alvo = semAcento([c.titulo, c.nome, c.servico, c.contato && c.contato.nome, c.email, c.contato && c.contato.email, c.empresa_nome, c.contato && c.contato.empresa_nome].filter(Boolean).join(" "));
         if (!alvo.includes(qn)) return false;
       }
     }
@@ -1251,8 +1526,9 @@ export function validarCampo(campo, valor) {
       return lista.every(x => opcaoOficial(c.opcoes, x) !== null) ? null : "Escolha entre as opções.";
     }
     case "sim_nao": return lerSimNao(s) !== null ? null : "Escolha sim ou não.";      // plano 1000b · RB-067: «Sim», «NÃO», «s», «N», 1/0
-    case "texto": return String(s).length > 500 ? "Máximo de 500 caracteres." : null;
-    case "texto_longo": return String(s).length > 5000 ? "Máximo de 5.000 caracteres." : null;
+    // plano 1500c · RC-031: conta caracteres (code points) como o servidor — emoji conta 1
+    case "texto": return [...String(s)].length > 500 ? "Máximo de 500 caracteres." : null;
+    case "texto_longo": return [...String(s)].length > 5000 ? "Máximo de 5.000 caracteres." : null;
     default: return null;
   }
 }
@@ -1265,8 +1541,9 @@ export function lerSimNao(v) {
   if (v === true || v === false) return v;
   if (v === 1 || v === 0) return v === 1;
   const t = semAcento(v).trim();
-  if (["sim", "s", "true", "1", "verdadeiro"].includes(t)) return true;
-  if (["nao", "n", "false", "0", "falso"].includes(t)) return false;
+  // plano 1500c · RX-017: planilha em inglês («Yes», «Y», «No») e o «x» de marcar coluna
+  if (["sim", "s", "true", "1", "verdadeiro", "yes", "y", "x", "ok"].includes(t)) return true;
+  if (["nao", "n", "false", "0", "falso", "no"].includes(t)) return false;
   return null;
 }
 
@@ -1385,7 +1662,7 @@ export function aniversario(nascimento, hojeIso, janela = 7) {
   const dias = Math.round((quando - hoje) / 86400000);
   const idade = ano - n[0];
   if (dias > janela || idade <= 0) return null;
-  const texto = dias === 0 ? `Faz ${idade} ${idade === 1 ? "ano" : "anos"} hoje` : dias === 1 ? `Aniversário amanhã (${idade} anos)` : `Aniversário em ${dias} dias (${idade} anos)`;
+  const texto = dias === 0 ? `Faz ${idade} ${idade === 1 ? "ano" : "anos"} hoje` : dias === 1 ? `Aniversário amanhã (${idade} ${idade === 1 ? "ano" : "anos"})` : `Aniversário em ${dias} dias (${idade} ${idade === 1 ? "ano" : "anos"})`;      // plano 1500c · RX-004: «(1 ano)»
   return { dias, idade, texto };
 }
 
@@ -1393,6 +1670,9 @@ export function aniversario(nascimento, hojeIso, janela = 7) {
 export function formatarTel(digitos) {
   let d = String(digitos ?? "").replace(/\D/g, "");
   if (!d) return "";
+  // plano 1500c · RC-013: 8–9 dígitos = número sem DDD — «9 9830-3030», não «+998303030» (parecia de outro país)
+  if (d.length === 8) return `${d.slice(0, 4)}-${d.slice(4)}`;
+  if (d.length === 9) return `${d.slice(0, 1)} ${d.slice(1, 5)}-${d.slice(5)}`;
   const br = d.length >= 12 && d.length <= 13 && d.startsWith("55");
   if (br) d = d.slice(2);
   // plano 1000 (CR-264): 10–11 dígitos SEM o 55 que não formam um número brasileiro são de outro país — «+1 2125551234», como na importação
@@ -1442,6 +1722,9 @@ const DICAS_FUNIL = {
   etapa_repetida: "Há duas etapas com o mesmo nome.",
   etapas: "O funil precisa ter de 1 a 25 etapas.",
   cor: "Cor inválida.", probabilidade: "Probabilidade entre 0 e 100%.", sla: "O prazo vai de 1 hora a 90 dias (2.160 horas).",
+  // plano 1500c · RC-018/019/044
+  cor_etapa: "Cor da etapa inválida: escolha outra cor.", sla_zero: "Prazo: use 1 ou mais (ou deixe vazio para não ter prazo).",
+  chance_decrescente: "A chance desta etapa é menor que a da etapa aberta anterior — a previsão do funil fica incoerente.",
   padrao_sem_ads: "O funil padrão recebe as conversas do WhatsApp e precisa contar nos anúncios.",
   padrao_inativo: "O funil padrão não pode ficar desativado.",
   precisa_padrao: "Escolha outro funil como padrão antes de tirar este.",
@@ -1493,7 +1776,7 @@ export function textoErro(e, { campos = [], padrao, vocab } = {}) {
   const t = termosNegocio(vocab);
   if (c === "campo_obrigatorio") {
     const cp = (campos || []).find(x => x.chave === hint);
-    return `Preencha o campo "${cp ? cp.rotulo : hint || "obrigatório"}" antes de continuar.`;
+    return `Preencha o campo «${cp ? cp.rotulo : hint || "obrigatório"}» antes de continuar.`;      // plano 1500c · RC-016: aspas do app
   }
   if (c === "dados_invalidos" && DICAS_DADOS[hint]) return DICAS_DADOS[hint];
   if (c === "motivo_obrigatorio") return `Escolha o motivo da perda${hint === "texto" ? " e escreva a justificativa" : ""}.`;
@@ -1552,13 +1835,21 @@ export function textoTempo(it, { nomes = {}, vocab, brl = v => `R$ ${v}`, motivo
     case "conversa_aberta": return `Atendimento ${d.protocolo || ""} aberto`.replace(/\s+/g, " ").trim();
     case "conversa_resolvida": return `Atendimento ${d.protocolo || ""} resolvido`.replace(/\s+/g, " ").trim();
     case "atribuida": return d.para ? `Conversa atribuída a ${nomeDe(d.para)}` : "Conversa ficou sem responsável";
-    case "etiqueta": return "Etiquetas alteradas";
+    case "etiqueta": {
+      // plano 1500c · RC-015: diz quais etiquetas entraram e saíram quando o servidor manda
+      const lst = x => (Array.isArray(x) ? x.map(e => (e && typeof e === "object" ? e.nome : e)).filter(Boolean) : []);
+      const mais = lst(d.adicionadas), menos = lst(d.removidas);
+      const partes = [...mais.map(n => `+ ${n}`), ...menos.map(n => `− ${n}`)];
+      return partes.length ? `Etiquetas: ${partes.join(", ")}` : "Etiquetas alteradas";
+    }
     case "importado": return "Veio da importação de planilha";
     case "automacao": return `Automação${d.nome ? ` «${d.nome}»` : ""} executada`;
     case "contato_mesclado": return "Cadastros duplicados foram unidos";
     // plano 100 · C6: nx_agenda_presenca grava {presenca, consulta_em, estagio_id}
-    case "presenca": return d.presenca === "faltou" ? "Faltou à consulta" : d.presenca === "compareceu" ? "Compareceu à consulta" : "Presença da consulta limpa";
-    default: return String(it.tipo || "Registro").replace(/_/g, " ");
+    // plano 1500c · RC-014: a palavra do compromisso da vertical (consulta · visita · entrega)
+    case "presenca": { const cp = palavraCompromisso(vocab); return d.presenca === "faltou" ? `Faltou à ${cp}` : d.presenca === "compareceu" ? `Compareceu à ${cp}` : `Presença da ${cp} limpa`; }
+    // plano 1500c · RC-015: tipo que a tela não conhece não aparece cru («stage x»)
+    default: return "Atualização";
   }
 }
 
@@ -1611,10 +1902,11 @@ export function textoChipEtiquetas(op, nomes) {
  * vazio das etiquetas (a oficina não vê «Implante superior» nem «dentista responsável»). Vertical desconhecida → genérico.
  */
 const EXEMPLOS_VERTICAL = Object.freeze({
-  odonto: { titulo: "Implante superior", campos: "dentista responsável, dentes", campo: "Dentista responsável", etiquetas: "Implante, Urgência" },
-  oficina: { titulo: "Troca de embreagem", campos: "placa, quilometragem", campo: "Placa do veículo", etiquetas: "Revisão, Urgente" },
-  loja: { titulo: "Kit presente", campos: "tamanho, forma de entrega", campo: "Tamanho", etiquetas: "Presente, Atacado" },
-  generico: { titulo: "Proposta mensal", campos: "prazo de entrega, plano escolhido", campo: "Plano escolhido", etiquetas: "Prioridade, Retorno" },
+  // plano 1500c · RC-160: camposContato/campoContato — os exemplos dos campos de CONTATO também são da vertical (antes «convênio» para todos)
+  odonto: { titulo: "Implante superior", campos: "dentista responsável, dentes", campo: "Dentista responsável", etiquetas: "Implante, Urgência", camposContato: "convênio, como conheceu, preferência de horário", campoContato: "Convênio" },
+  oficina: { titulo: "Troca de embreagem", campos: "placa, quilometragem", campo: "Placa do veículo", etiquetas: "Revisão, Urgente", camposContato: "placa, modelo do carro, ano", campoContato: "Modelo do carro" },
+  loja: { titulo: "Kit presente", campos: "tamanho, forma de entrega", campo: "Tamanho", etiquetas: "Presente, Atacado", camposContato: "tamanho, preferência de contato, aniversário do cliente", campoContato: "Tamanho" },
+  generico: { titulo: "Proposta mensal", campos: "prazo de entrega, plano escolhido", campo: "Plano escolhido", etiquetas: "Prioridade, Retorno", camposContato: "como conheceu, cargo, preferência de horário", campoContato: "Como conheceu" },
 });
 export function exemplosVertical(vertical) { return EXEMPLOS_VERTICAL[vertical] || EXEMPLOS_VERTICAL.generico; }
 export function exemploTituloNegocio(vertical) { return exemplosVertical(vertical).titulo; }
@@ -1723,6 +2015,7 @@ export function validarFunil(f, { outros = [] } = {}) {
   const nomes = new Set();
   const cont = { aberto: 0, ganho: 0, perdido: 0 };
   const marcos = new Set();
+  let ultimaChance = null;
   est.forEach((e, i) => {
     const nome = String(e.nome || "").trim();
     if (!nome) add(i, "nome", "etapa_nome");
@@ -1741,7 +2034,16 @@ export function validarFunil(f, { outros = [] } = {}) {
     }
     if (e.sla_horas !== null && e.sla_horas !== undefined && e.sla_horas !== "") {
       const s = Number(e.sla_horas);
-      if (!Number.isInteger(s) || s < 1 || s > 2160) add(i, "sla_horas", "sla");
+      if (Number.isFinite(s) && s <= 0) add(i, "sla_horas", "sla_zero");       // plano 1500c · RC-044: «0» não é «sem prazo»
+      else if (!Number.isInteger(s) || s < 1 || s > 2160) add(i, "sla_horas", "sla");
+    }
+    // plano 1500c · RC-018: cor fora de #rrggbb (cópia antiga, valor do banco) deixava a etapa sem cor no quadro
+    if (e.cor !== null && e.cor !== undefined && e.cor !== "" && !/^#[0-9a-f]{6}$/i.test(String(e.cor))) add(i, "cor", "cor_etapa");
+    // plano 1500c · RC-019: chance de uma etapa aberta menor que a da aberta anterior — só aviso (nivel «aviso» não bloqueia salvar)
+    if (tipo === "aberto" && e.marco !== "faltou" && e.probabilidade !== null && e.probabilidade !== undefined && e.probabilidade !== "") {
+      const p = Number(e.probabilidade);
+      if (Number.isFinite(p) && ultimaChance !== null && p < ultimaChance) erros.push({ indice: i, campo: "probabilidade", hint: "chance_decrescente", nivel: "aviso", texto: DICAS_FUNIL.chance_decrescente });
+      if (Number.isFinite(p)) ultimaChance = p;
     }
   });
   if (est.length && (!cont.aberto || !cont.ganho || !cont.perdido)) add(null, "estagios", "tipos");
@@ -1767,9 +2069,19 @@ export function marcosFaltando(f, etapas) {
   return faltam;
 }
 /** Frase do aviso inline: «Ganho/Perdido/Faltou sem etapa: a automação não vai conseguir mover …». "" quando não falta nada. */
-export function textoMarcosFaltando(lista) {
-  const l = Array.isArray(lista) ? lista : [];
+export function textoMarcosFaltando(lista, { vocab = null } = {}) {
+  let l = Array.isArray(lista) ? lista : [];
   if (!l.length) return "";
+  // plano 1500c · RC-017: na oficina é «Aprovado/Recusado» e «visita»; na loja «Vendido/Não comprou» e «entrega»
+  if (vocab) {
+    const g = vocab.ganhar || "Ganho", p = vocab.perder || "Perdido", cp = palavraCompromisso(vocab);
+    const neg = typeof vocab.min === "function" ? vocab.min("negocio") : "negócio";
+    const novo = { fechou: { rotulo: g, efeito: `a automação não vai conseguir mover para «${g}»` },
+      nao_fechou: { rotulo: p, efeito: `a automação não vai conseguir mover para «${p}»` },
+      faltou: { rotulo: "Faltou", efeito: `a presença «Faltou» da ${cp} não vai mover ${vocab.art && vocab.art("negocio") === "a" ? "a" : "o"} ${neg}` },
+      agendada: { rotulo: "Agendou", efeito: `marcar a ${cp} não vai mudar a etapa` } };
+    l = l.map(x => ({ ...x, ...(novo[x.marco] || {}) }));
+  }
   return `${l.map(x => x.rotulo).join("/")} sem etapa: ${l.map(x => x.efeito).join("; ")}. Dê o marco a uma etapa para a automação, a agenda e a presença saberem para onde mover.`;
 }
 
@@ -1876,6 +2188,18 @@ export function textoResumoImportacao(s) {
 
 /** Decodifica o arquivo: UTF-8; se aparecer o caractere de substituição (planilha salva em ANSI), tenta Windows-1252. */
 export function decodificarArquivo(bytes, Decodificador = globalThis.TextDecoder) {
+  // plano 1500c · RC-010: «Texto Unicode» do Excel = UTF-16 com BOM (FF FE / FE FF) ou sem BOM com zeros alternados
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes && bytes.buffer ? bytes.buffer : bytes || []);
+  let utf16 = b.length >= 2 && b[0] === 0xff && b[1] === 0xfe ? "utf-16le" : b.length >= 2 && b[0] === 0xfe && b[1] === 0xff ? "utf-16be" : null;
+  if (!utf16 && b.length >= 8) {
+    let par = 0, impar = 0;
+    const n = Math.min(b.length, 400);
+    for (let i = 0; i < n; i++) if (b[i] === 0) { if (i % 2) impar++; else par++; }
+    if (impar > n * 0.3 && par === 0) utf16 = "utf-16le"; else if (par > n * 0.3 && impar === 0) utf16 = "utf-16be";
+  }
+  if (utf16) {
+    try { return { texto: new Decodificador(utf16).decode(b).replace(/^﻿/, ""), codificacao: utf16 }; } catch { /* segue para UTF-8 */ }
+  }
   const utf = new Decodificador("utf-8").decode(bytes);
   if (!utf.includes("�")) return { texto: utf, codificacao: "utf-8" };
   // plano 1000b · RB-248: um «�» solto num arquivo UTF-8 de verdade (cheio de acentos que decodificaram bem) não troca tudo para 1252.
@@ -1905,15 +2229,24 @@ export function dataCurtaCSV(v) {
 export function linhasExportacao(itens, campos = []) {
   const extras = (campos || []).filter(c => c && c.entidade === "contato" && c.ativo !== false)
     .sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+  // plano 1500c · RC-020: «Último contato» e «Total ganho» entram quando nx_contatos_exportar devolver os campos (servidor antigo: colunas fora)
+  const temUltimo = (itens || []).some(k => k && k.ultimo_contato_em !== undefined);
+  const temTotal = (itens || []).some(k => k && k.total_ganho !== undefined);
   const cabecalho = ["Nome", "Telefone", "E-mail", "Empresa", "Cidade", "UF", "Nascimento", "CPF/CNPJ", "Origem", "Etiquetas",
-    "Responsável", "Aceita marketing", "Cadastrado em", "Observação", ...extras.map(c => c.rotulo)];
+    "Responsável", "Aceita marketing", "Cadastrado em", "Observação", ...(temUltimo ? ["Último contato"] : []), ...(temTotal ? ["Total ganho"] : []), ...extras.map(c => c.rotulo)];
+  // plano 1500c · RC-048: moeda com 2 casas e vírgula decimal, sem milhar (o Excel soma); número com até 2 casas
+  const numeroCSV = (v, moeda) => {
+    const n = typeof v === "number" ? v : lerNumero(v);
+    if (n === null || !Number.isFinite(n)) return String(v);
+    return (moeda ? n.toFixed(2) : String(Math.round(n * 100) / 100)).replace(".", ",");
+  };
   const valorCampo = (c, v) => {
     if (v === null || v === undefined || v === "") return "";
     if (Array.isArray(v)) return v.join("; ");
     if (typeof v === "boolean") return v ? "Sim" : "Não";
     if (c.tipo === "data") return dataCurtaCSV(v);
     if (c.tipo === "telefone") return formatarTel(v);
-    if (c.tipo === "moeda" || c.tipo === "numero") return String(v).replace(".", ",");
+    if (c.tipo === "moeda" || c.tipo === "numero") return numeroCSV(v, c.tipo === "moeda");
     return String(v);
   };
   const linhas = (itens || []).map(k => [
@@ -1921,12 +2254,301 @@ export function linhasExportacao(itens, campos = []) {
     dataCurtaCSV(k.nascimento), k.documento || "", ROTULO_ORIGEM[k.origem] || k.origem || "",
     (k.etiquetas_nomes || []).join("; "), k.dono_nome || "",
     k.optin_marketing === true ? "Sim" : k.optin_marketing === false ? "Não" : "", dataCurtaCSV(k.criado_em), k.obs || "",
+    ...(temUltimo ? [dataCurtaCSV(k.ultimo_contato_em)] : []), ...(temTotal ? [k.total_ganho == null ? "" : numeroCSV(k.total_ganho, true)] : []),
     ...extras.map(c => valorCampo(c, (k.campos || {})[c.chave])),
   ]);
   return { cabecalho, linhas };
 }
 
 /* ------------------------------------------------------------ listas do celular (M28) */
+/** plano 1500c · RC-127/237: exemplo do título da tarefa pela vertical e pelo tipo. */
+export function exemploTarefa(vertical, tipo = "tarefa") {
+  const cp = nomeCompromisso(vertical);
+  const coisa = { odonto: "a avaliação", oficina: "o orçamento", loja: "o pedido" }[vertical] || "a proposta";
+  switch (tipo) {
+    case "whatsapp": return `Mandar mensagem sobre ${coisa}`;
+    case "email": return `Enviar ${coisa} por e-mail`;
+    case "reuniao": return `Reunião para apresentar ${coisa}`;
+    case "visita": return vertical === "loja" ? "Visitar o cliente para mostrar as novidades" : `Confirmar a ${cp} da semana`;
+    default: return `Ligar para confirmar ${coisa}`;
+  }
+}
+/**
+ * plano 1500c · RC-286: a etapa aberta para «Reabrir» — a de onde o negócio saiu na última vez que foi para uma etapa fechada
+ * (evento «estagio» da linha do tempo: dados.de / de_id / de_nome). Sem histórico útil → null (quem chama usa a 1ª etapa).
+ */
+export function etapaParaReabrir(tempo, estagios) {
+  const ests = (estagios || []).filter(Boolean);
+  const achar = (id, nome) => ests.find(e => (id != null && String(e.id) === String(id))) || (nome ? ests.find(e => e.nome === nome) : null) || null;
+  const eventos = (tempo || []).filter(it => it && it.tipo === "estagio" && it.dados)
+    .sort((a, b) => (Date.parse(b.em || b.criado_em || "") || 0) - (Date.parse(a.em || a.criado_em || "") || 0));
+  for (const it of eventos) {
+    const d = it.dados;
+    const para = achar(d.para ?? d.para_id, d.para_nome);
+    const de = achar(d.de ?? d.de_id, d.de_nome);
+    if (para && para.tipo !== "aberto" && de && de.tipo === "aberto") return de;
+    if (para && para.tipo === "aberto") return para;
+  }
+  return null;
+}
+/** plano 1500c · RC-315: « por Ana em 10/10» quando o servidor manda bloqueado_por/bloqueado_em; sem os dados, "". */
+export function textoBloqueio(c, { usuario = null, data = x => String(x).slice(0, 10) } = {}) {
+  if (!c) return "";
+  const quem = c.bloqueado_por_nome || (c.bloqueado_por != null && typeof usuario === "function" ? (usuario(c.bloqueado_por) || {}).nome : null);
+  const quando = c.bloqueado_em && Number.isFinite(Date.parse(c.bloqueado_em)) ? data(c.bloqueado_em) : null;
+  return `${quem ? ` por ${quem}` : ""}${quando ? ` em ${quando}` : ""}`;
+}
+/**
+ * plano 1500c · RC-334: repete `chamar()` até `terminou(r)`, no máximo `max` voltas, parando quando `continuar()` for falso
+ * (a tela saiu). `aoProgresso(r)` a cada volta que não terminou. → a última resposta.
+ */
+export async function repetirAteTerminar(chamar, { terminou, continuar = () => true, max = 400, aoProgresso = null } = {}) {
+  let r, voltas = 0;
+  do {
+    r = await chamar();
+    if (terminou(r)) break;
+    if (aoProgresso) aoProgresso(r);
+  } while (++voltas < max && continuar());
+  return r;
+}
+/** plano 1500c · RC-318: onde o «Desfazer» devolve a etapa removida — logo depois da vizinha que estava acima (pelo _k); sem ela, o índice antigo. */
+export function posicaoDesfazer(etapas, antesK, indiceAntigo) {
+  const lista = etapas || [];
+  if (antesK == null) return 0;
+  const i = lista.findIndex(e => e && e._k === antesK);
+  return i >= 0 ? i + 1 : Math.min(Number(indiceAntigo) || 0, lista.length);
+}
+/** plano 1500c · RC-283: a previsão de fechamento (AAAA-MM-DD) já passou do dia de hoje (SP)? */
+export function previsaoVencida(previsao, hojeIso = null) {
+  const p = String(previsao || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(p)) return false;
+  const hoje = /^\d{4}-\d{2}-\d{2}/.test(String(hojeIso || "")) ? String(hojeIso).slice(0, 10) : fmtDiaSP.format(new Date());      // plano 1500c · RX-003: fmtDiaSP é um Intl.DateTimeFormat (chamado direto, lançava)
+  return p < hoje;
+}
+/** plano 1500c · RC-287: centavos só quando o valor tem centavos (R$ 1.500 · R$ 1.500,50) — a mesma régua no cartão e na gaveta. */
+export function temCentavos(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && Math.round(n * 100) % 100 !== 0;
+}
+/**
+ * plano 1500c · RC-257: abertos por responsável nos cartões carregados → {linhas:[{dono_id, n, valor, ponderado}], parcial}
+ * (ponderado = valor × chance da etapa; ordem: maior valor primeiro; «sem responsável» por último). parcial = alguma coluna aberta tem mais que o carregado.
+ */
+export function resumoPorPessoa(colunas, estagios) {
+  const est = new Map((estagios || []).map(e => [e.id, e]));
+  const m = new Map();
+  let parcial = false;
+  for (const c of colunas || []) {
+    const e = est.get(c && c.estagio_id);
+    if (!e || e.tipo !== "aberto") continue;
+    const itens = Array.isArray(c.itens) ? c.itens : [];
+    if ((Number(c.total) || 0) > itens.length) parcial = true;
+    const chance = Number.isFinite(Number(e.probabilidade)) ? Number(e.probabilidade) / 100 : 0;
+    for (const x of itens) {
+      const id = x && x.dono_id != null && x.dono_id !== "" ? x.dono_id : null;
+      const r = m.get(id) || { dono_id: id, n: 0, valor: 0, ponderado: 0 };
+      const v = valorCard(x);
+      r.n++; r.valor += v; r.ponderado += v * chance;
+      m.set(id, r);
+    }
+  }
+  const linhas = [...m.values()].map(r => ({ ...r, valor: Math.round(r.valor * 100) / 100, ponderado: Math.round(r.ponderado * 100) / 100 }))
+    .sort((a, b) => ((a.dono_id == null) - (b.dono_id == null)) || (b.valor - a.valor) || (b.n - a.n));
+  return { linhas, parcial };
+}
+/**
+ * plano 1500c · RC-294: previsão de receita por mês (o «forecast») — abertos carregados agrupados pelo mês de previsao_fechamento
+ * → {meses:[{mes:"AAAA-MM", n, valor, ponderado}] (ordem do calendário), semData, parcial}. Sem o campo nos cartões: meses vazio (a tela some).
+ */
+export function previsaoPorMes(colunas, estagios) {
+  const est = new Map((estagios || []).map(e => [e.id, e]));
+  const m = new Map();
+  let parcial = false, semData = 0;
+  for (const c of colunas || []) {
+    const e = est.get(c && c.estagio_id);
+    if (!e || e.tipo !== "aberto") continue;
+    const itens = Array.isArray(c.itens) ? c.itens : [];
+    if ((Number(c.total) || 0) > itens.length) parcial = true;
+    const chance = Number.isFinite(Number(e.probabilidade)) && e.probabilidade !== null && e.probabilidade !== "" ? Number(e.probabilidade) / 100 : probPadrao(e.tipo) / 100;
+    for (const x of itens) {
+      const mes = /^(\d{4}-\d{2})-\d{2}/.exec(String((x && x.previsao_fechamento) || ""));
+      if (!mes) { semData++; continue; }
+      const r = m.get(mes[1]) || { mes: mes[1], n: 0, valor: 0, ponderado: 0 };
+      const v = valorCard(x);
+      r.n++; r.valor += v; r.ponderado += v * chance;
+      m.set(mes[1], r);
+    }
+  }
+  const meses = [...m.values()].sort((a, b) => a.mes.localeCompare(b.mes))
+    .map(r => ({ ...r, valor: Math.round(r.valor * 100) / 100, ponderado: Math.round(r.ponderado * 100) / 100 }));
+  return { meses, semData, parcial };
+}
+/** plano 1500c · RC-294: «2026-11» → «nov/2026». */
+export function rotuloMes(mes) {
+  const r = /^(\d{4})-(\d{2})$/.exec(String(mes || ""));
+  if (!r) return String(mes || "");
+  return `${["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][Number(r[2]) - 1] || r[2]}/${r[1]}`;
+}
+/** plano 1500c · RC-167: as colunas da prévia da importação — cada destino mapeado uma vez, com o rótulo curto → [{dest, rotulo, campo?}]. */
+export function colunasPrevia(mapeados, destinos = []) {
+  const CURTO = { telefone: "Telefone", etiquetas: "Etiquetas", documento: "CPF/CNPJ", negocio_valor: "Valor", negocio_titulo: "Título", estagio: "Etapa", obs: "Observação" };
+  const rot = new Map((destinos || []).map(d => [d.valor ?? d.chave, String(d.rotulo || "").replace(/^Campo: /, "")]));
+  const vistos = new Set();
+  const out = [];
+  for (const d of mapeados || []) {
+    if (!d || d === "sobrenome" || vistos.has(d)) continue;      // o sobrenome já entra junto do nome
+    vistos.add(d);
+    out.push({ dest: d, rotulo: CURTO[d] || rot.get(d) || d, ...(String(d).startsWith("campo:") ? { campo: String(d).slice(6) } : {}) });
+  }
+  return out;
+}
+/** plano 1500c · RC-169: «cerca de 3 min» pela média de ms por linha já feita; < 1 min → «menos de 1 min»; sem base → "". */
+export function estimativaRestante(msGastos, feitas, faltam) {
+  const ms = Number(msGastos), f = Number(feitas), r = Number(faltam);
+  if (!(ms > 0) || !(f > 0) || !(r > 0)) return "";
+  const min = (ms / f) * r / 60000;
+  if (min < 1) return "menos de 1 min";
+  const tot = Math.round(min);      // plano 1500c · RX-009: arredonda ANTES de escolher a unidade — 59,6 min é «cerca de 1 h», não «cerca de 60 min» (nem «1 h 60 min»)
+  if (tot < 60) return `cerca de ${tot} min`;
+  const hh = Math.floor(tot / 60), mm = tot % 60;
+  return `cerca de ${hh} h${mm ? ` ${mm} min` : ""}`;
+}
+/** plano 1500c · RC-168: anunciar o progresso só ao cruzar cada 10% (não a cada lote de 100 linhas). */
+export function marcoProgresso(antes, depois, total) {
+  const t = Number(total);
+  if (!(t > 0)) return null;
+  const a = Math.floor((Number(antes) / t) * 10), d = Math.floor((Number(depois) / t) * 10);
+  return d > a && d < 10 ? d * 10 : null;
+}
+/** plano 1500c · RC-175: «12 linhas · 4 colunas» do texto colado (cabeçalho fora da conta); vazio → "". */
+export function contagemColado(texto) {
+  const linhas = String(texto || "").split(/\r?\n/).filter(l => l.trim());
+  if (!linhas.length) return "";
+  const sep = linhas[0].includes("\t") ? "\t" : linhas[0].includes(";") ? ";" : ",";
+  const cols = linhas[0].split(sep).length;
+  const n = Math.max(0, linhas.length - 1);
+  return `${n} ${n === 1 ? "linha" : "linhas"} · ${cols} ${cols === 1 ? "coluna" : "colunas"}`;
+}
+/** plano 1500c · RC-165: funis na configuração — ativos primeiro (ordem, nome); desativados no fim. Não muda a entrada. */
+export function ordenarFunisConfig(funis) {
+  return (funis || []).slice().sort((a, b) => ((a.ativo === false) - (b.ativo === false)) || ((a.ordem ?? 0) - (b.ordem ?? 0)) || String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR"));
+}
+const NOMES_PALETA = Object.freeze(["azul", "azul-claro", "amarelo", "areia", "verde", "salmão", "cinza", "caramelo", "dourado", "lilás", "verde-água", "rosa"]);
+/** plano 1500c · RC-149: o nome falado da cor — pela posição na paleta do app (12 cores); fora dela «cor personalizada»; sem cor «sem cor». */
+export function nomeCorPaleta(cor, paleta = []) {
+  if (!cor) return "sem cor";
+  const i = (paleta || []).findIndex(p => String(p).toLowerCase() === String(cor).toLowerCase());
+  return i >= 0 && NOMES_PALETA[i] ? NOMES_PALETA[i] : "cor personalizada";
+}
+/** plano 1500c · RC-148: quanto rolar por quadro ao arrastar perto da borda (40 px): negativo sobe, positivo desce, 0 parado. */
+export function velocidadeRolagem(y, altura, borda = 40, max = 14) {
+  const Y = Number(y), A = Number(altura);
+  if (!Number.isFinite(Y) || !Number.isFinite(A) || A <= 0) return 0;
+  if (Y < borda) return -Math.ceil(max * (borda - Math.max(0, Y)) / borda);
+  if (Y > A - borda) return Math.ceil(max * (Math.min(A, Y) - (A - borda)) / borda);
+  return 0;
+}
+/** plano 1500c · RC-154: modelos de funil por vertical → [{id, nome, etapas:[{nome, tipo, probabilidade, marco}]}]. */
+export function modelosFunil(vertical) {
+  const e = (nome, tipo, probabilidade, marco = null) => ({ nome, tipo, probabilidade, marco });
+  const fim = (g, p) => [e(g, "ganho", 100, "fechou"), e(p, "perdido", 0, "nao_fechou")];
+  const M = {
+    odonto: [{ id: "odonto-tratamento", nome: "Tratamento", etapas: [e("Avaliação", "aberto", 20, "agendada"), e("Plano apresentado", "aberto", 45, "orcamento"), e("Em tratamento", "aberto", 80), ...fim("Fechou", "Não fechou")] }],
+    oficina: [{ id: "oficina-servico", nome: "Serviço", etapas: [e("Orçamento", "aberto", 25, "orcamento"), e("Aprovação", "aberto", 50), e("Execução", "aberto", 85), e("Entrega", "aberto", 95), ...fim("Aprovado", "Recusado")] }],
+    loja: [{ id: "loja-pedido", nome: "Pedido", etapas: [e("Interesse", "aberto", 15), e("Proposta enviada", "aberto", 40, "orcamento"), e("Pagamento", "aberto", 80), e("Entrega", "aberto", 95), ...fim("Vendido", "Desistiu")] }],
+  };
+  const pos = { id: "pos-venda", nome: "Pós-venda", etapas: [e("Contato de satisfação", "aberto", 30), e("Avaliação pedida", "aberto", 60), ...fim("Voltou", "Não voltou")] };
+  return [...(M[vertical] || [{ id: "vendas", nome: "Vendas", etapas: [e("Primeiro contato", "aberto", 15), e("Proposta", "aberto", 40, "orcamento"), e("Negociação", "aberto", 70), ...fim("Ganho", "Perdido")] }]), pos];
+}
+/** plano 1500c · RC-162: os motivos de perda sugeridos (o «Outro» pede justificativa). */
+export function motivosSugeridos(vertical) {
+  const meio = { odonto: "Sem urgência agora", oficina: "Vai fazer depois", loja: "Sem urgência agora" }[vertical] || "Sem urgência";
+  return [{ nome: "Achou caro" }, { nome: "Fechou com outro" }, { nome: "Sem retorno" }, { nome: meio }, { nome: "Outro", exige_texto: true }];
+}
+/** plano 1500c · RC-240: o responsável da tarefa nova — o dono do negócio/contato quando está na equipe; senão «eu». */
+export function donoSugeridoTarefa(donoId, usuarios, eu) {
+  if (donoId != null && donoId !== "" && (usuarios || []).some(u => u && String(u.id) === String(donoId))) return donoId;
+  return eu ?? null;
+}
+/**
+ * plano 1500c · RC-131: o texto da nota em pedaços — links http(s) e telefones viram {tipo:"url"|"tel", texto, href}; o resto {tipo:"texto"}.
+ * Sem innerHTML: quem desenha cria os <a> com textContent. Telefone = 10 a 13 dígitos com ( ) - espaço ou +.
+ */
+export function partesNota(texto) {
+  const s = String(texto ?? "");
+  // plano 1500c · RX-006: o «(» do DDD faz parte do número («(12) 99830-3030» inteiro no link, não «12) 99830-3030»)
+  const re = /(https?:\/\/[^\s<>"«»]+)|(\+?\(?\d[\d\s().-]{8,18}\d)/g;
+  const out = [];
+  let ult = 0, m;
+  while ((m = re.exec(s))) {
+    let txt = m[0], href = null, tipo = null;
+    if (m[1]) { txt = txt.replace(/[.,;:!?)\]]+$/, ""); href = txt; tipo = "url"; }
+    else {
+      const d = txt.replace(/\D/g, "");
+      if (d.length < 10 || d.length > 13) continue;
+      // plano 1500c · RX-005: CPF («123.456.789-09»), CNPJ e data com hora («2026-10-21 14:30») não são telefone — sem «+», só número brasileiro de verdade
+      if (/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/?\d{0,4}|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4}/.test(txt)) continue;
+      if (!txt.trim().startsWith("+") && !normalizarTelefone(txt)) continue;
+      href = hrefTel(txt.trim().startsWith("+") ? txt : d); tipo = "tel";
+      if (!href) continue;
+    }
+    if (m.index > ult) out.push({ tipo: "texto", texto: s.slice(ult, m.index) });
+    out.push({ tipo, texto: txt, href });
+    ult = m.index + txt.length;
+    re.lastIndex = ult;
+  }
+  if (ult < s.length) out.push({ tipo: "texto", texto: s.slice(ult) });
+  return out;
+}
+/** plano 1500c · RC-136: troca só a hora de um valor datetime-local («2026-10-21T09:00» + «14:00»); sem data, usa `diaPadrao`. */
+export function trocarHora(valor, hora, diaPadrao = "") {
+  const dia = /^\d{4}-\d{2}-\d{2}/.test(String(valor || "")) ? String(valor).slice(0, 10) : String(diaPadrao || "").slice(0, 10);
+  return dia && /^\d{2}:\d{2}$/.test(hora) ? `${dia}T${hora}` : String(valor || "");
+}
+/** plano 1500c · RC-129: concluídas da mais recente para a mais antiga (concluida_em desc); sem data vai ao fim. Não muda a entrada. */
+export function ordenarConcluidas(lista) {
+  const t = x => { const v = Date.parse(x && x.concluida_em); return Number.isFinite(v) ? v : -Infinity; };
+  return (Array.isArray(lista) ? lista.slice() : []).sort((a, b) => t(b) - t(a));
+}
+/** plano 1500c · RC-130: a nota é longa (merece «Ver mais») — mais de 6 linhas ou ~420 caracteres. */
+export function notaLonga(texto) {
+  const s = String(texto || "");
+  return s.split("\n").length > 6 || s.length > 420;
+}
+/** plano 1500c · RC-124: quantas páginas (total ÷ tamanho, para cima); sem tamanho conhecido → 0. */
+export function paginasDe(total, porPagina) {
+  const t = Number(total), p = Number(porPagina);
+  return Number.isFinite(t) && Number.isFinite(p) && p > 0 && t > 0 ? Math.ceil(t / p) : 0;
+}
+/** plano 1500c · RC-121: negócios da empresa — abertos primeiro, depois ganhos e perdidos; dentro do grupo, os mais recentes primeiro. */
+export function ordenarNegociosEmpresa(negocios) {
+  const peso = n => (!n.status || n.status === "aberto" ? 0 : n.status === "ganho" ? 1 : 2);
+  const quando = n => Date.parse(n.atualizado_em || n.fechado_em || n.criado_em || "") || 0;
+  return (negocios || []).slice().sort((a, b) => peso(a) - peso(b) || quando(b) - quando(a));
+}
+/** plano 1500c · RC-117: soma dos negócios ganhos (régua do quadro) → {n, valor}. */
+export function totalGanho(negocios) {
+  const g = (negocios || []).filter(n => n && n.status === "ganho");
+  return { n: g.length, valor: Math.round(g.reduce((s, n) => s + valorCard(n), 0) * 100) / 100 };
+}
+/** plano 1500c · RC-108: as opções do responsável — quem saiu da equipe (dono_id fora da lista) aparece como «(desativado)», não «Sem responsável». */
+export function opcoesResponsavel(usuarios, donoId, nomeDono = null) {
+  const lista = (usuarios || []).map(u => ({ valor: u.id, rotulo: u.nome }));
+  if (donoId != null && donoId !== "" && !lista.some(o => String(o.valor) === String(donoId))) lista.push({ valor: donoId, rotulo: `${nomeDono || "Pessoa"} (desativado)` });
+  return lista;
+}
+/** plano 1500c · RC-109: as 27 UFs em ordem (para o select da ficha e da empresa). */
+export const UFS = Object.freeze(Object.values(UF_POR_NOME).slice().sort());
+
+/** plano 1500c · RC-106/111: o número no formato internacional (+5512998303030) e o link do wa.me — mesma régua do hrefTel. null sem número válido. */
+export function telInternacional(telefone) {
+  const h = hrefTel(telefone);
+  return h ? h.slice(4) : null;
+}
+export function hrefWhatsApp(telefone) {
+  const t = telInternacional(telefone);
+  return t ? `https://wa.me/${t.slice(1)}` : null;
+}
 /** `tel:+55…` a partir do telefone do cadastro (só dígitos): 10–11 dígitos = DDD + número, ganham o 55; 12–13 já trazem o país; fora disso não dá para ligar → null. */
 export function hrefTel(telefone) {
   let d = String(telefone == null ? "" : telefone).replace(/\D/g, "");
@@ -2142,13 +2764,17 @@ export function resumoEmpresa(d) {
   const abertos = negs.filter(n => !n.status || n.status === "aberto");
   const ganhos = negs.filter(n => n.status === "ganho");
   const soma = (lista, chave) => Math.round(lista.reduce((s, n) => s + (Number(n[chave]) || 0), 0) * 100) / 100;
-  return { contatos: ((d && d.contatos) || []).length, abertos: abertos.length, valorAberto: soma(abertos, "valor_previsto"), ganhos: ganhos.length, valorGanho: soma(ganhos, "valor") };
+  // plano 1500c · RC-022: o ganho vale pela régua do quadro (valorCard: final ?? previsto)
+  const somaGanho = Math.round(ganhos.reduce((s, n) => s + valorCard({ ...n, status: "ganho" }), 0) * 100) / 100;
+  return { contatos: ((d && d.contatos) || []).length, abertos: abertos.length, valorAberto: soma(abertos, "valor_previsto"), ganhos: ganhos.length, valorGanho: somaGanho };
 }
 
 /** Porcentagem inteira legível («62%») de uma fração; null/NaN → «—». */
 export function pctInteiro(fracao) {
   if (fracao === null || fracao === undefined || fracao === "") return "—";
   const n = Number(fracao);
+  if (Number.isFinite(n) && n > 0 && n < 0.01) return "< 1%";      // plano 1500c · RC-023: 0,4% não é «0%»
+  if (Number.isFinite(n) && n > 0.99 && n < 1) return "99%";      // plano 1500c · RX-016: 99,6% não é «100%» (sobrou alguém)
   return Number.isFinite(n) ? `${Math.round(n * 100)}%` : "—";
 }
 
@@ -2180,16 +2806,21 @@ export function conferirPlanilha(linhas, { estagios = [], etiquetas = [] } = {})
   const norm = s => semAcento(String(s || "")).trim().replace(/\s+/g, " ");
   const abertas = new Set((estagios || []).filter(e => e.tipo === "aberto").map(e => norm(e.nome)));
   const existentes = new Set((etiquetas || []).map(e => norm(e.nome)));
-  const etapas = new Map(), novas = new Map(), comVirgula = [];
+  // plano 1500c · RC-011: «Ganho»/«Perdido» na planilha existem, mas fechadas não entram pela importação — aviso próprio (código etapa_fechada)
+  const fechadas = new Set((estagios || []).filter(e => e.tipo === "ganho" || e.tipo === "perdido").map(e => norm(e.nome)));
+  const etapas = new Map(), novas = new Map(), comVirgula = [], etapasFechadas = new Map();
   for (const l of linhas || []) {
     if (l && l.etiquetas && /,/.test(String(l.etiquetas)) && !/[;|]/.test(String(l.etiquetas)) && comVirgula.length < 5) comVirgula.push(String(l.etiquetas).trim().slice(0, 60));
-    if (l && l.estagio && !abertas.has(norm(l.estagio))) etapas.set(norm(l.estagio), String(l.estagio).trim().slice(0, 40));
+    if (l && l.estagio && fechadas.has(norm(l.estagio)) && !abertas.has(norm(l.estagio))) etapasFechadas.set(norm(l.estagio), String(l.estagio).trim().slice(0, 40));
+    else if (l && l.estagio && !abertas.has(norm(l.estagio))) etapas.set(norm(l.estagio), String(l.estagio).trim().slice(0, 40));
     if (l && l.etiquetas) for (const t of String(l.etiquetas).split(/\s*[;|]\s*/)) {
       const nome = t.trim().slice(0, 40);
       if (nome && !existentes.has(norm(nome))) novas.set(norm(nome), nome);
     }
   }
-  return { etapasDesconhecidas: [...etapas.values()], etiquetasNovas: [...novas.values()], etiquetasComVirgula: comVirgula };
+  const avisos = etapasFechadas.size ? [{ codigo: "etapa_fechada", etapas: [...etapasFechadas.values()],
+    texto: `Etapas de fechamento não entram pela planilha (${[...etapasFechadas.values()].map(x => `«${x}»`).join(", ")}); essas linhas vão para a 1ª etapa aberta.` }] : [];
+  return { etapasDesconhecidas: [...etapas.values()], etiquetasNovas: [...novas.values()], etiquetasComVirgula: comVirgula, etapasFechadas: [...etapasFechadas.values()], avisos };
 }
 
 /** plano 1000 (CR-052): a data (AAAA-MM-DD, dia inteiro) ou data e hora (datetime-local) já passou? Vazio/inválido → false. Só avisa, não bloqueia. */
@@ -2231,25 +2862,46 @@ export function dadosTitular(d, { geradoEm = null, vocab = null, brl = v => `R$ 
   };
 }
 
+/** plano 1500c · RC-320: «dados-titular-ana-souza-2026-10-21.json» — o nome da pessoa (sem acento) ajuda a achar o arquivo; sem nome, o id. */
+export function nomeArquivoTitular(cadastro, dia) {
+  const c = cadastro || {};
+  const slug = semAcento(c.nome || "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  return `dados-titular-${slug || String(c.id ?? "cadastro")}-${dia}.json`;
+}
+
 /**
  * plano 1000b · RB-263: a versão LEGÍVEL dos dados do titular (vai num .txt junto do JSON) — seções com título, um item por linha, sem chaves técnicas.
  * `dados` = dadosTitular(...); `fmt` = {data(iso) → texto, brl(v) → texto} (o ui da tela). → texto (linhas com \n).
  */
-export function textoTitular(dados, { data = v => String(v ?? ""), brl = v => `R$ ${v}`, vocab = null } = {}) {
+export function textoTitular(dados, { data = v => String(v ?? ""), brl = v => `R$ ${v}`, vocab = null, campos = [], empresaConta = null } = {}) {
   if (!dados || !dados.cadastro) return "";
   const c = dados.cadastro, sai = [];
   const sec = (titulo, linhas) => { sai.push("", titulo.toUpperCase(), "-".repeat(Math.min(40, titulo.length))); if (!linhas.length) sai.push("(nada registrado)"); else sai.push(...linhas); };
   const par = (rot, v) => (v === undefined || v === null || v === "" ? null : `${rot}: ${v}`);
-  sai.push(`Dados de ${dados.titular}`, dados.gerado_em ? `Gerado em ${data(dados.gerado_em)}` : null);
-  sec("Cadastro", [par("Nome", c.nome), par("Telefone", c.telefone), par("E-mail", c.email), par("Documento", c.documento), par("Nascimento", c.nascimento),
+  // plano 1500c · RC-024: documento entregue ao titular sem termos internos — rótulo do campo, Sim/Não, dd/mm/aaaa, telefone formatado, status da vertical
+  const defCampo = chave => (campos || []).find(x => x && x.chave === chave) || null;
+  const valorLegivel = (def, v) => {
+    if (typeof v === "boolean") return v ? "Sim" : "Não";
+    if (Array.isArray(v)) return v.join(", ");
+    if (def && def.tipo === "data") return dataCurtaCSV(v);
+    if (def && def.tipo === "moeda" && lerNumero(v) !== null) return brl(lerNumero(v));
+    if (def && def.tipo === "telefone") return formatarTel(v);
+    if (def && def.tipo === "sim_nao") return lerSimNao(v) === true ? "Sim" : lerSimNao(v) === false ? "Não" : String(v);
+    return v;
+  };
+  const statusTxt = s => (s === "ganho" ? (vocab && vocab.ganhar) || "Ganho" : s === "perdido" ? (vocab && vocab.perder) || "Perdido" : s === "aberto" ? "Em andamento" : s);
+  sai.push(`Dados de ${dados.titular}`, dados.gerado_em ? `Gerado em ${data(dados.gerado_em)}` : null,
+    empresaConta ? `Responsável pelos dados: ${empresaConta}` : null);      // plano 1500c · RC-319: quem gerou e quando, no cabeçalho
+  sec("Cadastro", [par("Nome", c.nome), par("Telefone", c.telefone ? formatarTel(c.telefone) : null), par("E-mail", c.email), par("Documento", c.documento ? formatarDoc(c.documento) : null),
+    par("Nascimento", c.nascimento ? dataCurtaCSV(c.nascimento) || c.nascimento : null),
     par("Cidade", [c.cidade, c.uf].filter(Boolean).join("/")), par("Origem", ROTULO_ORIGEM[c.origem] || c.origem), par("Observação", c.obs),
     par("Cadastrado em", c.criado_em ? data(c.criado_em) : null), par("Último contato", c.ultimo_contato_em ? data(c.ultimo_contato_em) : null),
-    ...Object.entries(c.campos || {}).map(([k, v]) => par(k, Array.isArray(v) ? v.join(", ") : v))].filter(Boolean));
+    ...Object.entries(c.campos || {}).map(([k, v]) => { const def = defCampo(k); return par(def && def.rotulo ? def.rotulo : k.replace(/_/g, " "), valorLegivel(def, v)); })].filter(Boolean));
   const cs = dados.consentimento || {};
   sec("Consentimento de marketing", [cs.optin_marketing === false ? "Não quer receber marketing" : cs.optin_marketing === true ? "Aceitou receber marketing" : "Sem registro",
     par("Registrado em", cs.optin_em ? data(cs.optin_em) : null), par("Como", cs.optin_origem)].filter(Boolean));
   if (dados.empresa) sec("Empresa", [par("Nome", dados.empresa.nome), par("Cidade", [dados.empresa.cidade, dados.empresa.uf].filter(Boolean).join("/"))].filter(Boolean));
-  sec(vocab && vocab.negocios ? vocab.negocios : "Negócios", (dados.negocios || []).map(n => `- ${n.titulo || n.servico || `#${n.id}`}${n.status ? ` (${n.status})` : ""}${(n.valor ?? n.valor_previsto) != null ? ` · ${brl(n.valor ?? n.valor_previsto)}` : ""}${n.criado_em ? ` · ${data(n.criado_em)}` : ""}`));
+  sec(vocab && vocab.negocios ? vocab.negocios : "Negócios", (dados.negocios || []).map(n => `- ${n.titulo || n.servico || `#${n.id}`}${n.status ? ` (${statusTxt(n.status)})` : ""}${(n.valor ?? n.valor_previsto) != null ? ` · ${brl(n.valor ?? n.valor_previsto)}` : ""}${n.criado_em ? ` · ${data(n.criado_em)}` : ""}`));
   sec("Tarefas", (dados.tarefas || []).map(t => `- ${t.titulo || "Tarefa"}${t.vence_em ? ` · prazo ${data(t.vence_em)}` : ""}${t.concluida_em ? " · concluída" : ""}`));
   sec("Notas", (dados.notas || []).map(n => `- ${n.criado_em ? `${data(n.criado_em)}: ` : ""}${n.texto || ""}`));
   sec("Atendimentos", (dados.atendimentos || []).map(a => `- ${a.protocolo ? `Protocolo ${a.protocolo}` : `#${a.id}`}${a.status ? ` (${a.status})` : ""}${a.aberta_em ? ` · ${data(a.aberta_em)}` : ""}`));
@@ -2261,18 +2913,44 @@ export function textoTitular(dados, { data = v => String(v ?? ""), brl = v => `R
  * plano 1000 (CR-144): atalhos de prazo da tarefa a partir do dia de HOJE em São Paulo (AAAA-MM-DD) → [{rotulo, valor (datetime-local)}].
  * «Hoje 18h · Amanhã 9h · Em 3 dias (9h) · Próx. segunda (9h)».
  */
-export function atalhosPrazo(hojeIso) {
+export function atalhosPrazo(hojeIso, { agora = null, pularFimDeSemana = true } = {}) {
   const [a, m, d] = String(hojeIso || "").slice(0, 10).split("-").map(Number);
   if (!a || !m || !d) return [];
   const dia = n => { const x = new Date(Date.UTC(a, m - 1, d + n)); return x.toISOString().slice(0, 10); };
-  const dow = new Date(Date.UTC(a, m - 1, d)).getUTCDay();            // 0 = domingo
+  const dowDe = n => new Date(Date.UTC(a, m - 1, d + n)).getUTCDay();      // 0 = domingo
+  const dow = dowDe(0);
   const ateSegunda = ((8 - dow) % 7) || 7;
-  return [
-    { rotulo: "Hoje 18h", valor: `${dia(0)}T18:00` },
-    { rotulo: "Amanhã 9h", valor: `${dia(1)}T09:00` },
-    { rotulo: "Em 3 dias", valor: `${dia(3)}T09:00` },
-    { rotulo: "Próx. segunda", valor: `${dia(ateSegunda)}T09:00` },
-  ];
+  const SEMANA = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+  // plano 1500c · RC-026: sábado/domingo pulam para a segunda (rótulo mostra o dia: «Seg 9h»)
+  const util = n => { let x = n; if (pularFimDeSemana) while (dowDe(x) === 0 || dowDe(x) === 6) x++; return x; };
+  const lista = [];
+  // plano 1500c · RC-025: depois das 17h de SP o «Hoje 18h» já nasceria quase vencido — vira «Hoje 20h»; depois das 19h some
+  const horaSP = agora == null ? null : Number(new Intl.DateTimeFormat("en-GB", { timeZone: "America/Sao_Paulo", hour: "2-digit", hour12: false }).format(new Date(agora))) % 24;
+  if (horaSP === null || horaSP < 17) lista.push({ id: "hoje", rotulo: "Hoje 18h", valor: `${dia(0)}T18:00` });
+  else if (horaSP < 19) lista.push({ id: "hoje", rotulo: "Hoje 20h", valor: `${dia(0)}T20:00` });
+  const am = util(1);
+  lista.push({ id: "amanha", rotulo: am === 1 ? "Amanhã 9h" : `${SEMANA[dowDe(am)]} 9h`, valor: `${dia(am)}T09:00` });
+  const tres = util(3);
+  lista.push({ id: "tres", rotulo: tres === 3 ? "Em 3 dias" : `Em 3 dias (${SEMANA[dowDe(tres)].toLowerCase()})`, valor: `${dia(tres)}T09:00` });
+  lista.push({ id: "segunda", rotulo: "Próx. segunda", valor: `${dia(ateSegunda)}T09:00` });
+  return lista;
+}
+/** plano 1500c · RC-027: o atalho pelo id (a posição muda quando «Hoje» some à noite). */
+export function atalhoPrazo(hojeIso, id, o = {}) { return atalhosPrazo(hojeIso, o).find(x => x.id === id) || null; }
+
+/** plano 1500c · RC-028: dia de São Paulo (AAAA-MM-DD) e o instante UTC de uma hora local de SP, com o deslocamento REAL do dia (Intl, não −3 fixo). */
+const fmtOffSP = new Intl.DateTimeFormat("en-US", { timeZone: "America/Sao_Paulo", timeZoneName: "longOffset" });
+function deslocamentoSP(ms) {
+  const p = fmtOffSP.formatToParts(new Date(ms)).find(x => x.type === "timeZoneName");
+  const r = /GMT([+-]\d{1,2})(?::?(\d{2}))?/.exec((p && p.value) || "");
+  if (!r) return "-03:00";
+  const hh = r[1].replace(/^([+-])(\d)$/, "$10$2");
+  return `${hh}:${r[2] || "00"}`;
+}
+export function diaSP(agora = new Date()) { return fmtDiaSP.format(new Date(agora)); }
+export function instanteSP(dia, hhmm = "09:00") {
+  const chute = Date.parse(`${dia}T${hhmm}:00-03:00`);
+  return new Date(Date.parse(`${dia}T${hhmm}:00${deslocamentoSP(chute)}`)).toISOString();
 }
 
 /* ------------------------------------------------------------ plano 1000 (13/10/2026) — lote crm-2 */
@@ -2348,9 +3026,9 @@ export function adiarTarefa(venceEm, modo, agora = new Date()) {
   const ag = new Date(agora).getTime();
   if (modo === "hora") { const v = venceEm ? Date.parse(venceEm) : NaN; return new Date((Number.isFinite(v) && v > ag ? v : ag) + 3600000).toISOString(); }
   if (modo === "semana") {
-    const hojeSP = new Date(ag - 3 * 3600000).toISOString().slice(0, 10);
-    const seg = atalhosPrazo(hojeSP)[3];
-    return new Date(Date.parse(`${seg.valor}:00-03:00`)).toISOString();
+    // plano 1500c · RC-027/028: o atalho pelo id («segunda»), não pela posição; dia e hora de SP pelo Intl
+    const seg = atalhoPrazo(diaSP(ag), "segunda");
+    return instanteSP(seg.valor.slice(0, 10), seg.valor.slice(11, 16));
   }
   return adiarParaAmanha(venceEm, agora);
 }
@@ -2361,10 +3039,9 @@ export function adiarTarefa(venceEm, modo, agora = new Date()) {
 export function retomarEm(dias, agora = new Date()) {
   const n = Math.round(Number(dias));
   if (!(n >= 1 && n <= 365)) return null;
-  const hojeSP = new Date(new Date(agora).getTime() - 3 * 3600000).toISOString().slice(0, 10);
-  const [a, m, d] = hojeSP.split("-").map(Number);
+  const [a, m, d] = diaSP(agora).split("-").map(Number);      // plano 1500c · RC-028: o mesmo fuso (Intl) do resto do CRM
   const alvo = new Date(Date.UTC(a, m - 1, d + n)).toISOString().slice(0, 10);
-  return new Date(Date.parse(`${alvo}T09:00:00-03:00`)).toISOString();
+  return instanteSP(alvo, "09:00");
 }
 /** CR-019: legenda da distribuição — as etapas com cartões e, à parte, as vazias (que viram «+3 vazias»). */
 export function partesDistribuicao(colunas, estagios) {
@@ -2397,6 +3074,20 @@ export function linhaAtendimento(c, fmtData = x => String(x || "").slice(0, 10),
 export function origensManuais(atual = null) {
   return Object.entries(ROTULO_ORIGEM).filter(([v]) => (v !== "anuncio" && v !== "importacao") || v === atual);
 }
+const fmtBRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+/** plano 1500c · RC-029: o valor de um campo personalizado como a pessoa lê — moeda «R$ 1.500,50», data dd/mm/aaaa, Sim/Não, lista com vírgula. */
+export function textoValorCampo(c, v) {
+  if (v === null || v === undefined || v === "") return "";
+  if (Array.isArray(v)) return v.join(", ");
+  if (v === true || v === false) return v ? "Sim" : "Não";
+  const tipo = (c || {}).tipo;
+  if (tipo === "moeda" && lerNumero(v) !== null) return fmtBRL.format(lerNumero(v)).replace(/\s/g, " ");
+  if (tipo === "numero" && lerNumero(v) !== null) return lerNumero(v).toLocaleString("pt-BR", { maximumFractionDigits: 2 });
+  if (tipo === "data" && lerData(v)) return dataCurtaCSV(lerData(v));
+  if (tipo === "sim_nao" && lerSimNao(v) !== null) return lerSimNao(v) ? "Sim" : "Não";
+  if (tipo === "telefone") return formatarTel(v) || String(v);
+  return String(v);
+}
 /** CR-074: valores de campos de negócio que NÃO valem no funil atual (o negócio mudou de funil) → [{chave, rotulo, texto}] (só os que têm valor). */
 export function camposDeOutrosFunis(campos, funilId, valores = {}) {
   const aqui = new Set(camposDe(campos, "negocio", funilId).map(c => c.chave));
@@ -2405,7 +3096,7 @@ export function camposDeOutrosFunis(campos, funilId, valores = {}) {
     if (c.entidade !== "negocio" || aqui.has(c.chave) || out.some(x => x.chave === c.chave)) continue;
     const v = (valores || {})[c.chave];
     if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) continue;
-    out.push({ chave: c.chave, rotulo: c.rotulo || c.chave, texto: Array.isArray(v) ? v.join(", ") : v === true ? "Sim" : v === false ? "Não" : String(v) });
+    out.push({ chave: c.chave, rotulo: c.rotulo || c.chave, texto: textoValorCampo(c, v) });      // plano 1500c · RC-029: pelo tipo do campo
   }
   return out;
 }

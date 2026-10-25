@@ -21,8 +21,25 @@ export const SRI_V1 = "sha384-5seekIDmBnVMEmAI/uZoEKAyr41xbFHY+KxEYM2sHNNVw/ef9D
 /** Plano 1000b (AB-007, AB-122, AB-205, AB-226, AB-127): o snippet novo aponta para a rastreio.v2.js, também fixa e com SRI (o hash é
     conferido com o arquivo em testes/plano1000b-ads). Quem já instalou a v1 continua com ela — nada muda sem trocar o código no site. */
 export const URL_SCRIPT_V2 = "https://jpfamelli.github.io/nexus-ads/rastreio.v2.js";
-export const SRI_V2 = "sha384-kD7YCVtWVAbP21SE+MD3BbT7gP5gGQr4urIMl0cnvj999LQpCQHF3vklYhvMOdPH";   // plano 1000b · ads-3: v2 com AB-121/AB-124/AB-126 (ainda não publicada)
-const SCRIPT_ATUAL = URL_SCRIPT_V2, SRI_ATUAL = SRI_V2;
+export const SRI_V2 = "sha384-kD7YCVtWVAbP21SE+MD3BbT7gP5gGQr4urIMl0cnvj999LQpCQHF3vklYhvMOdPH";   // plano 1000b · ads-3: v2 com AB-121/AB-124/AB-126 (publicada; conferido em 21/10)
+/** Plano 1500c · AC-201/AC-196..AC-200: a v3 (referência orgânica, formulários, tel:/ig.me/m.me, sem aquecimento no hover). O hash é
+    conferido com o arquivo em testes/plano1500c-ads. */
+export const URL_SCRIPT_V3 = "https://jpfamelli.github.io/nexus-ads/rastreio.v3.js";
+export const SRI_V3 = "sha384-qNrflB2DhKMiP/s8kF/4sc9GC9+1xnSgCReGBS9NELeCBElxbvW//r85wpEu3MvY";
+/** Plano 1500c · AC-205: UMA tabela diz qual versão está publicada — o snippet usa a mais nova com «publicada: true» (antes um
+    comentário «ainda não publicada» ao lado de um snippet que já apontava para ela). Publicou a v3 no Pages? Mude publicada para true
+    (e só então: o integrity de um arquivo que não está no ar quebra o script no site do cliente). */
+export const VERSOES = Object.freeze([
+  Object.freeze({ n: 1, url: URL_SCRIPT_V1, sri: SRI_V1, publicada: true }),
+  Object.freeze({ n: 2, url: URL_SCRIPT_V2, sri: SRI_V2, publicada: true }),
+  Object.freeze({ n: 3, url: URL_SCRIPT_V3, sri: SRI_V3, publicada: false }),
+]);
+export function versaoPublicada(lista = VERSOES) {
+  const pub = (lista || []).filter(v => v && v.publicada && v.url && /^sha384-[A-Za-z0-9+/=]{64}$/.test(String(v.sri || "")));
+  return pub.length ? pub.reduce((a, b) => (b.n > a.n ? b : a)) : null;
+}
+const VERSAO_ATUAL = versaoPublicada() || VERSOES[1];
+const SCRIPT_ATUAL = VERSAO_ATUAL.url, SRI_ATUAL = VERSAO_ATUAL.sri;
 const HOSTS_LOCAIS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 /** O servidor falso anuncia para onde o snippet deve apontar (window.ORBITA_DEV_FALSO.rastreio); só vale se for local. */
@@ -64,8 +81,9 @@ export const UTM = Object.freeze({
     gera o texto com elas (cabeçalho do rastreio.js). */
 // plano 1000b · AB-121: os textos citam também ttclid, msclkid e utm_id (a v2 passou a guardar os três)
 const periodoPriv = dias => { const n = Number(dias); return n === 0 ? "só durante a visita" : `por até ${Number.isFinite(n) && n > 0 ? Math.round(n) : 30} dias`; };
-export function textoPrivacidade({ dias = 30, gpc = true } = {}) {
-  return `O script guarda no navegador do visitante (armazenamento local, sem cookies), ${periodoPriv(dias)}, de onde veio a visita: os parâmetros utm_* e os identificadores de clique dos anúncios (gclid, gbraid, wbraid, fbclid, ttclid, msclkid). Quando a pessoa toca no botão do WhatsApp, esses parâmetros e o endereço da página vão para o Órbita, que devolve um código curto (ex.: [ref K7Q2P]) e guarda o clique por até 45 dias para ligar a conversa à campanha. O script não coleta nome, telefone nem e-mail${gpc ? ", e respeita o sinal Global Privacy Control do navegador (com ele, nada é guardado nem enviado)" : ""}.`;
+// plano 1500c · AC-196: com a v3 no snippet, o texto cita também o TIPO de origem da visita sem campanha (busca, rede social, outro site)
+export function textoPrivacidade({ dias = 30, gpc = true, versao = VERSAO_ATUAL.n } = {}) {
+  return `O script guarda no navegador do visitante (armazenamento local, sem cookies), ${periodoPriv(dias)}, de onde veio a visita: os parâmetros utm_* e os identificadores de clique dos anúncios (gclid, gbraid, wbraid, fbclid, ttclid, msclkid)${versao >= 3 ? " e, sem campanha, só o tipo de origem (busca do Google, Instagram, outro site ou acesso direto)" : ""}. Quando a pessoa toca no botão do WhatsApp, esses parâmetros e o endereço da página vão para o Órbita, que devolve um código curto (ex.: [ref K7Q2P]) e guarda o clique por até 45 dias para ligar a conversa à campanha. O script não coleta nome, telefone nem e-mail${gpc ? ", e respeita o sinal Global Privacy Control do navegador (com ele, nada é guardado nem enviado)" : ""}.`;
 }
 /** Aviso de privacidade (F8): o que fica no navegador, o que vai ao Órbita e por quanto tempo (snippet padrão). */
 export const TEXTO_PRIVACIDADE = textoPrivacidade();
@@ -98,20 +116,34 @@ const MOTIVOS = {
   origem_definida: "o negócio já tinha origem",
   codigo_desconhecido: "código não reconhecido",
   codigo_invalido: "código inválido",
+  // plano 1500c · AC-207: os outros motivos que o servidor manda, em português de gente (antes «codigo expirado» cru)
+  codigo_expirado: "o código venceu antes de a conversa chegar",
+  expirado: "o código venceu antes de a conversa chegar",
+  limite: "muitos cliques seguidos: o site esperou um pouco",
+  limite_excedido: "muitos cliques seguidos: o site esperou um pouco",
+  chave_invalida: "a chave do site não vale mais",
+  teste: "teste do painel",
+  aquecimento: "visita preparada (sem toque no botão)",
 };
+/** Plano 1500c · AC-207: motivo que o painel não conhece não aparece cru («erro_xyz_123») — vira um texto leigo. */
+export const MOTIVO_OUTRO = "outro motivo (veja os detalhes do clique)";
 /** Rótulo do motivo de um clique (F10); clique sem motivo e sem casar = a mensagem nunca chegou com o código.
     Plano 1000 (AD-183): clique de menos de 1 h sem motivo ainda está «aguardando a mensagem» (a pessoa pode estar escrevendo). */
 export const AGUARDANDO_MS = 3600e3;
 export const rotuloMotivo = (motivo, casou = false, { em = null, agora = Date.now() } = {}) => {
   if (casou) return MOTIVOS.aplicado;
   if (MOTIVOS[motivo]) return MOTIVOS[motivo];
-  if (motivo) return String(motivo).replace(/_/g, " ");
+  if (motivo) return MOTIVO_OUTRO;   // plano 1500c · AC-207
   const t = em ? Date.parse(em) : NaN;
   return Number.isFinite(t) && agora - t >= 0 && agora - t < AGUARDANDO_MS ? "aguardando a mensagem" : "a mensagem não chegou com o código";
 };
 /** Plano 1000 (AD-181): o domínio da página do clique («www.clinica.com.br» → «clinica.com.br»); null se não for URL. */
 export function hostDe(url) {
   try { const u = new URL(String(url)); return /^https?:$/.test(u.protocol) ? u.hostname.replace(/^www\./, "").toLowerCase() : null; } catch { return null; }
+}
+/** Plano 1500c · AC-212: o caminho da página do clique («https://site.com.br/implante/» → «/implante»); null se não for URL. */
+export function caminhoDe(url) {
+  try { const u = new URL(String(url)); if (!/^https?:$/.test(u.protocol)) return null; const p = u.pathname.replace(/\/+$/, ""); return (p || "/").slice(0, 120); } catch { return null; }
 }
 /** Plano 1000 (AD-182): filtro da lista de cliques pelo rótulo do motivo ("" = todos). */
 export const filtrarCliques = (itens = [], motivo = "", agora = Date.now()) =>
@@ -164,6 +196,15 @@ export function resumoRastreio(resp, { ultimos = 10, agora = Date.now(), nomes =
   // plano 1000b · AB-252: «novo» = primeiro clique nos últimos 7 dias, MESMO sem outro site antes (a 1ª vez que a chave aparece num
   // site estranho também alerta); g.antigo diz se já havia clique de outro domínio antes (o texto do aviso muda)
   for (const g of hostsL) { const t = Date.parse(g.primeiro); g.novo = Number.isFinite(t) && agora - t <= 7 * 864e5; g.antigo = antigoDe(g); }
+  // plano 1500c · AC-212: de qual PÁGINA do site saiu cada clique (o caminho, sem o domínio) — a «/implante» que mais manda clique
+  const pagM = new Map();
+  for (const x of itens) {
+    const cam = caminhoDe(x.pagina);
+    if (!cam) continue;
+    const g = pagM.get(cam) || { caminho: cam, cliques: 0, casados: 0 };
+    g.cliques++; if (x.casou) g.casados++;
+    pagM.set(cam, g);
+  }
   const camp = new Map();
   for (const x of itens) {
     const bruto = String(x.utm_campaign || "").trim() || "(sem campanha)";
@@ -188,6 +229,7 @@ export function resumoRastreio(resp, { ultimos = 10, agora = Date.now(), nomes =
     todos: ordenados,                                    // AD-182: «Mostrar mais» e o filtro por motivo trabalham sobre a lista inteira
     ultimoReal: real ? { em: real.em, host: hostDe(real.pagina) } : null,
     hosts: hostsL.sort((a, b) => b.cliques - a.cliques || a.host.localeCompare(b.host)),
+    paginas: [...pagM.values()].sort((a, b) => b.cliques - a.cliques || a.caminho.localeCompare(b.caminho)).slice(0, 10),   // AC-212
     vazio: !itens.length && !cliques,
   };
 }
@@ -432,6 +474,12 @@ async function secaoRastreio(ctx, alvo) {
         h("ul", { class: "ads-rastreio-hosts" }, R.hosts.map(x => h("li", null, h("span", { class: "mono" }, x.host),
           x.novo ? h("span", { class: "pilula pilula-p pilula-aten" }, "novo") : null,
           h("small", { class: "campo-ajuda" }, `${x.cliques} ${x.cliques === 1 ? "clique" : "cliques"} · último ${quandoCurto(x.ultimo)}`))))));
+    }
+    // plano 1500c · AC-212: as páginas do site que mais mandaram cliques (só com mais de uma página — com uma só, não diz nada)
+    if (R.paginas && R.paginas.length > 1) {
+      corpo.append(h("div", { class: "ads-rastreio-bloco" }, h("h4", { class: "rotulo" }, "Páginas que mandaram cliques"),
+        h("ul", { class: "ads-rastreio-hosts ads-rastreio-paginas" }, R.paginas.map(x => h("li", null, h("span", { class: "mono" }, x.caminho),
+          h("small", { class: "campo-ajuda" }, `${x.cliques} ${x.cliques === 1 ? "clique" : "cliques"}${x.casados ? ` · ${x.casados} ${x.casados === 1 ? "casou" : "casaram"}` : ""}`))))));
     }
     if (R.motivos.length) {
       const max = Math.max(...R.motivos.map(m => m.n));

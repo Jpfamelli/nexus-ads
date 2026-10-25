@@ -114,12 +114,16 @@ export function gerarDemo({ sal = "pdz", hoje = hojeSP(), nome = "Clínica Demon
     return esc;
   };
 
+  // plano 1500c · AC-007: o núcleo parou de arredondar a estimativa para a dezena — a demo arredonda o PRÓPRIO fator (valor de tabela
+  // × fator cai em dezena redonda), e os números da demonstração (R$ 13.550, R$ 5,41…) seguem os mesmos
+  const tkDemo = { ...CFG_DEMO.ticket, ...(cfg.ticket || {}) };
+  const fatorRedondo = (servico, f) => { const t = +tkDemo[servico]; return t > 0 ? Math.round(t * f / 10) * 10 / t : f; };
   function novoLead(c, k, i, r) {
     const servico = servicoDe(c);
     const lista = r() < .62 ? NOMES_F : NOMES_M;
     const nomeP = `${lista[Math.floor(r() * lista.length)]} ${INICIAIS[Math.floor(r() * INICIAIS.length)]}.`;
     const L = { id: LEADS.length + 1, i, camp: c.id, cri: k.id, plat: c.plat, servico, nome: nomeP, telefone: "",
-                iAgenda: null, iConsulta: null, compareceu: false, fechou: false, fator: .85 + r() * .3 };
+                iAgenda: null, iConsulta: null, compareceu: false, fechou: false, fator: fatorRedondo(servico, .85 + r() * .3) };
     const lag1 = [0, 0, 1, 1, 1, 2, 3][Math.floor(r() * 7)], lag2 = 1 + Math.floor(r() * 7);
     if (cruza(`ag:${c.id}`, c.agenda)) {
       L.iAgenda = i + lag1;

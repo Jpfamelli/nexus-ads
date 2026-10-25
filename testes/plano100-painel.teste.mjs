@@ -370,7 +370,7 @@ test("P4/P5/P8 · Ajustes: cartões do super com id, estados do Órbita com «Ab
   assert.match(JS, /txt\("ia_aviso_custo_usd", /);
   assert.match(JS, /cfg\.ia_aviso_custo_usd\.replace\(\/\^US\\\$\\s\*\/i, ""\)\.replace\(",", "\."\)/);
   assert.match(JS, /const apagando = \["painel_url", "wa_phone_number_id", "saas_url"\]\.filter\(k => k in cfg && !cfg\[k\] && String\(atual\[k\] \|\| ""\)\.trim\(\)\);/);
-  assert.match(JS, /if \(apagando\.length && !confirm\(/);
+  assert.match(JS, /if \(apagando\.length && !\(await confirmar\(/);   // plano 1500c: AC-242 — diálogo próprio no lugar do confirm()
   assert.match(JS, /data-rm-segredo="\$\{k\}"/);
   assert.match(JS, /await api\.configSalvar\(S\.token, \{ \[k\]: null \}\);/);
   assert.match(JS, /const ainda = S\.aj\.config && S\.aj\.config\[flag\];/, "se o servidor antigo manteve o segredo, a tela diz que nada mudou");

@@ -12,6 +12,9 @@
 export function criarChat(A) {
   const { ui, L } = A;
   const h = ui.h;
+  // plano 1500c · CC-122: um MediaQueryList só para o celular (o cabeçalho, redesenhado a cada delta, criava dois por desenho)
+  let mqCelular = null;
+  const ehCelular = () => { try { if (!mqCelular) mqCelular = matchMedia("(max-width: 760px)"); return !!mqCelular.matches; } catch { return false; } };
 
   const cab = h("header", { class: "cvc-cab" });
   const faixa = h("div", { class: "cvc-selos", "aria-label": "Situação do atendimento" });
@@ -232,7 +235,7 @@ export function criarChat(A) {
     const s = JSON.stringify([conv.id, conv.status, conv.atribuida_a, conv.atribuida && conv.atribuida.nome, conv.atribuida_nome, conv.departamento && conv.departamento.nome,
       conv.oculta, conv.protocolo, conv.canal && conv.canal.nome, conv.canal_id, ((A.base && A.base.canais) || []).find(k => k.id === conv.canal_id)?.nome, provedorCanal, jan.texto, jan.nivel, L.janelaCurta(jan), Math.round(L.fracaoJanela(jan) * 1000), jan.ate,
       ct.id, nome, ct.telefone, ct.optin_marketing, ia && [ia.disponivel, ia.ia_ligada, ia.pausada, ia.pausada_ate, ia.so_manual, ia.pausada_por, ia.pausada_por_nome, ia.respondendo, ia.erro],
-      flash, A.podeEscrever, eu, A.raiz && A.raiz.dataset.lateral, caido && [caido.nome, caido.desde], (() => { try { return matchMedia("(max-width: 760px)").matches; } catch { return false; } })(),
+      flash, A.podeEscrever, eu, A.raiz && A.raiz.dataset.lateral, caido && [caido.nome, caido.desde], ehCelular() /* CC-122 */,
       conv.ultima_entrada_em ? 1 : 0]);
     const ativo = typeof document !== "undefined" ? document.activeElement : null;
     if (s === sigCab && cab.firstChild) {
@@ -253,18 +256,18 @@ export function criarChat(A) {
     // CA-015: com a coluna estreita o protocolo some do cabeçalho (está na lateral e no atalho «Protocolo»); o title tem a linha inteira
     const subTitulo = [ct.telefone ? ui.telBR(ct.telefone) : null, canal, conv.protocolo ? `protocolo ${conv.protocolo}` : null].filter(Boolean).join(" · ");
     // plano 1000 · CA-112: no celular, tocar no nome abre a gaveta de Detalhes (com «Abrir ficha» lá dentro) — antes ia para outra tela
-    const celular = (() => { try { return matchMedia("(max-width: 760px)").matches; } catch { return false; } })();
+    const celular = ehCelular();   // plano 1500c · CC-122
     const pelaGaveta = celular && A.raiz && A.raiz.dataset.lateral === "gaveta";
     const quem = h("button", { type: "button", class: "cvc-quem", title: pelaGaveta ? `Detalhes do contato · ${subTitulo}` : semFicha ? "Contato removido: não há ficha para abrir" : `Abrir a ficha · ${subTitulo}`,
       disabled: semFicha && !pelaGaveta, "aria-disabled": semFicha && !pelaGaveta ? "true" : null, dataset: { acao: "quem" }, "aria-haspopup": pelaGaveta ? "dialog" : null,
       on: { click: () => { if (pelaGaveta) A.acoes.abrirDetalhes(); else if (!semFicha) A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }); } } },
       ui.avatar(nome, ct.id),
       h("span", { class: "cvc-quem-txt" },
-        h("span", { class: "cvc-nome" }, nome),
+        h("span", { class: "cvc-nome dado-pessoal" }, nome),   // plano 1500c · CX-001: nome e telefone borrados no modo apresentação
         // plano 1000b · CB-012: separador só ENTRE itens — sem telefone não começa com «·», sem protocolo não termina com «·»
         // (sem telefone, o «·» do protocolo some junto com o «via» quando a coluna estreita esconde o canal)
         h("span", { class: "cvc-sub" },
-          ct.telefone ? h("span", null, ui.telBR(ct.telefone)) : null,
+          ct.telefone ? h("span", { class: "dado-pessoal" }, ui.telBR(ct.telefone)) : null,
           ct.telefone ? h("i", { class: "cvc-via-sep" }, "·") : null, h("span", { class: "cvc-via" }, canal),
           conv.protocolo ? h("i", { class: ct.telefone ? "cvc-proto-sep" : "cvc-proto-sep cvc-via-sep" }, "·") : null,
           conv.protocolo ? h("span", { class: "mono" }, conv.protocolo) : null)));
@@ -273,7 +276,14 @@ export function criarChat(A) {
     ui.limpar(faixa);
     const dono =conv.atribuida ? `Com ${conv.atribuida.nome}` : conv.atribuida_nome ? `Com ${conv.atribuida_nome}` : "Sem dono";
     const semDono = dono === "Sem dono";
-    faixa.appendChild(ui.pilula(conv.departamento ? `${dono} · ${conv.departamento.nome}` : dono, semDono && conv.status !== "resolvida" ? "aten" : "neutra",
+    // plano 1500c · CC-137: «Sem dono» parecia clicável e não era — com permissão de escrever, a pílula assume a conversa
+    const textoDono = conv.departamento ? `${dono} · ${conv.departamento.nome}` : dono;
+    if (semDono && conv.status !== "resolvida" && A.podeEscrever) {
+      const bDono = h("button", { type: "button", class: ["pilula", "pilula-aten", "cv-pil-status", "cv-pil-assumir"], dataset: { acao: "assumir-pilula" },
+        title: "Sem dono: toque para assumir", "aria-label": `${textoDono}. Assumir esta conversa` }, ui.icone("usuario"), h("span", null, textoDono));
+      bDono.addEventListener("click", () => A.acoes.assumir(bDono));
+      faixa.appendChild(bDono);
+    } else faixa.appendChild(ui.pilula(textoDono, semDono && conv.status !== "resolvida" ? "aten" : "neutra",
       { icone: "usuario", class: "cv-pil-status", title: conv.departamento ? `${dono} · departamento ${conv.departamento.nome}` : dono }));
     // o aparelho do CodeWords não tem janela de 24 h: nada de «Janela aberta/fechada» nesse canal
     if (conv.status !== "resolvida" && L.canalTemJanela(provedorCanal)) {
@@ -281,14 +291,28 @@ export function criarChat(A) {
         // plano 1000 · CA-089: fechada, o title explica sem jargão (a pílula continua curta)
         { icone: "relogio", class: "cv-janela", title: !jan.aberta ? (conv.ultima_entrada_em ? L.JANELA_FECHADA_LONGO : L.JANELA_NUNCA_LONGO)
           : jan.ate ? `${jan.texto}. Até ${ui.dataHoraBR(jan.ate)}` : "O cliente ainda não mandou mensagem neste número" });
-      pj.append(h("span", { class: "so-largo-txt" }, jan.texto), h("span", { class: "so-curto-txt" }, L.janelaCurta(jan)));
+      // plano 1500c · CC-138: o leitor de tela ouve a frase inteira («Janela aberta · 23 h restantes»), não só «23 h» do celular
+      pj.append(h("span", { class: "so-largo-txt", "aria-hidden": "true" }, jan.texto), h("span", { class: "so-curto-txt", "aria-hidden": "true" }, L.janelaCurta(jan)),
+        h("span", { class: "sr-only" }, jan.texto));
       // plano 50: barrinha com o que resta das 24 h (a cor acompanha a pílula)
       pj.appendChild(h("i", { class: "cv-janela-barra", "aria-hidden": "true", style: { "--pct": String(Math.round(L.fracaoJanela(jan) * 1000) / 1000) } }));
       faixa.appendChild(pj);
     } else if (conv.status === "resolvida") faixa.appendChild(ui.pilula("Resolvida", "neutra", { icone: "check", class: "cv-pil-resolvida" }));
     if (conv.status === "pendente") faixa.appendChild(ui.pilula("Pendente", "aten"));
     if (conv.oculta) faixa.appendChild(ui.pilula("Oculta · contato bloqueado", "ruim", { icone: "alerta" }));
-    if (ct.optin_marketing === false) faixa.appendChild(ui.pilula("Não quer marketing", "aten", { title: "Pediu para não receber mensagens de marketing" }));
+    // plano 1500c · CC-314: o supervisor registra que o cliente voltou a aceitar — a pílula abre a ficha, onde fica a escolha de marketing
+    if (ct.optin_marketing === false) {
+      if (A.acoes.pode("supervisor") && ct.id) {
+        const bOpt = h("button", { type: "button", class: ["pilula", "pilula-aten", "cv-pil-optin"], dataset: { acao: "optin" },
+          title: "Pediu para não receber marketing. Toque para registrar na ficha se voltou a aceitar" }, h("span", null, "Não quer marketing"));
+        bOpt.addEventListener("click", async () => {
+          const ok = await ui.confirmar({ titulo: "O cliente voltou a aceitar marketing?", rotulo: "Abrir a ficha",
+            texto: "Registre só se o cliente pediu de novo. Na ficha, em «Mensagens de marketing», marque «Aceita receber mensagens de marketing» e salve." });
+          if (ok) A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() });
+        });
+        faixa.appendChild(bOpt);
+      } else faixa.appendChild(ui.pilula("Não quer marketing", "aten", { title: "Pediu para não receber mensagens de marketing" }));
+    }
     // D18: o número desta conversa caiu — nada chega nem sai por ele até reconectar
     if (caido) faixa.appendChild(ui.pilula("Número desconectado", "ruim", { icone: "alerta", class: "cv-pil-caido",
       title: `${caido.nome || "O número"} está desconectado${caido.desde ? ` desde ${ui.dataHoraBR(caido.desde)}` : ""}: as mensagens não chegam nem saem até reconectar.` }));
@@ -384,6 +408,8 @@ export function criarChat(A) {
         itens.push({ rotulo: L.rotuloPausa8(), icone: "relogio",   // plano 1000b · CB-086: de madrugada, «até as 8h»
  fn: () => A.acoes.assumirIA(null, { horas: L.horasAteAmanha8() }) });
         itens.push({ rotulo: "Pausar a IA até eu devolver", icone: "relogio", fn: () => A.acoes.assumirIA(null, { horas: 0 }) });
+        // plano 1500c · CC-313: «Pausar até…» com a hora escolhida (fim do expediente, depois do almoço)
+        itens.push({ rotulo: "Pausar a IA até…", icone: "relogio", fn: () => pausarAte() });
       }
       if (pode && est.devolverIA) itens.push({ rotulo: "Devolver para a IA", icone: "ia", fn: () => A.acoes.devolverIA() });
       if (pode) itens.push({ rotulo: "Transferir…", icone: "seta-dir", fn: () => A.acoes.transferir() });
@@ -392,8 +418,40 @@ export function criarChat(A) {
       // CA-008: «Devolver para a fila» tem Desfazer (como Transferir e Resolver): nada vai ao servidor antes de o aviso fechar
       if (pode && conv.atribuida_a) itens.push({ rotulo: "Devolver para a fila", icone: "seta-esq", fn: () => A.acoes.devolverFila(conv) });
       if (pode) itens.push({ rotulo: "Etiquetas…", icone: "etiqueta", fn: () => abrirEtiquetas() });
+      // plano 1500c · CC-005: devolver o destaque de não lida (nx_cv_marcar_nao_lida) e voltar para a lista
+      if (pode && typeof A.acoes.marcarNaoLida === "function" && L.podeMarcarLida(conv, A.eu, pode))
+        itens.push({ rotulo: "Marcar como não lida", icone: "olho", fn: () => A.acoes.marcarNaoLida(conv.id, { voltar: true }) });
+      // plano 1500c · CC-057: fixar no topo da lista (no aparelho, até 5)
+      if (typeof A.acoes.alternarFixar === "function") {
+        const fix = (A.acoes.fixadas() || []).map(Number).includes(Number(conv.id));
+        itens.push({ rotulo: fix ? "Desafixar do topo" : "Fixar no topo da lista", icone: "pino", fn: () => A.acoes.alternarFixar(conv.id) });
+      }
+      // plano 1500c · CC-058: silenciar o som e o aviso só desta conversa
+      if (typeof A.acoes.silenciar === "function") {
+        if (A.acoes.silenciada(conv.id)) itens.push({ rotulo: "Ativar som desta conversa", icone: "sino", fn: () => A.acoes.silenciar(conv.id, null) });
+        else itens.push({ rotulo: "Silenciar esta conversa…", icone: "sino", fn: () => ui.menu(mais, [
+          { rotulo: "Por 8 horas", icone: "relogio", fn: () => A.acoes.silenciar(conv.id, 8) },
+          { rotulo: "Por 1 dia", icone: "relogio", fn: () => A.acoes.silenciar(conv.id, 24) },
+          { rotulo: "Até eu reativar", icone: "sino", fn: () => A.acoes.silenciar(conv.id, 0) },
+        ]) });
+      }
       itens.push("-");
       // plano 1000 · CA-080: o telefone vai no formato internacional (+55…), pronto para colar no discador ou no WhatsApp
+      // plano 1500c · CC-066: «Ligar» também aqui (a lateral some abaixo de 1280 px e no celular)
+      if (ct.telefone) itens.push({ rotulo: "Ligar", icone: "telefone", fn: () => { try { globalThis.location.href = `tel:${L.telefoneInternacional(ct.telefone)}`; } catch { /* sem discador */ } } });
+      // plano 1500c · CC-140: o WhatsApp deste aparelho (figurinha, enquete) — avisa que sai pelo número do aparelho e não fica no Órbita
+      if (ct.telefone) itens.push({ rotulo: "Abrir no WhatsApp deste aparelho", icone: "whatsapp", fn: () => {
+        ui.toast("Abrindo o WhatsApp deste aparelho: o que você mandar lá sai pelo número dele, não pelo da empresa, e não aparece no Órbita.", { tipo: "info", ms: 9000 });
+        try { globalThis.open(L.linkWhatsApp(ct.telefone), "_blank", "noopener"); } catch { /* bloqueado */ }
+      } });
+      // plano 1500c · CC-119: «Marcar consulta» no ⋮ (o atalho da lateral não aparece no tablet), com o negócio aberto já escolhido
+      if (pode && A.ctx && typeof A.ctx.temModulo === "function" && A.ctx.temModulo("crm") && typeof A.acoes.agendar === "function")
+        itens.push({ rotulo: "Marcar consulta", icone: "calendario", fn: () => A.acoes.agendar(L.negocioParaAgenda(A.ver)) });
+      // plano 1500c · CC-120: o endereço da conversa para pedir ajuda a um colega
+      itens.push({ rotulo: "Copiar link da conversa", icone: "link", fn: () => {
+        const base = (globalThis.location && `${globalThis.location.origin || ""}${globalThis.location.pathname || "/app/"}`) || "";
+        ui.copiar(`${base}#/conversas/${conv.id}`, { aviso: "Link da conversa copiado. Só quem tem acesso à central consegue abrir." });
+      } });
       if (ct.telefone) itens.push({ rotulo: "Copiar telefone", icone: "copiar", fn: () => ui.copiar(L.telefoneInternacional(ct.telefone), { aviso: `Telefone copiado: ${L.telefoneInternacional(ct.telefone)}` }) });
       // CA-082: «Abrir ficha» saiu do ⋮ (o nome no cabeçalho e o botão do cartão já abrem) — fica «Detalhes» no modo gaveta
       if (A.raiz && A.raiz.dataset.lateral === "gaveta") itens.push({ rotulo: "Detalhes e negócios", icone: "info", fn: () => A.acoes.abrirDetalhes() });
@@ -401,6 +459,8 @@ export function criarChat(A) {
       itens.push({ rotulo: mostrarSistema() ? "Eventos do sistema: à vista" : "Eventos do sistema: recolhidos", icone: "info", fn: () => definirSistema(!mostrarSistema()) });
       // CA-232: a conversa inteira em texto (prontuário, registro) — sem notas internas
       if (typeof A.acoes.exportar === "function") itens.push({ rotulo: "Exportar conversa (.txt)", icone: "baixar", fn: () => A.acoes.exportar() });
+      // plano 1500c · CC-121: a mesma exportação numa página de impressão (anexar ao prontuário como PDF)
+      if (typeof A.acoes.exportarPdf === "function") itens.push({ rotulo: "Imprimir ou salvar em PDF", icone: "folha", fn: () => A.acoes.exportarPdf() });
       if (pode) itens.push({ rotulo: A.acoes.avancarAoResolver() ? "Ao resolver, abrir a próxima: ligado" : "Ao resolver, abrir a próxima: desligado",
         icone: A.acoes.avancarAoResolver() ? "check" : "seta-dir", fn: () => A.acoes.definirAvancar(!A.acoes.avancarAoResolver()) });
       // CA-018: no aparelho de toque não há teclado: a folha de atalhos não entra no menu
@@ -412,7 +472,7 @@ export function criarChat(A) {
           : { rotulo: "Ocultar e bloquear (spam)", icone: "alerta", perigo: true, fn: () => A.acoes.ocultar(true) });
       }
       // plano 1000 · CA-111: no toque, folha de baixo em grupos («Atendimento» · «Contato») no lugar do popover de 13 itens que encostava no campo
-      if (L.aparelhoDeToque()) abrirFolha(mais, itens, ["Atendimento", "Contato", "Bloqueio"]);
+      if (L.aparelhoDeToque()) abrirFolha(mais, itens, ["Atendimento", "Contato", "Bloqueio"], `Ações da conversa com ${nome}`);   // plano 1500c · CC-147
       else ui.menu(mais, itens);
     });
     acoes.appendChild(mais);
@@ -430,13 +490,27 @@ export function criarChat(A) {
   /** CA-111: folha de baixo (celular) com os itens do ⋮ em grupos; "-" separa os grupos. Esc, tocar fora e Voltar fecham; o foco volta ao ⋮. */
   let folhaAberta = null;
   let seqFolha = 0;
-  function abrirFolha(ancora, itens, nomes = []) {
+  /** plano 1500c · CC-313: a IA volta sozinha na hora escolhida (horário de Brasília; já passou hoje = amanhã). */
+  async function pausarAte() {
+    const inp = h("input", { type: "time", id: "cvc-pausa-ate", value: "18:00", required: true });
+    const horas = await ui.modal({ titulo: "Pausar a IA até…", largura: "p",
+      corpo: h("div", { class: "campo" }, h("label", { for: "cvc-pausa-ate" }, "A IA volta sozinha às (horário de Brasília)"), inp,
+        h("small", { class: "campo-ajuda" }, "Se essa hora já passou hoje, vale amanhã.")),
+      acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Pausar", tipo: "primario", fn: api => {
+        const hs = L.horasAteHora(inp.value);
+        if (!hs) { if (api && typeof api.erro === "function") api.erro("Escolha a hora em que a IA volta."); return false; }
+        return hs;
+      } }] });
+    if (horas) A.acoes.assumirIA(null, { horas });
+  }
+
+  function abrirFolha(ancora, itens, nomes = [], rotulo = "Mais ações") {
     if (folhaAberta) { try { folhaAberta.fechar(); } catch { /* ok */ } }
     const grupos = [[]];
     for (const it of itens.filter(Boolean)) { if (it === "-") grupos.push([]); else grupos[grupos.length - 1].push(it); }
     let fechado = false, camada = null;
     const folhaSeq = ++seqFolha;   // plano 1000b · CB-088: ids únicos dos títulos dos grupos
-    const dlg = h("dialog", { class: "cv-folha", "aria-label": "Mais ações" });
+    const dlg = h("dialog", { class: "cv-folha", "aria-label": rotulo });   // plano 1500c · CC-147: «Ações da conversa com Maria»
     const fechar = (voltarFoco = true) => {
       if (fechado) return; fechado = true;
       if (camada) try { camada.liberar(); } catch { /* ok */ }
@@ -572,6 +646,8 @@ export function criarChat(A) {
   /** plano 1000 · CA-121: o link mostra para onde vai de verdade (o host como o navegador lê — domínio internacional em punycode) e
       avisa encurtador; o ↗ diz que abre fora do Órbita. */
   function linkSeguro(url, texto = url) {   // plano 1000b · CB-026: «www.…» mostra o que foi escrito; o href leva o https://
+    // plano 1500c · CX-016: e-mail abre o aplicativo de e-mail (sem aba nova nem a seta de «sai do Órbita»)
+    if (/^mailto:/i.test(url)) return h("a", { href: url, class: "cv-link-email", title: `Escrever um e-mail para ${texto}` }, texto);
     const d = L.destinoLink(url);
     const title = !d ? "Abre fora do Órbita" : d.encurtador ? `Link encurtado (${d.host}): o destino real só aparece depois de abrir. Abra só se confia no remetente.`
       : d.idn ? `Vai para ${d.host} — endereço com letras de outro alfabeto: confira antes de abrir.` : `Vai para ${d.host}`;
@@ -644,6 +720,14 @@ export function criarChat(A) {
 
   /* ---------------- visualizador de fotos (33): <dialog> próprio — Esc fecha, ← → trocam, deslize no celular, foco preso e devolvido à bolha */
   let visualizador = null;
+  /** plano 1500c · CC-077: a área de transferência só aceita PNG — JPEG/WEBP passam por um canvas. */
+  async function paraPng(blob) {
+    const bmp = await createImageBitmap(blob);
+    const c = document.createElement("canvas");
+    c.width = bmp.width; c.height = bmp.height;
+    c.getContext("2d").drawImage(bmp, 0, 0);
+    return new Promise((ok, erro) => c.toBlob(b => (b ? ok(b) : erro(new Error("png_falhou"))), "image/png"));
+  }
   function abrirVisualizador(msgInicial) {
     const itens = L.imagensDaConversa(A.msgs);
     if (!itens.length) return;
@@ -660,12 +744,26 @@ export function criarChat(A) {
     const btBaixar = baixarDeVerdade(h("a", { class: "bt bt-sec bt-p cv-lb-baixar", href: "#", target: "_blank", rel: "noopener noreferrer" }, A.icone("baixar"), h("span", { class: "so-largo-txt" }, "Baixar")));   // plano 1000b · CB-034
     const btZoom = h("button", { type: "button", class: "bt-icone cv-lb-zoom", "aria-label": "Ampliar a foto", "aria-pressed": "false" }, A.icone("ampliar"));
     const btFechar = h("button", { type: "button", class: "bt-icone cv-lb-x", "aria-label": "Fechar (Esc)" }, ui.icone("fechar"));
+    // plano 1500c · CC-076: girar 90° (só a exibição; o arquivo não muda) · CC-077: copiar a imagem quando o navegador deixa
+    let giro = 0;
+    const btGirar = h("button", { type: "button", class: "bt-icone cv-lb-girar", "aria-label": "Girar a foto 90 graus", title: "Girar" }, A.icone("reabrir"));
+    btGirar.addEventListener("click", () => { giro = (giro + 90) % 360; img.style.setProperty("--giro", `${giro}deg`); dlg.dataset.giro = String(giro); });
+    const podeCopiarImg = typeof globalThis.ClipboardItem === "function" && !!(globalThis.navigator && navigator.clipboard && typeof navigator.clipboard.write === "function");
+    const btCopiarImg = podeCopiarImg ? h("button", { type: "button", class: "bt-icone cv-lb-copiar", "aria-label": "Copiar a imagem", title: "Copiar imagem" }, ui.icone("copiar")) : null;
+    if (btCopiarImg) btCopiarImg.addEventListener("click", async () => {
+      try {
+        const r = await fetch(img.src); const b = await r.blob();
+        const png = b.type === "image/png" ? b : await paraPng(b);
+        await navigator.clipboard.write([new globalThis.ClipboardItem({ "image/png": png })]);
+        ui.toast("Imagem copiada: cole onde quiser.", { tipo: "ok" });
+      } catch { ui.toast("Este navegador não deixou copiar a imagem. Use «Baixar».", { tipo: "info" }); }
+    });
     const kbd = t => h("kbd", null, t);
     // plano 1000b · CB-031: aviso quando a URL da foto não vem
     const btTentar = h("button", { type: "button", class: "bt bt-sec bt-p cv-lb-tentar" }, "Tentar de novo");
     const falha = h("p", { class: "cv-lb-falha", role: "status", hidden: true }, "Não deu para abrir a foto agora. ", btTentar);
     const dlg = h("dialog", { class: "cv-lb", "aria-label": "Visualizador de fotos", dataset: { carregando: "0", zoom: "0" } },
-      h("header", { class: "cv-lb-cab" }, contador, nome, h("div", { class: "cv-lb-acoes" }, btZoom, btBaixar, btFechar)),
+      h("header", { class: "cv-lb-cab" }, contador, nome, h("div", { class: "cv-lb-acoes" }, btGirar, btZoom, btCopiarImg, btBaixar, btFechar)),
       h("div", { class: "cv-lb-palco" }, btAnt, fig, btProx), falha,
       // plano 1000b · CB-074: no toque só «Deslize para trocar»; com teclado, só as teclas
       L.aparelhoDeToque() ? h("p", { class: "cv-lb-dica" }, "Deslize para trocar")
@@ -690,6 +788,7 @@ export function criarChat(A) {
       leg.textContent = [it.legenda, L.horaMsg(it.criado_em)].filter(Boolean).join(" · ");
       btAnt.disabled = i === 0; btProx.disabled = i === itens.length - 1;
       dlg.dataset.zoom = "0"; btZoom.setAttribute("aria-pressed", "false");
+      giro = 0; img.style.removeProperty("--giro"); delete dlg.dataset.giro;   // CC-076: cada foto começa sem giro
       const r = resolverUrl(it);
       if (r.url) {
         falha.hidden = true;
@@ -948,8 +1047,13 @@ export function criarChat(A) {
       const selo = h("span", { class: "cv-video-selo dado", "aria-hidden": "true" }, "▶ ", dur || "Vídeo");
       v.addEventListener("play", () => { selo.hidden = true; });
       const cxVideo = h("div", { class: "cv-midia cv-video" }, v, selo);
-      preloadPreguicoso(v, cxVideo);
-      return cxVideo;
+      // plano 1500c · CC-152: rede em economia ou lenta (2g/3g) — nada de metadados ao rolar; o vídeo baixa quando a pessoa toca no play
+      const economia = (() => { try { return L.economiaDeDados(globalThis.navigator && globalThis.navigator.connection); } catch { return false; } })();
+      if (economia) cxVideo.dataset.economia = "1"; else preloadPreguicoso(v, cxVideo);
+      // plano 1500c · CC-075: vídeo também tem «Baixar» (no iPhone não existe o menu do player para salvar)
+      if (local) return cxVideo;
+      return h("div", { class: "cv-video-cx" }, cxVideo,
+        h("div", { class: "cv-doc-acoes" }, baixarDeVerdade(h("a", { class: "bt bt-fant bt-p cv-video-baixar", href: url, rel: "noopener noreferrer", download: nome || "video.mp4", "aria-label": "Baixar vídeo" }, A.icone("baixar"), "Baixar"))));
     }
     if (m.tipo === "audio") return blocoAudio(m, url, md);
     // CA-119: documento recebido de tipo incomum (.apk, .exe, .html, .svg…) nunca abre direto numa aba: aviso e download forçado
@@ -1004,7 +1108,19 @@ export function criarChat(A) {
   /* ---------------- linha do tempo do sistema (37): eventos seguidos (IA, transferências, atribuições) num bloco recolhível */
   const gruposAbertos = new Set();
   /* CA-231: «Eventos do sistema» à vista (padrão) ou recolhidos num traço fino com a contagem — preferência por navegador */
-  function mostrarSistema() { return !(typeof A.acoes.mostrarSistema === "function" && A.acoes.mostrarSistema() === false); }
+  // plano 1500c · CC-151: «mostrar» no traço fino vale só para ESTA conversa (até sair dela); a preferência global fica no ⋮
+  let sistemaSoNesta = null;
+  function mostrarSistema() {
+    const atual = A.ver && A.ver.conversa ? A.ver.conversa.id : null;
+    if (sistemaSoNesta !== null && sistemaSoNesta !== atual) sistemaSoNesta = null;
+    if (sistemaSoNesta !== null) return true;
+    return !(typeof A.acoes.mostrarSistema === "function" && A.acoes.mostrarSistema() === false);
+  }
+  function mostrarSistemaNesta() {
+    sistemaSoNesta = A.ver && A.ver.conversa ? A.ver.conversa.id : null;
+    renderMensagens({ rolar: "manter" });
+    ui.anunciar("Eventos do sistema à vista nesta conversa.");
+  }
   function definirSistema(sim) {
     if (typeof A.acoes.definirMostrarSistema === "function") A.acoes.definirMostrarSistema(!!sim);
     renderMensagens({ rolar: "manter" });
@@ -1014,8 +1130,8 @@ export function criarChat(A) {
   function linhaSistemaFina(msgsSis) {
     const n = msgsSis.length;
     return h("div", { class: "cv-sis-fino", dataset: { id: msgsSis[0].id, n: String(n) } },
-      h("button", { type: "button", class: "cv-sis-fino-bt", title: L.rotuloGrupoSistema(msgsSis), on: { click: () => definirSistema(true) } },
-        `${n} ${n === 1 ? "evento" : "eventos"} do sistema · mostrar`));
+      h("button", { type: "button", class: "cv-sis-fino-bt", title: `${L.rotuloGrupoSistema(msgsSis)}. Mostra só nesta conversa (para sempre: ⋮ › Eventos do sistema)`, on: { click: () => mostrarSistemaNesta() } },
+        `${n} ${n === 1 ? "evento" : "eventos"} do sistema · mostrar nesta conversa`));
   }
   function construirGrupoSistema(ln) {
     const lista = ln.msgs, ult = lista[lista.length - 1];
@@ -1081,13 +1197,16 @@ export function criarChat(A) {
     const loc = L.localizacaoDe(m.corpo);
     if (!loc) return null;
     const url = `https://maps.google.com/?q=${encodeURIComponent(`${loc.lat},${loc.lng}`)}`;
-    return h("div", { class: "cv-msg-extra" }, h("a", { class: "bt bt-sec bt-p cv-mapa", href: url, target: "_blank", rel: "noopener noreferrer", "aria-label": `Abrir no mapa${loc.nome ? `: ${loc.nome}` : ""}` }, ui.icone("globo"), "Abrir no mapa"));
+    // plano 1500c · CC-153: rota pelo Waze também (motoboy, cliente que manda a localização para a visita)
+    const waze = `https://waze.com/ul?ll=${encodeURIComponent(`${loc.lat},${loc.lng}`)}&navigate=yes`;
+    return h("div", { class: "cv-msg-extra" }, h("a", { class: "bt bt-sec bt-p cv-mapa", href: url, target: "_blank", rel: "noopener noreferrer", "aria-label": `Abrir no mapa${loc.nome ? `: ${loc.nome}` : ""}` }, ui.icone("globo"), "Abrir no mapa"),
+      h("a", { class: "bt bt-fant bt-p cv-waze", href: waze, target: "_blank", rel: "noopener noreferrer", "aria-label": `Rota no Waze${loc.nome ? `: ${loc.nome}` : ""}` }, ui.icone("seta-dir"), "Rota no Waze"));
   }
   function blocoContatos(m) {
     const lista = L.contatosDe(m.corpo);
     if (!lista.length) return null;
     return h("div", { class: "cv-msg-extra" }, lista.slice(0, 3).map(c => h("div", { class: "cv-contato-rec" },
-      h("span", { class: "cv-contato-rec-nome" }, c.nome || ui.telBR(c.telefone)),
+      h("span", { class: "cv-contato-rec-nome dado-pessoal" }, c.nome || ui.telBR(c.telefone)),   // plano 1500c · CX-001
       h("button", { type: "button", class: "bt bt-fant bt-p", "aria-label": `Copiar o telefone de ${c.nome || "contato"}`, on: { click: () => ui.copiar(L.telefoneInternacional(c.telefone), { aviso: `Telefone copiado: ${L.telefoneInternacional(c.telefone)}` }) } }, ui.icone("copiar"), "Copiar telefone"),
       A.podeEscrever ? h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.novaConversa({ telefone: c.telefone, nome: c.nome }) } }, ui.icone("chat"), "Nova conversa") : null)));
   }
@@ -1095,7 +1214,9 @@ export function criarChat(A) {
   function quemEnviou(m) {
     if (m.direcao !== "out" || m.tipo === "nota") return null;
     const cw = A.ver?.conversa?.canal?.provedor === "codewords";
-    if (cw && m.origem === "ia") return `${A.base?.config?.ia?.assistente_nome || "Assistente"} · IA`;
+    // plano 1500c · CC-003: o nome do assistente vem no topo do nx_cv_base para todos (CB-203); a config só o admin recebe
+    // plano 1500c · CC-004: mensagem da IA é da IA em qualquer número (antes só no CodeWords; no nx-ia da Meta parecia da equipe)
+    if (m.origem === "ia") return `${A.base?.ia_assistente_nome || A.base?.config?.ia?.assistente_nome || "Assistente"} · IA`;
     if (cw && !m.origem && !m.enviado_por) return "Pelo celular";
     if (m.origem === "automacao") return "Automação";
     if (m.origem === "fora_horario") return "Mensagem automática (fora do horário)";
@@ -1141,8 +1262,11 @@ export function criarChat(A) {
     if (m.responde_a) {
       const ra = m.responde_a;
       // CA-009: citação de mensagem que não está carregada vai buscá-la (páginas anteriores) e só então destaca
-      const cita = h("button", { type: "button", class: "cv-cita", dataset: { dir: ra.direcao === "in" ? "in" : "out" }, on: { click: () => irParaCitada(ra.id) } },
-        h("b", null, ra.direcao === "in" ? A.acoes.nomeContato(A.ver && A.ver.contato) || "Cliente" : autorCitada(ra)), ra.resumo || "Mensagem");
+      // plano 1500c · CC-156: o botão diz para onde vai («Ir para a mensagem citada de Maria: …»)
+      const autorCita = ra.direcao === "in" ? A.acoes.nomeContato(A.ver && A.ver.contato) || "Cliente" : autorCitada(ra);
+      const cita = h("button", { type: "button", class: "cv-cita", dataset: { dir: ra.direcao === "in" ? "in" : "out" }, on: { click: () => irParaCitada(ra.id) },
+        "aria-label": `Ir para a mensagem citada de ${autorCita}: ${ra.resumo || "mensagem"}` },
+        h("b", null, autorCita), ra.resumo || "Mensagem");
       bolha.appendChild(cita);
     }
     if (["imagem", "video", "audio", "documento", "sticker"].includes(m.tipo)) bolha.appendChild(blocoMidia(m));
@@ -1161,7 +1285,7 @@ export function criarChat(A) {
     if (m.reacao) bolha.appendChild(h("span", { class: "cv-reacao", role: "img", title: "Reação do cliente", "aria-label": `Reação do cliente: ${m.reacao}` }, m.reacao));
 
     const quem = !ln.junta ? quemEnviou(m) : null;
-    const box = h("div", { class: ["cv-msg", m.local && "cv-local-env"], dataset: { id: m.id, dir, tipo: m.tipo, junta: ln.junta ? "1" : "0", cauda: ln.cauda === false ? "0" : "1" } },
+    const box = h("div", { class: ["cv-msg", m.local && "cv-local-env"], dataset: { id: m.id, dir, tipo: m.tipo, junta: ln.junta ? "1" : "0", origem: m.origem === "ia" ? "ia" : null /* plano 1500c · CC-004 */, cauda: ln.cauda === false ? "0" : "1" } },
       quem ? h("div", { class: "cv-quem" }, quem) : null, bolha);
     // ações da bolha (hover/foco no desktop, toque longo no celular): responder e copiar o texto
     const acoesMsg = h("div", { class: "cv-msg-acoes" });
@@ -1178,6 +1302,18 @@ export function criarChat(A) {
       acoesMsg.appendChild(h("button", { type: "button", class: "bt-icone cv-copiar", "aria-label": "Copiar o texto da mensagem", title: "Copiar texto",
         on: { click: () => A.acoes.copiarTexto(m) } }, ui.icone("copiar")));
       itensMenu.push({ rotulo: "Copiar texto", icone: "copiar", fn: () => A.acoes.copiarTexto(m) });
+    }
+    // plano 1500c · CC-070 / CC-071: «Encaminhar» (texto pronto em outra conversa, sem enviar) e «Criar tarefa» com o texto da mensagem
+    const extras = [];
+    if (A.podeEscrever && !m.local && m.corpo && m.tipo !== "nota" && m.tipo !== "sistema" && m.tipo !== "desconhecido" && typeof A.acoes.encaminhar === "function")
+      extras.push({ rotulo: "Encaminhar para outra conversa", icone: "seta-dir", fn: () => A.acoes.encaminhar(m) });
+    if (A.podeEscrever && !m.local && m.tipo !== "sistema" && typeof A.acoes.tarefaDeMensagem === "function")
+      extras.push({ rotulo: "Criar tarefa", icone: "tarefa", fn: () => A.acoes.tarefaDeMensagem(m) });
+    if (extras.length) {
+      const btMaisMsg = h("button", { type: "button", class: "bt-icone cv-msg-mais", "aria-label": "Mais ações da mensagem", title: "Mais" }, ui.icone("opcoes"));
+      btMaisMsg.addEventListener("click", () => ui.menu(btMaisMsg, extras));
+      acoesMsg.appendChild(btMaisMsg);
+      itensMenu.push(...extras);
     }
     let toque = false;
     try { toque = matchMedia("(pointer: coarse)").matches; } catch { toque = false; }
@@ -1311,6 +1447,10 @@ export function criarChat(A) {
     if (A.destruido || !A.ver) return;
     const estavaNoFim = noFim();
     const alturaAntes = msgs.scrollHeight, topoAntes = msgs.scrollTop;
+    // plano 1500c · CC-020: ao inserir as antigas no topo, o role=log fica ocupado (o NVDA não lê as 50 bolhas) e um aviso curto diz quantas
+    const anterior = rolar === "anterior";
+    const idsAntes = anterior ? new Set([...cache.keys()]) : null;
+    if (anterior) msgs.setAttribute("aria-busy", "true");
     // plano 50: cauda só na última bolha do grupo, fotos seguidas em grade, eventos do sistema agrupados e o separador «Mensagens novas»
     let linhas = L.marcarCaudas(L.montarLinhas(A.msgs, A.conversasContato));
     // o separador entra ANTES de agrupar: ele fecha a grade de fotos (e o bloco do sistema), então lidas e não lidas nunca dividem a mesma grade
@@ -1373,7 +1513,12 @@ export function criarChat(A) {
         vigiarUltima();
       });
     }
-    else if (rolar === "anterior") msgs.scrollTop = topoAntes + (msgs.scrollHeight - alturaAntes);
+    else if (rolar === "anterior") {
+      msgs.scrollTop = topoAntes + (msgs.scrollHeight - alturaAntes);
+      const n = [...cache.keys()].filter(k => k.startsWith("m-") && !idsAntes.has(k)).length;
+      setTimeout(() => { msgs.removeAttribute("aria-busy"); }, 0);
+      if (n > 0 && typeof ui.anunciar === "function") ui.anunciar(`${n} ${n === 1 ? "mensagem anterior carregada" : "mensagens anteriores carregadas"}`);
+    }
     else if (rolar === "novas") {
       if (estavaNoFim) requestAnimationFrame(() => rolarFim(true));
       else if (ult !== null && ultimoRenderId !== null && ult > ultimoRenderId) {
@@ -1486,5 +1631,7 @@ export function criarChat(A) {
     desmontar() { if (obsPreload) { try { obsPreload.disconnect(); } catch { /* ok */ } obsPreload = null; } clearTimeout(tLiberarEnvio); tLiberarEnvio = null; liberarEm = 0; players.clear(); if (visualizador) { try { visualizador.fechar(); } catch { /* ok */ } } },
     get visualizador() { return visualizador; },
     focarMensagens() { try { msgs.focus({ preventScroll: true }); } catch { /* ok */ } },
+    /** plano 1500c · CC-016: rola até o topo do que está carregado (a mensagem procurada é mais antiga). */
+    rolarTopo() { grudarFimAte = 0; msgs.scrollTop = 0; },
   };
 }

@@ -173,6 +173,7 @@
 }
 .cv-msg[data-dir="in"]:not([data-junta="1"]) .cv-bolha { border-top-left-radius: 6px; }
 .cv-msg[data-dir="out"] .cv-bolha { background: var(--c-bolha-out); border-color: color-mix(in srgb, var(--c-prim) 26%, transparent); }
+.cv-msg[data-dir="out"][data-origem="ia"] .cv-bolha { border-color: color-mix(in srgb, var(--c-info) 45%, transparent); border-style: dashed; } /* plano 1500c · CC-004: bolha da IA em qualquer número */
 .cv-msg[data-dir="out"]:not([data-junta="1"]) .cv-bolha { border-top-right-radius: 6px; }
 .cv-texto { white-space: pre-wrap; font-size: var(--fs-15); line-height: 1.45; }
 .cv-texto a { color: var(--c-prim-luz); }
@@ -1334,3 +1335,70 @@ mark.cvx-pend { background: var(--c-aten-suave); color: var(--c-texto); border-r
 .cvx-multi-tirar { min-height: 44px; align-self: flex-start; }                                  /* CB-080 */
 .cv-nv-caido { margin: 0; }                                                                 /* CB-044 */
 .cvt-sem-detalhes .sub { margin: 0; }                                                        /* CB-131 */
+
+/* ============================================================ plano 1500c · frente conv */
+/* plano 1500c · CC-042: a busca da lista com 44 px e 16 px de fonte no celular (o iPhone não dá zoom ao focar) */
+.cvl-busca .busca input { min-height: 44px; }
+@media (max-width: 760px), (pointer: coarse) { .cvl-busca .busca input { font-size: 16px; } }
+/* plano 1500c · CC-040 / CC-041: remover faixa e campos de hora do departamento com 44 px no toque */
+@media (max-width: 760px), (pointer: coarse) {
+  .cfg-faixa .bt-icone { width: 44px; height: 44px; }
+  .cfg-faixas input[type="time"] { min-height: 44px; font-size: 16px; }
+}
+/* plano 1500c · CC-044: responder/copiar da bolha com 44 px em qualquer tela de toque (tablet de 1280 px também) */
+@media (pointer: coarse) { .cv-msg-acoes .bt-icone { width: 44px; min-width: 44px; height: 44px; min-height: 44px; } }
+/* plano 1500c · CC-045: o avatar do responsável legível (antes 9,5 px) */
+.cvl-item .cvl-dono { width: 24px; height: 24px; font-size: var(--fs-11, 11px); }
+/* plano 1500c · CC-046: a sigla do documento no piso de 12 px (--fs-11) e peso 700 */
+.cv-doc-ic { font-size: var(--fs-11); font-weight: 700; }
+/* plano 1500c · CC-047: selo «ligado» da lateral em 12 px e cor de texto 2 (contraste AA) */
+.cvt-ligado { font-size: var(--fs-12, 12px); color: var(--c-texto-2); }
+/* plano 1500c · CC-052 / CC-057 / CC-058: «Selecionar todas», alfinete e sino da lista */
+.cvl-lote-todas { min-height: 44px; font-size: var(--fs-13); }
+.cvl-lote-todas[hidden] { display: none !important; }
+.cvl-fixada, .cvl-silenciada { display: inline-flex; align-items: center; color: var(--c-texto-2); }
+.cvl-fixada .ic, .cvl-silenciada .ic { width: 14px; height: 14px; }
+.cvl-silenciada { opacity: .7; }
+/* plano 1500c · CC-009: «Ver mais mensagens» na busca */
+.cvl-msgs-mais { margin: .5rem 1rem; min-height: 44px; }
+.cvf-origens .chip-check input[type="radio"] { accent-color: var(--c-prim); }
+[hidden] { display: none !important; }
+/* plano 1500c · CC-076: girar a foto no visualizador (90/270 trocam os limites de largura e altura) */
+.cv-lb-fig img { transform: rotate(var(--giro, 0deg)); transition: transform var(--t-ui) var(--e-out); }
+.cv-lb[data-giro="90"] .cv-lb-fig img, .cv-lb[data-giro="270"] .cv-lb-fig img { max-width: calc(100dvh - 11rem); max-height: 100vw; }
+@media (prefers-reduced-motion: reduce) { .cv-lb-fig img { transition: none; } }
+/* plano 1500c · CC-075: «Baixar» do vídeo logo abaixo do player */
+.cv-video-cx { display: flex; flex-direction: column; gap: .35rem; }
+@media (max-width: 760px), (pointer: coarse) { .cv-video-baixar, .cv-msg-mais, .cvt-prazo { min-height: 44px; } }
+/* plano 1500c · CC-085: antes/depois em cada foto da janela de várias fotos */
+.cvx-multi-ordem-bts { gap: .25rem; }
+@media (max-width: 760px), (pointer: coarse) { .cvx-multi-ordem-bts .bt-icone { width: 44px; height: 44px; } }
+/* plano 1500c · CC-088: interruptor «Ativa/Desligada» na linha das respostas rápidas */
+.cfg-resp-ativa { display: inline-flex; align-items: center; gap: .45rem; min-height: 44px; padding: 0 .4rem; border-radius: 999px; font-size: var(--fs-13); color: var(--c-texto-2); background: none; border: 0; cursor: pointer; }
+.cfg-resp-ativa-trilho { position: relative; width: 34px; height: 20px; border-radius: 999px; background: var(--c-sup-3); border: 1px solid var(--c-borda-2); flex: none; }
+.cfg-resp-ativa-trilho::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--c-texto-3); transition: transform var(--t-micro) var(--e-out); }
+.cfg-resp-ativa[aria-checked="true"] .cfg-resp-ativa-trilho { background: var(--c-ok-suave); border-color: var(--c-ok); }
+.cfg-resp-ativa[aria-checked="true"] .cfg-resp-ativa-trilho::after { transform: translateX(14px); background: var(--c-ok); }
+.cfg-resp-ativa:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .cfg-resp-ativa-trilho::after { transition: none; } }
+/* plano 1500c · CC-104: o alerta «Sem mensagem fora do horário · Ligar» é um botão */
+.cfg-dep-msg-bt { min-height: 44px; border: 0; background: none; padding: 0 .25rem; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; color: inherit; font: inherit; }
+.cfg-dep-msg-bt:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; border-radius: 6px; }
+/* plano 1500c · CC-137/CC-314: pílulas que viraram botão (assumir / registrar marketing) */
+.cv-pil-assumir, .cv-pil-optin { cursor: pointer; border: 0; font: inherit; }
+.cv-pil-assumir:hover, .cv-pil-optin:hover { filter: brightness(.96); }
+.cv-pil-assumir:focus-visible, .cv-pil-optin:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; }
+@media (max-width: 760px), (pointer: coarse) { .cv-pil-assumir, .cv-pil-optin, .cv-waze, .cv-tr-recado-chip, .cfg-ia-da-agenda { min-height: 44px; } }
+/* plano 1500c · CC-124: dono sem nome conhecido — ícone de pessoa no lugar do «?» */
+.cvl-dono-sem { display: inline-grid; place-items: center; }
+.cvl-dono-sem svg { width: 14px; height: 14px; }
+/* plano 1500c · CC-146: recados usados antes, acima do campo do transferir */
+.cv-tr-recados { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .35rem; }
+.cv-tr-recado-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-12); }
+.cv-tr-avisar textarea { margin-top: .35rem; }
+/* plano 1500c · CC-149: como o número digitado vai ficar */
+.cv-nv-tel-previa { color: var(--c-texto-2); }
+/* plano 1500c · CC-316 / CC-315 / CC-125: avisos das configurações */
+.cfg-sync-erro { display: block; margin-top: .25rem; font-size: var(--fs-12); color: var(--c-aten); }
+.cfg-dep-ninguem { margin: .25rem 0 0; font-size: var(--fs-13); }
+.cfg-ia-da-agenda { align-self: flex-start; margin-top: .35rem; }

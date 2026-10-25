@@ -102,10 +102,11 @@ test("46 · funil por plataforma: 4 etapas, taxa entre pares (null sem base), s�
   assert.deepEqual(fp.map(x => x.plat), ["meta", "google"]);
   const tudo = L.numerosPeriodo(M, { dias: 30 });
   assert.equal(fp.reduce((s, p) => s + p.etapas[1].v, 0), tudo.c.conversas);
-  assert.equal(fp.reduce((s, p) => s + p.etapas[3].v, 0), tudo.c.fecharam);
+  // plano 1500c: o funil ganhou «compareceram» (AC-097) — 5 etapas, fecharam é a 5ª
+  assert.equal(fp.reduce((s, p) => s + p.etapas[4].v, 0), tudo.c.fecharam);
   for (const p of fp) {
-    assert.deepEqual(p.etapas.map(e => e.id), ["convAds", "conversas", "agendadas", "fecharam"]);
-    assert.equal(p.taxas.length, 3);
+    assert.deepEqual(p.etapas.map(e => e.id), ["convAds", "conversas", "agendadas", "compareceram", "fecharam"]);
+    assert.equal(p.taxas.length, 4);
     p.taxas.forEach((tx, k) => { const base = p.etapas[k].v; if (base > 0) assert.equal(tx.pct, Math.round(p.etapas[k + 1].v / base * 1000) / 10); else assert.equal(tx.pct, null); });
     assert.equal(p.max, Math.max(...p.etapas.map(e => e.v)));
   }
@@ -113,7 +114,7 @@ test("46 · funil por plataforma: 4 etapas, taxa entre pares (null sem base), s�
   const soMeta = { consolidar: ls => ({ gasto: ls.length ? 10 : 0, conversoes: ls.length ? 2 : 0 }), linhasDe: (de, ate, f) => (f.plat === "meta" ? [1] : []), crmTot: (de, ate, f) => (f.plat === "meta" ? { conversas: 2, agendadas: 0, fecharam: 0, receita: 0 } : { conversas: 0, agendadas: 0, fecharam: 0, receita: 0 }), R: 10 };
   const um = L.funilPorPlataforma(soMeta, { dias: 7 });
   assert.deepEqual(um.map(x => x.plat), ["meta"]);
-  assert.equal(um[0].taxas[1].pct, 0); assert.equal(um[0].taxas[2].pct, null);
+  assert.equal(um[0].taxas[1].pct, 0); assert.equal(um[0].taxas[2].pct, null); assert.equal(um[0].taxas[3].pct, null);
 });
 
 test("47 · calor dia da semana × semana: a matriz soma todas as conversas, as semanas começam na segunda e o pico/dia mais forte são coerentes", () => {
@@ -125,7 +126,9 @@ test("47 · calor dia da semana × semana: a matriz soma todas as conversas, as 
     assert.ok(c.semanas.length >= Math.ceil(dias / 7) && c.semanas.length <= Math.ceil(dias / 7) + 1, `${dias} dias: ${c.semanas.length} semanas`);
     const primeiro = t[0].i, dowPrimeiro = M.dataDe(primeiro).getDay();
     assert.equal(c.semanas[0].ini, primeiro - ((dowPrimeiro + 6) % 7), "a 1ª coluna começa na segunda-feira da semana do 1º dia");
-    if (c.max > 0) { assert.equal(c.matriz[c.pico.dow][c.pico.semana], c.max); assert.equal(c.porDow[c.melhorDow], Math.max(...c.porDow)); }
+    if (c.max > 0) { assert.equal(c.matriz[c.pico.dow][c.pico.semana], c.max); // plano 1500c: empate no topo (AC-143) → melhorDow null e a lista dos empatados
+      if (c.melhorDow == null) assert.ok(c.empate.every(d => c.porDow[d] === Math.max(...c.porDow)) && c.empate.length > 1);
+      else assert.equal(c.porDow[c.melhorDow], Math.max(...c.porDow)); }
   }
   const vazio = L.calorSemanal({ porDia: () => ({ meta: [], google: [], conv: [], ag: [], fe: [], rec: [] }), LEADS: [], DIAS: 0, R: -1, dataDe: () => new Date() }, { dias: 7 });
   assert.equal(vazio.max, 0); assert.equal(vazio.pico, null); assert.deepEqual(vazio.semanas, []);
@@ -231,7 +234,7 @@ test("49 · sparkline (DOM): sem graficos.sparkline desenha o fallback; com ela,
 test("46 · funil por plataforma (DOM): uma coluna por plataforma, barras proporcionais e «sem base» quando não há denominador", () => {
   const el = A.criarFunilPlataformas({ h, dados: L.funilPorPlataforma(M, { dias: 30 }), fmtInt: String, fmtMoeda: v => `R$ ${Math.round(v)}`, pctTxt: v => `${v}%` });
   assert.equal(el.querySelectorAll(".ads-fp-col").length, 2);
-  assert.equal(el.querySelectorAll(".ads-fp-meta .ads-fp-etapa").length, 4);
+  assert.equal(el.querySelectorAll(".ads-fp-meta .ads-fp-etapa").length, 5);   // plano 1500c: + «compareceram» (AC-097)
   const barras = el.querySelectorAll(".ads-fp-meta .ads-fp-barra").map(b => parseFloat(b.style.getPropertyValue("--w")));
   assert.equal(barras[0], 100); assert.ok(barras.every(w => w >= 0 && w <= 100));
   const semBase = A.criarFunilPlataformas({ h, dados: [{ plat: "google", nome: "Google", gasto: 5, receita: 0, max: 0, etapas: [{ id: "a", rotulo: "A", v: 0 }, { id: "b", rotulo: "B", v: 0 }], taxas: [{ de: "a", para: "b", pct: null }] }] });

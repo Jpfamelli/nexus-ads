@@ -29,6 +29,13 @@ const CONSULTAS = {
     WHERE segments.date BETWEEN '{de}' AND '{ate}' AND metrics.impressions > 0`,
 };
 
+/** plano 1500c · SC-062: erro de conexão com o Google (código google_indisponivel), sem URL nem token. */
+export function erroIndisponivel(onde) {
+  const e = new Error(`Google Ads indisponível agora (${onde} sem resposta). Tenta de novo na próxima rodada.`);
+  e.codigo = "google_indisponivel";
+  return e;
+}
+
 const lerJson = txt => { try { return JSON.parse(txt); } catch { return null; } };
 const primeiroErro = corpo => (Array.isArray(corpo) ? corpo.find(b => b && b.error)?.error : corpo?.error) || null;
 
@@ -72,7 +79,11 @@ export function criarGoogle({ fetch: f = globalThis.fetch, versao = null, espera
     // sync do Google naquela hora (4xx como invalid_grant não repete)
     let r;
     try { r = await trocar(); }
-    catch { await esperar(ESPERA_OAUTH_MS); r = await trocar(); }
+    catch {
+      await esperar(ESPERA_OAUTH_MS);
+      // plano 1500c · SC-062: a 2ª falha de rede vira erro com código (antes a exceção crua do fetch, com a URL)
+      try { r = await trocar(); } catch { throw erroIndisponivel("OAuth"); }
+    }
     if (r.status >= 500 || r.status === 429) { await r.body?.cancel?.().catch?.(() => null); await esperar(ESPERA_OAUTH_MS); r = await trocar(); }
     const corpo = await r.json().catch(() => ({}));
     if (!r.ok || !corpo.access_token) throw new Error(`OAuth Google ${r.status}: ${corpo.error_description || corpo.error || "falhou"}`);
@@ -99,9 +110,16 @@ export function criarGoogle({ fetch: f = globalThis.fetch, versao = null, espera
     for (const v of ordem) {
       let r, corpo;
       for (let i = 0; ; i++) {
-        r = await f(`https://googleads.googleapis.com/${v}/customers/${cliente}/googleAds:searchStream`, {
-          method: "POST", headers, body: JSON.stringify({ query: gaql }),
-        });
+        try {
+          r = await f(`https://googleads.googleapis.com/${v}/customers/${cliente}/googleAds:searchStream`, {
+            method: "POST", headers, body: JSON.stringify({ query: gaql }),
+          });
+        } catch {
+          // plano 1500c · SC-062: falha de REDE também repete (2 s, 8 s); esgotou → google_indisponivel, sem a URL/exceção crua
+          if (i >= ESPERAS_GOOGLE_MS.length) throw erroIndisponivel("API");
+          await esperar(ESPERAS_GOOGLE_MS[i]);
+          continue;
+        }
         corpo = lerJson(await r.text());
         const st = primeiroErro(corpo)?.status;
         const passageiro = r.status >= 500 && r.status !== 501 || r.status === 429 || STATUS_PASSAGEIROS.has(st);

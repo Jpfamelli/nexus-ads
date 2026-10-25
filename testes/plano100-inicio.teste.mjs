@@ -122,7 +122,8 @@ test("B5: números caídos — servidor e shell somados sem repetir; estado ok s
   const l = I.numerosCaidos(d, [{ id: "cw1", nome: "Recepção", desde: null }, { id: "x9", nome: "Filial" }]);
   assert.deepEqual(l.map(x => [x.id, x.fonte]), [["cw1", "inicio"], ["x9", "shell"]]);
   assert.equal(I.textoNumeroCaido(l.slice(0, 1), agora), "Número de WhatsApp desconectado há 12 min: Recepção.");
-  assert.equal(I.textoNumeroCaido(l, agora), "2 números de WhatsApp desconectados: Recepção, Filial.");
+  // plano 1500c: RC-231 — com vários, o «há X» do mais antigo também aparece
+  assert.equal(I.textoNumeroCaido(l, agora), "2 números de WhatsApp desconectados (o primeiro há 12 min): Recepção, Filial.");
   assert.equal(I.textoNumeroCaido([{ nome: "Sem data" }], agora), "Número de WhatsApp desconectado: Sem data.");
   assert.equal(I.textoNumeroCaido([], agora), "");
   assert.equal(I.estadoNumeros(d), "caido");

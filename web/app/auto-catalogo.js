@@ -127,7 +127,11 @@ export const GATILHOS = Object.freeze([
     rotulo: () => "Tarefa venceu sem ser concluída",
     descricao: "Quando o prazo de uma tarefa passa e ela continua aberta.",
     dica: () => "Olha as tarefas não concluídas que venceram (até 7 dias atrás).",
-    campos: [] },
+    // plano 1500c · UCA-002: os filtros que o servidor aceita desde a 20261015a (sem eles no catálogo, Salvar apagava os dois)
+    campos: [
+      { nome: "tipo_tarefa", tipo: "opcoes", opcoes: TIPOS_TAREFA, rotulo: "Só tarefas deste tipo", opcional: true, vazioRotulo: "Qualquer tipo" },
+      { nome: "dono_id", tipo: "pessoa", rotulo: "Só tarefas desta pessoa", opcional: true, vazioRotulo: "Qualquer pessoa" },
+    ] },
   { id: "antes_da_data", grupo: "Agenda", icone: "relogio",
     rotulo: vv => `Antes da ${palavraConsulta(vv.vertical)} marcada`,
     descricao: "Algumas horas antes de uma data marcada (lembretes).",
@@ -171,7 +175,13 @@ export const CAMPOS_CONDICAO = Object.freeze([
   { id: "texto", rotulo: "Texto da mensagem", valor: "texto" },
   { id: "valor", rotulo: "Valor", valor: "numero" },
   { id: "dono_id", rotulo: "Responsável", valor: "pessoa" },
+  // plano 1500c · UCA-001: o servidor aceita desde a 20261015a (campanha: contém/não contém; plataforma: é/não é)
+  { id: "campanha", rotulo: "Campanha do anúncio", valor: "campanha" },
+  { id: "plataforma", rotulo: "Plataforma do anúncio", valor: "plataforma" },
 ]);
+
+/** plano 1500c · UCA-001: as plataformas que a condição «Plataforma do anúncio» aceita (as mesmas do nx_auto_normalizar). */
+export const PLATAFORMAS = Object.freeze([["meta", "Meta (Facebook e Instagram)"], ["google", "Google"]]);
 
 export const OPERADORES = Object.freeze([
   { id: "igual", rotulo: "é", frase: "for" },
@@ -284,7 +294,8 @@ export const ACOES = Object.freeze([
   { id: "parar", grupo: "Sequência", icone: "parar", sequencia: true, rotulo: () => "Parar por aqui", campos: [],
     descricao: "Encerra a sequência: o que vem depois não roda." },
   { id: "ia_decidir", grupo: "Inteligência artificial", icone: "ia", ia: true, rotulo: () => "Deixar a IA decidir",
-    descricao: "A IA lê a conversa e escolhe entre opções que você definiu. Usa a cota de IA do mês.",
+    // plano 1500c · UCA-073: a pessoa não define opções — a IA escolhe entre o que já existe no sistema
+    descricao: "A IA lê a conversa e escolhe a etapa, resume numa nota ou pontua o interesse — sempre com o que já existe no sistema. Usa a cota de IA do mês.",
     campos: [
       { nome: "tarefa", tipo: "tarefa_ia", rotulo: "O que a IA faz", obrigatorio: true, padrao: "classificar_etapa" },
       { nome: "instrucao", tipo: "texto_longo", rotulo: "Instrução extra (opcional)", opcional: true, max: 500,

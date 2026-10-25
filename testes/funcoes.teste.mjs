@@ -476,7 +476,8 @@ test("nx-ciclo: Meta respondendo 200 com corpo cortado é erro, não sync vazio 
 test("nx-relatorio: 401 sem header, 400 com tipo inválido", async () => {
   const s = cenario();
   assert.equal((await relatorio(new Request(`${FN}/nx-relatorio`, { method: "POST", body: "{}" }), ENV, s.deps())).status, 401);
-  assert.equal((await relatorio(pedirCron("nx-relatorio", { tipo: "semanal" }), ENV, s.deps())).status, 400);
+  // plano 1500c · AC-055: «semanal» passou a existir; tipo inválido é outro
+  assert.equal((await relatorio(pedirCron("nx-relatorio", { tipo: "anual" }), ENV, s.deps())).status, 400);
   assert.equal((await relatorio(pedirCron("nx-relatorio", { cliente: "1; drop" }), ENV, s.deps())).status, 400);
 });
 

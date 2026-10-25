@@ -136,26 +136,44 @@ export const pertoDoLimite = it => { const u = (it && it.uso) || {}, lim = (it &
 
 /** Resumo da lista de clientes (item 58): por situação e quantos estão perto de algum limite (≥ 80 %).
     plano 1000 · AS-164: «ativo» só conta quem não está pausado pela Nexus (ativo === false vira «pausados», à parte). */
-export function resumoClientes(itens) {
+export function resumoClientes(itens, hoje = null) {
   const l = Array.isArray(itens) ? itens : [];
+  // plano 1500c · UCB-085: com `hoje`, também acabando7 (teste que termina em até 7 dias, hoje incluído), vencidos (fim já passado)
+  // e sem_pacote (UCB-098) — sem `hoje` o resumo continua o de antes
   const r = { total: l.length, ativo: 0, teste: 0, suspenso: 0, cancelado: 0, perto_limite: 0 };
+  if (hoje) Object.assign(r, { acabando7: 0, vencidos: 0, sem_pacote: 0 });
   for (const it of l) {
     if (it && it.ativo === false) r.pausados = (r.pausados || 0) + 1;     // só aparece quando há pausado
-    if (it && Object.hasOwn(r, it.status) && it.status !== "total" && !(it.status === "ativo" && it.ativo === false)) r[it.status]++;
+    if (it && Object.hasOwn(r, it.status) && ["ativo", "teste", "suspenso", "cancelado"].includes(it.status) && !(it.status === "ativo" && it.ativo === false)) r[it.status]++;
     if (pertoDoLimite(it)) r.perto_limite++;
+    if (hoje && it && it.status === "teste") {
+      const n = diasAteFimTeste(it.teste_ate, hoje);
+      if (n !== null && n < 0) r.vencidos++; else if (n !== null && n <= 7) r.acabando7++;
+    }
+    if (hoje && semPacote(it)) r.sem_pacote++;
   }
   return r;
 }
 
 /** plano 1000 · AS-165: filtro local dos KPIs que não são uma situação («perto» do limite, «pausados»).
     `status` = a situação filtrada no servidor: «ativo» segue a régua do contador (resumoClientes) — pausado pela Nexus não é «Ativo». */
-export function filtrarLocal(itens, local, status = "") {
+export function filtrarLocal(itens, local, status = "", hoje = _hojeDaLista) {
   let l = Array.isArray(itens) ? itens : [];
   if (status === "ativo") l = l.filter(it => !(it && it.ativo === false));
   if (local === "perto") return l.filter(pertoDoLimite);
   if (local === "pausados") return l.filter(it => it && it.ativo === false);
+  // plano 1500c · UCB-085 / UC-021 / UCB-098: teste acabando (até 7 dias), teste vencido e sem pacote comercial
+  const fim = it => (it && it.status === "teste" && hoje ? diasAteFimTeste(it.teste_ate, hoje) : null);
+  if (local === "acabando") return l.filter(it => { const n = fim(it); return n !== null && n >= 0 && n <= 7; });
+  if (local === "vencido") return l.filter(it => { const n = fim(it); return n !== null && n < 0; });
+  if (local === "sem_pacote") return l.filter(semPacote);
   return l;
 }
+/** plano 1500c · UCB-085: o «hoje» (São Paulo) da lista aberta — a tela de clientes grava ao montar; os testes passam o deles. */
+let _hojeDaLista = null;
+/** plano 1500c: o texto do chip de cada filtro local. */
+export const ROTULO_FILTRO_LOCAL = Object.freeze({ perto: "Só quem está perto do limite", acabando: "Só o teste acabando (até 7 dias)",
+  vencido: "Só o teste vencido", sem_pacote: "Só os sem pacote comercial" });
 
 /** plano 1000 · AS-158: dias desde o fim do teste (só status «teste» com a data já passada); null quando não venceu. hoje = AAAA-MM-DD. */
 export function testeVencidoHa(it, hoje) {
@@ -165,14 +183,122 @@ export function testeVencidoHa(it, hoje) {
 }
 export const rotuloTesteVencido = dias => (dias === 1 ? "Teste vencido há 1 dia" : `Teste vencido há ${dias} dias`);
 
+/* ---------------------------------------------------------------- plano 1500c · lógica nova do Admin (frente config) */
+const diaUTC = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || "")); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : NaN; };
+/** plano 1500c · UCB-084/UCB-088: dias até o fim do teste (0 = hoje; negativo = já passou), por datas de São Paulo; null sem data. */
+export function diasAteFimTeste(testeAte, hoje) {
+  const a = diaUTC(testeAte), b = diaUTC(hoje);
+  return Number.isFinite(a) && Number.isFinite(b) ? Math.round((a - b) / 86400000) : null;
+}
+/** plano 1500c · UCB-084: «acaba hoje» / «acaba em 2 dias» (≤ 3 dias, tom de atenção) para a coluna «Fim do teste»; null fora disso. */
+export function rotuloFimTeste(it, hoje) {
+  if (!it || it.status !== "teste") return null;
+  const n = diasAteFimTeste(it.teste_ate, hoje);
+  if (n === null || n < 0 || n > 3) return null;
+  return { texto: n === 0 ? "acaba hoje" : n === 1 ? "acaba amanhã" : `acaba em ${n} dias`, tom: "aten" };
+}
+/** plano 1500c · UCB-087 / UC-022: mais N dias de teste, a partir do maior entre hoje e o fim atual. */
+export function estenderTeste(testeAte, hoje, dias) {
+  const base = /^\d{4}-\d{2}-\d{2}/.test(String(testeAte || "")) && String(testeAte).slice(0, 10) > String(hoje) ? String(testeAte).slice(0, 10) : String(hoje);
+  return isoMais(base, Number(dias) || 0);
+}
+export const prorrogarTeste = estenderTeste;
+/** plano 1500c · UCB-008: salvar «Em teste» com o fim já passado bloqueia o cliente na hora. */
+export function testeNoPassado(status, testeAte, hoje) { return status === "teste" && !!testeAte && String(testeAte).slice(0, 10) < String(hoje); }
+/** plano 1500c · UCB-009: plano sem nenhum limite preenchido (= tudo ilimitado). */
+export function planoSemLimites(limites) { return !Object.values(limites || {}).some(v => v !== null && v !== undefined && v !== ""); }
+/** plano 1500c · UCB-025: preço por mês válido (vazio = sob consulta). */
+export function precoPlanoValido(v) { return v === null || v === undefined || v === "" || (Number.isFinite(Number(v)) && Number(v) >= 0); }
+/** plano 1500c · UCB-115: slug sem hífen no começo, no fim ou dobrado (2 a 40). */
+export function slugValido(s) { return /^[a-z0-9](?:[a-z0-9]|-(?!-)){0,38}[a-z0-9]$/.test(String(s || "")); }
+/** plano 1500c · UCB-001: a situação da revenda — «Cancelada» entra quando é a atual (senão o seletor caía em «Ativa» e reativava). */
+export function opcoesStatusRevenda(statusAtual) {
+  const l = [{ valor: "ativo", rotulo: "Ativa" }, { valor: "suspenso", rotulo: "Suspensa (os clientes da agência não entram)" }];
+  if (statusAtual === "cancelado") l.push({ valor: "cancelado", rotulo: "Cancelada" });
+  return l;
+}
+/** plano 1500c · UCB-004: as opções do plano padrão — o atual desligado continua, marcado «(desligado)» (salvar sem mexer não troca). */
+export function opcoesPlanoPadrao(planos, atual) {
+  const l = (Array.isArray(planos) ? planos : []).filter(p => p && p.ativo && p.id !== "interno").map(p => ({ valor: p.id, rotulo: p.nome }));
+  if (atual && !l.some(o => o.valor === atual)) {
+    const p = (Array.isArray(planos) ? planos : []).find(x => x && x.id === atual);
+    l.unshift({ valor: atual, rotulo: `${p ? p.nome : atual} (desligado)` });
+  }
+  return l;
+}
+/**
+ * plano 1500c · UCB-002: os pacotes comerciais (ESPEC §1.4) são da Nexus e valem só para a org plataforma. O gestor de uma revenda
+ * (marca própria, preço próprio) escolhe o plano técnico. orgEscolhida = a org do novo cliente (super escolhe; gestor é a dele).
+ */
+export function pacoteObrigatorio(sessao, orgEscolhida = null) {
+  const conta = (sessao && sessao.conta) || {};
+  const org = orgEscolhida || (sessao && sessao.org) || null;
+  if (conta.super) return !org || org.tipo !== "revenda";
+  return !!org && org.tipo === "plataforma";
+}
+/**
+ * plano 1500c · UCB-003: o plano de acesso do cliente novo. Com pacote, o do pacote; sem pacote (revenda), o escolhido ou o plano padrão
+ * da org (o da revenda que o super escolheu, não «interno»); a plataforma sem revenda continua no «interno».
+ */
+export function planoDeAcessoNovo({ superConta = false, oferta = null, planoPadraoOrg = null, planos = [], orgEscolhida = null, escolhido = null } = {}) {
+  const existe = id => !!id && (planos || []).some(p => p && p.id === id && (superConta || p.ativo !== false));
+  if (escolhido && existe(escolhido)) return escolhido;
+  if (oferta && !superConta) return oferta.acesso;
+  if (superConta && (!orgEscolhida || orgEscolhida.tipo !== "revenda")) return "interno";
+  const padrao = (orgEscolhida && orgEscolhida.limites && orgEscolhida.limites.plano_padrao) || planoPadraoOrg;
+  if (existe(padrao)) return padrao;
+  if (existe("essencial")) return "essencial";
+  const p = (planos || []).find(x => x && x.ativo !== false && x.id !== "interno");
+  return p ? p.id : null;
+}
+/** plano 1500c · UCB-005: quem pausa o cliente, dito sem a marca da plataforma para a revenda (white-label). */
+export function quemPausa(superConta) { return superConta ? "pela Nexus" : "pela plataforma"; }
+/** plano 1500c · UCB-086: receita mensal da carteira — preço do plano dos ativos não pausados (teste não entra). */
+export function mrrClientes(itens, planos) {
+  const preco = new Map((Array.isArray(planos) ? planos : []).map(p => [p && p.id, Number(p && p.preco_mensal) || 0]));
+  return (Array.isArray(itens) ? itens : []).reduce((s, it) => s + (it && it.status === "ativo" && it.ativo !== false ? preco.get(it.plano) || 0 : 0), 0);
+}
+/** plano 1500c · UCB-097: o nome do CSV diz o filtro (situação e filtro local). */
+export function nomeCsvClientes(filtro = {}, hoje = "") {
+  const partes = ["clientes", filtro.status, filtro.local === "perto" ? "perto-do-limite" : filtro.local === "sem_pacote" ? "sem-pacote" : filtro.local, hoje].filter(Boolean);
+  return `${partes.join("-")}.csv`;
+}
+/** plano 1500c · UCB-127: a mensagem ao cliente cujo teste acaba (o produto é o nome da marca da revenda). */
+export function textoAvisoTeste(cli, dias, produto = "sistema") {
+  const quando = dias === null || dias === undefined ? "está acabando" : dias < 0 ? "terminou" : dias === 0 ? "termina hoje" : dias === 1 ? "termina amanhã" : `termina em ${dias} dias`;
+  return `Olá! Seu teste do ${produto} na ${(cli && cli.nome) || "sua empresa"} ${quando}. Quer continuar usando? Seus dados ficam guardados — me responda por aqui que eu deixo tudo pronto.`;
+}
+/** plano 1500c · UC-023: o follow-up para copiar (com o uso, quando houver). */
+export function mensagemFollowupTeste(cli, hoje, produto = "sistema") {
+  const n = diasAteFimTeste(cli && cli.teste_ate, hoje);
+  const u = (cli && cli.uso) || {};
+  const uso = [u.contatos ? `${u.contatos} contatos` : null, u.usuarios ? `${u.usuarios} ${u.usuarios === 1 ? "pessoa" : "pessoas"} na equipe` : null].filter(Boolean).join(" e ");
+  return `${textoAvisoTeste(cli, n, produto)}${uso ? ` Até agora vocês já têm ${uso} no sistema.` : ""}`;
+}
+/**
+ * plano 1500c · UC-032: o checklist da revenda nova (marca, WhatsApp de suporte, domínio opcional, primeiro cliente, primeiro acesso).
+ * → [{id, rotulo, feito, opcional, href}]
+ */
+export function passosRevenda(marca, clientes, dominios) {
+  const m = marca || {}, cs = Array.isArray(clientes) ? clientes : [], ds = Array.isArray(dominios) ? dominios : [];
+  return [
+    { id: "marca", rotulo: "Logo e cores da sua marca", feito: !!(m.logo || m.logo_claro) && !!(m.cores && Object.keys(m.cores).length), href: "#/config/marca?de=org" },
+    { id: "suporte", rotulo: "WhatsApp de suporte", feito: !!m.suporte_wa, href: "#/config/marca?de=org" },
+    { id: "dominio", rotulo: "Domínio próprio (opcional)", feito: ds.some(d => d && d.status === "ativo"), opcional: true, href: "#/config/dominio" },
+    { id: "cliente", rotulo: "Primeiro cliente criado", feito: cs.length > 0, href: "#/admin/clientes" },
+    { id: "acesso", rotulo: "Primeiro cliente com a equipe entrando", feito: cs.some(c => c && c.uso && Number(c.uso.usuarios) > 0), href: "#/admin/clientes" },
+  ];
+}
+
 /** plano 1000 · AS-166: CSV da lista de clientes (separador «;» e BOM para o Excel em português). */
-export function csvClientes(itens, nomeDoPlano = id => id) {
+export function csvClientes(itens, nomeDoPlano = id => id, { superConta = true } = {}) {
   // plano 1000b · UB-103: valor que começa com = + - @ (ou tab/CR) vira fórmula no Excel — sai com apóstrofo na frente (texto puro)
   const esc = v => { let s = v === null || v === undefined ? "" : String(v); if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const cab = ["Cliente", "Endereço", "Revenda", "Plano", "Pacote comercial", "Situação", "Pausado pela Nexus", "Fim do teste", "Criado em",
+  // plano 1500c · UCB-005: a revenda entrega este CSV ao cliente — sem a marca da plataforma e sem o pacote comercial da Nexus
+  const cab = ["Cliente", "Endereço", "Revenda", "Plano", ...(superConta ? ["Pacote comercial"] : []), "Situação", `Pausado ${quemPausa(superConta)}`, "Fim do teste", "Criado em",
     ...CHAVES_LIMITE.flatMap(k => [`${k.rotulo} (uso)`, `${k.rotulo} (limite)`])];
   const linhas = (Array.isArray(itens) ? itens : []).map(it => [it.nome, it.slug, it.org ? it.org.nome : "", nomeDoPlano(it.plano),
-    it.comercial && it.comercial.pacote ? rotuloPacote(it.comercial.pacote) : "", statusDe(it.status).rotulo, it.ativo === false ? "sim" : "não",
+    ...(superConta ? [it.comercial && it.comercial.pacote ? rotuloPacote(it.comercial.pacote) : ""] : []), statusDe(it.status).rotulo, it.ativo === false ? "sim" : "não",
     it.teste_ate || "", String(it.criado_em || "").slice(0, 10),
     ...CHAVES_LIMITE.flatMap(k => [it.uso && it.uso[k.chave] != null ? it.uso[k.chave] : "", it.limites && it.limites[k.chave] != null ? it.limites[k.chave] : "sem limite"])]);
   return "\uFEFF" + [cab, ...linhas].map(l => l.map(esc).join(";")).join("\r\n");
@@ -368,8 +494,10 @@ async function telaClientes(ctx, corpo) {
   const segStatus = ui.segmentado({ tipo: "filtro", rotulo: "Filtrar por situação", classe: "adm-seg-status", valor: filtro.status || "",
     opcoes: [{ valor: "", rotulo: "Todas" }, ...STATUS.map(s => ({ valor: s.valor, rotulo: s.rotulo }))],
     aoMudar: v => { filtro.status = v; gravarFiltro(); carregar(); } });
-  const selOrg = superConta ? h("select", { class: "sel", "aria-label": "Filtrar por revenda" }, h("option", { value: "" }, "Todas as orgs")) : null;
-  const novo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("mais"), "Cliente");
+  // plano 1500c · UCB-096: «revenda», não «org» (jargão)
+  const selOrg = superConta ? h("select", { class: "sel", "aria-label": "Filtrar por revenda" }, h("option", { value: "" }, "Todas as revendas")) : null;
+  // plano 1500c · UCB-117: o texto visível diz a ação inteira (no celular fica só o ícone, com o nome acessível)
+  const novo = h("button", { type: "button", class: "bt bt-prim adm-novo" }, ui.icone("mais"), h("span", { class: "adm-novo-rot" }, "Novo cliente"));
   novo.setAttribute("aria-label", "Novo cliente");
   // plano 1000 · AS-166: a lista que está na tela (com os filtros) vira CSV para a cobrança e o relatório da revenda
   const btCsv = h("button", { type: "button", class: "bt bt-fant adm-csv" }, ui.icone("baixar"), "Exportar CSV");
@@ -399,28 +527,44 @@ async function telaClientes(ctx, corpo) {
     if (!filtro.local) return;
     const tirar = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("fechar"), "Tirar filtro");
     tirar.addEventListener("click", () => { filtro.local = ""; carregar(); });
-    chipLocal.append(ui.pilula(filtro.local === "perto" ? "Só quem está perto do limite" : "Só os pausados pela Nexus", "info"), tirar);
+    // plano 1500c · UCB-005: «pausados pela plataforma» para a revenda; UCB-085/UCB-098: os chips novos
+    chipLocal.append(ui.pilula(ROTULO_FILTRO_LOCAL[filtro.local] || `Só os pausados ${quemPausa(superConta)}`, "info"), tirar);
   }
-  btCsv.addEventListener("click", () => {
-    if (!ultimosItens.length) { ui.toast("Nenhum cliente na lista para exportar.", { tipo: "info" }); return; }
-    if (baixarArquivoTexto(csvClientes(ultimosItens, nomePlano), `clientes-${ui.hojeSP()}.csv`, "text/csv")) ui.toast(`${ultimosItens.length} ${ultimosItens.length === 1 ? "cliente exportado" : "clientes exportados"}.`, { tipo: "ok" });
+  const exportarCsv = itens => {
+    if (!itens.length) { ui.toast("Nenhum cliente na lista para exportar.", { tipo: "info" }); return; }
+    // plano 1500c · UCB-097: o nome do arquivo diz o filtro; UCB-005: sem «Nexus» no CSV da revenda
+    if (baixarArquivoTexto(csvClientes(itens, nomePlano, { superConta }), nomeCsvClientes(filtro, ui.hojeSP()), "text/csv")) ui.toast(`${itens.length} ${itens.length === 1 ? "cliente exportado" : "clientes exportados"}.`, { tipo: "ok" });
     else ui.toast("O navegador não deixou baixar o arquivo.", { tipo: "erro" });
-  });
+  };
+  btCsv.addEventListener("click", () => exportarCsv(ultimosItens));
   // nx_saude (20261013c, só plataforma): a saúde da operação no topo da lista; servidor antigo → o cartão nem aparece
   if (saude) cartaoSaude(ctx, saude);
+  // plano 1500c · UC-032: o gestor de revenda vê «Deixe sua revenda pronta» no topo (até completar ou dispensar)
+  // (pintado uma vez, com a lista completa que o resumo já trouxe — nenhuma chamada a mais de clientes)
+  let passosEl = null;
+  if (!superConta && ctx.sessao.org) { passosEl = h("div", { class: "adm-passos", hidden: true }); corpo.prepend(passosEl); }
   // o resumo é sempre da lista SEM situação nem busca (só a revenda do filtro): é o que dá as contagens do segmentado
   let resumoDaOrg = null, seqResumo = 0;          // de qual org_id ("" = todas) é o resumo pintado
   function pintarResumo(itens, orgId) {
-    const r = resumoClientes(itens);
+    const r = resumoClientes(itens, hoje);
     resumoDaOrg = orgId;
+    if (passosEl && !passosEl.dataset.feito) { passosEl.dataset.feito = "1"; cartaoPassosRevenda(ctx, passosEl, itens); }      // UC-032
     ui.limpar(faixa);
     const ajudaTotal = orgId ? "Todos os clientes da revenda escolhida no filtro." : superConta ? "Todos os clientes da plataforma." : "Todos os clientes desta revenda.";
+    // plano 1500c · UCB-086: receita mensal pelos preços dos planos (ativos não pausados; teste fora)
+    const mrr = mrrClientes(itens, _planos || []);
     faixa.append(...[
       kpi({ rotulo: "Clientes", valor: r.total, ajuda: ajudaTotal, aoClicar: () => aplicarKpi({ status: "", local: "" }) }),
-      kpi({ rotulo: "Ativos", valor: r.ativo, ajuda: "Pagando e com acesso liberado (sem os pausados pela Nexus).", aoClicar: () => aplicarKpi({ status: "ativo", local: "" }) }),
-      kpi({ rotulo: "Em teste", valor: r.teste, ajuda: "Período de avaliação em andamento.", aoClicar: () => aplicarKpi({ status: "teste", local: "" }) }),
+      kpi({ rotulo: "Ativos", valor: r.ativo, ajuda: `Pagando e com acesso liberado (sem os pausados ${quemPausa(superConta)}).`, aoClicar: () => aplicarKpi({ status: "ativo", local: "" }) }),
+      kpi({ rotulo: "Em teste", valor: r.teste, ajuda: "Período de avaliação (em andamento ou vencido).", aoClicar: () => aplicarKpi({ status: "teste", local: "" }) }),
+      // plano 1500c · UCB-085 / UC-021: quem precisa de contato esta semana e quem já venceu
+      r.acabando7 ? kpi({ rotulo: "Teste acabando", valor: r.acabando7, ajuda: "Teste que termina nos próximos 7 dias (hoje incluído): é a hora de converter.", aoClicar: () => aplicarKpi({ status: "", local: "acabando" }) }) : null,      // só quando há algum (a faixa não cresce à toa)
+      r.vencidos ? kpi({ rotulo: "Teste vencido", valor: r.vencidos, ajuda: "Ainda «Em teste», com o fim do teste já passado: a equipe do cliente está bloqueada.", aoClicar: () => aplicarKpi({ status: "", local: "vencido" }) }) : null,
       kpi({ rotulo: "Perto do limite", valor: r.perto_limite, ajuda: "Usando 80 % ou mais de algum limite do plano.", aoClicar: () => aplicarKpi({ local: "perto" }) }),
-      r.pausados ? kpi({ rotulo: "Pausados", valor: r.pausados, ajuda: "Pausados pela Nexus: a equipe do cliente não entra.", aoClicar: () => aplicarKpi({ local: "pausados" }) }) : null].filter(Boolean));
+      mrr > 0 ? kpi({ rotulo: "Receita mensal", valor: mrr, formato: v => ui.brl(v, { centavos: false }), ajuda: "Soma pelos preços dos planos dos clientes ativos (sem teste nem pausados). Não inclui descontos combinados." }) : null,
+      // UCB-098: só a plataforma tem pacote comercial
+      superConta && r.sem_pacote ? kpi({ rotulo: "Sem pacote", valor: r.sem_pacote, ajuda: "Sem pacote comercial registrado: abra o cliente para completar.", aoClicar: () => aplicarKpi({ local: "sem_pacote" }) }) : null,
+      r.pausados ? kpi({ rotulo: "Pausados", valor: r.pausados, ajuda: `Pausados ${quemPausa(superConta)}: a equipe do cliente não entra.`, aoClicar: () => aplicarKpi({ local: "pausados" }) }) : null].filter(Boolean));
     faixa.hidden = false;
     if (typeof segStatus.contar === "function") { for (const s of STATUS) segStatus.contar(s.valor, r[s.valor]); segStatus.contar("", r.total); }
   }
@@ -440,11 +584,27 @@ async function telaClientes(ctx, corpo) {
   }
 
   if (superConta) {
-    orgs(ctx).then(os => { for (const o of os) selOrg.appendChild(h("option", { value: o.id, selected: o.id === filtro.org_id }, o.nome)); }).catch(() => { /* filtro some */ });
+    const carregarOrgs = () => orgs(ctx).then(os => {
+      selOrg.disabled = false; selOrg.removeAttribute("title");
+      for (const o of os) selOrg.appendChild(h("option", { value: o.id, selected: o.id === filtro.org_id }, o.nome));
+      const rec = selOrg.parentNode && selOrg.parentNode.querySelector(".adm-orgs-recarregar"); if (rec) rec.remove();
+    }).catch(() => {
+      // plano 1500c · UCB-026: a lista de revendas falhou — o seletor diz por quê e oferece tentar de novo
+      _orgs = null;
+      selOrg.disabled = true;
+      selOrg.title = "Não deu para carregar as revendas.";
+      if (selOrg.parentNode && !selOrg.parentNode.querySelector(".adm-orgs-recarregar")) {
+        const b = h("button", { type: "button", class: "bt bt-fant bt-p adm-orgs-recarregar", title: "Não deu para carregar as revendas" }, ui.icone("reabrir"), "Recarregar revendas");
+        b.addEventListener("click", () => ui.carregando(b, carregarOrgs()));
+        selOrg.after(b);
+      }
+    });
+    carregarOrgs();
   }
 
   let seq = 0;
   const hoje = ui.hojeSP();
+  _hojeDaLista = hoje;      // plano 1500c · UCB-085: filtrarLocal (acabando/vencido) usa a data de SP desta tela
   let mostrar = POR_PAGINA_CLIENTES, ultimosDoFiltro = [];
   async function carregar() {
     const n = ++seq;
@@ -464,6 +624,41 @@ async function telaClientes(ctx, corpo) {
       ui.limpar(lista);
       lista.appendChild(ui.erroCartao(e, carregar));
     }
+  }
+  /** plano 1500c · UC-023/UCB-127: o nome do produto da marca em uso (o da revenda para o gestor). */
+  function produtoMarca() { try { const me = ctx.shell.marcaEfetiva(); return (me && me.produto) || "sistema"; } catch { return "sistema"; } }
+  /** plano 1500c · UCB-099: «N selecionados: Estender teste +7 · Exportar» — chamadas em sequência e um resumo no fim. */
+  function barraLote(tab) {
+    const barra = h("div", { class: "linha adm-lote", role: "region", "aria-label": "Ações nos clientes selecionados", hidden: true });
+    if (!tab || typeof tab.selecionados !== "function") return barra;
+    const txt = h("b", { class: "adm-lote-n", "aria-live": "polite" });
+    const bEstender = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("relogio"), "Estender teste +7 dias");
+    const bExportar = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("baixar"), "Exportar");
+    const pintar = () => {
+      const sel = tab.selecionados();
+      barra.hidden = !sel.length;
+      txt.textContent = `${sel.length} ${sel.length === 1 ? "selecionado" : "selecionados"}`;
+      bEstender.disabled = !sel.some(it => it.status === "teste");
+    };
+    tab.el.addEventListener("change", () => setTimeout(pintar, 0));
+    bExportar.addEventListener("click", () => exportarCsv(tab.selecionados()));
+    bEstender.addEventListener("click", async () => {
+      const alvos = tab.selecionados().filter(it => it.status === "teste");
+      if (!alvos.length) return;
+      if (!(await ui.confirmar({ titulo: `Estender o teste de ${alvos.length} ${alvos.length === 1 ? "cliente" : "clientes"}?`, rotulo: "Estender +7 dias",
+        texto: "Cada um ganha mais 7 dias a partir do fim atual (ou de hoje, se já venceu). Os selecionados que não estão em teste ficam como estão." }))) return;
+      let ok = 0; const falhas = [];
+      await ui.carregando(bEstender, (async () => {
+        for (const it of alvos) {
+          try { await api.rpc("nx_cliente_admin_salvar", { p_cliente: { id: it.id, teste_ate: estenderTeste(it.teste_ate, hoje, 7) } }); ok++; }
+          catch (e) { falhas.push(`${it.nome}: ${api.mensagemErro(e)}`); }
+        }
+      })());
+      ui.toast(falhas.length ? `${ok} ${ok === 1 ? "teste estendido" : "testes estendidos"}; não deu em ${falhas.length}: ${falhas.join("; ")}` : `${ok} ${ok === 1 ? "teste estendido" : "testes estendidos"} em 7 dias.`, { tipo: falhas.length ? "erro" : "ok" });
+      carregar();
+    });
+    barra.append(txt, bEstender, bExportar);
+    return barra;
   }
   function pintarLista(todosDoFiltro) {
     {
@@ -491,12 +686,13 @@ async function telaClientes(ctx, corpo) {
           // plano 1000 · AS-289: o nome é um link de verdade (Ctrl+clique abre em outra aba; dá para copiar o endereço)
           { chave: "nome", rotulo: "Cliente", ordenavel: true, principal: true, render: it => h("div", { class: "cel-nome" }, ui.avatar(it.nome, it.id),
             h("div", null, h("a", { class: "adm-nome-link", href: `#/admin/clientes/${encodeURIComponent(it.id)}` }, h("b", null, it.nome)), h("small", null, it.slug))) },
-          ...(superConta ? [{ chave: "org_nome", rotulo: "Org", ordenavel: true, render: it => it.org ? it.org.nome : "—" }] : []),
+          ...(superConta ? [{ chave: "org_nome", rotulo: "Revenda", ordenavel: true, render: it => it.org ? it.org.nome : "—" }] : []),      // plano 1500c · UCB-096
           // G5 [H306]: sem pacote comercial registrado (criado pelo clássico) → pílula; o detalhe ensina a completar
+          // plano 1500c · UCB-002: o pacote comercial é da plataforma — a revenda (white-label) não vê «Sem pacote»
           { chave: "plano", rotulo: "Plano", ordenavel: true, render: it => h("span", { class: "adm-pilulas" }, ui.pilula(nomePlano(it.plano), it.plano === "interno" ? "sec" : "prim"),
-            semPacote(it) ? ui.pilula("Sem pacote", "aten", { title: "Sem pacote comercial registrado. Abra o cliente para escolher um." }) : null) },
+            superConta && semPacote(it) ? ui.pilula("Sem pacote", "aten", { title: "Sem pacote comercial registrado. Abra o cliente para escolher um." }) : null) },
           { chave: "status", rotulo: "Situação", ordenavel: true, render: it => h("span", { class: "adm-pilulas" }, ui.pilula(statusDe(it.status).rotulo, statusDe(it.status).cor),
-            it.ativo === false ? ui.pilula("Pausado", "ruim", { icone: "cadeado", title: "Pausado pela Nexus: a equipe do cliente não entra." }) : null) },
+            it.ativo === false ? ui.pilula("Pausado", "ruim", { icone: "cadeado", title: `Pausado ${quemPausa(superConta)}: a equipe do cliente não entra.` }) : null) },
           ...(comNumeros ? [{ chave: "n_numeros", rotulo: "Número", ordenavel: true, render: it => {
             const e = estadoNumerosCliente(it.canais);
             return e ? h("span", { class: "adm-numero", dataset: { tom: e.tom } }, ui.pilula(e.rotulo, e.tom, { icone: e.tom === "ok" ? "check" : e.tom === "ruim" ? "alerta" : "whatsapp" })) : "—";
@@ -504,7 +700,13 @@ async function telaClientes(ctx, corpo) {
           { chave: "teste_ate", rotulo: "Fim do teste", ordenavel: true, render: it => {
             if (!(it.status === "teste" && it.teste_ate)) return "—";
             const venc = testeVencidoHa(it, hoje);      // plano 1000 · AS-158: data passada não fica muda
-            return venc ? h("span", { class: "adm-pilulas" }, ui.pilula(rotuloTesteVencido(venc), "ruim", { icone: "alerta" }), h("small", { class: "fraco" }, ui.dataBR(it.teste_ate))) : ui.dataBR(it.teste_ate);
+            const logo = rotuloFimTeste(it, hoje);       // plano 1500c · UCB-084: acabando em até 3 dias também se destaca
+            // plano 1500c · UC-023: «Follow-up» copia a mensagem pronta (só copia; nada sai pelo sistema)
+            const bFollow = venc || logo ? h("button", { type: "button", class: "bt bt-fant bt-p adm-followup", "aria-label": `Copiar mensagem de follow-up para ${it.nome}` }, ui.icone("copiar"), "Follow-up") : null;
+            if (bFollow) bFollow.addEventListener("click", () => ui.copiar(mensagemFollowupTeste(it, hoje, produtoMarca()), { aviso: "Mensagem de follow-up copiada." }));
+            if (venc) return h("span", { class: "adm-pilulas" }, ui.pilula(rotuloTesteVencido(venc), "ruim", { icone: "alerta" }), h("small", { class: "fraco" }, ui.dataBR(it.teste_ate)), bFollow);
+            if (logo) return h("span", { class: "adm-pilulas" }, ui.pilula(logo.texto, logo.tom, { icone: "relogio" }), h("small", { class: "fraco" }, ui.dataBR(it.teste_ate)), bFollow);
+            return ui.dataBR(it.teste_ate);
           } },
           { chave: "u_usuarios", rotulo: "Usuários", render: it => uso(it, "usuarios", "Usuários") },
           { chave: "u_canais", rotulo: "Números", render: it => uso(it, "canais", "Números de WhatsApp") },
@@ -515,9 +717,18 @@ async function telaClientes(ctx, corpo) {
         // plano 1000b · UB-225: 50 linhas por vez (paginação local) — com 300 clientes a tabela não desenha tudo de uma vez
         linhas: itens.slice(0, mostrar).map(it => { const e = estadoNumerosCliente(it.canais);
           return { ...it, org_nome: it.org ? it.org.nome : "", u_usuarios: it.uso && it.uso.usuarios, n_numeros: e ? (e.caidos ? 0 : e.tom === "ok" ? 2 : 1) : null }; }),
-        aoClicar: it => ctx.navegar(`#/admin/clientes/${it.id}`),
+        // plano 1500c · UCB-109: o clique na linha faz o que o link faria (Ctrl/⌘ ou botão do meio abrem em outra aba)
+        aoClicar: (it, ev) => {
+          const href = `#/admin/clientes/${encodeURIComponent(it.id)}`;
+          if (ev && (ev.ctrlKey || ev.metaKey || ev.button === 1) && typeof window !== "undefined" && typeof window.open === "function") { window.open(href, "_blank", "noopener"); return; }
+          ctx.navegar(`#/admin/clientes/${it.id}`);
+        },
+        selecao: true,      // plano 1500c · UCB-099: ações em lote
         vazio: "Nenhum cliente com esse filtro.",
       });
+      // UCB-109: o alvo de teclado é só o link do nome (a linha inteira não entra no Tab duas vezes)
+      for (const tr of tab.el.querySelectorAll("tr[tabindex]")) tr.removeAttribute("tabindex");
+      lista.appendChild(barraLote(tab));
       lista.appendChild(tab.el);
       if (itens.length > mostrar) {
         const mais = h("button", { type: "button", class: "bt bt-sec adm-mais" }, `Mostrar mais (${ui.num(Math.min(POR_PAGINA_CLIENTES, itens.length - mostrar))} de ${ui.num(itens.length - mostrar)} restantes)`);
@@ -533,6 +744,32 @@ async function telaClientes(ctx, corpo) {
   _limpeza.push(() => aoBuscar.cancelar());
   try { await planos(ctx); } catch { /* nomes de plano caem no id */ }
   await carregar();
+}
+
+/** plano 1500c · UC-032: o checklist da revenda (marca, WhatsApp de suporte, domínio, primeiro cliente, primeiro acesso), dispensável. */
+async function cartaoPassosRevenda(ctx, caixa, cls = []) {
+  const { ui, api } = ctx;
+  const h = ui.h;
+  const chave = `nx-adm-passos:${ctx.sessao.org.id}`;
+  try { if (globalThis.localStorage && localStorage.getItem(chave) === "dispensado") return; } catch { /* sem storage: mostra */ }
+  let os = [], doms = [];
+  try { [os, doms] = await Promise.all([orgs(ctx).catch(() => []), api.rpc("nx_dominios_listar").catch(() => [])]); } catch { return; }
+  const minha = (os || []).find(o => o && o.id === ctx.sessao.org.id);
+  const marca = (minha && minha.marca) || ctx.sessao.org.marca || {};
+  const passos = passosRevenda(marca, cls, doms);
+  const obrig = passos.filter(p => !p.opcional);
+  const feitos = obrig.filter(p => p.feito).length;
+  if (feitos === obrig.length || !caixa.isConnected) return;
+  const dispensar = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("fechar"), "Dispensar");
+  dispensar.addEventListener("click", () => { try { localStorage.setItem(chave, "dispensado"); } catch { /* ok */ } caixa.hidden = true; ui.limpar(caixa); });
+  caixa.append(h("section", { class: "cartao adm-passos-cartao", "aria-labelledby": "adm-passos-tit" },
+    h("div", { class: "cartao-cab" }, h("div", null, h("h2", { id: "adm-passos-tit" }, "Deixe sua revenda pronta"),
+      h("p", { class: "sub" }, `${feitos} de ${obrig.length} passos feitos.`)), dispensar),
+    h("ul", { class: "adm-passos-lista" }, passos.map(p => h("li", { class: ["adm-passo", p.feito && "feito"] },
+      ui.icone(p.feito ? "check" : "seta-dir"),
+      p.feito ? h("span", null, p.rotulo) : h("a", { href: p.href }, p.rotulo),
+      p.feito ? h("span", { class: "sr-only" }, " (feito)") : null)))));
+  caixa.hidden = false;
 }
 
 function baixarArquivoTexto(texto, nome, tipo) {
@@ -603,23 +840,51 @@ async function criarCliente(ctx) {
   try { ps = await planos(ctx); } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); return; }
   try { os = await orgs(ctx); } catch { os = []; }
   const orgPadrao = ctx.sessao.org ? ctx.sessao.org.id : null;
-  const minhaOrg = os.find(o => o.id === orgPadrao);
+  const minhaOrg = os.find(o => o.id === orgPadrao) || (ctx.sessao.org ? { ...ctx.sessao.org } : null);
   const padraoOrg = minhaOrg && minhaOrg.limites && minhaOrg.limites.plano_padrao;
-  const planoPadrao = superConta ? "interno"
-    : (ps.some(p => p.id === padraoOrg) ? padraoOrg : ps.some(p => p.id === "essencial") ? "essencial" : (ps[0] && ps[0].id));
+  // plano 1500c · UCB-093: os dias de teste padrão da revenda (limites.dias_teste, quando o servidor guardar); senão 14
+  const diasPadrao = diasDeTesteValidos(minhaOrg && minhaOrg.limites && minhaOrg.limites.dias_teste) || 14;
+  const orgDe = id => os.find(o => o.id === id) || (id === orgPadrao ? minhaOrg : null);
+  // plano 1500c · UCB-002: o plano técnico (nx_planos ativos, sem o interno) — é o que a revenda escolhe no lugar do pacote da Nexus
+  const opcoesTecnicas = ps.filter(p => p && p.ativo !== false && p.id !== "interno").map(p => ({ valor: p.id, rotulo: `${p.nome}${p.preco_mensal != null ? ` — ${ui.brl(p.preco_mensal, { centavos: false })}/mês` : ""}` }));
+  const planoInicial = () => planoDeAcessoNovo({ superConta: false, planoPadraoOrg: padraoOrg, planos: ps, orgEscolhida: superConta ? null : minhaOrg }) || (opcoesTecnicas[0] && opcoesTecnicas[0].valor) || "";
+  const campoPlanoTec = opcoesTecnicas.length ? ui.campo({ rotulo: "Plano", nome: "plano_tecnico", tipo: "select", valor: planoInicial(), opcoes: opcoesTecnicas,
+    ajuda: "Limites e módulos que o cliente recebe. O preço que você cobra é combinado por você." }) : null;
+  const campoPacote = campoPacoteComercial(ui, null, { obrigatorio: true });
   const form = h("form", { class: "pilha", novalidate: true },
     h("div", { class: "form-grade" },
       ui.campo({ rotulo: "Nome do cliente", nome: "nome", obrigatorio: true, max: 80, placeholder: "Ex.: Clínica Sorriso", autocomplete: "off" }),
-      ui.campo({ rotulo: "Endereço (slug)", nome: "slug", obrigatorio: true, max: 40, ajuda: "Letras minúsculas, números e hífen.", autocomplete: "off" }),
+      ui.campo({ rotulo: "Endereço (slug)", nome: "slug", obrigatorio: true, max: 40, ajuda: "Letras minúsculas, números e hífen (sem hífen no começo ou no fim).", autocomplete: "off" }),
       ui.campo({ rotulo: "Segmento do cliente", nome: "segmento", max: 120, placeholder: "Escreva livremente, por exemplo: clínica odontológica, loja de roupas, consultoria…",
         ajuda: "Sem opções predefinidas. Clínicas odontológicas, oficinas e lojas reconhecidas recebem o modelo correspondente; os demais usam o modelo genérico." }),
       ui.campo({ rotulo: "Situação", nome: "status", tipo: "select", valor: "teste", opcoes: STATUS.slice(0, 2) }),
-      ui.campo({ rotulo: "Dias de teste", nome: "dias", tipo: "numero", valor: 14, min: 1, max: 90 }),
-      superConta && os.length ? ui.campo({ rotulo: "Revenda / plataforma", nome: "org_id", tipo: "select", valor: orgPadrao, opcoes: os.map(o => ({ valor: o.id, rotulo: `${o.nome}${o.tipo === "plataforma" ? " (plataforma)" : ""}` })) }) : null),
+      ui.campo({ rotulo: "Dias de teste", nome: "dias", tipo: "numero", valor: diasPadrao, min: 1, max: 90 }),
+      superConta && os.length ? ui.campo({ rotulo: "Revenda / plataforma", nome: "org_id", tipo: "select", valor: orgPadrao, opcoes: os.map(o => ({ valor: o.id, rotulo: `${o.nome}${o.tipo === "plataforma" ? " (plataforma)" : ""}` })) }) : null,
+      campoPlanoTec),
     // plano 1000b · UB-113: nenhum pacote vem marcado — a escolha é obrigatória de verdade («Escolha um dos três» aparece se pular)
-    campoPacoteComercial(ui, null, { obrigatorio: true }),
+    campoPacote,
     ui.campo({ rotulo: "Especificações do cliente", nome: "especificacoes", tipo: "textarea", max: 5000, linhas: 4,
       placeholder: "Escreva necessidades, objetivos, entregas combinadas e observações…", ajuda: "Campo livre, sem modelos ou respostas predefinidas." }));
+  const selOrgNovo = form.querySelector("select[name=org_id]");
+  const orgAlvo = () => (superConta ? orgDe(selOrgNovo ? selOrgNovo.value : orgPadrao) : minhaOrg);
+  // UCB-002: pacote (Nexus) só para a plataforma; plano técnico só para revenda. O super alterna conforme a org escolhida.
+  const pintarOferta = () => {
+    const comPacote = pacoteObrigatorio(ctx.sessao, orgAlvo());
+    campoPacote.hidden = !comPacote;
+    for (const r of campoPacote.querySelectorAll("input[type=radio]")) r.required = comPacote;
+    const cp = campoPlanoTec;
+    if (cp) {
+      cp.hidden = comPacote;
+      if (!comPacote) {
+        const o = orgAlvo();
+        const sel = cp.querySelector("select");
+        const sug = planoDeAcessoNovo({ superConta, planoPadraoOrg: padraoOrg, planos: ps, orgEscolhida: o });
+        if (sel && sug && sel.querySelector(`option[value="${sug}"]`)) sel.value = sug;
+      }
+    }
+  };
+  if (selOrgNovo) selOrgNovo.addEventListener("change", pintarOferta);
+  pintarOferta();
   const nome = form.querySelector("input[name=nome]"), slug = form.querySelector("input[name=slug]");
   // plano 1000 · AS-168: «Vamos usar o modelo: …» ao digitar o segmento, com opção de trocar
   const inpSegNovo = form.querySelector("input[name=segmento]");
@@ -631,7 +896,9 @@ async function criarCliente(ctx) {
   if (inpSegNovo) { inpSegNovo.addEventListener("input", pintarModeloNovo); inpSegNovo.closest("[data-campo]") ? inpSegNovo.closest("[data-campo]").appendChild(linhaModeloNovo) : inpSegNovo.parentNode.appendChild(linhaModeloNovo); pintarModeloNovo(); }
   let slugMexido = false;
   const conferirSlug = conferidorDeSlug(ctx, slug, null);
-  nome.addEventListener("input", () => { if (!slugMexido) { slug.value = sugerirSlug(nome.value); conferirSlug(); } });
+  // plano 1500c · UCB-102: o slug sugerido pelo nome só é conferido quando a pessoa sai do nome (não a cada letra digitada)
+  nome.addEventListener("input", () => { if (!slugMexido) slug.value = sugerirSlug(nome.value); });
+  nome.addEventListener("blur", () => { if (!slugMexido && slug.value) conferirSlug(); });
   slug.addEventListener("input", () => { slugMexido = true; conferirSlug(); });
   const selStatus = form.querySelector("select[name=status]");
   const campoDias = form.querySelector("[data-campo=dias]");
@@ -651,26 +918,33 @@ async function criarCliente(ctx) {
 
   const r = await ui.modal({
     titulo: "Novo cliente", corpo: form, largura: "g",
-    descricao: "Registre o segmento e as necessidades com suas próprias palavras e escolha uma das três ofertas comerciais.",
+    descricao: pacoteObrigatorio(ctx.sessao, orgAlvo()) ? "Registre o segmento e as necessidades com suas próprias palavras e escolha uma das três ofertas comerciais."
+      : "Registre o segmento e as necessidades com suas próprias palavras e escolha o plano do cliente.",
     acoes: [
       { rotulo: "Cancelar", tipo: "neutro" },
       { rotulo: "Criar cliente", tipo: "primario", fn: async () => {
         ui.marcarErro(form, null);
         const d = ui.lerForm(form);
-        if (!d.nome || d.nome.length < 2) { ui.marcarErro(form, "nome", "Informe o nome."); return false; }
-        if (!/^[a-z0-9-]{2,40}$/.test(d.slug || "")) { ui.marcarErro(form, "slug", "Use de 2 a 40 letras minúsculas, números ou hífen."); return false; }
-        const oferta = PACOTES_COMERCIAIS.find(p => p.id === d.pacote_comercial);
-        if (!oferta) { ui.marcarErro(form, "pacote_comercial", "Escolha um dos três planos comerciais."); return false; }
-        pacoteCriado = oferta.id;
-        const planoAcesso = superConta ? planoPadrao : oferta.acesso;
-        if (!ps.some(p => p.id === planoAcesso && (superConta || p.ativo !== false))) {
-          ui.marcarErro(form, "pacote_comercial", "O plano de acesso correspondente não está disponível para esta revenda. Fale com a plataforma."); return false;
+        // plano 1500c · UCB-116: nome só com espaços não passa
+        if (String(d.nome || "").trim().length < 2) { ui.marcarErro(form, "nome", "Informe o nome."); return false; }
+        // plano 1500c · UCB-115: sem hífen no começo, no fim ou dobrado
+        if (!slugValido(d.slug)) { ui.marcarErro(form, "slug", "Use de 2 a 40 letras minúsculas, números ou hífen (sem hífen no começo, no fim ou dois seguidos)."); return false; }
+        const org = orgAlvo();
+        const comPacote = pacoteObrigatorio(ctx.sessao, org);
+        const oferta = comPacote ? PACOTES_COMERCIAIS.find(p => p.id === d.pacote_comercial) : null;
+        if (comPacote && !oferta) { ui.marcarErro(form, "pacote_comercial", "Escolha um dos três planos comerciais."); return false; }
+        if (oferta) pacoteCriado = oferta.id;
+        // plano 1500c · UCB-003: o plano padrão da revenda (a escolhida pelo super, ou a do gestor) vale de verdade
+        const planoAcesso = planoDeAcessoNovo({ superConta, oferta, planoPadraoOrg: padraoOrg, planos: ps, orgEscolhida: superConta ? org : minhaOrg,
+          escolhido: comPacote ? null : d.plano_tecnico || null });
+        if (!planoAcesso || !ps.some(p => p.id === planoAcesso && (superConta || p.ativo !== false))) {
+          ui.marcarErro(form, comPacote ? "pacote_comercial" : "plano_tecnico", "O plano de acesso correspondente não está disponível para esta revenda. Fale com a plataforma."); return false;
         }
         const dias = diasDeTesteValidos(d.dias);
         if (d.status === "teste" && !dias) { ui.marcarErro(form, "dias", "Use de 1 a 90 dias."); return false; }      // UB-112
         const teste = d.status === "teste" ? isoMais(ui.hojeSP(), dias) : null;
-        const p = { nome: d.nome, slug: d.slug, vertical: VERTICAIS.some(v => v.valor === selModelo.value) ? selModelo.value : verticalPorSegmento(d.segmento), plano: planoAcesso, status: d.status, teste_ate: teste,
-          comercial: { pacote: oferta.id, segmento: d.segmento || "", especificacoes: d.especificacoes || "" } };
+        const p = { nome: String(d.nome).trim(), slug: d.slug, vertical: VERTICAIS.some(v => v.valor === selModelo.value) ? selModelo.value : verticalPorSegmento(d.segmento), plano: planoAcesso, status: d.status, teste_ate: teste,
+          comercial: { pacote: oferta ? oferta.id : null, segmento: d.segmento || "", especificacoes: d.especificacoes || "" } };
         if (superConta && d.org_id) p.org_id = d.org_id;
         try {
           return await api.rpc("nx_cliente_admin_salvar", { p_cliente: p });
@@ -683,24 +957,31 @@ async function criarCliente(ctx) {
     ],
   });
   if (r && r.id) {
-    ui.toast(`Cliente criado com ${rotuloPacote(r.comercial?.pacote || pacoteCriado)}.`, { tipo: "ok" });
+    const comPacote = !!(r.comercial && r.comercial.pacote);
+    ui.toast(comPacote ? `Cliente criado com ${rotuloPacote(r.comercial.pacote || pacoteCriado)}.` : `Cliente criado no plano ${nomePlano(r.plano)}.`, { tipo: "ok" });
     try { await ctx.shell.recarregarSessao(); } catch { /* o seletor atualiza na próxima entrada */ }
-    ctx.navegar(`#/admin/clientes/${r.id}`);
+    // plano 1500c · UCB-090: o detalhe abre com o próximo passo em destaque (convidar o administrador)
+    ctx.navegar(`#/admin/clientes/${r.id}?novo=1`);
   }
 }
 
-/** plano 1000 · AS-169: confere o endereço enquanto digita (400 ms parado) com nx_clientes_admin {busca: slug} — aviso embaixo do campo. */
+/** plano 1000 · AS-169: confere o endereço enquanto digita (400 ms parado) com nx_clientes_admin {busca: slug} — aviso embaixo do campo.
+    plano 1500c · UCB-102: cache por slug já conferido (voltar a um endereço não chama de novo). */
 function conferidorDeSlug(ctx, inp, idProprio) {
   const { ui, api } = ctx;
   const campo = inp.closest("[data-campo]") || inp.parentNode;
   const aviso = ui.h("small", { class: "campo-erro adm-slug-tomado", role: "status", hidden: true });
   campo.appendChild(aviso);
   let seq = 0;
+  const cache = new Map();
   const conferir = ui.debounce(async () => {
     const n = ++seq, v = inp.value.trim().toLowerCase();
     if (!/^[a-z0-9-]{2,40}$/.test(v)) { aviso.hidden = true; return; }
     let achado = null;
-    try { achado = slugTomado(await api.rpc("nx_clientes_admin", { p_filtro: { busca: v } }), v, idProprio); } catch { return; }
+    try {
+      if (!cache.has(v)) cache.set(v, slugTomado(await api.rpc("nx_clientes_admin", { p_filtro: { busca: v } }), v, idProprio));
+      achado = cache.get(v);
+    } catch { return; }
     if (n !== seq) return;
     aviso.hidden = !achado;
     aviso.textContent = achado ? `Esse endereço já é de «${achado.nome}». Escolha outro.` : "";
@@ -751,10 +1032,14 @@ async function telaCliente(ctx, corpo, id) {
     cabNome.textContent = cli.nome;
     cabAvatar.replaceChildren(ui.avatar(cli.nome, cli.id));
     const venc = testeVencidoHa(cli, hojeDet);
+    const logo = rotuloFimTeste(cli, hojeDet);                 // plano 1500c · UCB-084
+    const nums = estadoNumerosCliente(cli.canais);             // plano 1500c · UCB-100: o WhatsApp também no cabeçalho
     cabPilulas.replaceChildren(...[ui.pilula(s.rotulo, s.cor), ui.pilula(nomePlano(cli.plano), cli.plano === "interno" ? "sec" : "prim"),
-      cli.comercial && cli.comercial.pacote ? ui.pilula(rotuloPacote(cli.comercial.pacote), "info") : ui.pilula("Sem pacote", "aten"),
-      venc ? ui.pilula(rotuloTesteVencido(venc), "ruim", { icone: "alerta" }) : null,
-      cli.ativo === false ? ui.pilula("Pausado pela Nexus", "ruim", { icone: "cadeado" }) : null,
+      // plano 1500c · UCB-002/UCB-005: pacote comercial e «Nexus» só para a plataforma (white-label)
+      !superConta ? null : cli.comercial && cli.comercial.pacote ? ui.pilula(rotuloPacote(cli.comercial.pacote), "info") : ui.pilula("Sem pacote", "aten"),
+      venc ? ui.pilula(rotuloTesteVencido(venc), "ruim", { icone: "alerta" }) : logo ? ui.pilula(`Teste ${logo.texto}`, logo.tom, { icone: "relogio" }) : null,
+      nums && nums.total ? ui.pilula(nums.rotulo, nums.tom, { icone: nums.tom === "ok" ? "check" : nums.tom === "ruim" ? "alerta" : "whatsapp", class: "adm-cab-numeros" }) : null,
+      cli.ativo === false ? ui.pilula(`Pausado ${quemPausa(superConta)}`, "ruim", { icone: "cadeado" }) : null,
       h("span", { class: "fraco" }, `${cli.org ? cli.org.nome : ""} · desde ${ui.dataBR(cli.criado_em)}`)].filter(Boolean));
   }
   pintarCabecalho();
@@ -776,10 +1061,22 @@ async function telaCliente(ctx, corpo, id) {
     }
     ctx.navegar(destino);
   }
-  btEntrar.addEventListener("click", () => entrarComo(btEntrar, "#/"));
+  // plano 1500c · UCB-091: antes de entrar, um motivo opcional vai para a auditoria (nx_suporte_entrar); servidor sem a função segue igual
+  async function registrarEntrada(destino, botao) {
+    const form = h("form", { class: "pilha", novalidate: true },
+      h("p", null, `Você vai ver a ${cli.nome} como a equipe dela vê. A entrada fica registrada.`),
+      ui.campo({ rotulo: "Motivo (opcional)", nome: "motivo", max: 200, autocomplete: "off", placeholder: "Ex.: conferir o número a pedido do cliente" }));
+    const r = await ui.modal({ titulo: `Entrar na ${cli.nome}`, corpo: form, largura: "p", acoes: [{ rotulo: "Cancelar", tipo: "neutro" },
+      { rotulo: "Entrar", tipo: "primario", fn: async () => ({ motivo: String(ui.lerForm(form).motivo || "").trim() }) }] });
+    if (!r) return;
+    try { await api.rpc("nx_suporte_entrar", { p_cliente: cli.id, p_motivo: r.motivo || null }); }
+    catch (e) { if (!semFuncao(e)) { ui.toast(`Não deu para registrar a entrada. ${api.mensagemErro(e)}`, { tipo: "erro" }); return; } }
+    return entrarComo(botao, destino);
+  }
+  btEntrar.addEventListener("click", () => registrarEntrada("#/", btEntrar));
   const btNumeros = typeof cli.modulos === "object" && Array.isArray(cli.modulos) && !cli.modulos.includes("conversas") ? null
     : h("button", { type: "button", class: "bt bt-sec adm-ver-numeros" }, ui.icone("whatsapp"), "Ver números");
-  if (btNumeros) btNumeros.addEventListener("click", () => entrarComo(btNumeros, "#/config/numeros"));
+  if (btNumeros) btNumeros.addEventListener("click", () => registrarEntrada("#/config/numeros", btNumeros));      // UCB-091
   const btConvite = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("convidar"), "Gerar convite do administrador");
   let convitesPend = [];        // preenchido pela lista de usuários (nx_usuarios_listar → convites)
   btConvite.addEventListener("click", async () => {
@@ -790,6 +1087,10 @@ async function telaCliente(ctx, corpo, id) {
     // plano 1000b · UB-201: a validade é escolhida antes de gerar (1 a 30 dias, padrão 3) — a mesma régua do convite em Usuários
     const form = h("form", { class: "pilha", novalidate: true },
       h("p", null, `Envie para quem vai administrar a ${cli.nome}. O link cria a conta de administrador (ou acrescenta o acesso, se a pessoa já usa o sistema).`),
+      // plano 1500c · UCB-042: nome e e-mail opcionais, como no convite de Usuários (o e-mail trava o convite)
+      h("div", { class: "form-grade" },
+        ui.campo({ rotulo: "Nome (opcional)", nome: "nome", max: 80, autocomplete: "off" }),
+        ui.campo({ rotulo: "E-mail (opcional)", nome: "email", tipo: "email", autocomplete: "off", ajuda: "Se preencher, só este e-mail poderá aceitar o convite." })),
       ui.campo({ rotulo: "O link vale por", nome: "dias", tipo: "select", valor: DIAS_CONVITE_ADMIN, opcoes: OPCOES_VALIDADE_CONVITE }));
     let criado = null;
     try {
@@ -799,10 +1100,21 @@ async function telaCliente(ctx, corpo, id) {
           { rotulo: "Cancelar", tipo: "neutro" },
           { rotulo: "Gerar link", tipo: "primario", fn: async m => {
             if (criado) return true;
-            const dias = Number(ui.lerForm(form).dias) || Number(DIAS_CONVITE_ADMIN);
-            const r = await api.rpc("nx_convite_criar", { p_cliente: cli.id, p_dados: { papel: "admin", dias }, p_org: null });
+            const dl = ui.lerForm(form);
+            const dias = Number(dl.dias) || Number(DIAS_CONVITE_ADMIN);
+            ui.marcarErro(form, null);
+            const nomeCv = String(dl.nome || "").trim(), emailCv = String(dl.email || "").trim().toLowerCase();
+            if (nomeCv && nomeCv.length < 2) { ui.marcarErro(form, "nome", "Use de 2 a 80 letras no nome."); return false; }
+            if (emailCv && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailCv)) { ui.marcarErro(form, "email", "Esse e-mail não parece válido."); return false; }
+            let r;
+            try { r = await api.rpc("nx_convite_criar", { p_cliente: cli.id, p_dados: { papel: "admin", dias, nome: nomeCv || null, email: emailCv || null }, p_org: null }); }
+            catch (e) {
+              if (e && e.codigo === "email_invalido") { ui.marcarErro(form, "email", "Esse e-mail não parece válido."); return false; }
+              if (e && e.codigo === "nome_invalido") { ui.marcarErro(form, "nome", "Use de 2 a 80 letras no nome."); return false; }
+              throw e;
+            }
             criado = r;
-            convitesPend.push({ id: r.id || null, papel: "admin", expira_em: r.expira_em || null });   // o próximo clique já sabe que há um aguardando
+            convitesPend.push({ id: r.id || null, papel: "admin", nome: nomeCv || null, email: emailCv || null, expira_em: r.expira_em || null });   // o próximo clique já sabe que há um aguardando
             // G5 [H305]: link relativo aberto num host que não serve o app (Pages, localhost) sairia quebrado → aviso no lugar do link
             const lc = linkConvite(r.link, typeof location !== "undefined" ? location : null);
             ui.limpar(m.corpo);
@@ -825,6 +1137,12 @@ async function telaCliente(ctx, corpo, id) {
   const planoAtual = () => ps.find(p => p.id === form.querySelector("select[name=plano]").value) || ps.find(p => p.id === cli.plano) || { modulos: [], limites: {} };
   const opcoesPlano = ps.some(p => p.id === cli.plano) ? ps : [{ id: cli.plano, nome: cli.plano, modulos: cli.modulos, limites: {} }, ...ps];
   const comercial = cli.comercial || {};
+  // plano 1500c · UCB-094: o campo vazio diz qual é o limite do plano («plano: 5» ou «plano: sem limite»)
+  const placeholderLimite = (k, plano = null) => {
+    const p = plano || ps.find(x => x.id === cli.plano) || { limites: {} };
+    const v = p.limites ? p.limites[k] : null;
+    return `plano: ${v === null || v === undefined ? "sem limite" : v}`;
+  };
   let segmentoInicial = comercial.segmento || (VERTICAIS.find(v => v.valor === cli.vertical) || {}).rotulo || "";
   const segmento = ui.campo({ rotulo: "Segmento do cliente", nome: "segmento", valor: segmentoInicial, max: 120,
     placeholder: "Escreva livremente o ramo de atividade…",
@@ -845,11 +1163,13 @@ async function telaCliente(ctx, corpo, id) {
     h("div", { class: "form-grade" },
       ui.campo({ rotulo: "Nome", nome: "nome", valor: cli.nome, obrigatorio: true, max: 80 }),
       ui.campo({ rotulo: "Endereço (slug)", nome: "slug", valor: cli.slug, obrigatorio: true, max: 40 }),
-      ui.campo({ rotulo: "Plano de acesso ao Órbita", nome: "plano", tipo: "select", valor: cli.plano, opcoes: opcoesPlano.map(p => ({ valor: p.id, rotulo: `${p.nome}${p.preco_mensal != null ? ` — ${ui.brl(p.preco_mensal, { centavos: false })}/mês` : ""}` })) }),
+      // plano 1500c · UCB-005: sem o nome do produto da plataforma (a revenda vende com a própria marca)
+      ui.campo({ rotulo: "Plano de acesso", nome: "plano", tipo: "select", valor: cli.plano, opcoes: opcoesPlano.map(p => ({ valor: p.id, rotulo: `${p.nome}${p.preco_mensal != null ? ` — ${ui.brl(p.preco_mensal, { centavos: false })}/mês` : ""}` })) }),
       ui.campo({ rotulo: "Situação", nome: "status", tipo: "select", valor: cli.status, opcoes: STATUS }),
       ui.campo({ rotulo: "Fim do teste", nome: "teste_ate", tipo: "data", valor: cli.teste_ate || "" }),
       segmento, especificacoes),
-    campoPacoteComercial(ui, comercial.pacote || null, { comercial }),
+    // plano 1500c · UCB-002: o pacote comercial (ESPEC §1.4) é da plataforma — o gestor de revenda não vê os pacotes nem os preços da Nexus
+    superConta ? campoPacoteComercial(ui, comercial.pacote || null, { comercial }) : null,
     // G5 (contrato 9): o interruptor da Nexus. Só aparece quando o servidor diz o estado (cli.ativo) e só a plataforma muda
     superConta && typeof cli.ativo === "boolean" ? comClasse(ui.campo({ rotulo: "Cliente ativo", nome: "ativo", tipo: "interruptor", valor: cli.ativo,
         // plano 1000b · UB-120: ajuda curta; o detalhe (anúncios, relatórios, rastreio, vigia, sessão aberta) vai no diálogo de confirmação
@@ -858,7 +1178,7 @@ async function telaCliente(ctx, corpo, id) {
     superConta ? h("fieldset", { class: "campo" }, h("legend", null, "Limites extras (só a plataforma)"),
       h("p", { class: "campo-ajuda" }, "Em branco = o limite do plano. 0 bloqueia o recurso (nenhum permitido)."),
       h("div", { class: "form-grade" }, CHAVES_LIMITE.map(k => ui.campo({ rotulo: k.rotulo, nome: `lim_${k.chave}`, tipo: "numero", min: 0,
-        valor: cli.limites_extra && cli.limites_extra[k.chave] != null ? cli.limites_extra[k.chave] : "" })))) : null,
+        valor: cli.limites_extra && cli.limites_extra[k.chave] != null ? cli.limites_extra[k.chave] : "", placeholder: placeholderLimite(k.chave) })))) : null,
     h("div", { class: "linha linha-fim" }, h("button", { type: "submit", class: "bt bt-prim" }, "Salvar alterações")));
 
   const caixaMod = form.querySelector(".campo-modulos");
@@ -888,6 +1208,7 @@ async function telaCliente(ctx, corpo, id) {
     const atuais = [...caixaMod.querySelectorAll("input[type=checkbox]")].filter(x => x.checked).map(x => x.value);
     const r = modulosAoTrocarPlano({ atuais, planoAntigo: planoAntes, planoNovo: planoAtual().modulos || [], superConta });
     planoAntes = (planoAtual().modulos || []).slice();
+    for (const k of CHAVES_LIMITE) { const inp = form.querySelector(`input[name=lim_${k.chave}]`); if (inp) inp.setAttribute("placeholder", placeholderLimite(k.chave, planoAtual())); }      // UCB-094
     desenharModulos(r.marcados);
     ui.limpar(avisoModulos);
     avisoModulos.hidden = !r.sairam.length;
@@ -903,18 +1224,60 @@ async function telaCliente(ctx, corpo, id) {
     if (selSt.value === "teste" && inpTeste && !inpTeste.value) inpTeste.value = isoMais(ui.hojeSP(), 14);
   };
   selSt.addEventListener("change", ajustarTeste); ajustarTeste();
+  // plano 1500c · UCB-088: «Faltam N dias» ao vivo; UCB-087 / UC-022: «+7 dias» e «+14 dias» a partir do maior entre hoje e o fim atual
+  const ajudaTeste = h("p", { class: "campo-ajuda adm-teste-faltam", "aria-live": "polite" });
+  const pintarFaltam = () => {
+    const n = diasAteFimTeste(inpTeste && inpTeste.value, ui.hojeSP());
+    ajudaTeste.textContent = n === null ? "" : n < 0 ? `Terminou há ${-n} ${n === -1 ? "dia" : "dias"}.` : n === 0 ? "Termina hoje." : n === 1 ? "Falta 1 dia." : `Faltam ${n} dias.`;
+  };
+  const btMais = dias => {
+    const b = h("button", { type: "button", class: "bt bt-fant bt-p adm-teste-mais" }, `+${dias} dias`);
+    b.addEventListener("click", () => {
+      if (!inpTeste) return;
+      inpTeste.value = estenderTeste(inpTeste.value, ui.hojeSP(), dias);
+      inpTeste.dispatchEvent(new Event("input", { bubbles: true }));
+      if (typeof ui.anunciar === "function") ui.anunciar(`Fim do teste: ${ui.dataBR(inpTeste.value)}.`);
+    });
+    return b;
+  };
+  /** plano 1500c · UCB-089 / UC-022: «Converter em pagante» — confirma plano e preço e salva a situação «Ativo» (o fim do teste fica como histórico). */
+  async function converter(botao) {
+    const pl = ps.find(x => x.id === cli.plano);
+    const preco = pl && pl.preco_mensal != null ? ` por ${ui.brl(pl.preco_mensal, { centavos: false })}/mês` : "";
+    if (!(await ui.confirmar({ titulo: `Converter ${cli.nome} em cliente pagante?`, rotulo: "Converter em pagante",
+      texto: `A situação passa a «Ativo» no plano ${nomePlano(cli.plano)}${preco}. A data do fim do teste fica guardada como histórico.` }))) return;
+    try {
+      const r = await ui.carregando(botao, api.rpc("nx_cliente_admin_salvar", { p_cliente: { id: cli.id, status: "ativo" } }));
+      cli = { ...cli, ...r, status: (r && r.status) || "ativo", uso: r && r.uso ? r.uso : cli.uso };
+      selSt.value = cli.status; ajustarTeste();
+      formSalvo = estadoDoForm();
+      pintarCabecalho(); pintarAvisoTeste();
+      ui.toast("Cliente convertido em pagante.", { tipo: "ok" });
+    } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+  }
+  const btConverter = h("button", { type: "button", class: "bt bt-sec bt-p adm-converter" }, ui.icone("check"), "Converter em pagante");
+  btConverter.addEventListener("click", () => converter(btConverter));
+  if (campoTeste) campoTeste.append(h("div", { class: "linha adm-teste-atalhos" }, btMais(7), btMais(14), btConverter), ajudaTeste);
+  if (inpTeste) { inpTeste.addEventListener("input", pintarFaltam); inpTeste.addEventListener("change", pintarFaltam); }
+  pintarFaltam();
 
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     ui.marcarErro(form, null);
     const d = ui.lerForm(form);
-    if (!d.nome || d.nome.length < 2) return ui.marcarErro(form, "nome", "Informe o nome.");
-    if (!/^[a-z0-9-]{2,40}$/.test(d.slug || "")) return ui.marcarErro(form, "slug", "Use de 2 a 40 letras minúsculas, números ou hífen.");
+    if (String(d.nome || "").trim().length < 2) return ui.marcarErro(form, "nome", "Informe o nome.");      // plano 1500c · UCB-116
+    // plano 1500c · UCB-115: o slug que já existe com hífen nas pontas continua (o servidor aceita); só o NOVO passa pela régua
+    if (d.slug !== cli.slug && !slugValido(d.slug)) return ui.marcarErro(form, "slug", "Use de 2 a 40 letras minúsculas, números ou hífen (sem hífen no começo, no fim ou dois seguidos).");
     if (d.status === "teste" && !d.teste_ate) return ui.marcarErro(form, "teste_ate", "Informe até quando vai o teste.");      // UB-109
-    const p = { id: cli.id, nome: d.nome, slug: d.slug, plano: d.plano, status: d.status,
+    // plano 1500c · UCB-008: fim do teste no passado bloqueia a equipe na hora — pergunta antes
+    if (testeNoPassado(d.status, d.teste_ate, ui.hojeSP()) && d.teste_ate !== cli.teste_ate
+      && !(await ui.confirmar({ titulo: "O teste já terá terminado", rotulo: "Salvar assim mesmo", perigo: true,
+        texto: "Com o fim do teste no passado, a equipe do cliente fica sem acesso assim que salvar. Salvar assim mesmo?" }))) return;
+    const p = { id: cli.id, nome: String(d.nome).trim(), slug: d.slug, plano: d.plano, status: d.status,
       vertical: verticalAoEditar(d.segmento, segmentoInicial, cli.vertical),      // segmento igual: mantém o modelo escolhido
       teste_ate: d.status === "teste" ? (d.teste_ate || null) : cli.teste_ate, modulos: d.modulos || [],
-      comercial: { pacote: d.pacote_comercial || null, segmento: d.segmento || "", especificacoes: d.especificacoes || "" } };
+      // UCB-002: a revenda não vê o pacote — o registro que já existe fica como está
+      comercial: { pacote: superConta ? d.pacote_comercial || null : comercial.pacote || null, segmento: d.segmento || "", especificacoes: d.especificacoes || "" } };
     if (superConta) {
       const lim = {};
       for (const k of CHAVES_LIMITE) { const v = d[`lim_${k.chave}`]; if (v !== null && v !== undefined && v !== "" && Number.isFinite(v)) lim[k.chave] = Math.max(0, Math.floor(v)); }
@@ -930,6 +1293,14 @@ async function telaCliente(ctx, corpo, id) {
       const ok = await ui.confirmar({ titulo: d.status === "suspenso" ? "Suspender o cliente?" : "Cancelar o cliente?",
         texto: "A equipe do cliente deixa de acessar na hora. Os dados continuam guardados e a situação pode voltar a Ativo.", rotulo: d.status === "suspenso" ? "Suspender" : "Cancelar cliente", perigo: true });
       if (!ok) return;
+      // plano 1500c · UCB-092: o motivo que a equipe do cliente vê — só com o servidor que guarda (o cliente já vem com «motivo_status»)
+      if (Object.hasOwn(cli, "motivo_status")) {
+        const fm = h("form", { class: "pilha", novalidate: true }, ui.campo({ rotulo: "Motivo (o cliente vê)", nome: "motivo", max: 200, valor: cli.motivo_status || "", autocomplete: "off",
+          placeholder: "Ex.: pagamento em aberto desde 10/10", ajuda: "Opcional. Aparece para a equipe do cliente no aviso de conta suspensa." }));
+        const rm = await ui.modal({ titulo: "Motivo para o cliente", corpo: fm, largura: "p", acoes: [{ rotulo: "Pular", tipo: "neutro", valor: { motivo: null } },
+          { rotulo: "Usar este motivo", tipo: "primario", fn: async () => ({ motivo: String(ui.lerForm(fm).motivo || "").trim() || null }) }] });
+        p.motivo_status = rm && rm.motivo ? rm.motivo : null;
+      }
     }
     try {
       const r = await ui.carregando(form.querySelector("[type=submit]"), api.rpc("nx_cliente_admin_salvar", { p_cliente: p }));
@@ -974,23 +1345,68 @@ async function telaCliente(ctx, corpo, id) {
 
   // ---- usuários com acesso
   // revisão 1000b · UB-209: esqueleto secundário (o detalhe do cliente já anunciou «Carregando…») — não fala de novo
-  const usuariosEl = h("div", { class: "pilha-p" }, ui.esqueleto("lista", { n: 2, anunciar: false }));
-  api.rpc("nx_usuarios_listar", { p_cliente: cli.id }).then(r => {
+  const usuariosEl = h("div", { class: "pilha-p", tabindex: "-1" }, ui.esqueleto("lista", { n: 2, anunciar: false }));
+  // plano 1500c · UCB-041: o rótulo do papel vem do config.js (rotuloPapel); sem ele, o mesmo mapa local
+  let rotPapel = p => ({ admin: "Administrador", supervisor: "Supervisor", atendente: "Atendente", leitura: "Somente leitura", gestor: "Gestor" })[p] || p;
+  let cfgMod = null;
+  function pintarUsuarios(r) {
     ui.limpar(usuariosEl);
     const us = r.usuarios || [];
+    const adm = us.find(u => u && u.papel === "admin" && u.telefone);
+    telAdmin = adm ? String(adm.telefone) : null;
     if (!us.length) usuariosEl.appendChild(h("p", { class: "fraco" }, "Ninguém com acesso ainda. Gere o convite do administrador."));
     // plano 1000 · AS-160: ações de suporte por pessoa (link de nova senha) sem precisar «Entrar» no cliente
     for (const u of us) {
       const b = h("button", { type: "button", class: "bt-icone adm-us-acoes", "aria-label": `Ações de suporte para ${u.nome}` }, ui.icone("opcoes"));
-      b.addEventListener("click", () => ui.menu(b, [{ rotulo: "Gerar link de nova senha", icone: "cadeado", fn: () => linkSenhaSuporte(u) }]));
+      // plano 1500c · UCB-040: remover o acesso e mudar o papel também daqui (as mesmas confirmações das Configurações)
+      const ultimo = cfgMod && typeof cfgMod.ehUltimoAdmin === "function" ? cfgMod.ehUltimoAdmin(us, u.conta_id)
+        : u.papel === "admin" && !us.some(x => x.conta_id !== u.conta_id && x.papel === "admin" && !x.gestor);
+      const motivo = ultimo ? "A empresa precisa de pelo menos um administrador." : null;
+      b.addEventListener("click", () => ui.menu(b, [
+        { rotulo: "Gerar link de nova senha", icone: "cadeado", fn: () => linkSenhaSuporte(u) },
+        { rotulo: "Mudar papel", icone: "usuario", desabilitado: ultimo, motivo, fn: () => mudarPapelSuporte(u) },
+        "-",
+        { rotulo: "Remover acesso", icone: "lixeira", perigo: true, desabilitado: ultimo, motivo, fn: () => removerSuporte(u) },
+      ]));
       usuariosEl.appendChild(h("div", { class: "cel-nome adm-us-linha" }, ui.avatar(u.nome, u.conta_id),
-        h("div", null, h("b", null, u.nome), h("small", null, `${({ admin: "Administrador", supervisor: "Supervisor", atendente: "Atendente", leitura: "Somente leitura" })[u.papel] || u.papel} · ${u.email}`)),
+        h("div", null, h("b", null, u.nome), h("small", null, `${u.gestor ? "Gestor" : rotPapel(u.papel)} · ${u.email}`)),
         u.editavel === false ? null : b));
     }
     convitesPend = Array.isArray(r.convites) ? r.convites : [];
     usuariosCarregados = true;
     pintarConvitesAdmin();
+    pintarAvisoTeste();
+  }
+  Promise.all([api.rpc("nx_usuarios_listar", { p_cliente: cli.id }), modConfig(ctx).catch(() => null)]).then(([r, cfg]) => {
+    cfgMod = cfg;
+    if (cfg && typeof cfg.rotuloPapel === "function") rotPapel = p => cfg.rotuloPapel(p);
+    pintarUsuarios(r || {});
   }).catch(e => { ui.limpar(usuariosEl); usuariosEl.appendChild(h("p", { class: "fraco" }, ui.mensagemErro(e))); });
+  async function mudarPapelSuporte(u) {
+    const opcoes = [["admin", "Administrador"], ["supervisor", "Supervisor"], ["atendente", "Atendente"], ["leitura", "Somente leitura"]].map(([valor, rotulo]) => ({ valor, rotulo: rotPapel(valor) || rotulo }));
+    const fm = h("form", { class: "pilha", novalidate: true }, ui.campo({ rotulo: `Papel de ${u.nome}`, nome: "papel", tipo: "select", valor: u.papel, opcoes }));
+    const novo = await ui.modal({ titulo: "Mudar papel", corpo: fm, largura: "p", acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Aplicar", tipo: "primario", fn: async () => ui.lerForm(fm).papel }] });
+    if (!novo || novo === u.papel) return;
+    if ((novo === "admin" || u.papel === "admin") && !(await ui.confirmar(novo === "admin"
+      ? { titulo: `Tornar ${u.nome} administrador?`, rotulo: "Tornar administrador", texto: "Administradores veem e mudam tudo da empresa, inclusive usuários, números e configurações." }
+      : { titulo: `Tirar ${u.nome} de administrador?`, rotulo: `Mudar para ${rotPapel(novo)}`, perigo: true, texto: "A pessoa perde o acesso às configurações e aos usuários da empresa." }))) return;
+    try {
+      const r = await api.rpc("nx_usuario_salvar", { p_cliente: cli.id, p_usuario: { conta_id: u.conta_id, papel: novo } });
+      pintarUsuarios(r || {});
+      ui.toast(`${u.nome} agora é ${rotPapel(novo)}.`, { tipo: "ok" });
+    } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+  }
+  async function removerSuporte(u) {
+    if (!(await ui.confirmar({ titulo: `Remover o acesso de ${u.nome}?`, rotulo: "Remover acesso", perigo: true,
+      texto: "A conta continua existindo; ela só deixa de entrar nesta empresa. Conversas e registros dela ficam, e ela sai do rodízio de conversas novas." }))) return;
+    try {
+      const r = await api.rpc("nx_usuario_remover", { p_cliente: cli.id, p_conta: u.conta_id });
+      pintarUsuarios(r || {});
+      ui.toast("Acesso removido.", { tipo: "ok" });
+      const foco = usuariosEl.querySelector(".adm-us-acoes");
+      try { (foco || usuariosEl).focus(); } catch { /* ok */ }
+    } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+  }
   /** UB-202: (re)desenha a lista «N convites aguardando» dentro do cartão de usuários. */
   let usuariosCarregados = false;
   function pintarConvitesAdmin() {
@@ -1054,13 +1470,18 @@ async function telaCliente(ctx, corpo, id) {
         if (!(await ui.confirmar({ titulo: "Revogar convite?", texto: "O link deixa de funcionar na hora.", rotulo: "Revogar", perigo: true }))) return;
         try {
           await ui.carregando(b, api.rpc("nx_convite_revogar", { p_cliente: cli.id, p_convite: cv.id }));
+          const pos = convitesPend.findIndex(x => x.id === cv.id);
           convitesPend = convitesPend.filter(x => x.id !== cv.id);
           const nova = convitesPend.length ? listaConvitesAdmin() : null;
           if (nova) caixa.replaceWith ? caixa.replaceWith(nova) : (caixa.parentNode.insertBefore(nova, caixa), caixa.remove()); else caixa.remove();
           ui.toast("Convite revogado.", { tipo: "ok" });
+          // plano 1500c · UCB-043: o foco vai ao próximo «Revogar» (ou ao rótulo da lista de usuários), não cai no body
+          const bts = nova ? [...nova.querySelectorAll("button")] : [];
+          const alvoFoco = bts[Math.min(Math.max(0, pos), bts.length - 1)] || usuariosEl;
+          try { alvoFoco.focus(); } catch { /* ok */ }
         } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
       });
-      const papel = ({ admin: "Administrador", supervisor: "Supervisor", atendente: "Atendente", leitura: "Somente leitura" })[cv.papel] || cv.papel || "Administrador";
+      const papel = cv.papel ? rotPapel(cv.papel) : "Administrador";      // plano 1500c · UCB-041
       caixa.appendChild(h("div", { class: "convite-item" }, ui.icone("link"),
         h("div", null, h("b", null, cv.nome || cv.email || "Convite sem nome"),
           h("small", null, [papel, cv.expira_em ? `vence ${ui.relativo(cv.expira_em)}` : null].filter(Boolean).join(" · "))), b));
@@ -1083,12 +1504,62 @@ async function telaCliente(ctx, corpo, id) {
         h("div", { class: "linha" }, ir)));
   }
 
+  // plano 1500c · UCB-101: a projeção do mês no anel de IA (a mesma conta do Plano e uso — projecaoMes do config.js)
+  const projecaoIAEl = h("p", { class: "fraco adm-ia-proj", hidden: true });
+  if (cli.uso && Number(cli.uso.ia_mes) > 0) modConfig(ctx).then(cfg => {
+    if (!cfg || typeof cfg.projecaoMes !== "function") return;
+    const proj = cfg.projecaoMes(cli.uso.ia_mes, ui.hojeSP());
+    const lim = cli.limites ? cli.limites.ia_mes : null;
+    projecaoIAEl.textContent = `No ritmo atual, ~${ui.num(proj)} até o fim do mês${lim != null && lim > 0 && proj > lim ? " (passa do limite)" : ""}.`;
+    projecaoIAEl.hidden = false;
+  }).catch(() => { /* sem a projeção */ });
+  // plano 1500c · UCB-126: teste vencido ou acabando (≤ 3 dias) → aviso no topo com «+7 dias», «Converter» e (UCB-127) a mensagem pronta
+  const avisoTesteEl = h("div", { class: "aviso aviso-aten adm-aviso-teste", role: "status", hidden: true });
+  let telAdmin = null;          // o celular do administrador do cliente, quando a lista de usuários traz
+  function pintarAvisoTeste() {
+    ui.limpar(avisoTesteEl);
+    const n = cli.status === "teste" ? diasAteFimTeste(cli.teste_ate, ui.hojeSP()) : null;
+    if (n === null || n > 3) { avisoTesteEl.hidden = true; return; }
+    avisoTesteEl.hidden = false;
+    avisoTesteEl.classList.toggle("aviso-ruim", n < 0);
+    const b7 = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("relogio"), "+7 dias de teste");
+    b7.addEventListener("click", async () => {
+      try {
+        const novo = estenderTeste(cli.teste_ate, ui.hojeSP(), 7);
+        const r = await ui.carregando(b7, api.rpc("nx_cliente_admin_salvar", { p_cliente: { id: cli.id, teste_ate: novo } }));
+        cli = { ...cli, ...r, teste_ate: (r && r.teste_ate) || novo, uso: r && r.uso ? r.uso : cli.uso };
+        if (inpTeste) { inpTeste.value = cli.teste_ate; inpTeste.dispatchEvent(new Event("input", { bubbles: true })); }
+        formSalvo = estadoDoForm();
+        pintarCabecalho(); pintarAvisoTeste();
+        ui.toast(`Teste estendido até ${ui.dataBR(cli.teste_ate)}.`, { tipo: "ok" });
+      } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+    });
+    const bConv = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("check"), "Converter em pagante");
+    bConv.addEventListener("click", () => converter(bConv));
+    let produto = "sistema";
+    try { const me = ctx.shell.marcaEfetiva(); if (me && me.produto) produto = me.produto; } catch { /* ok */ }
+    const txtWa = textoAvisoTeste(cli, n, produto);
+    const aWa = h("a", { class: "bt bt-fant bt-p adm-avisar-teste", href: ui.linkWhatsApp(txtWa, telAdmin || ""), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), "Avisar pelo WhatsApp");
+    avisoTesteEl.append(ui.icone("alerta"), h("div", { class: "pilha-p" },
+      h("p", null, n < 0 ? `${rotuloTesteVencido(-n)}: a equipe do cliente está sem acesso.` : n === 0 ? "O teste acaba hoje." : `O teste acaba em ${n} ${n === 1 ? "dia" : "dias"}.`),
+      h("div", { class: "linha" }, b7, bConv, aWa)));
+  }
+  pintarAvisoTeste();
+  // plano 1500c · UCB-090: depois de criar, o próximo passo é o convite do administrador (em destaque)
+  const avisoNovo = ctx.rota && ctx.rota.query && ctx.rota.query.novo ? (() => {
+    const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("convidar"), "Gerar convite do administrador");
+    b.addEventListener("click", () => btConvite.click());
+    return h("div", { class: "aviso aviso-ok adm-proximo-passo", role: "status" }, ui.icone("check"),
+      h("div", { class: "pilha-p" }, h("p", null, h("b", null, "Cliente criado. "), "Próximo passo: convidar quem vai administrar a empresa."), h("div", { class: "linha" }, b)));
+  })() : null;
   corpo.append(...[
     h("div", { class: "cartao" },
       h("div", { class: "cartao-cab" },
         h("div", { class: "cel-nome" }, cabAvatar, h("div", null, cabNome, cabPilulas)),
         h("div", { class: "linha" }, btConvite, btNumeros, btEntrar))),
-    semPacote(cli) ? avisoSemPacote() : null,
+    avisoNovo,
+    avisoTesteEl,
+    superConta && semPacote(cli) ? avisoSemPacote() : null,
     h("div", { class: "adm-det" },
       h("div", { class: "pilha" },
         h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Plano e situação"),
@@ -1097,6 +1568,7 @@ async function telaCliente(ctx, corpo, id) {
         // uso de IA do mês em anel (item 58) + a série por dia do servidor (G2, nx_ia_uso_dia) com o custo estimado
         h("div", { class: "cartao adm-ia" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "IA neste mês"), h("p", { class: "sub" }, "Sugestões da IA usadas no mês corrente. Zera todo dia 1."))),
           anelUso(ui, { uso: cli.uso ? cli.uso.ia_mes : 0, limite: cli.limites ? cli.limites.ia_mes : null, rotulo: "Sugestões de IA" }),
+          projecaoIAEl,
           usoIAPorDia(ctx, cli)),
         h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Uso do plano"), h("p", { class: "sub" }, "Contagem de agora; sugestões de IA no mês corrente."))), usoEl),
         h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Usuários com acesso"))), usuariosEl),
@@ -1160,7 +1632,7 @@ async function telaRevendas(ctx, corpo) {
   const { ui, api } = ctx;
   const h = ui.h;
   ctx.titulo("Revendas");
-  const novo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("mais"), "Revenda");
+  const novo = h("button", { type: "button", class: "bt bt-prim adm-novo" }, ui.icone("mais"), h("span", { class: "adm-novo-rot" }, "Nova revenda"));      // plano 1500c · UCB-117
   novo.setAttribute("aria-label", "Nova revenda");
   const lista = h("div", { class: "pilha" }, ui.esqueleto("cartoes", 3));
   corpo.append(h("div", { class: "adm-filtros adm-filtros-fim" }, novo), lista);
@@ -1251,17 +1723,20 @@ async function formRevenda(ctx, o, aoSalvar) {
   const h = ui.h;
   const T = ctx.shell.tema;
   let ps = [], falhaPlanos = null;
-  try { ps = (await planos(ctx)).filter(p => p.ativo && p.id !== "interno"); } catch (e) { ps = []; falhaPlanos = e; }
+  try { ps = await planos(ctx); } catch (e) { ps = []; falhaPlanos = e; }
   const lim = (o && o.limites) || { empresas: 10, usuarios: 50, canais: 10, plano_padrao: "essencial" };
+  // plano 1500c · UCB-004: o plano padrão desligado continua na lista (salvar sem mexer não troca em silêncio)
+  const opPadrao = falhaPlanos ? [] : opcoesPlanoPadrao(ps, lim.plano_padrao || "essencial");
   const form = h("form", { class: "pilha", novalidate: true },
     h("div", { class: "form-grade" },
       ui.campo({ rotulo: "Nome da agência", nome: "nome", valor: o ? o.nome : "", obrigatorio: true, max: 80, autocomplete: "off", placeholder: "Ex.: Agência Conecta" }),
       ui.campo({ rotulo: "Endereço (slug)", nome: "slug", valor: o ? o.slug : "", obrigatorio: true, max: 40, autocomplete: "off",
         ajuda: "Vira o link de entrada: /app/?org=slug (até ter domínio próprio)." }),
-      o ? ui.campo({ rotulo: "Situação", nome: "status", tipo: "select", valor: o.status, opcoes: [{ valor: "ativo", rotulo: "Ativa" }, { valor: "suspenso", rotulo: "Suspensa (os clientes da agência não entram)" }],
+      // plano 1500c · UCB-001: «Cancelada» aparece quando é a situação atual (antes o seletor caía em «Ativa» e salvar reativava)
+      o ? ui.campo({ rotulo: "Situação", nome: "status", tipo: "select", valor: o.status, opcoes: opcoesStatusRevenda(o.status),
         ajuda: "Suspensa: as equipes dos clientes da agência deixam de entrar. O gestor continua entrando para organizar e exportar." }) : null,
       ui.campo({ rotulo: "Plano padrão dos clientes novos", nome: "plano_padrao", tipo: "select", valor: lim.plano_padrao || "essencial",
-        opcoes: ps.map(p => ({ valor: p.id, rotulo: p.nome })) })),
+        opcoes: opPadrao })),
     h("fieldset", { class: "campo" }, h("legend", null, "Limites da agência (somados em todos os clientes)"),
       h("p", { class: "campo-ajuda" }, "Em branco = sem limite."),
       h("div", { class: "form-grade form-grade-3" }, LIMITES_ORG.map(k => ui.campo({ rotulo: k.rotulo, nome: `lim_${k.chave}`, tipo: "numero", min: 0, valor: lim[k.chave] ?? "" })))),
@@ -1290,12 +1765,15 @@ async function formRevenda(ctx, o, aoSalvar) {
         if (falhaPlanos) return false;
         ui.marcarErro(form, null);
         const d = ui.lerForm(form);
-        if (!d.nome || d.nome.length < 2) { ui.marcarErro(form, "nome", "Informe o nome."); return false; }
-        if (!/^[a-z0-9-]{2,40}$/.test(d.slug || "")) { ui.marcarErro(form, "slug", "Use de 2 a 40 letras minúsculas, números ou hífen."); return false; }
+        if (String(d.nome || "").trim().length < 2) { ui.marcarErro(form, "nome", "Informe o nome."); return false; }      // plano 1500c · UCB-116
+        // plano 1500c · UCB-115: régua do slug sem hífen nas pontas (o slug que já existe continua valendo)
+        if (!(o && d.slug === o.slug) && !slugValido(d.slug)) { ui.marcarErro(form, "slug", "Use de 2 a 40 letras minúsculas, números ou hífen (sem hífen no começo, no fim ou dois seguidos)."); return false; }
         const limites = {};
         for (const k of LIMITES_ORG) { const v = d[`lim_${k.chave}`]; if (v !== null && v !== undefined && v !== "" && Number.isFinite(v)) limites[k.chave] = Math.max(0, Math.floor(v)); }
         if (d.plano_padrao) limites.plano_padrao = d.plano_padrao;
-        const p = { nome: d.nome, slug: d.slug, limites };
+        // limites que o servidor guarda e esta tela não edita (ex.: dias_teste) continuam
+        for (const [k, v] of Object.entries((o && o.limites) || {})) if (!(k in limites) && !LIMITES_ORG.some(x => x.chave === k) && k !== "plano_padrao") limites[k] = v;
+        const p = { nome: String(d.nome).trim(), slug: d.slug, limites };
         if (o) { p.id = o.id; p.status = d.status; }
         else {
           const marca = { cores: {} };
@@ -1305,11 +1783,19 @@ async function formRevenda(ctx, o, aoSalvar) {
         }
         if (o && o.status === "ativo" && d.status === "suspenso"
           && !(await ui.confirmar({ titulo: `Suspender ${o.nome}?`, texto: "As equipes de TODOS os clientes da agência deixam de acessar na hora. O gestor da agência continua entrando. Os dados ficam guardados.", rotulo: "Suspender", perigo: true }))) return false;
+        // plano 1500c · UCB-001: sair de «Cancelada» é reativar — pergunta antes
+        if (o && o.status === "cancelado" && d.status !== "cancelado"
+          && !(await ui.confirmar({ titulo: `Reativar a revenda ${o.nome}?`, rotulo: "Reativar", texto: `A revenda passa a «${d.status === "suspenso" ? "Suspensa" : "Ativa"}»${d.status === "ativo" ? " e os clientes dela voltam a entrar" : ""}.` }))) return false;
         try { return await api.rpc("nx_org_salvar", { p_org: p }); }
         catch (e) {
           if (e.codigo === "slug_em_uso") { ui.marcarErro(form, "slug", "Esse endereço já está em uso."); return false; }
           if (e.codigo === "dados_invalidos" && /^limites\./.test(e.hint || "")) { ui.marcarErro(form, `lim_${e.hint.slice(8)}`, "Use um número inteiro (ou deixe em branco)."); return false; }
-          if (e.codigo === "marca_invalida") throw e;
+          // plano 1500c · UCB-024: marca inválida vai para o campo dela (nome do produto ou a cor)
+          if (e.codigo === "marca_invalida") {
+            const hint = String(e.hint || "");
+            const campo = hint === "produto" ? "produto" : /^cores?\.?(primaria|secundaria|fundo)$/.test(hint) ? `cor_${hint.replace(/^cores?\.?/, "")}` : null;
+            if (campo && form.querySelector(`[name="${campo}"]`)) { ui.marcarErro(form, campo, api.mensagemErro(e)); return false; }
+          }
           throw e;
         }
       } },
@@ -1352,7 +1838,9 @@ async function convidarGestor(ctx, o, botao) {
     h("div", { class: "aviso" }, ui.icone("info"), h("p", null, "O link cria uma conta NOVA de gestor desta agência. Quem já tem conta no sistema precisa usar outro e-mail.")),
     h("div", { class: "form-grade" },
       ui.campo({ rotulo: "Nome (opcional)", nome: "nome", max: 80, autocomplete: "off" }),
-      ui.campo({ rotulo: "E-mail (opcional)", nome: "email", tipo: "email", autocomplete: "off" })));
+      ui.campo({ rotulo: "E-mail (opcional)", nome: "email", tipo: "email", autocomplete: "off" })),
+    // plano 1500c · UCB-023: a validade é escolhida, como no convite do administrador (antes fixa em 7 dias)
+    ui.campo({ rotulo: "O link vale por", nome: "dias", tipo: "select", valor: "7", opcoes: OPCOES_VALIDADE_CONVITE }));
   let feito = null;
   await ui.modal({
     titulo: `Convidar gestor · ${o.nome}`, corpo: form, largura: "m",
@@ -1362,8 +1850,8 @@ async function convidarGestor(ctx, o, botao) {
         if (feito) return true;
         const d = ui.lerForm(form);
         if (d.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d.email)) { ui.marcarErro(form, "email", "Esse e-mail não parece válido."); return false; }
-        const r = await (botao ? ui.carregando(botao, api.rpc("nx_convite_criar", { p_cliente: null, p_dados: { papel: "gestor", dias: 7, nome: d.nome || null, email: d.email || null }, p_org: o.id }))
-          : api.rpc("nx_convite_criar", { p_cliente: null, p_dados: { papel: "gestor", dias: 7, nome: d.nome || null, email: d.email || null }, p_org: o.id }));
+        // UCB-023: o «ocupado» é o do próprio «Gerar link» do modal (o ui.modal já marca o botão clicado) — não mais o botão do cartão por trás
+        const r = await api.rpc("nx_convite_criar", { p_cliente: null, p_dados: { papel: "gestor", dias: Number(d.dias) || 7, nome: d.nome || null, email: d.email || null }, p_org: o.id });
         feito = r;
         const lc = linkConvite(r.link, location);
         ui.limpar(m.corpo);
@@ -1428,7 +1916,7 @@ async function telaPlanos(ctx, corpo) {
   const { ui, api } = ctx;
   const h = ui.h;
   ctx.titulo("Planos");
-  const novo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("mais"), "Plano");
+  const novo = h("button", { type: "button", class: "bt bt-prim adm-novo" }, ui.icone("mais"), h("span", { class: "adm-novo-rot" }, "Novo plano"));      // plano 1500c · UCB-117
   novo.setAttribute("aria-label", "Novo plano");
   const grade = h("div", { class: "plano-grade" }, ui.esqueleto("cartoes", 3));
   corpo.append(h("div", { class: "adm-filtros adm-filtros-fim" },
@@ -1520,8 +2008,13 @@ function cartaoPlano(ctx, p, recarregar) {
     ui.marcarErro(form, null);
     const d = ui.lerForm(form);
     if (!d.nome || d.nome.length < 2) return ui.marcarErro(form, "nome", "Informe o nome.");
+    // plano 1500c · UCB-025: preço negativo ou inválido não vai ao servidor
+    if (!precoPlanoValido(d.preco_mensal)) return ui.marcarErro(form, "preco_mensal", "Use um valor de zero para cima (ou deixe em branco para «sob consulta»).");
     const limites = {};
     for (const k of CHAVES_LIMITE) { const v = d[`lim_${k.chave}`]; if (v !== null && v !== undefined && v !== "" && Number.isFinite(v)) limites[k.chave] = Math.max(0, Math.floor(v)); }
+    // plano 1500c · UCB-009: ligar um plano sem nenhum limite deixa tudo ilimitado — pergunta antes
+    if (d.ativo && p.id !== "interno" && planoSemLimites(limites) && !(await ui.confirmar({ titulo: "Este plano não tem nenhum limite", rotulo: "Salvar sem limites",
+      texto: "Disponível assim, quem entrar neste plano terá usuários, números, contatos e IA sem limite. Salvar assim mesmo?" }))) return;
     if (p.id === "interno" && d.ativo === false && !(await ui.confirmar({ titulo: "Desligar o plano Interno?", texto: "Os clientes da plataforma continuam nele; ele só deixa de aparecer para novos clientes.", rotulo: "Desligar" }))) return;
     // plano 1000b · UB-110: mudar limite ou módulo vale na hora para TODOS os clientes do plano — antes de salvar, diz quantos
     if (mudouLimitesOuModulos(p, { limites, modulos: d.modulos || [] })) {
@@ -1545,11 +2038,28 @@ function cartaoPlano(ctx, p, recarregar) {
       ui.toast(api.mensagemErro(e), { tipo: "erro" });
     }
   });
+  // plano 1500c · UCB-095: «Duplicar» cria outro plano com o mesmo preço, limites e módulos (desligado)
+  const btDup = h("button", { type: "button", class: "bt bt-fant bt-p adm-plano-dup" }, ui.icone("copiar"), "Duplicar");
+  btDup.addEventListener("click", async () => {
+    const fd = h("form", { class: "pilha", novalidate: true }, h("div", { class: "form-grade" },
+      ui.campo({ rotulo: "Nome", nome: "nome", valor: `${p.nome} (cópia)`.slice(0, 40), max: 40, autocomplete: "off" }),
+      ui.campo({ rotulo: "Código", nome: "id", valor: `${p.id}_copia`.slice(0, 30), max: 30, autocomplete: "off", ajuda: "Minúsculas, números e _ (não muda depois)." })));
+    const r = await ui.modal({ titulo: `Duplicar ${p.nome}`, corpo: fd, largura: "m", acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Duplicar", tipo: "primario", fn: async () => {
+      ui.marcarErro(fd, null);
+      const d = ui.lerForm(fd);
+      if (String(d.nome || "").trim().length < 2) { ui.marcarErro(fd, "nome", "Informe o nome."); return false; }
+      if (!/^[a-z0-9_]{2,30}$/.test(d.id || "")) { ui.marcarErro(fd, "id", "Use de 2 a 30 letras minúsculas, números ou _."); return false; }
+      if ((_planos || []).some(x => x.id === d.id)) { ui.marcarErro(fd, "id", "Já existe um plano com esse código."); return false; }
+      return api.rpc("nx_plano_salvar", { p_plano: { id: d.id, nome: String(d.nome).trim(), ativo: false, preco_mensal: p.preco_mensal ?? null, limites: { ...(p.limites || {}) },
+        modulos: [...(p.modulos || [])], ordem: ((_planos || []).reduce((mx, x) => Math.max(mx, x.ordem || 0), 0) + 1) } });
+    } }] });
+    if (r && r.id) { _planos = null; ui.toast(`Plano ${r.nome || ""} criado desligado, igual ao ${p.nome}. Ajuste e ligue quando estiver pronto.`, { tipo: "ok" }); if (recarregar) await recarregar(); }
+  });
   return h("article", { class: ["cartao", "plano-cartao", !p.ativo && "inativo"] },
     h("div", { class: "cartao-cab" },
       h("div", null, h("h2", { class: "titulo-sec" }, p.nome),
         h("p", { class: "mono fraco" }, `${p.id}${p.preco_mensal != null ? ` · ${ui.brl(p.preco_mensal, { centavos: false })}/mês` : ""}`)),
-      ui.pilula(p.id === "interno" ? "Só plataforma" : p.ativo ? "Disponível" : "Desligado", p.id === "interno" ? "sec" : p.ativo ? "ok" : "neutra")),
+      h("div", { class: "linha" }, ui.pilula(p.id === "interno" ? "Só plataforma" : p.ativo ? "Disponível" : "Desligado", p.id === "interno" ? "sec" : p.ativo ? "ok" : "neutra"), btDup)),
     form);
 }
 
@@ -1570,7 +2080,7 @@ async function telaDominios(ctx, corpo) {
   const superConta = !!ctx.sessao.conta.super;
   const filtro = h("select", { class: "sel", "aria-label": "Filtrar por situação" },
     h("option", { value: "" }, "Todos"), h("option", { value: "pendente" }, "Pendentes"), h("option", { value: "ativo" }, "Ativos"));
-  const novo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("mais"), "Domínio");
+  const novo = h("button", { type: "button", class: "bt bt-prim adm-novo" }, ui.icone("mais"), h("span", { class: "adm-novo-rot" }, "Novo domínio"));      // plano 1500c · UCB-117
   novo.setAttribute("aria-label", "Novo domínio");
   // plano 1000 · AS-171: busca por endereço, cliente ou revenda (além da situação)
   const buscaDom = h("input", { type: "search", placeholder: "Buscar endereço ou cliente", "aria-label": "Buscar domínio", autocomplete: "off" });
@@ -1614,7 +2124,7 @@ async function telaDominios(ctx, corpo) {
   }
   filtro.addEventListener("change", () => { gravarFiltroDom(); desenhar(); });
   novo.addEventListener("click", async () => {
-    const clientes = ctx.shell.clientes();
+    const clientes = (typeof ctx.shell.clientes === "function" && ctx.shell.clientes()) || [];      // plano 1500c · UCB-018
     const form = h("form", { class: "pilha", novalidate: true },
       ui.campo({ rotulo: "Endereço", nome: "host", placeholder: "crm.agencia.com.br", autocomplete: "off", ajuda: "Subdomínio (domínio raiz não aceita CNAME)." }),
       ui.campo({ rotulo: "Para quem", nome: "cliente", tipo: "select", valor: "",
@@ -1666,8 +2176,9 @@ function cartaoDominiosCliente(ctx, cli) {
       const meus = todos.filter(d => d.cliente && d.cliente.id === cli.id);
       ui.limpar(lista);
       if (!meus.length) lista.append(h("p", { class: "fraco" }, "Sem domínio próprio. Os links usam o endereço da agência."));
-      for (const d of meus) lista.append(h("div", { class: "dom-linha" }, ui.icone("globo"), h("span", { class: "mono" }, d.host),
-        ui.pilula(d.status === "ativo" ? "Ativo" : "Pendente", d.status === "ativo" ? "ok" : "aten")));
+      // plano 1500c · UCB-071: cada domínio leva à instrução dele (a tela de domínios já filtrada pelo endereço)
+      for (const d of meus) lista.append(h("a", { class: "dom-linha dom-linha-link", href: hashDominios({ busca: d.host }) }, ui.icone("globo"), h("span", { class: "mono" }, d.host),
+        ui.pilula(d.status === "ativo" ? "Ativo" : "Pendente", d.status === "ativo" ? "ok" : "aten"), ui.icone("seta-dir")));
     } catch (e) {
       ui.limpar(lista);
       const tentar = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Tentar novamente");

@@ -746,7 +746,8 @@ test("CA-004 (DOM) · IA não configurada: «Sugerir com IA» some (botão e men
   const d = comDom();
   try {
     const t = await montarComposer(d, { base: { ia: { ligada: false, cota: { usadas: 0, limite: 100 } } } });
-    const bt = achar(t.comp.el, ".cvx-ferr button[title='Sugerir com IA']");
+    // plano 1500c: o title agora diz quanto resta da cota (CC-307) — o botão é achado pelo nome acessível
+    const bt = achar(t.comp.el, '.cvx-ferr button[aria-label="Sugerir resposta com IA"]');
     assert.equal(bt.hidden, true, "antes: aparecia e só dava «A IA não está disponível agora»");
     achar(t.comp.el, '[aria-label="Mais opções"]').click();
     assert.equal(d.menus.at(-1).itens.some(x => /Sugerir com IA/.test(x.rotulo)), false);
@@ -1326,7 +1327,8 @@ test("CA-026/CA-054/CA-055 (central) · transferir: pessoa fora do departamento 
     const ordem = srv.chamadas.map(x => x[0]).filter(n => n === "nx_cv_atribuir" || n === "nx_cv_nota");
     // revisão 13/10: o recado é gravado ANTES (depois de transferir, quem transferiu pode deixar de ver a conversa e a nota falhava)
     assert.deepEqual(ordem, ["nx_cv_nota", "nx_cv_atribuir"]);
-    assert.equal(srv.chamadas.find(x => x[0] === "nx_cv_nota")[1].p_texto, "Transferência: quer remarcar para sexta");
+    // plano 1500c: a nota do recado diz para quem foi (CC-312)
+    assert.equal(srv.chamadas.find(x => x[0] === "nx_cv_nota")[1].p_texto, "Transferida para Pessoa 3 (Ortodontia): quer remarcar para sexta");
   } finally { c.fim(); d.fim(); }
 });
 
@@ -1661,9 +1663,10 @@ test("CA-080/CA-082/CA-231/CA-232 (DOM) · ⋮: copia o telefone com +55, não r
     assert.equal(mostrar, false);
     assert.equal(chat.el.querySelector("details.cv-sis-grupo"), null, "o grupo virou um traço fino");
     const fino = achar(chat.el, ".cv-sis-fino");
-    assert.equal(fino.textContent, "3 eventos do sistema · mostrar");
+    // plano 1500c: o traço fino mostra só NESTA conversa (CC-151); a preferência global continua desligada
+    assert.equal(fino.textContent, "3 eventos do sistema · mostrar nesta conversa");
     achar(fino, "button").click();
-    assert.equal(mostrar, true);
+    assert.equal(mostrar, false);
     assert.ok(achar(chat.el, "details.cv-sis-grupo"));
   } finally { d.fim(); }
 });
@@ -2299,8 +2302,9 @@ test("CA-232 (central) · «Exportar conversa (.txt)» baixa as mensagens em ord
     const texto = await blobs.at(-1).text();
     const linhas = texto.trim().split(NL);
     assert.match(linhas[0], /^Conversa com Cliente 1 · protocolo ORB-901/);
-    assert.match(linhas[2], / · Cliente 1: Tem horário\?$/);
-    assert.match(linhas[3], / · Equipe: Sexta às 9h$/);
+    // plano 1500c: o cabeçalho (responsável, número, período) entra entre o título e as mensagens — as mensagens são as duas últimas linhas
+    assert.match(linhas.at(-2), / · Cliente 1: Tem horário\?$/);
+    assert.match(linhas.at(-1), / · Equipe: Sexta às 9h$/);
     assert.doesNotMatch(texto, /segredo/);
   } finally { URL.createObjectURL = salvo; c.fim(); d.fim(); }
 });

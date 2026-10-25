@@ -19,7 +19,7 @@ import {
   ErroHttp, ErroApi, json, agoraDe, somaDias, limparErro, lerCorpo, exigirCorpoValido, lerConfig, autenticarCron, listarClientes,
   carregarModelo, emLotes, erroDeEnvio, registrarExecucao, listaDestinos, comPrazo, PRAZO_REDE_MS,
   nomeCurto, tituloRadar, modeloVazio, comPainelUrl, comTravaDoCliente, todosPulados, EM_EXECUCAO, soltandoCorpo,
-  funcaoAusente, anonimizarEnvio, tratarPainel, lerCorpoPainel, autenticarPainel, interna, respostaPainel, auditar,
+  funcaoAusente, anonimizarEnvio, tratarPainel, lerCorpoPainel, autenticarPainel, interna, respostaPainel, auditar, travaDeAviso,
 } from "./comum.js";
 
 const CONFLITO_METRICAS = "cliente_id,plataforma,nivel,data,campanha_ext,anuncio_ext";
@@ -579,6 +579,8 @@ export function tratar(req, env, deps = {}) {
 // cada tipo de problema no máximo a cada 6 h
 export const SAUDE_RODADA_S = 50 * 60;
 export const SAUDE_AVISO_S = 6 * 3600;
+/** plano 1500c · SC-054/SC-055: a trava enquanto o aviso está saindo (a longa só depois do envio confirmado). */
+export const TRAVA_AVISO_CURTA_S = 10 * 60;
 
 /** Lê nx_saude_dados (20261013c) e manda um WhatsApp curto ao(s) número(s) de nx_config.wa_equipe SÓ quando há problema novo
     (trava 'nx-saude:aviso:<tipo>' de 6 h; o tipo é o texto sem os números). Sem wa_equipe, sem a RPC ou no «Testar conexão»: nada.
@@ -590,15 +592,22 @@ export async function avisarSaude(db, cfg, ctx) {
     if (await db.rpc("nx_trava_pegar", { p_nome: "nx-saude:rodada", p_segundos: SAUDE_RODADA_S, p_dono: "nx-ciclo" }) !== true) return null;
     const s = await db.rpc("nx_saude_dados", {});
     const problemas = Array.isArray(s?.problemas) ? s.problemas.map(p => String(p)).filter(Boolean) : [];
-    const novos = [];
+    const novos = [], travas = [];
     for (const p of problemas) {
       const tipo = p.replace(/\d+/g, "#").slice(0, 80);
-      if (await db.rpc("nx_trava_pegar", { p_nome: `nx-saude:aviso:${tipo}`, p_segundos: SAUDE_AVISO_S, p_dono: "nx-ciclo" }) === true) novos.push(p);
+      // plano 1500c · SC-054: trava curta antes, a de 6 h só depois de o aviso sair
+      const t = await travaDeAviso(db, `nx-saude:aviso:${tipo}`, TRAVA_AVISO_CURTA_S, SAUDE_AVISO_S);
+      if (t) { novos.push(p); travas.push(t); }
     }
     if (!novos.length) return { problemas: problemas.length, avisados: 0 };
     const texto = ["⚠️ *Órbita · operação*", "", ...novos.map(p => `• ${p}`), "", "_Detalhes: nx_saude (docs/orbita/OPERACAO.md)._"].join("\n");
-    const envio = await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo: "Órbita: aviso de operação" });
-    return { problemas: problemas.length, avisados: novos.length, envio: anonimizarEnvio(envio) };
+    let envio = [];
+    try { envio = await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo: "Órbita: aviso de operação" }); }
+    finally {
+      const saiu = envio.some(e => e.ok);
+      for (const t of travas) await (saiu ? t.estender() : t.soltar());
+    }
+    return { problemas: problemas.length, avisados: envio.some(e => e.ok) ? novos.length : 0, envio: anonimizarEnvio(envio) };
   } catch (e) {
     if (!funcaoAusente(e)) console.error("nx-ciclo saúde:", limparErro(e?.message || e));
     return null;
@@ -656,7 +665,8 @@ async function tratarPainelCiclo(req, env, deps) {
     if (Number.isNaN(dias)) throw new ErroApi("dados_invalidos", 400, "dias");
     // plano 1000 (SV-088): um «Testar conexão» por cliente a cada 60 s (cada clique é sync na Meta/Google + linha em nx_execucoes);
     // a repetição dentro do prazo devolve o último resultado guardado. A trava não é solta: vence sozinha.
-    const pegou = await db.rpc("nx_trava_pegar", { p_nome: `nx-ciclo:teste:${cliente}`, p_segundos: TESTE_INTERVALO_S, p_dono: "nx-ciclo" }).catch(() => true);
+    const pegou = await db.rpc("nx_trava_pegar", { p_nome: `nx-ciclo:teste:${cliente}`, p_segundos: TESTE_INTERVALO_S, p_dono: "nx-ciclo" })
+      .catch(() => false);   // plano 1500c · SC-038: banco falhou ao conferir o limite → recusa (falha FECHADA); antes liberava
     if (pegou !== true) {
       const ultimo = await ultimoTeste(db, cliente);
       if (ultimo) return respostaPainel({ ok: true, teste: true, repetido: true, ...ultimo });
@@ -705,14 +715,20 @@ export async function avisarCustoIA(db, cfg, ctx) {
   if (!destinos.length || ctx.teste) return null;
   try {
     const teto = Number(cfg?.ia_aviso_custo_usd) > 0 ? Number(cfg.ia_aviso_custo_usd) : TETO_CUSTO_IA_USD;
-    if (await db.rpc("nx_trava_pegar", { p_nome: `nx-ia-custo:${ctx.hoje}`, p_segundos: 26 * 3600, p_dono: "nx-ciclo" }) !== true) return null;
-    const lista = await db.rpc("nx_ia_custo_alto", { p_dia: somaDias(ctx.hoje, -1), p_teto: teto });
+    // plano 1500c · SC-055: trava curta antes; a de 26 h só quando a conferência terminou (e o aviso, se havia, saiu)
+    const trava = await travaDeAviso(db, `nx-ia-custo:${ctx.hoje}`, TRAVA_AVISO_CURTA_S, 26 * 3600);
+    if (!trava) return null;
+    let lista;
+    try { lista = await db.rpc("nx_ia_custo_alto", { p_dia: somaDias(ctx.hoje, -1), p_teto: teto }); }
+    catch (e) { await trava.soltar(); throw e; }
     const altos = Array.isArray(lista) ? lista : [];
-    if (!altos.length) return { clientes: 0 };
+    if (!altos.length) { await trava.estender(); return { clientes: 0 }; }
     const linhas = altos.slice(0, 10).map(c => `• ${String(c.nome || c.slug || "cliente").slice(0, 60)}: US$ ${Number(c.custo_usd).toFixed(2)} (${Number(c.chamadas) || 0} chamadas)`);
     const texto = ["⚠️ *Órbita · custo de IA*", "", `Ontem (${somaDias(ctx.hoje, -1)}) passaram de US$ ${teto.toFixed(2)}:`, ...linhas,
       ...(altos.length > 10 ? [`… e mais ${altos.length - 10}`] : []), "", "_Confira automações decidindo em laço (Admin → IA)._"].join("\n");
-    const envio = await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo: "Órbita: custo de IA" });
+    let envio = [];
+    try { envio = await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo: "Órbita: custo de IA" }); }
+    finally { await (envio.some(e => e.ok) ? trava.estender() : trava.soltar()); }
     return { clientes: altos.length, envio: anonimizarEnvio(envio) };
   } catch (e) {
     if (!funcaoAusente(e)) console.error("nx-ciclo custo IA:", limparErro(e?.message || e));

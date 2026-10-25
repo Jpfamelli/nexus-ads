@@ -362,7 +362,8 @@ test("44: o painel na tela — quatro números, lista em ordem com selos, toque 
   const abertos = [], marcados = [];
   const el = A.montarPainelDia({ h, iso: seg, consultas, config: cfg, hoje: "2026-10-04", pode: true, horaBR: iso => iso.slice(11, 16), num: String, aoAbrir: (k, bt) => abertos.push([k, bt]), aoMarcar: iso => marcados.push(iso) });
   assert.equal(el.tagName, "ASIDE"); assert.equal(el.getAttribute("aria-label"), "Resumo do dia");
-  assert.equal(el.querySelector(".ag-painel-sub").textContent, "Dia por vir");
+  // plano 1500c: o dia seguinte a hoje diz «Amanhã» (CC-302), não «Dia por vir»
+  assert.equal(el.querySelector(".ag-painel-sub").textContent, "Amanhã");
   const kpis = el.querySelectorAll(".ag-kpi");
   assert.deepEqual(kpis.map(k => k.textContent), ["3consultas", "1concluída", "1falta", "1encaixe"]);
   assert.deepEqual(kpis.map(k => k.querySelector("b").dataset.valor), ["3", "1", "1", "1"]);

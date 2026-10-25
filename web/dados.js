@@ -71,6 +71,8 @@ export function mensagemErro(e) {
   const c = e && (e.codigo || e.message);
   const hint = e && e.detalhe && typeof e.detalhe === "object" && e.detalhe.hint ? String(e.detalhe.hint).trim() : "";
   if (hint && COM_HINT[c]) { const t = COM_HINT[c](hint); if (t) return t; }
+  // plano 1500c · AC-284: o tempo-limite do PRÓPRIO navegador (30 s sem resposta) não é «operação grande demais» (essa é a do banco)
+  if (c === "tempo_esgotado" && e && e.local) return "O servidor demorou demais para responder. Confira a internet e tente de novo.";
   if (MENSAGENS[c]) return MENSAGENS[c];
   if (/^http_5\d\d$/.test(String(c || ""))) return "O servidor está fora agora. Tente em instantes.";
   if (c) { try { console.warn("[nexus] erro sem tradução:", String(c).slice(0, 80)); } catch { /* sem console */ } }
@@ -87,15 +89,28 @@ function erro(codigo, extra = {}) {
 /** Plano 1000b · AB-165: tempo-limite de cada chamada (rede presa deixava o clássico em «Carregando» para sempre). */
 export const TEMPO_LIMITE_MS = 30e3;
 
+/** Plano 1500c · AC-285: RPCs só de LEITURA — numa queda de rede passageira (sem_conexao) tentam mais 1 vez depois de RETRY_MS. Escrita
+    nunca repete sozinha (salvar duas vezes). */
+export const RPC_LEITURA = new Set(["nx_dados", "nx_sessao", "nx_integracoes_status", "nx_contas_listar", "nx_config_ver"]);
+export const RETRY_MS = 700;
+
 /** POST /rest/v1/rpc/<nome>. Erro do PostgREST → Error com .codigo = message. */
 export async function rpc(nome, params = {}) {
+  try { return await rpcUmaVez(nome, params); }
+  catch (e) {
+    if (!(e && e.codigo === "sem_conexao" && RPC_LEITURA.has(nome))) throw e;
+    await new Promise(r => setTimeout(r, RETRY_MS));
+    return rpcUmaVez(nome, params);
+  }
+}
+async function rpcUmaVez(nome, params = {}) {
   let r, txt;
   // AD-200: chamada com o token guardado conta como uso (renova a ociosidade da sessão em origem compartilhada)
   if (params && params.p_token && modoSessao() && params.p_token === lerToken(Date.now(), { renovar: false })) lerToken();
   // AB-165: AbortController + corrida com o relógio — mesmo um fetch que ignora o sinal não prende a tela; estoura com «tempo_esgotado»
   const ctl = typeof AbortController === "function" ? new AbortController() : null;
   let tLimite = null;
-  const limite = new Promise((_, rej) => { tLimite = setTimeout(() => { try { ctl && ctl.abort(); } catch { /* ok */ } rej(erro("tempo_esgotado")); }, TEMPO_LIMITE_MS); });
+  const limite = new Promise((_, rej) => { tLimite = setTimeout(() => { try { ctl && ctl.abort(); } catch { /* ok */ } rej(erro("tempo_esgotado", { local: true })); }, TEMPO_LIMITE_MS); });   // AC-284
   limite.catch(() => { /* tratado na corrida */ });
   try {
     try {

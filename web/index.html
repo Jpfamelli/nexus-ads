@@ -216,7 +216,7 @@
     <main class="main" id="main" tabindex="-1">
       <p class="ribbon" id="ribbon" role="note" hidden>
         <button class="ribbon-chip" id="ribbon-chip" type="button" aria-expanded="false" aria-controls="ribbon-txt"><i aria-hidden="true"></i>Demonstração</button>
-        <span class="ribbon-txt" id="ribbon-txt"><b>Demonstração</b> — números ilustrativos, gerados para mostrar como o painel funciona. Nenhum dado real de paciente.</span>
+        <span class="ribbon-txt" id="ribbon-txt"><b>Demonstração</b> — números ilustrativos, gerados para mostrar como o painel funciona. Nenhum dado real de paciente. <a class="ribbon-sair" id="ribbon-sair" href="./">Sair da demonstração</a></span><!-- plano 1500c · AC-282: saída visível também no celular (abre com o chip) -->
         <button class="ribbon-link" id="btn-link-reuniao" type="button" hidden>Copiar link da reunião</button>
       </p>
 
@@ -323,6 +323,8 @@
             <div class="chart" id="chart-dia" tabindex="0" role="group" aria-label="Gráfico diário. Use as setas para ler cada dia; Home e End vão às pontas."></div>
             <div class="tabela-dia" id="tabela-dia" hidden></div>
             <form class="marco-form" id="marco-form" novalidate hidden></form>
+            <!-- plano 1500c · AC-272: todos os marcos numa lista, com «Remover» (o marco errado de fora do período também sai) -->
+            <details class="marcos-lista" id="marcos-lista" hidden><summary id="marcos-lista-s">Marcos</summary><ul id="marcos-lista-ul"></ul></details>
           </article>
 
           <div class="grid g-d">
@@ -379,8 +381,10 @@
             <header class="card-h">
               <div>
                 <h2>Campanhas</h2>
-                <p class="sub"><span class="so-largo">Clique no título de uma coluna para ordenar. </span>A bolinha compara o custo por conversa com a meta.</p>
+                <p class="sub"><span class="so-largo">Clique no título de uma coluna para ordenar. </span>A bolinha compara o custo com a meta da campanha.</p>
               </div>
+              <!-- plano 1500c · AC-248: a tabela em planilha (CSV para o Excel/Planilhas) -->
+              <button class="pill pill-ghost pill-sm" id="btn-csv-camp" type="button">Baixar planilha (CSV)</button>
             </header>
             <div class="tbl-wrap" id="tbl-campanhas"></div>
           </article>
@@ -786,6 +790,13 @@
 
   <!-- ===================== O CURTA (modo apresentação · curta.js) ===================== -->
   <div class="palco-curta" id="palco-curta" role="dialog" aria-modal="true" aria-roledescription="apresentação" aria-label="Apresentação dos resultados" hidden></div>
+
+  <!-- plano 1500c · AC-242: confirmação do próprio painel (no lugar do confirm() nativo) -->
+  <dialog class="dlg-confirmar" id="dlg-confirmar" aria-labelledby="dlg-confirmar-t">
+    <form method="dialog"><p id="dlg-confirmar-t" class="dlg-t"></p>
+      <div class="acoes"><button class="pill pill-ghost" value="nao" type="submit" data-cancelar>Cancelar</button><button class="pill pill-bronze" value="sim" type="submit" data-ok>Confirmar</button></div>
+    </form>
+  </dialog>
 
   <!-- ===================== FOLHA DO MÊS (A4 · folha.js) ===================== -->
   <div class="folha-modal" id="folha-modal" role="dialog" aria-modal="true" aria-label="Folha do mês" hidden>

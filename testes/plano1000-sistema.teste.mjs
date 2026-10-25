@@ -357,7 +357,8 @@ test("AS-296 · ui.configurar({suprimirToast}): com a faixa de conexão à vista
   } finally { U.configurar({ suprimirToast: null }); }
   const f = fnApp("function toastRepetidoDeRede(", { E: { rede: { estado: "offline" }, M: { api: A, ui: U } }, RE_ESTADO_FALHA: /^(offline|servidor_fora)$/, frasesDeRede: null }, "toastRepetidoDeRede");
   assert.equal(f(A.mensagemErro({ codigo: "sem_conexao", contexto: { leitura: true } }), { tipo: "erro" }), true);
-  assert.equal(f("Não foi possível concluir. Sem internet: nada foi salvo.", { tipo: "erro" }), true, "frase embutida (acaoComDesfazer) também");
+  // plano 1500c: UCC-001 — a frase de ESCRITA («nada foi salvo») nunca é calada: a pessoa precisa saber que o que fez não foi gravado
+  assert.equal(f("Não foi possível concluir. Sem internet: nada foi salvo.", { tipo: "erro" }), false, "frase de escrita embutida aparece");
   assert.equal(f("Esse telefone já existe.", { tipo: "erro" }), false);
   const online = fnApp("function toastRepetidoDeRede(", { E: { rede: { estado: "online" }, M: { api: A, ui: U } }, RE_ESTADO_FALHA: /^(offline|servidor_fora)$/, frasesDeRede: null }, "toastRepetidoDeRede");
   assert.equal(online(A.mensagemErro({ codigo: "sem_conexao", contexto: { leitura: true } }), { tipo: "erro" }), false, "sem a faixa, o toast sai");
@@ -452,7 +453,9 @@ test("AS-185 · cache em aparelho compartilhado: disco desligado (só memória) 
   assert.match(APP_JS, /E\.cache = E\.M\.cache\.criarCache\(aparelhoCompartilhado\(\) \? \{ disco: false \} : \{\}\);/);
   assert.match(fnDoApp("function definirAparelhoCompartilhado(sim) {"), /E\.cache\.desligarDisco\(\)/);
   assert.match(LOGIN_TXT, /ui\.campo\(\{ rotulo: "Lembrar neste aparelho", nome: "lembrar", tipo: "checkbox"/);
-  assert.match(LOGIN_TXT, /await ctx\.aoEntrar\(r\.token, lembrar \? \{ compartilhado: d\.lembrar === false \} : \{\}\);/);
+  // plano 1500c: UCC-030 — a escolha vai junto da validade do token (quando o servidor manda expira_em)
+  assert.match(LOGIN_TXT, /const opcoesEntrada = lembrar \? \{ compartilhado: d\.lembrar === false \} : \{\};/);
+  assert.match(LOGIN_TXT, /await ctx\.aoEntrar\(r\.token, \{ \.\.\.opcoesEntrada, /);
 });
 
 /* ============================================================ pulso.js ============================================================ */
@@ -559,7 +562,8 @@ test("AS-177 · precache por aparelho: só as telas que a pessoa pode abrir; eco
   for (const f of ["conversas.js", "cv-chat.js", "crm-kanban.js", "agenda.js", "ui.js", "config.js", "cv-config.js", "../dados.js"]) assert.ok(urls.includes(f), `${f} vai`);
   for (const lista of Object.values(deps.ARQUIVOS_POR_TELA)) for (const f of lista) assert.ok(ARQ.includes(f), `${f} existe em ARQUIVOS_DO_APP`);
   assert.deepEqual(fnApp("function urlsPrecacheDoAparelho() {", { ...deps, navigator: { connection: { saveData: true } } })(), [], "economia de dados");
-  assert.match(APP_JS, /urlsPrecache: urlsPrecacheDoAparelho \}\);/);
+  // plano 1500c: depois do urlsPrecache o pwa.iniciar recebe também o leitor de versão (UCC-052) e o relógio único (UCC-129)
+  assert.match(APP_JS, /urlsPrecache: urlsPrecacheDoAparelho, leitorVersao:/);
   assert.match(ler("pwa.js"), /nav\.serviceWorker\.ready\.then\(\(\) => quandoOcioso\(jan, \(\) => api\.precache\(\)\)\)/);
   let chamado = null; PWA.quandoOcioso({ requestIdleCallback: (fn, o) => { chamado = o; fn(); } }, () => {}); assert.deepEqual(chamado, { timeout: 5000 });
 });
@@ -755,7 +759,8 @@ test("pedido (b) · guarda de rota: ctx.aoSairDaRota(fn) é consultada antes de 
   guardasDeRota.clear(); guardasDeRota.add(() => { throw new Error("x"); }); assert.equal(await podeSair(), true, "guarda que quebra não prende ninguém");
   const rota = fnDoApp("async function aoMudarRota(doUsuario) {");
   assert.match(rota, /if \(guardasDeRota\.size && E\.hashAtual != null && location\.hash !== E\.hashAtual\) \{/);
-  assert.match(rota, /if \(!ok\) \{\s*try \{ history\.replaceState\(history\.state, "", location\.pathname \+ location\.search \+ E\.hashAtual\); \} catch \{ \/\* ok \*\/ \}\s*return;/);
+  // plano 1500c: UCC-041 — «ficar» desfaz a navegação no histórico (back/forward) e só substitui a entrada quando é a mesma
+  assert.match(rota, /if \(!ok\) \{[\s\S]*?desfazerNavegacao\(idxDoEstado\(history\.state\), E\.idxAtual\)[\s\S]*?else history\.replaceState\(history\.state, "", location\.pathname \+ location\.search \+ E\.hashAtual\);[\s\S]*?return;/);
   assert.ok(rota.indexOf("podeSairDaRota(") < rota.indexOf("const seq = ++E.montando;"), "a pergunta vem antes de começar a montar");
   assert.match(APP_JS, /aoSairDaRota\(fn\) \{\s*if \(typeof fn !== "function"\) return \(\) => \{\};\s*guardasDeRota\.add\(fn\);[\s\S]*?E\.assinaturas\.add\(cancelar\);/, "some ao desmontar a tela");
   assert.match(fnDoApp("function abrirSeletorEmpresa(ancora) {"), /if \(!\(await podeSairDaRota\(\{ motivo: "empresa" \}\)\)\) return;/, "AS-175: trocar de empresa pergunta");
@@ -838,7 +843,8 @@ test("pedido (h) · paleta: «Novo paciente» e «Cadastrar «x» como paciente�
 
 test("AS-254 · seletor de empresa: pílulas de número caído, teste acabando/vencido e empresa pausada", () => {
   const E = { ui: U };
-  const f = fnApp("function sinaisDaEmpresa(c, hoje = E.ui.hojeSP()) {", { E, DIA_MS: 86400000 }, "sinaisDaEmpresa");
+  // plano 1500c: o «hoje» padrão vem do relógio do servidor (hojeServidor, UCC-136); o teste passa o dia explícito
+  const f = fnApp("function sinaisDaEmpresa(c, hoje = hojeServidor()) {", { E, DIA_MS: 86400000, hojeServidor: () => E.ui.hojeSP() }, "sinaisDaEmpresa");
   assert.deepEqual(f({ canais: [{ estado: "conectado" }] }, "2026-10-13"), []);
   assert.deepEqual(f({ canais: [{ estado: "desconectado" }, { estado: "desconectado" }] }, "2026-10-13").map(s => s.texto), ["2 números caídos"]);
   assert.deepEqual(f({ status: "teste", teste_ate: "2026-10-15" }, "2026-10-13").map(s => s.texto), ["teste: 2 dias"]);
@@ -932,18 +938,22 @@ test("AS-262 · instalar: sugestão única no celular a partir da 3ª abertura, 
   assert.equal(deve({ aberturas: 3, jaSugeriu: false, toque: true, modo: "evento" }), true);
   assert.equal(deve({ aberturas: 2, jaSugeriu: false, toque: true, modo: "evento" }), false);
   assert.equal(deve({ aberturas: 5, jaSugeriu: true, toque: true, modo: "evento" }), false, "uma vez só");
-  assert.equal(deve({ aberturas: 5, jaSugeriu: false, toque: false, modo: "evento" }), false, "no computador o menu basta");
+  // plano 1500c: no computador com instalação nativa (beforeinstallprompt) a sugestão também aparece (UCC-060); iPhone continua só no toque
+  assert.equal(deve({ aberturas: 5, jaSugeriu: false, toque: false, modo: "evento" }), true, "computador com instalação nativa");
+  assert.equal(deve({ aberturas: 5, jaSugeriu: false, toque: false, modo: "ios" }), false, "iPhone só no toque");
   assert.equal(deve({ aberturas: 5, jaSugeriu: false, toque: true, modo: null }), false, "já instalado/sem suporte");
   assert.match(fnDoApp("function sugerirInstalacao() {"), /acao: \{ rotulo: "Instalar", fn: \(\) => instalarApp\(\) \}/);
 });
 
 test("AS-292 · Ajuda › «Sobre este app»: versão do app, migração do banco e «Copiar para o suporte» (sem e-mail nem token)", () => {
-  const texto = fnApp("function textoSobre() {", { E: { M: { rotas: ROTAS }, produto: "Órbita", workspace: null, sessao: { migracao: "20261013d_contratos", conta: { email: "ana@x.com" } }, cliente: { nome: "Clínica", slug: "clinica" }, titulo: "Conversas", rede: { estado: "online" } },
+  // plano 1500c: textoSobre({cache}) — o «Sobre» também mostra o que está guardado no aparelho (UCC-103)
+  const texto = fnApp("function textoSobre({ cache = null } = {}) {", { E: { M: { rotas: ROTAS }, produto: "Órbita", workspace: null, sessao: { migracao: "20261013d_contratos", conta: { email: "ana@x.com" } }, cliente: { nome: "Clínica", slug: "clinica" }, titulo: "Conversas", rede: { estado: "online" } },
     VERSAO: "20261013z", innerWidth: 390 })();
   assert.match(texto, /versão do app 20261013z/); assert.match(texto, /Banco: 20261013d_contratos/); assert.match(texto, /Empresa: Clínica \(clinica\)/);
   assert.ok(!texto.includes("ana@x.com"));
-  assert.match(fnDoApp("function abrirMenuAjuda(ancora) {"), /\{ rotulo: "Sobre este app", icone: "ajuda", fn: \(\) => abrirSobre\(\) \}/);
-  assert.match(fnDoApp("function abrirSobre() {"), /rotulo: "Copiar para o suporte"/);
+  // plano 1500c: o menu Ajuda e o «Sobre» ficaram assíncronos (a Central de ajuda e o cache são lidos antes)
+  assert.match(fnDoApp("async function abrirMenuAjuda(ancora) {"), /\{ rotulo: "Sobre este app", icone: "ajuda", fn: \(\) => abrirSobre\(\) \}/);
+  assert.match(fnDoApp("async function abrirSobre() {"), /rotulo: "Copiar para o suporte"/);
 });
 
 test("AS-191 · armazenamento persistente: pedido na 1ª vez que um texto longo é escrito (ou a fila é usada), nunca no login nem em aparelho compartilhado", () => {

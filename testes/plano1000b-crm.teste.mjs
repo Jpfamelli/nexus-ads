@@ -1025,7 +1025,8 @@ test("RB-241/144 Funis (DOM): a cópia avisa que nasce fora dos anúncios; o bot
     await t.reg.menus["Mais ações para Pacientes"].find(x => x && x.rotulo === "Duplicar").fn(); await varias();
     assert.match(t.alvo.querySelector(".fe-nota-copia").textContent, /fora dos anúncios.*Conta nos anúncios/);
     const cores = t.alvo.querySelectorAll(".fe-cor").map(b => b.attrs["aria-label"]);
-    assert.equal(cores[0], "Cor da etapa Novo: #111111", "antes: só «Cor da etapa Novo»");
+    // plano 1500c: RC-149 — o leitor ouve o NOME da cor (código hexadecimal não diz nada); #111111 não é da paleta → «cor personalizada»
+    assert.equal(cores[0], "Cor da etapa Novo: cor personalizada", "antes: só «Cor da etapa Novo»");
     assert.equal(cores[1], "Cor da etapa Avaliação: sem cor");
   } finally { D.desfazer(); }
 });
@@ -1228,7 +1229,8 @@ test("RB-263 dados do titular legíveis: seções com título, sem chaves técni
     negocios: [{ id: 9, titulo: "Implante", status: "aberto", valor_previsto: 3500, criado_em: "2026-10-02T12:00:00Z" }], notas: [{ id: 1, texto: "prefere manhã", criado_em: "2026-10-03T12:00:00Z" }] }, { geradoEm: "2026-10-15T12:00:00Z" });
   const txt = L.textoTitular(d, { data: v => String(v).slice(0, 10), brl: v => `R$ ${v}`, vocab: { negocios: "Oportunidades" } });
   for (const s of ["Dados de Ana", "CADASTRO", "Nome: Ana", "Origem: WhatsApp", "convenio: Unimed", "CONSENTIMENTO DE MARKETING", "Não quer receber marketing",
-    "OPORTUNIDADES", "- Implante (aberto) · R$ 3500 · 2026-10-02", "NOTAS", "- 2026-10-03: prefere manhã", "TAREFAS", "(nada registrado)"]) assert.ok(txt.includes(s), s);
+    // plano 1500c: RC-024 — o status sai em português («Em andamento»), não a chave técnica «aberto»
+    "OPORTUNIDADES", "- Implante (Em andamento) · R$ 3500 · 2026-10-02", "NOTAS", "- 2026-10-03: prefere manhã", "TAREFAS", "(nada registrado)"]) assert.ok(txt.includes(s), s);
   assert.equal(/optin_marketing|"cadastro"|\{/.test(txt), false, "sem JSON nem chaves");
 });
 
@@ -2878,10 +2880,12 @@ test("RB-142 (revisão 1000b) · com NodeList de verdade (sem .map), a gravaçã
     };
     try {
       const bt = r => alvo.querySelectorAll("button").find(b => b.attrs["aria-label"] === r);
-      assert.equal(bt("Subir A").disabled, true, "o 1º não sobe");
+      // plano 1500c: RC-163 — o fim da lista usa aria-disabled (continua focável, com o motivo no title), não disabled
+      assert.equal(bt("Subir A").getAttribute("aria-disabled"), "true", "o 1º não sobe");
       bt("Descer A").clique(); await varias();
-      assert.equal(bt("Subir A").disabled, true, "antes: o finally religava o Subir do 1º (NodeList.map não existe)");
-      assert.equal(bt("Descer B").disabled, true, "o último continua sem Descer");
+      assert.equal(bt("Subir A").getAttribute("aria-disabled"), "true", "antes: o finally religava o Subir do 1º (NodeList.map não existe)");
+      assert.equal(bt("Subir A").disabled, false, "o finally devolve o disabled de antes (falso)");
+      assert.equal(bt("Descer B").getAttribute("aria-disabled"), "true", "o último continua sem Descer");
       assert.equal(bt("Descer A").disabled, false);
     } finally { proto.querySelectorAll = qsa; }
   } finally { D.desfazer(); }

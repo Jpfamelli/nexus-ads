@@ -42,6 +42,10 @@ let lerNumeroCrm = null;   // plano 1000b · RB-064: crm-logica.lerNumero (o mes
 let controlesSpark = [];   // plano 1000b · RB-167: os controles das linhas dos KPIs (ResizeObserver); destruídos antes de cada redesenho
 let memVolta = null;       // plano 1000b · RB-260: o item do checklist que a pessoa foi «Fazer agora» (e a rolagem) — o Início volta ao mesmo lugar
 const VALIDADE_VOLTA = 30 * 60000;
+const CHAVE_VOLTA = "nx-ini-volta";     // plano 1500c · RC-216: o mesmo lugar também depois de recarregar a página (sessionStorage, 30 min)
+const VALIDADE_ONB = 10 * 60000;        // plano 1500c · RC-209: no pulso o checklist pendente vale por 10 min (como a agenda do mês)
+let onbLidoEm = 0;
+let verExemplo = false;                 // plano 1500c · RC-229: «Ver um exemplo» na conta zerada (só na tela; nada é gravado)
 
 export function statusAtualizacaoInicio({ hora = "", falhou = false } = {}) {
   if (falhou) return hora ? `A atualização falhou; exibindo os últimos dados confirmados às ${hora}.` : "A atualização falhou; ainda não há dados confirmados nesta sessão.";
@@ -87,6 +91,12 @@ export function somarDiasIso(iso, n) {
 const diaSemanaIso = iso => { const [a, m, d] = String(iso).slice(0, 10).split("-").map(Number); return new Date(Date.UTC(a, m - 1, d)).getUTCDay(); };
 /** "sábado, 4 de outubro" no fuso de SP. */
 export function dataLonga(agora = new Date()) { return FMT_LONGA.format(agora); }
+/** plano 1500c · RC-221: «ter, 21 out» para o celular (a longa ocupava 2 linhas a 360 px ao lado da hora e do botão). */
+const FMT_CURTA = new Intl.DateTimeFormat("pt-BR", { timeZone: FUSO, weekday: "short", day: "numeric", month: "short" });
+export function dataCurta(agora = new Date()) {
+  const p = Object.fromEntries(FMT_CURTA.formatToParts(agora).map(x => [x.type, x.value]));
+  return `${String(p.weekday || "").replace(".", "")}, ${p.day} ${String(p.month || "").replace(".", "")}`;
+}
 
 /**
  * Histórico local das leituras do Início (a linha de tendência dos KPIs): UM registro por dia do servidor, só os últimos `max` dias.
@@ -149,6 +159,13 @@ export function chaveDestaqueKpi(id) {
   return { aguardando: "conversas.aguardando", consultas: "agenda.consultas", aberto: "negocios.valor_aberto", leads: "leads.semana",
     prazo: "conversas.respondidas_no_prazo_pct", receita: "negocios.receita_mes", previsao: "negocios.previsao_ponderada", atrasadas: "tarefas.atrasadas" }[id] || null;
 }
+/** plano 1500c · RC-206: o texto da opção no «Trocar indicadores» — o nome e o valor de agora; sem dado, só o nome. */
+export function rotuloOpcaoKpi(k, { brl = v => `R$ ${Math.round(v)}`, int = v => String(Math.round(v)) } = {}) {
+  if (!k) return "";
+  if (k.valor === null || k.valor === undefined || !fin(k.valor)) return k.rotulo;
+  const v = k.formato === "brl" ? brl(+k.valor) : k.formato === "pct" ? pct(k.valor) : int(+k.valor);
+  return `${k.rotulo} — ${v}`;
+}
 /** CR-177: aplica a escolha guardada ({posição: id}) sobre os 4 padrão, sem repetir indicador. Escolha inválida é ignorada. */
 export function aplicarEscolhaKpis(padrao, alternativos, escolha) {
   const todos = [...padrao, ...alternativos.filter(a => !padrao.some(p => p.id === a.id))];
@@ -190,17 +207,18 @@ export function kpisInicio(d, agenda, { hoje = null, links = {}, voc = {} } = {}
   const abertos = Math.max(0, Math.floor(+n.abertos) || 0);
   const adj = (m, q) => (V.feminino ? m.replace(/o$/, "a") : m) + (Number(q) === 1 ? "" : "s");
   const prazo = fin(c.respondidas_no_prazo_pct) ? Math.max(0, Math.min(100, +c.respondidas_no_prazo_pct)) : null;
+  const prazoMin = prazoResposta(c);      // plano 1500c · RC-187: o prazo da empresa (conversas.prazo_min); 15 só sem o campo
   const quarto = prazo !== null
     ? { id: "prazo", chave: "respondidas_pct", rotulo: "Respondidas no prazo", valor: prazo, formato: "pct", sentido: "cima",
       tom: prazo >= 80 ? "ok" : prazo < 50 ? "aten" : "neutro", href: links.relatorios || links.conversas || null,
-      sub: "1ª resposta em até 15 min · 7 dias",
-      ajuda: "Conversas dos últimos 7 dias em que a primeira resposta da equipe saiu em até 15 minutos (contagem do servidor)." }
+      sub: `1ª resposta em até ${prazoMin} min · 7 dias`,
+      ajuda: `Conversas dos últimos 7 dias em que a primeira resposta da equipe saiu em até ${prazoMin} minutos (contagem do servidor).` }
     : { id: "leads", chave: "leads_semana", rotulo: "Leads · 7 dias", valor: +l.semana || 0, formato: "int", sentido: "cima", tom: "neutro", href: links.leads || links.crm || null,
       sub: `${+l.hoje || 0} hoje · ${+l.semana_anuncio || 0} de anúncio`,
       ajuda: ajudaLeads(V) };     // plano 1000b · RB-157
   return [
     { id: "aguardando", chave: "aguardando", rotulo: "Esperando resposta", valor: ag, formato: "int", sentido: "baixo",
-      tom: ag > 0 ? (espera !== null && espera >= 30 ? "ruim" : "aten") : "ok", href: links.conversas || null,
+      tom: ag > 0 ? (espera !== null && espera >= limiteEspera(c) ? "ruim" : "aten") : "ok", href: links.conversas || null,     // plano 1500c · RC-301
       sub: ag > 0 ? (espera !== null && espera >= 1 ? `a mais antiga há ${duracaoCurta(espera)}` : `${plural(ag, V.contato, V.contatos)} sem resposta`) : "ninguém esperando",
       ajuda: `Conversas abertas em que a última mensagem é do ${V.contato} e ainda não foi respondida.` },     // plano 1000b · RB-157
     // plano 1000 (CR-251): consultas não têm «sentido bom» — um dia mais calmo não é problema: a variação fica neutra (sem vermelho)
@@ -214,6 +232,22 @@ export function kpisInicio(d, agenda, { hoje = null, links = {}, voc = {} } = {}
       ajuda: `Soma do valor previsto ${V.feminino ? "das" : "dos"} ${V.negocios} ${adj("aberto", 2)} no CRM.` },
     quarto,
   ];
+}
+
+/** plano 1500c · RC-187: o prazo de 1ª resposta da empresa em minutos (nx_inicio.conversas.prazo_min); 15 sem o campo. */
+export function prazoResposta(c) { return c && fin(c.prazo_min) && +c.prazo_min > 0 ? Math.round(+c.prazo_min) : 15; }
+/** plano 1500c · RC-301: a partir de quantos minutos a espera fica vermelha — o prazo da empresa quando o servidor manda; 30 sem ele. */
+export function limiteEspera(c) { return c && fin(c.prazo_min) && +c.prazo_min > 0 ? Math.round(+c.prazo_min) : 30; }
+/**
+ * plano 1500c · RC-204: a faixa da espera de quem está na fila — "ok" (< 5 min), "aten" (5 min até o limite) e "ruim" (≥ limite) — com o texto
+ * que acompanha a cor (nunca só cor). → {faixa, texto}
+ */
+export function faixaEspera(min, limite = 30) {
+  if (!fin(min)) return { faixa: "ok", texto: "" };
+  const lim = Math.max(5, +limite || 30);
+  if (+min >= lim) return { faixa: "ruim", texto: "passou do prazo" };
+  if (+min >= 5) return { faixa: "aten", texto: "responda logo" };
+  return { faixa: "ok", texto: "" };
 }
 
 /* ---- plano 100 · contrato 4: os campos novos de nx_inicio, sempre por detecção (sem eles, null e a tela segue como antes) ---- */
@@ -275,7 +309,9 @@ export function listaEspera(c, max = MAX_ESPERA) {
     .map(x => ({ id: x.id, nome: String(x.nome || "").trim() || null, espera: fin(x.espera_min) ? Math.max(0, +x.espera_min) : null,
       canal: x.canal ? String(x.canal) : null, origem: x.origem ? String(x.origem) : null, plataforma: x.plataforma ? String(x.plataforma) : null,
       atribuidaId: x.atribuida_id !== null && x.atribuida_id !== undefined && x.atribuida_id !== "" ? String(x.atribuida_id) : null,
-      atribuidaNome: String(x.atribuida_nome || "").trim() || null }))
+      atribuidaNome: String(x.atribuida_nome || "").trim() || null,
+      // plano 1500c · RC-228: o contato (quando o servidor manda) — «Marcar» abre a agenda já com a pessoa
+      contatoId: x.contato_id !== null && x.contato_id !== undefined && x.contato_id !== "" ? x.contato_id : null }))
     .sort((a, b) => (b.espera ?? -1) - (a.espera ?? -1)).slice(0, max);
 }
 
@@ -320,12 +356,19 @@ export function estadoNumeros(d) {
 export function primeiroNome(nome) {
   const partes = String(nome || "").trim().split(/\s+/).filter(Boolean);
   const titulo = /^(dr|dra|sr|sra|srta|prof|profa|eng|enga)\.?$/i;
-  return partes.find(p => !titulo.test(p)) || "";
+  // plano 1500c · RC-185: «joão silva» → «João» (a conta cadastrada em minúscula não vira «Boa tarde, joão»)
+  const p = partes.find(x => !titulo.test(x)) || "";
+  return p ? p.charAt(0).toLocaleUpperCase("pt-BR") + p.slice(1) : "";
 }
 /** A frase da faixa: «Número de WhatsApp desconectado há 12 min: Recepção.» (vários: «2 números … : A, B.»); "" sem número caído. */
 export function textoNumeroCaido(lista, agora = Date.now()) {
   if (!Array.isArray(lista) || !lista.length) return "";
-  if (lista.length > 1) return `${lista.length} números de WhatsApp desconectados: ${lista.map(x => x.nome).join(", ")}.`;
+  if (lista.length > 1) {
+    // plano 1500c · RC-231: com vários, desde quando caiu o mais antigo («o primeiro há 40 min»)
+    const ts = lista.map(x => Date.parse(x && x.desde || "")).filter(Number.isFinite);
+    const ha = ts.length ? ` (o primeiro há ${duracaoCurta(Math.max(0, (agora - Math.min(...ts)) / 60000))})` : "";
+    return `${lista.length} números de WhatsApp desconectados${ha}: ${lista.map(x => x.nome).join(", ")}.`;
+  }
   const x = lista[0], t = Date.parse(x.desde || "");
   const ha = Number.isFinite(t) ? ` há ${duracaoCurta(Math.max(0, (agora - t) / 60000))}` : "";
   return `Número de WhatsApp desconectado${ha}: ${x.nome}.`;
@@ -397,9 +440,12 @@ export function consultasPorDia(agenda, hoje, dias = 7) {
  * As consultas de hoje com o estado em relação ao relógio (passou · agora · proxima · depois) e as próximas da semana.
  * → {hoje: [...], visiveis: as de hoje que ainda não acabaram (até max), passadas, restantes, futuras: as dos próximos dias (até max), diaAcabou}
  */
-export function proximasConsultas(agenda, { hoje, agora = Date.now(), max = 4 } = {}) {
+export function proximasConsultas(agenda, { hoje, agora = Date.now(), max = 4, duracaoPadrao = null } = {}) {
+  // plano 1500c · RC-200: consulta sem fim dura o padrão da agenda da empresa (agenda.duracao_padrao_min); 30 min só sem ele
+  const durP = [duracaoPadrao, agenda && agenda.duracao_padrao_min].find(v => fin(v) && +v > 0);
+  const dur = (durP ? +durP : 30) * 60000;
   const todas = (listaConsultas(agenda) || [])
-    .map(c => { const ini = Date.parse(c.inicio), fim = Date.parse(c.fim); return { ...c, ini, fim: Number.isFinite(fim) && fim > ini ? fim : ini + 30 * 60000, dia: diaSP(c.inicio) }; })
+    .map(c => { const ini = Date.parse(c.inicio), fim = Date.parse(c.fim); return { ...c, ini, fim: Number.isFinite(fim) && fim > ini ? fim : ini + dur, dia: diaSP(c.inicio) }; })
     .filter(c => Number.isFinite(c.ini)).sort((a, b) => a.ini - b.ini);
   let proximaMarcada = false;
   const marcar = c => {
@@ -414,7 +460,9 @@ export function proximasConsultas(agenda, { hoje, agora = Date.now(), max = 4 } 
   const futuras = todas.filter(c => c.dia > hoje).slice(0, max).map(c => ({ ...c, estado: "depois" }));
   const passadas = deHoje.filter(c => c.estado === "passou").length;
   const visiveis = deHoje.filter(c => c.estado !== "passou").slice(0, max);
-  return { hoje: deHoje, visiveis, passadas, restantes: deHoje.length - passadas, futuras, diaAcabou: deHoje.length > 0 && visiveis.length === 0 };
+  // plano 1500c · RC-201: as que já passaram sem Compareceu/Faltou marcado (e têm negócio para marcar) — a recepção marca daqui
+  const semPresenca = deHoje.filter(c => c.estado === "passou" && c.negocio_id && !(c.presenca || (c.campos && c.campos.presenca)) && c.marco !== "faltou");
+  return { hoje: deHoje, visiveis, passadas, restantes: deHoje.length - passadas, futuras, diaAcabou: deHoje.length > 0 && visiveis.length === 0, semPresenca };
 }
 
 /**
@@ -455,7 +503,7 @@ export function textoMeta(p, { fmt = v => String(Math.round(v)), dia = null, dia
   if (!p) return "";
   const pc = pct(p.pctReal);       // plano 1000b · RB-158
   if (p.estado === "batida") return `Meta batida: ${fmt(p.realizado)} de ${fmt(p.meta)} (${pc}).`;
-  const base = `${fmt(p.realizado)} de ${fmt(p.meta)} (${pc}). Faltam ${fmt(p.falta)}`;
+  const base = `${fmt(p.realizado)} de ${fmt(p.meta)} (${pc}). ${p.falta === 1 ? "Falta" : "Faltam"} ${fmt(p.falta)}`;     // plano 1500c · RC-181
   const ritmo = dia && diasNoMes ? `; no dia ${dia} de ${diasNoMes} o esperado seria ${fmt(p.esperado)}` : "";
   const frase = p.estado === "frente" ? "você está à frente do ritmo" : p.estado === "ritmo" ? "está perto do ritmo" : "está abaixo do ritmo";
   return `${base} — ${frase}${ritmo}.`;
@@ -467,10 +515,13 @@ export function textoMeta(p, { fmt = v => String(Math.round(v)), dia = null, dia
 export function validarMetas({ vendas = "", consultas = "" } = {}, lerMoeda = v => Number(String(v).replace(",", "."))) {
   const erros = {}, ERRO = "Use um número maior que zero.";
   const vTxt = String(vendas ?? "").trim(), cTxt = String(consultas ?? "").trim();
-  const v = vTxt ? lerMoeda(vTxt) : null, c = cTxt ? Number(cTxt.replace(",", ".")) : null;
+  const v = vTxt ? lerMoeda(vTxt) : null;
+  // plano 1500c · RC-180: consultas são inteiras — «1.000» (milhar) = 1000 (antes virava 1) e «2,5»/«1.5» é erro (antes arredondava calado)
+  const cLimpo = /^\d{1,3}(\.\d{3})+$/.test(cTxt) ? cTxt.replace(/\./g, "") : cTxt;
+  const c = cTxt ? (/^\d+$/.test(cLimpo) ? Number(cLimpo) : NaN) : null;
   if (vTxt && !(Number.isFinite(v) && v > 0)) erros.meta_vendas = ERRO;
-  if (cTxt && !(Number.isFinite(c) && Math.round(c) > 0)) erros.meta_consultas = ERRO;
-  return { vendas: !erros.meta_vendas && v > 0 ? v : null, consultas: !erros.meta_consultas && c > 0 ? Math.round(c) : null, erros };
+  if (cTxt && !(Number.isFinite(c) && c > 0)) erros.meta_consultas = /[.,]/.test(cLimpo) && /\d/.test(cLimpo) ? "Use um número inteiro maior que zero." : ERRO;
+  return { vendas: !erros.meta_vendas && v > 0 ? v : null, consultas: !erros.meta_consultas && c > 0 ? c : null, erros };
 }
 /** plano 1000b · RB-160: a linha do «Atendimento agora» — um só: «Paciente esperando há 40 min»; vários: «A mais antiga espera há 40 min» (como no «Agora»). */
 export function fraseEspera(aguardando, esperaTxt, { contato = "cliente" } = {}) {
@@ -480,6 +531,211 @@ export function fraseEspera(aguardando, esperaTxt, { contato = "cliente" } = {})
 export function rotuloSemDono(n) {
   const q = Math.max(0, Math.floor(+n) || 0);
   return q === 1 ? "Ver a conversa sem responsável para assumir" : `Ver as ${q} conversas sem responsável para assumir`;
+}
+/**
+ * plano 1500c · RC-210: o que identifica uma leitura para saber se a tela precisa mudar — com nx_inicio.versao (hash/versão do servidor), a versão
+ * e o resto pequeno (agenda, checklist); sem ela, a resposta inteira serializada como antes. `contar` (teste) conta as serializações grandes.
+ */
+export function assinaturaInicio(d, resto = {}, contar = null) {
+  if (d && (typeof d.versao === "string" || typeof d.versao === "number") && String(d.versao)) return `v:${d.versao}|${JSON.stringify(resto)}`;
+  if (typeof contar === "function") contar();
+  return JSON.stringify({ ...d, agora: null, ...resto });
+}
+/**
+ * plano 1500c · IC-002: os primeiros passos do cliente novo, só do que o plano libera — WhatsApp (conversas), anúncios (ads) e agenda (crm).
+ * `feito(ids)` diz pelo checklist do servidor se o passo está pronto; `rota` só para quem consegue abrir a seção (admin + podeSecao).
+ * → [{id, rotulo, botao, ajuda, feito, rota|null}]
+ */
+export function guiaPrimeiroUso({ admin = false, podeSecao = () => true, temModulo = () => true, feito = () => false } = {}) {
+  const tem = m => { try { return typeof temModulo === "function" ? !!temModulo(m) : true; } catch { return false; } };
+  const abre = id => { try { return !!admin && (typeof podeSecao !== "function" || !!podeSecao({ id })); } catch { return false; } };
+  const out = [];
+  if (tem("conversas")) out.push({ id: "whatsapp", rotulo: "Conectar o WhatsApp", botao: "Conectar o WhatsApp", ajuda: "As mensagens dos clientes chegam aqui e a equipe responde sem trocar de celular.",
+    feito: !!feito(["chave_codewords", "aparelho_pareado", "recebimento"]), rota: abre("chave_codewords") ? "#/config/numeros?assistente=novo" : null });
+  if (tem("ads")) out.push({ id: "anuncios", rotulo: "Ligar os anúncios", botao: "Ligar Meta e Google", ajuda: "Para o Início mostrar quanto cada R$ 1 investido voltou em vendas.",
+    feito: !!feito(["anuncios_ligados"]), rota: abre("anuncios_ligados") ? "#/config/anuncios" : null });
+  if (tem("crm")) out.push({ id: "agenda", rotulo: "Configurar a agenda", botao: "Configurar a agenda", ajuda: "Os horários de atendimento: o Início mostra as consultas do dia e quem está chegando.",
+    feito: !!feito(["agenda_faixas"]), rota: abre("agenda_faixas") ? "#/config/agenda" : null });
+  return out;
+}
+/** plano 1500c · RC-193: as atrasadas primeiro (a mais antiga no topo), depois as outras na ordem do servidor — sem depender de o servidor ordenar. */
+export function ordenarTarefas(lista) {
+  const l = Array.isArray(lista) ? lista.filter(Boolean) : [];
+  const t = x => { const v = Date.parse(x.vence_em || ""); return Number.isFinite(v) ? v : Infinity; };
+  const atr = l.filter(x => x.atrasada).sort((a, b) => t(a) - t(b));
+  return [...atr, ...l.filter(x => !x.atrasada)];
+}
+/**
+ * plano 1500c · RC-192: o novo vencimento de «Amanhã» — amanhã (SP) na mesma hora (09:00 sem prazo); nunca antes de vence_em + 1 dia.
+ * A mesma regra de crm-logica.adiarParaAmanha (o Início não baixa o crm-logica inteiro para isso). → ISO
+ */
+export function adiarParaAmanha(venceEm, agora = new Date()) {
+  const DIA = 86400000, SP = 3 * 3600000;
+  const ymd = ms => new Date(ms - SP).toISOString().slice(0, 10);
+  const atual = venceEm ? Date.parse(venceEm) : NaN;
+  const hhmm = Number.isFinite(atual) ? new Date(atual - SP).toISOString().slice(11, 16) : "09:00";
+  let alvo = Date.parse(`${ymd(new Date(agora).getTime() + DIA)}T${hhmm}:00-03:00`);
+  if (Number.isFinite(atual) && atual + DIA > alvo) alvo = atual + DIA;
+  return new Date(alvo).toISOString();
+}
+/** plano 1500c · RC-196: a diferença em reais deste mês × o mesmo pedaço do mês passado («+R$ 3.200», «−R$ 800», «igual»); "" sem os dois números. */
+export function textoDiferenca(atual, anterior, fmt = v => String(Math.round(v))) {
+  if (!fin(atual) || !fin(anterior)) return "";
+  const dif = Math.round(+atual - +anterior);
+  if (!dif) return "igual ao mesmo período";
+  return `${dif > 0 ? "+" : "−"}${fmt(Math.abs(dif))} ${dif > 0 ? "a mais" : "a menos"} que no mesmo período`;
+}
+/**
+ * plano 1500c · RC-218: o «Do lead à venda» deste mês × o do mês passado (nx_inicio.funil_mes_anterior {leads, ganhos}) em pontos percentuais.
+ * → null sem o campo ou sem leads em um dos meses; {atual, anterior} (0–100). (A função vem logo depois de linksFunilMes.)
+ */
+export function linksFunilMes(hoje, { crm = false, conversas = false, agenda = false, rel = false } = {}) {
+  // plano 1500c · RC-341: para onde cada etapa do funil do mês leva (só o que a pessoa pode abrir) — leads desde o dia 1, conversas, agenda, vendas
+  const dia1 = primeiroDiaMes(hoje);
+  const out = {};
+  if (crm) out.leads = `#/contatos?criado_de=${dia1}`;
+  if (conversas) out.conversas = "#/conversas?aba=abertas";
+  if (agenda) out.agendados = `#/agenda?dia=${String(hoje).slice(0, 10)}`;
+  if (rel) out.ganhos = "#/relatorios/vendas"; else if (crm) out.ganhos = "#/crm";
+  return out;
+}
+/** plano 1500c · RC-218: chip de uma taxa contra outra em pontos percentuais — {v, txt: "29 p.p.", cls: bom|ruim|neutro, seta}. */
+export function chipPontos(atual, anterior) {
+  const v = Math.round(+atual - +anterior);
+  if (!Number.isFinite(v)) return { v: null, txt: "sem base", cls: "neutro", seta: "" };
+  return { v, txt: `${Math.abs(v)} p.p.`, cls: v > 0 ? "bom" : v < 0 ? "ruim" : "neutro", seta: v > 0 ? "▲" : v < 0 ? "▼" : "→" };
+}
+export function funilComparado(d) {
+  const a = d && d.funil_mes, b = d && d.funil_mes_anterior;
+  if (!a || !b || typeof b !== "object") return null;
+  const taxa = f => (fin(f.leads) && +f.leads > 0 && fin(f.ganhos) ? Math.max(0, +f.ganhos) / +f.leads * 100 : null);
+  const atual = taxa(a), anterior = taxa(b);
+  return atual === null || anterior === null ? null : { atual, anterior };
+}
+/** plano 1500c · RC-232: o ponto de partida da meta de vendas — o mês passado inteiro e +10% (arredondado a R$ 100). null sem o número. */
+export function sugestaoMetaVendas(n) {
+  const v = n && fin(n.receita_mes_anterior) ? +n.receita_mes_anterior : null;
+  return v && v > 0 ? { mesPassado: v, mais10: Math.ceil(v * 1.1 / 100) * 100 } : null;
+}
+/** plano 1500c · RC-299: a mesma escrita de espera nos três lugares da tela (KPI, «Atendimento agora» e a fila do «Agora»). */
+export const textoEspera = min => duracaoCurta(min);
+/** plano 1500c · RC-183: a nota do bloco Leads sem «1 dos 1 leads … vieram». */
+export function notaLeadsAnuncio(semana, anuncio) {
+  const s = Math.max(0, Math.round(+semana || 0)), a = Math.max(0, Math.round(+anuncio || 0));
+  if (s === 1) return a ? "O lead dos últimos 7 dias veio de anúncio." : "O lead dos últimos 7 dias não veio de anúncio.";
+  return `${a} dos ${s} leads criados nos últimos 7 dias ${a === 1 ? "veio" : "vieram"} de anúncio.`;
+}
+/**
+ * plano 1500c · RC-215: a frase dos agendados sem data com o termo explícito — «2 oportunidades em Agendou sem data» (a etapa quando todos estão
+ * na mesma), senão «… na etapa de agendamento sem data». Sem gênero adivinhado.
+ */
+export function fraseSemData(sd, voc = {}) {
+  const n = Math.max(0, Math.round(+(sd && sd.total) || 0));
+  const termo = n === 1 ? (voc.negocio || "negócio") : (voc.negocios || "negócios");
+  const etapas = [...new Set(((sd && sd.itens) || []).map(x => x && x.etapa).filter(Boolean))];
+  return `${n} ${termo} ${etapas.length === 1 ? `em ${etapas[0]}` : "na etapa de agendamento"} sem data`;
+}
+/** plano 1500c · RC-233: os leads de anúncio da semana por plataforma (leads.semana_meta / semana_google); null sem os dois campos. */
+export function divisaoPlataformas(l) {
+  if (!l || !fin(l.semana_meta) || !fin(l.semana_google)) return null;
+  return { meta: Math.max(0, Math.round(+l.semana_meta)), google: Math.max(0, Math.round(+l.semana_google)) };
+}
+/** plano 1500c · RC-183: o rótulo da barra de origem («1 de 1 lead veio de anúncio»). */
+export function rotuloOrigem(total, anuncio, pctAn) {
+  const t = Math.max(1, Math.round(+total || 0)), a = Math.max(0, Math.round(+anuncio || 0));
+  return `${a} de ${t} ${t === 1 ? "lead" : "leads"} ${a === 1 ? "veio" : "vieram"} de anúncio (${pctAn}%)`;
+}
+/**
+ * plano 1500c · RC-202: a consulta de AMANHÃ ainda não confirmada pelo paciente? Só quando a agenda manda `confirmacao` (null/"pendente"/false =
+ * não confirmada; "confirmada"/true = ok). Sem o campo → false (nada inventado).
+ */
+export function precisaConfirmar(c, amanha) {
+  if (!c || !("confirmacao" in c) || (c.dia || diaSP(c.inicio)) !== amanha) return false;
+  const v = c.confirmacao;
+  return !(v === true || /^(confirmad|sim|ok)/i.test(String(v ?? "")));
+}
+/** plano 1500c · RC-211: a tecla vale para a tela? Não quando o foco está num campo (input, textarea, select, editável) ou há janela/diálogo aberto. */
+export function teclaLivre(alvo, doc = typeof document !== "undefined" ? document : null) {
+  const el = alvo && alvo.nodeType === 1 ? alvo : null;
+  if (el) {
+    const tag = String(el.localName || el.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return false;
+    if (el.isContentEditable || (typeof el.getAttribute === "function" && el.getAttribute("contenteditable") === "true")) return false;
+    if (typeof el.closest === "function" && el.closest("dialog, [role=dialog], .flut")) return false;
+  }
+  try { if (doc && typeof doc.querySelector === "function" && doc.querySelector("dialog[open]")) return false; } catch { /* ok */ }
+  return true;
+}
+/** plano 1500c · RC-235: «vs. ontem» quando o dia de comparação é ontem; senão «vs. dd/mm». */
+export function rotuloContraDia(dia, hoje) {
+  if (!dia) return "";
+  if (hoje && String(dia).slice(0, 10) === somarDiasIso(hoje, -1)) return "vs. ontem";
+  const [, m, dd] = String(dia).slice(0, 10).split("-");
+  return dd ? `vs. ${dd}/${m}` : "";
+}
+/** plano 1500c · RC-300: o nome do botão da consulta — «Abrir a consulta de Maria, às 14:00» (antes «Abrir Maria das 14:00»). */
+export function rotuloAbrirConsulta(nome, hora, palavra = "consulta", { agenda = false } = {}) {
+  const quem = String(nome || "").trim();
+  return `${agenda ? "Ver na agenda" : "Abrir"} a ${palavra}${quem ? ` de ${quem}` : ""}, às ${hora}`;
+}
+/**
+ * plano 1500c · RC-229: um Início de EXEMPLO para quem ainda não tem dados (só na tela, nada é gravado): números redondos de uma clínica
+ * pequena, datas relativas a `hoje`. → {d (formato de nx_inicio, com exemplo: true), agenda (formato de nx_agenda_dia)}
+ */
+export function dadosExemplo(hoje, agora = Date.now()) {
+  const dia = String(hoje || "").slice(0, 10) || diaSP(new Date(agora));
+  const em = (dd, hh, mm = 0) => `${somarDiasIso(dia, dd)}T${p2(hh)}:${p2(mm)}:00-03:00`;
+  const desde = min => new Date(agora - min * 60000).toISOString();
+  const d = {
+    exemplo: true, hoje: dia, agora: new Date(agora).toISOString(),
+    conversas: { aguardando: 3, sem_dono: 1, minhas: 2, abertas: 14, pendentes: 0, espera_mais_antiga_min: 18, respondidas_no_prazo_pct: 86,
+      aguardando_lista: [{ id: "ex-1", nome: "Mariana Costa", espera_min: 18, canal: "codewords" }, { id: "ex-2", nome: "Rafael Mendes", espera_min: 7, canal: "meta" },
+        { id: "ex-3", nome: "Ana Paula", espera_min: 2, canal: "codewords" }] },
+    tarefas: { hoje: 3, atrasadas: 1, abertas: 6, proximas: [
+      { id: "ex-t1", titulo: "Ligar para confirmar avaliação", vence_em: em(-1, 16), atrasada: true, contato_nome: "Carla Souza" },
+      { id: "ex-t2", titulo: "Enviar orçamento do implante", vence_em: em(0, 17), atrasada: false, contato_nome: "Rafael Mendes" }] },
+    negocios: { abertos: 21, valor_aberto: 48600, previsao_ponderada: 19400, ganhos_mes: 12, receita_mes: 31800, receita_anuncio_mes: 21600, receita_mes_anterior: 27500,
+      receita_mes_anterior_parcial: 22900, dia_do_mes: Number(dia.slice(8, 10)) || 1 },
+    leads: { hoje: 5, hoje_anuncio: 3, semana: 34, semana_anuncio: 21 },
+    funil_mes: { leads: 96, conversas: 81, agendados: 38, ganhos: 12 },
+    gasto_anuncios_mes: 2400,
+    canais: [{ id: "ex-c1", nome: "Recepção", numero_exibicao: "+55 12 90000-0000", status: "ativo", estado: "conectado", ultima_entrada_em: desde(4) }],
+    notificacoes_nao_lidas: 0,
+  };
+  const agenda = { data: dia, dias: 7, exemplo: true, consultas: [
+    { negocio_id: null, nome: "Mariana Costa", servico: "Avaliação", status: "aberto", inicio: em(0, 9), fim: em(0, 9, 45) },
+    { negocio_id: null, nome: "Rafael Mendes", servico: "Implante", status: "aberto", inicio: em(0, 14, 30), fim: em(0, 15, 15) },
+    { negocio_id: null, nome: "Ana Paula", servico: "Limpeza", status: "aberto", inicio: em(0, 16), fim: em(0, 16, 40) },
+    { negocio_id: null, nome: "Carla Souza", servico: "Clareamento", status: "aberto", inicio: em(1, 10), fim: em(1, 11) },
+    { negocio_id: null, nome: "Bruno Lima", servico: "Avaliação", status: "aberto", inicio: em(2, 15), fim: em(2, 15, 40) }] };
+  return { d, agenda };
+}
+/**
+ * O destaque de venda do Início: «cada R$ 1 em anúncio virou R$ X em vendas» — receita do mês ÷ gasto em anúncios do mês
+ * (nx_inicio.gasto_anuncios_mes, quando o servidor manda). null sem gasto ou sem receita: nada é estimado. → {multiplo, receita, gasto}
+ * (plano 1500c · IC-001)
+ */
+export function retornoAnuncios(d) {
+  const n = (d && d.negocios) || {};
+  const gasto = d && fin(d.gasto_anuncios_mes) ? +d.gasto_anuncios_mes : d && d.anuncios && fin(d.anuncios.gasto_mes) ? +d.anuncios.gasto_mes : null;
+  // a receita que veio DE anúncio (negocios.receita_anuncio_mes) quando o servidor separa; sem ela, a do mês inteiro — e o texto diz qual é
+  const deAnuncio = fin(n.receita_anuncio_mes);
+  const receita = deAnuncio ? +n.receita_anuncio_mes : fin(n.receita_mes) ? +n.receita_mes : null;
+  if (!(gasto > 0) || !(receita > 0)) return null;
+  return { multiplo: receita / gasto, receita, gasto, deAnuncio };
+}
+/** plano 1500c · IC-006: custo por lead do mês — gasto em anúncios ÷ leads do mês (funil_mes.leads). null sem os dois. */
+export function custoPorLead(d) {
+  const r = retornoAnuncios(d) || null;
+  const gasto = r ? r.gasto : d && fin(d.gasto_anuncios_mes) ? +d.gasto_anuncios_mes : null;
+  const leads = d && d.funil_mes && fin(d.funil_mes.leads) ? +d.funil_mes.leads : null;
+  return gasto > 0 && leads > 0 ? gasto / leads : null;
+}
+/** «R$ 13,25» do «cada R$ 1 virou…»: duas casas abaixo de 10, inteiro arredondado acima (R$ 13). (plano 1500c · IC-001) */
+export function textoMultiplo(m) {
+  if (!fin(m)) return "—";
+  const v = +m >= 10 ? Math.round(+m) : Math.round(+m * 100) / 100;
+  return `R$ ${v.toLocaleString("pt-BR", { minimumFractionDigits: v >= 10 ? 0 : 2, maximumFractionDigits: v >= 10 ? 0 : 2 })}`;
 }
 
 /**
@@ -522,12 +778,98 @@ export function encurtarManchete(m, { max = 2, fmtMoeda = v => String(v) } = {})
 export function chavesInicioOrfas(chaves, { clientes = null, conta = "-" } = {}) {
   if (!Array.isArray(clientes) || !clientes.length) return [];
   const validos = new Set(clientes.map(c => String(c && c.id != null ? c.id : c)));
-  const re = /^nx-ini-(hist|kpis|blocos):([^:]+):([^:]+)$/;
-  return (chaves || []).filter(k => { const m = re.exec(String(k || "")); return !!m && m[3] === String(conta) && !validos.has(m[2]); });
+  // plano 1500c · RC-184: o checklist (nx-onb:<cliente>:<conta>) também sai; as metas (nx-ini-metas:<cliente>, por empresa) só quando
+  // nenhuma OUTRA conta deste aparelho ainda guarda algo da empresa (a meta é de quem divide o aparelho)
+  const re = /^(?:nx-ini-(?:hist|kpis|blocos)|nx-onb):([^:]+):([^:]+)$/, reMeta = /^nx-ini-metas:([^:]+)$/;
+  const lista = (chaves || []).map(k => String(k || ""));
+  const deOutraConta = new Set();
+  for (const k of lista) { const m = re.exec(k); if (m && m[2] !== String(conta)) deOutraConta.add(m[1]); }
+  return lista.filter(k => {
+    const m = re.exec(k);
+    if (m) return m[2] === String(conta) && !validos.has(m[1]);
+    const mm = reMeta.exec(k);
+    return !!mm && !validos.has(mm[1]) && !deOutraConta.has(mm[1]);
+  });
 }
 
 /** Todos os blocos do Início (ids) na ordem padrão. */
-export const BLOCOS_INICIO = Object.freeze(["agora", "atendimento", "tarefas", "numeros", "vendas", "funil", "horas", "metas", "leads"]);
+// plano 1500c · RC-339/RC-325/RC-219: «esfriando», «desde que você começou» e «equipe no mês» (só quando o servidor manda os campos)
+export const BLOCOS_INICIO = Object.freeze(["agora", "atendimento", "tarefas", "esfriando", "numeros", "vendas", "funil", "desde", "horas", "metas", "leads", "equipe"]);
+
+/**
+ * plano 1500c · RC-339: negócios abertos sem mensagem nem tarefa há 7+ dias (nx_inicio.esfriando {total, itens:[{id, titulo, contato_nome,
+ * estagio_nome, parado_dias, valor}]}) — onde a venda se perde. null sem o campo ou sem nenhum. → {total, itens:[{id, nome, etapa, dias, valor}]}
+ */
+export function listaEsfriando(d, max = 5) {
+  const s = d && d.esfriando;
+  if (!s || typeof s !== "object") return null;
+  const itens = (Array.isArray(s.itens) ? s.itens : []).filter(x => x && x.id !== null && x.id !== undefined && x.id !== "")
+    .map(x => ({ id: x.id, nome: String(x.contato_nome || x.titulo || "").trim() || null, etapa: String(x.estagio_nome || "").trim() || null,
+      dias: fin(x.parado_dias) ? Math.max(0, Math.floor(+x.parado_dias)) : null, valor: fin(x.valor) ? +x.valor : null }))
+    .sort((a, b) => (b.dias ?? -1) - (a.dias ?? -1)).slice(0, max);
+  const total = Math.max(fin(s.total) ? +s.total : 0, itens.length);
+  return total > 0 ? { total, itens } : null;
+}
+/**
+ * plano 1500c · RC-219: a equipe no mês (nx_inicio.equipe [{conta_id, nome, ganhos, valor, tpr_media_min}]) ordenada pelo valor ganho.
+ * null sem o campo ou lista vazia.
+ */
+export function equipeMes(d) {
+  const l = d && Array.isArray(d.equipe) ? d.equipe : null;
+  if (!l) return null;
+  const out = l.filter(x => x && String(x.nome || "").trim()).map(x => ({ id: x.conta_id ?? x.id ?? null, nome: String(x.nome).trim(),
+    ganhos: Math.max(0, Math.round(+x.ganhos || 0)), valor: fin(x.valor) ? +x.valor : 0, tpr: fin(x.tpr_media_min) ? Math.max(0, +x.tpr_media_min) : null }))
+    .sort((a, b) => b.valor - a.valor || b.ganhos - a.ganhos || (a.tpr ?? Infinity) - (b.tpr ?? Infinity));
+  return out.length ? out : null;
+}
+/**
+ * plano 1500c · RC-325: «desde que você começou» (nx_inicio.desde_inicio {primeiro: {mes: "AAAA-MM", leads, tpr_media_min, receita}, atual: {…}}).
+ * null sem o campo ou quando o primeiro mês é o atual (nada a comparar). → {primeiro, atual, linhas:[{id, rotulo, antes, agora, melhor}]}
+ */
+export function desdeInicio(d) {
+  const s = d && d.desde_inicio;
+  if (!s || typeof s !== "object" || !s.primeiro || !s.atual || !s.primeiro.mes || s.primeiro.mes === s.atual.mes) return null;
+  const linha = (id, rotulo, chave, sentido) => {
+    const a = fin(s.primeiro[chave]) ? +s.primeiro[chave] : null, b = fin(s.atual[chave]) ? +s.atual[chave] : null;
+    if (a === null || b === null) return null;
+    return { id, rotulo, antes: a, agora: b, melhor: sentido === "baixo" ? b < a : b > a };
+  };
+  const linhas = [linha("leads", "Leads no mês", "leads", "cima"), linha("tpr", "1ª resposta (média)", "tpr_media_min", "baixo"), linha("receita", "Receita no mês", "receita", "cima")].filter(Boolean);
+  return linhas.length ? { primeiro: s.primeiro, atual: s.atual, linhas } : null;
+}
+/** plano 1500c · RC-338: quem faz aniversário hoje (nx_inicio.aniversariantes [{contato_id, nome, conversa_id?}]); null sem o campo ou vazio. */
+export function aniversariantesHoje(d) {
+  const l = d && Array.isArray(d.aniversariantes) ? d.aniversariantes : null;
+  if (!l) return null;
+  const out = l.filter(x => x && String(x.nome || "").trim()).map(x => ({ contatoId: x.contato_id ?? null, nome: String(x.nome).trim(), conversaId: x.conversa_id ?? null }));
+  return out.length ? out : null;
+}
+/**
+ * plano 1500c · RC-254: as linhas do «Resumo do mês» para mostrar ao sócio — só o que nx_inicio já manda (nada estimado).
+ * → [{id, rotulo, valor (texto)}]
+ */
+export function linhasResumoMes(d, { voc = {}, brl = v => `R$ ${Math.round(v)}` } = {}) {
+  const V = { negocios: "negócios", feminino: false, ...voc };
+  const n = (d && d.negocios) || {}, c = (d && d.conversas) || {}, f = (d && d.funil_mes) || null, l = (d && d.leads) || {};
+  const out = [];
+  const poe = (id, rotulo, valor) => { if (valor !== null && valor !== undefined && valor !== "") out.push({ id, rotulo, valor: String(valor) }); };
+  poe("receita", "Receita do mês", fin(n.receita_mes) ? brl(+n.receita_mes) : null);
+  poe("ganhos", `${cap(V.negocios)} ${V.feminino ? "ganhas" : "ganhos"}`, fin(n.ganhos_mes) ? String(Math.round(+n.ganhos_mes)) : null);
+  if (fin(n.receita_mes) && fin(n.receita_mes_anterior_parcial)) poe("vs", "Contra o mesmo período do mês passado", textoDiferenca(+n.receita_mes, +n.receita_mes_anterior_parcial, brl));
+  poe("leads", "Leads no mês", f && fin(f.leads) ? String(Math.round(+f.leads)) : null);
+  poe("leads7", "Leads nos últimos 7 dias", fin(l.semana) ? `${Math.round(+l.semana)} (${Math.round(+l.semana_anuncio || 0)} de anúncio)` : null);
+  poe("prazo", "Conversas respondidas no prazo (7 dias)", fin(c.respondidas_no_prazo_pct) ? pct(c.respondidas_no_prazo_pct) : null);
+  if (f && fin(f.leads) && +f.leads > 0 && fin(f.ganhos)) poe("conv", "Do lead à venda", pct(+f.ganhos / +f.leads * 100));
+  const r = retornoAnuncios(d);
+  if (r) poe("roi", "Cada R$ 1 em anúncios virou", textoMultiplo(r.multiplo));
+  poe("aberto", "Em aberto no funil", fin(n.valor_aberto) ? brl(+n.valor_aberto) : null);
+  return out;
+}
+/** «abril de 2026» de «2026-04». */
+export function mesPorExtenso(am) {
+  const [a, m] = String(am || "").split("-").map(Number);
+  return a && m >= 1 && m <= 12 ? `${MESES[m - 1]} de ${a}` : "";
+}
 /** Reordena `ids` pela ordem guardada: o que está na ordem vem primeiro (na posição guardada); o resto segue a ordem padrão. */
 export function ordenarBlocos(ids, ordemSalva = []) {
   const pos = new Map((Array.isArray(ordemSalva) ? ordemSalva : []).map((id, i) => [id, i]));
@@ -618,14 +960,15 @@ export async function montar(ctx) {
     try {
       const [nL, nG] = await Promise.all([import(`./rel-logica.js?v=${ctx.versao}`), import(`./graficos.js?v=${ctx.versao}`)]);
       L = nL; G = nG; versaoLG = ctx.versao;
-      // RB-064: só a meta usa; vem em paralelo e, se falhar, a meta lê com ui.lerMoeda como antes
-      import(`./crm-logica.js?v=${ctx.versao}`).then(m => { if (typeof m.lerNumero === "function") lerNumeroCrm = m.lerNumero; }).catch(() => {});
+      // plano 1500c · RC-261: o crm-logica (2.400 linhas) não vem mais em toda abertura — só quando o formulário das metas aparece (único uso)
+      lerNumeroCrm = null;
     } catch (e) { if (!L || !G) { ui.limpar(raiz); raiz.append(ui.erroCartao(e, () => montar(ctx))); return; } }   // a versão nova falhou: segue com a anterior
   }
   if (minha !== montagem) return;
   // outra empresa (ou outra conta): o último checklist e os últimos números eram da anterior e não podem aparecer nesta
   const dono = `${ctx.cliente.id}|${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || "-"}`;
   if (donoDados !== dono) agendaSemanaEm = 0;     // plano 1000 (CR-170): a semana guardada era da empresa/conta anterior
+  if (donoDados !== dono) { onbLidoEm = 0; verExemplo = false; }     // plano 1500c · RC-209/RC-229: o checklist lido e o exemplo eram da anterior
   if (donoDados !== dono) { ultimoOnb = null; ultimoDado = null; ultimaAgenda = null; ultimoJson = ""; maisAberto = false; ultimaCarga = 0; donoDados = dono; }
   if (ultimaAgendaMes && ultimaAgendaMes.dono !== dono) ultimaAgendaMes = null;   // a agenda do mês também era da empresa anterior
   if (!ultimoDado) modoHoras = "hoje";
@@ -678,8 +1021,10 @@ export async function montar(ctx) {
   const gravarJson = (chave, v) => { try { if (v === null || v === undefined) localStorage.removeItem(chave); else localStorage.setItem(chave, JSON.stringify(v)); } catch { /* sem storage */ } };
   const lerHist = () => lerJson(chaveHist, { dias: [] });
   const lerMetas = () => { const m = lerJson(chaveMetas, {}); return { vendas: +m.vendas > 0 ? +m.vendas : null, consultas: +m.consultas > 0 ? Math.round(+m.consultas) : null }; };
-  const lerBlocos = () => { const b = lerJson(chaveBlocos, {}); return { ordem: Array.isArray(b.ordem) ? b.ordem.filter(id => BLOCOS_INICIO.includes(id)) : [], recolhidos: Array.isArray(b.recolhidos) ? b.recolhidos.filter(id => BLOCOS_INICIO.includes(id)) : [] }; };
-  const gravarBlocos = b => gravarJson(chaveBlocos, b && (b.ordem.length || b.recolhidos.length) ? b : null);
+  // plano 1500c · RC-207: «Mais detalhes» aberto fica guardado junto (mais: true) — quem sempre abre não precisa abrir a cada visita
+  const lerBlocos = () => { const b = lerJson(chaveBlocos, {}); return { ordem: Array.isArray(b.ordem) ? b.ordem.filter(id => BLOCOS_INICIO.includes(id)) : [], recolhidos: Array.isArray(b.recolhidos) ? b.recolhidos.filter(id => BLOCOS_INICIO.includes(id)) : [], mais: b.mais === true }; };
+  const gravarBlocos = b => gravarJson(chaveBlocos, b && (b.ordem.length || b.recolhidos.length || b.mais) ? { ordem: b.ordem, recolhidos: b.recolhidos, ...(b.mais ? { mais: true } : {}) } : null);
+  if (lerBlocos().mais) maisAberto = true;
   // o checklist só cobra o que esta pessoa consegue abrir nas Configurações (a mesma régua do config.js: seção pronta, módulo do plano e papel)
   const podeSecao = L.filtroSecoesOnboarding({ temModulo: ctx.temModulo, pode: ctx.pode, configPronta: ctx.configPronta });
   const resumoOnb = onb => { const local = lerOnb(); return L.resumoOnboarding(onb, { pulados: local.pulados, dispensadoAte: local.dispensadoAte, admin, podeSecao }); };
@@ -689,28 +1034,39 @@ export async function montar(ctx) {
   // cabeçalho: saudação pequena em cima, manchete no degrau display, data por extenso + hora da leitura + Atualizar
   // plano 1000b · RB-153: sem aria-live — «Atualizado às HH:MM» muda a cada leitura e o leitor falava a hora sozinho; só a FALHA é anunciada
   const quando = h("p", { class: "rel-nota ini-quando" });
-  const dataEl = h("time", { class: "ini-data", datetime: L.hojeSP() }, dataLonga());
-  const btn = h("button", { type: "button", class: "rel-btn rel-btn-sec" }, "Atualizar");
+  // plano 1500c · RC-221: a data longa e a curta («ter, 21 out»); o CSS mostra a curta no celular, o leitor de tela ouve a longa
+  const dataEl = h("time", { class: "ini-data", datetime: L.hojeSP() });
+  const pintarData = () => {
+    ui.limpar(dataEl);
+    dataEl.append(h("span", { class: "ini-data-longa" }, dataLonga()), h("span", { class: "ini-data-curta", "aria-hidden": "true" }, dataCurta()));
+  };
+  pintarData();
+  // plano 1500c · RC-211: «R» atualiza (fora de campos e sem modificador); o botão diz o atalho
+  const btn = h("button", { type: "button", class: "rel-btn rel-btn-sec", "aria-keyshortcuts": "R", title: "Atualizar (tecla R)" }, "Atualizar");
   // plano 1000 (CR-284): a idade da leitura («· há 3 min»), fora do aria-live (não é lida a cada minuto); passou de 10 min fica âmbar
   const idadeEl = h("span", { class: "rel-nota ini-idade", hidden: true });
   function pintarIdade() {
-    if (!ultimaCarga || falhouUltima) { idadeEl.hidden = true; idadeEl.classList.remove("ini-velho"); return; }
+    if (!ultimaCarga || falhouUltima) { idadeEl.hidden = true; idadeEl.classList.remove("ini-velho"); idadeEl.removeAttribute("title"); return; }
     const min = Math.floor((Date.now() - ultimaCarga) / 60000);
     idadeEl.hidden = min < 1;
     idadeEl.textContent = min >= 1 ? `· há ${duracaoCurta(min)}` : "";
     idadeEl.classList.toggle("ini-velho", min >= 10);
+    // plano 1500c · RC-223: o âmbar diz o que fazer (o pulso parou: aba em segundo plano ou rede)
+    if (min >= 10) idadeEl.setAttribute("title", `Sem atualização há ${duracaoCurta(min)} — toque em Atualizar`); else idadeEl.removeAttribute("title");
   }
   let falhouUltima = false;
   let falhasSeguidas = 0;     // plano 1000b · RB-175: só a 1ª falha seguida vira aviso (servidor em 503 não empilha um toast a cada 30 s)
   // plano 1000 (CR-181): sem internet o «Atualizar» desliga («Sem internet»), o pulso não tenta (nada de erro a cada 30 s) e, quando a rede volta, relê
   const semRede = () => typeof navigator !== "undefined" && !!navigator && navigator.onLine === false;
   const DICA_SEM_REDE = "Sem internet: a tela atualiza sozinha quando a conexão voltar";
+  let lendoForcado = false;   // plano 1500c · RC-230: só a leitura pedida pela pessoa desliga o botão (o pulso não o pisca)
   function marcarRede() {
     const off = semRede();
     btn.disabled = off;
     btn.textContent = off ? "Sem internet" : "Atualizar";
     btn.removeAttribute("aria-busy");
-    if (off) btn.setAttribute("title", DICA_SEM_REDE); else btn.removeAttribute("title");
+    lendoForcado = false;
+    btn.setAttribute("title", off ? DICA_SEM_REDE : "Atualizar (tecla R)");
     marcarCaixasTarefa(off);
   }
   /** plano 1000b · RB-169: sem internet a caixa de concluir tarefa desliga com a mesma dica do #/tarefas (CR-156); volta com a rede. */
@@ -730,7 +1086,16 @@ export async function montar(ctx) {
   const titulo = cab.querySelector("h1");
   titulo.id = "ini-h";
   const corpo = h("div", { class: "rel-corpo" });
-  btn.addEventListener("click", () => carregar({ forcar: true }));
+  // plano 1500c · RC-229: no exemplo nenhum botão ou link faz nada de verdade (só «Voltar e conectar» e o que só muda a tela)
+  corpo.addEventListener("click", ev => {
+    if (!corpo.classList.contains("ini-exemplo")) return;
+    const alvo = ev.target && typeof ev.target.closest === "function" ? ev.target.closest("a, button, input") : null;
+    if (!alvo || (alvo.dataset && alvo.dataset.exemploOk) || alvo.closest(".ini-kpis-escolha, .seg, .ini-bl-barra, .g-ver-tabela, .ini-kpi-ajuda")) return;
+    if (alvo.classList && (alvo.classList.contains("g-ver-tabela") || alvo.classList.contains("ini-kpi-ajuda"))) return;
+    ev.preventDefault(); if (typeof ev.stopPropagation === "function") ev.stopPropagation();
+    ui.toast("É só um exemplo: conecte o WhatsApp para ver os seus números aqui.", { tipo: "info" });
+  }, true);
+  btn.addEventListener("click", () => { if (!lendoForcado) carregar({ forcar: true }); });
   let desenhou = false;      // já houve algum dado na tela (cache ou rede)
   let colocado = false;      // o esqueleto já foi trocado pelo cabeçalho + corpo
   let relogio = null;        // refaz «Agora» e as barras com a hora de agora (montado a cada desenho; o intervalo de 60 s chama)
@@ -753,7 +1118,9 @@ export async function montar(ctx) {
       h("span", { class: "ini-faixa-ic", "aria-hidden": "true" }, ui.icone("alerta")),
       h("p", { class: "ini-faixa-txt" }, h("b", null, frase), " ", h("span", null, "As mensagens não chegam até reconectar.")),
       admin ? h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { k: "faixa-ver" }, on: { click: verNumero } }, "Ver número")
-        : h("span", { class: "rel-nota" }, "Peça ao administrador para reconectar."),
+        // plano 1500c · RC-212: quem é o administrador, quando o servidor diz (nx_inicio.admin_nome)
+        : h("span", { class: "rel-nota" }, ultimoDado && String(ultimoDado.admin_nome || "").trim()
+          ? `Peça a ${String(ultimoDado.admin_nome).trim()}, que administra a conta, para reconectar.` : "Peça ao administrador para reconectar."),
     ].filter(Boolean));
   }
 
@@ -787,6 +1154,7 @@ export async function montar(ctx) {
     if (!admin) return null;
     // no pulso: checklist completo ou dispensado não tem cartão a mostrar, então a consulta não é refeita (volta ao abrir a tela ou em «Atualizar»)
     if (!reler && ultimoOnb && resumoOnb(ultimoOnb) === null) return ultimoOnb;
+    if (!reler && ultimoOnb && Date.now() - onbLidoEm < VALIDADE_ONB) return ultimoOnb;     // plano 1500c · RC-209
     try { return await ctx.api.rpcC("nx_onboarding_estado", {}); }
     catch { return ultimoOnb; }          // sem o checklist a tela segue (a RPC é um complemento: vale o último estado conhecido, desta empresa)
   }
@@ -802,7 +1170,8 @@ export async function montar(ctx) {
     // plano 1000b · RB-155: os KPIs trocáveis «Previsão» e «Tarefas atrasadas» também ganham a linha (antes nunca tinham ponto guardado)
     const t = d.tarefas || {};
     const registro = { aguardando: +c.aguardando || 0, consultas, valor_aberto: +n.valor_aberto || 0, abertos: +n.abertos || 0,
-      leads_semana: +l.semana || 0, receita_mes: +n.receita_mes || 0, previsao_ponderada: fin(n.previsao_ponderada) ? +n.previsao_ponderada : null,
+      // plano 1500c · RC-190: sem o campo na resposta, o dia fica sem ponto de receita (null) — antes caía a zero e a linha despencava
+      leads_semana: +l.semana || 0, receita_mes: fin(n.receita_mes) ? +n.receita_mes : null, previsao_ponderada: fin(n.previsao_ponderada) ? +n.previsao_ponderada : null,
       tarefas_atrasadas: Math.max(0, Math.floor(+t.atrasadas) || 0) };
     // plano 1000b · RB-170: só grava quando o ponto do dia mudou (antes: ler + gravar o localStorage a cada leitura de 30 s)
     const doHoje = (hist.dias || []).find(x => x && x.dia === d.hoje);
@@ -813,8 +1182,9 @@ export async function montar(ctx) {
   async function carregar({ forcar = false, primeira = false } = {}) {
     if (minha !== montagem) return;
     if (!primeira && semRede()) { marcarRede(); return; }      // CR-181: o pulso e a volta da aba não tentam sem rede
-    btn.disabled = true;
     // plano 1000b · RB-176: quem pediu («Atualizar», «Tentar de novo») vê que está atualizando; o pulso silencioso não pisca o botão
+    // plano 1500c · RC-230: e só nesse caso o botão desliga — no pulso continua clicável (o clique duplo é barrado por lendoForcado)
+    if (forcar || primeira) { btn.disabled = true; lendoForcado = true; }
     if (forcar) { btn.textContent = "Atualizando…"; btn.setAttribute("aria-busy", "true"); }
     try {
       // 1ª abertura: pinta o último dado guardado (se o shell tiver cache) e confere na rede em seguida
@@ -824,14 +1194,19 @@ export async function montar(ctx) {
       const [d, agenda, onb, agendaMes] = await Promise.all([ctx.api.rpcC("nx_inicio", {}, { cache: true, aoCache }), buscarAgenda(forcar || primeira),
         buscarOnboarding(forcar || primeira), buscarAgendaMes(forcar || primeira)]);
       if (minha !== montagem) return;          // resposta de uma montagem antiga (outra empresa ou conta): não toca no estado guardado
+      // plano 1500c · RC-209: com passos pendentes, o pulso reaproveita o checklist por 10 min (antes relia a cada 30 s); abrir, «Atualizar» e voltar releem
+      if (onb && onb !== ultimoOnb) onbLidoEm = Date.now();
       ultimoOnb = onb; ultimaAgenda = agenda; ultimaAgendaMes = agendaMes;
       ultimaCarga = Date.now();
       falhouUltima = false; falhasSeguidas = 0;
       quando.textContent = statusAtualizacaoInicio({ hora: L.horaSP(new Date(ultimaCarga)) });
       pintarIdade();
       guardarHistorico(d, agenda);
-      const js = JSON.stringify({ ...d, agora: null, agenda: agenda && agenda.consultas ? agenda.consultas.map(c => `${c.negocio_id}|${c.inicio}|${c.status}`) : null,
-        agErro: !!(agenda && agenda.erro), agMes: agendaMes && agendaMes.consultas ? agendaMes.consultas.length : null, onb: onb ? onb.itens.map(i => i.feito) : null });
+      // plano 1500c · RC-210: com a versão que o servidor mandar (nx_inicio.versao) a comparação não serializa a resposta inteira
+      // plano 1500c · RC-186: nx_onboarding_estado sem «itens» não derruba a atualização
+      const resto = { agenda: agenda && agenda.consultas ? agenda.consultas.map(c => `${c.negocio_id}|${c.inicio}|${c.status}`) : null,
+        agErro: !!(agenda && agenda.erro), agMes: agendaMes && agendaMes.consultas ? agendaMes.consultas.length : null, onb: onb && Array.isArray(onb.itens) ? onb.itens.map(i => i && i.feito) : null };
+      const js = assinaturaInicio(d, resto);
       if (!forcar && !primeira && (js === ultimoJson || metasEditando)) return;      // nada mudou (ou a pessoa está digitando as metas): não mexe na tela
       ultimoJson = js;
       const antes = ultimoDado;
@@ -866,20 +1241,23 @@ export async function montar(ctx) {
     const cls = ["ini-m-trecho", no.tom ? `ini-m-${no.tom}` : null];
     return no.href ? h("a", { class: cls, href: no.href, dataset: { k } }, partes) : h("span", { class: cls }, partes);
   }
-  function pintarManchete(m) {
+  function pintarManchete(m, completo = null) {
     ui.limpar(titulo);
     let i = 0;
     m.frases.forEach((f, fi) => {
       if (fi) titulo.append(" ");
       for (const no of f) titulo.append(noManchete(no, `m-${i++}`));
     });
-    titulo.setAttribute("aria-label", m.texto);       // o leitor de tela lê a frase inteira, sem picotar por link
+    // o leitor de tela lê a frase inteira, sem picotar por link — plano 1500c · RC-222: a frase COMPLETA (antes de encurtar para 360 px):
+    // o que saiu do visual por falta de espaço não sai para quem ouve
+    titulo.setAttribute("aria-label", (completo && completo.texto) || m.texto);
   }
 
   /** Linha de tendência de um KPI: G.sparkline (frente A) quando existir; senão um SVG mínimo daqui (linha + área + último ponto). */
-  function sparkline(alvo, valores, rotulo) {
+  function sparkline(alvo, valores, rotulo, fmt = null) {
     // plano 1000b · RB-167: o controle (ResizeObserver) fica guardado e é destruído no próximo desenho (antes: 4 observadores novos a cada pulso)
-    if (typeof G.sparkline === "function") { try { const ctl = G.sparkline(alvo, { valores, area: true, rotulo }); if (ctl) controlesSpark.push(ctl); return; } catch { /* cai no desenho local */ } }
+    // plano 1500c · RC-189: o resumo acessível no formato do KPI («de R$ 15.200 a R$ 18.000», não «de 15200 a 18000»)
+    if (typeof G.sparkline === "function") { try { const ctl = G.sparkline(alvo, { valores, area: true, rotulo, ...(fmt ? { fmt } : {}) }); if (ctl) controlesSpark.push(ctl); return; } catch { /* cai no desenho local */ } }
     const NS = "http://www.w3.org/2000/svg", W = Math.max(80, Math.round(alvo.clientWidth || 160)), H = 34, n = valores.length;
     const max = Math.max(...valores), min = Math.min(...valores), amp = max - min || 1;
     const x = i => (n === 1 ? W / 2 : i / (n - 1) * (W - 6) + 3), y = v => H - 4 - (v - min) / amp * (H - 10);
@@ -906,6 +1284,9 @@ export async function montar(ctx) {
     const blocoFoco = secFoco ? secFoco.dataset.bloco : null;
     let quieto = false;        // o relógio refaz um bloco: sem animar de novo
     ultimoDado = d;
+    // plano 1500c · RC-229: «Ver um exemplo» — a conta zerada vê o Início com dados de mentira (selo EXEMPLO; ações não gravam nada)
+    const exemplo = verExemplo && L.inicioVazio(d);
+    if (exemplo) ({ d, agenda } = dadosExemplo(d.hoje || L.hojeSP()));
     soltarSparks();            // plano 1000b · RB-167: as linhas do desenho anterior saem da página agora
     const contarDepois = [];     // animações de "contar até o valor": começam quando o esqueleto sai (o elemento precisa estar na página)
     const num = (v, fmt, cls = "", chave = null) => {
@@ -921,27 +1302,51 @@ export async function montar(ctx) {
     const links = { conversas: podeConversas ? "#/conversas?aba=aguardando" : null, tarefas: podeTarefas ? "#/tarefas?aba=atrasadas" : null,
       agenda: podeAgenda ? "#/agenda" : null, crm: podeCrm ? "#/crm" : null, relatorios: podeRel ? "#/relatorios/atendimento" : null,
       // plano 1000 (CR-299): cada KPI leva ao recorte certo — «Em aberto» abre o quadro com o resumo; «Leads · 7 dias» a lista de quem chegou na semana
-      crmResumo: podeCrm ? "#/crm?resumo=1" : null, leads: podeCrm ? `#/contatos?criado_de=${somarDiasIso(d.hoje || L.hojeSP(), -7)}` : null };
+      // plano 1500c · RC-182: «7 dias» com hoje incluso = hoje − 6 (antes − 7: a lista mostrava um dia a mais que o número do cartão)
+      crmResumo: podeCrm ? "#/crm?resumo=1" : null, leads: podeCrm ? `#/contatos?criado_de=${somarDiasIso(d.hoje || L.hojeSP(), -6)}` : null };
     const voc = { contato: vmin("contato", "cliente"), contatos: vmin("contatos", "clientes"),
       negocio: vmin("negocio", "negócio"), negocios: vmin("negocios", "negócios"), feminino: fem, consulta: palavra.um, consultas: palavra.varios };
-    const m = encurtarManchete(L.manchete(d, { agenda, links, voc }), { max: 2, fmtMoeda: v => L.textoMoeda(v, { centavos: false }) });     // plano 1000 (CR-249)
-    pintarManchete(m);
+    const mCompleta = L.manchete(d, { agenda, links, voc });
+    const m = encurtarManchete(mCompleta, { max: 2, fmtMoeda: v => L.textoMoeda(v, { centavos: false }) });     // plano 1000 (CR-249)
+    pintarManchete(m, mCompleta);     // plano 1500c · RC-222
     titulo.dataset.tam = m.texto.length > 70 ? "longa" : "curta";     // frase curta ganha o degrau display; a longa cabe em 2-3 linhas no degrau h1
     ui.limpar(corpo);
     corpo.append(faixaCanal);         // número caído vem antes de tudo (sem ele a tela inteira mente: nada chega)
     pintarFaixa();
-    const rapidas = acoesRapidas();
+    corpo.classList.toggle("ini-exemplo", exemplo);
+    if (exemplo) {
+      // RC-229: o selo diz que é exemplo e a saída volta ao começo (os passos para ligar tudo)
+      const sair = h("button", { type: "button", class: "bt bt-prim bt-p", dataset: { k: "ex-sair", exemploOk: "1" }, on: { click: () => { verExemplo = false; redesenhar(); } } }, "Voltar e conectar");
+      corpo.append(h("div", { class: "ini-exemplo-faixa", role: "status" }, h("span", { class: "ini-exemplo-selo" }, "Exemplo"),
+        h("p", { class: "ini-exemplo-txt" }, "Números de mentira para mostrar como o Início fica com a sua empresa ligada. Nada aqui é gravado."), sair));
+    }
+    const rapidas = exemplo ? null : acoesRapidas();
     if (rapidas) corpo.append(rapidas);
+    // plano 1500c · IC-001: o destaque de venda — «cada R$ 1 em anúncio virou R$ X» (receita ÷ gasto do mês, quando o servidor manda o gasto)
+    const roi = retornoAnuncios(d);
+    if (roi && !L.inicioVazio(d)) corpo.append(cartaoRetorno(roi));
 
     const onbRes = resumoOnb(onb);
-    if (L.inicioVazio(d)) {
+    if (L.inicioVazio(d) && !d.exemplo) {
       // cliente zerado: a órbita com os satélites que acendem conforme os passos ficam prontos (M09 + M32)
       const feito = ids => !!(onb && Array.isArray(onb.itens) && ids.every(id => (onb.itens.find(i => i.id === id) || {}).feito));
+      // plano 1500c · IC-002: o cliente novo é guiado pelo que faz o Início ganhar vida — WhatsApp, anúncios e agenda (o que o plano libera),
+      // cada passo com o seu botão; a equipe e o funil continuam no checklist logo abaixo
+      const passosGuia = guiaPrimeiroUso({ admin, podeSecao, temModulo: ctx.temModulo, feito });
+      const proximoGuia = passosGuia.find(p => !p.feito && p.rota) || null;
       corpo.append(h("div", { class: "ini-comecar rel-entra" }, ui.vazio({ tipo: "primeiro_uso", titulo: "Tudo pronto para começar.",
-        texto: admin ? "Três passos e o Órbita já recebe e responde pelo WhatsApp." : "Peça ao administrador da sua empresa para concluir a configuração.",
-        passos: [{ rotulo: "Conectar o WhatsApp", feito: feito(["chave_codewords", "aparelho_pareado", "recebimento"]) }, { rotulo: "Convidar a equipe", feito: feito(["colega_convidado"]) },
-          { rotulo: "Ajustar o funil", feito: feito(["funil_ajustado"]) }],
-        acao: admin && podeSecao({ id: "chave_codewords" }) ? { rotulo: "Conectar o WhatsApp", fn: () => ctx.navegar("#/config/numeros?assistente=novo") } : null })));
+        texto: admin ? `${passosGuia.length === 1 ? "Um passo" : passosGuia.length === 2 ? "Dois passos" : "Três passos"} e o Início mostra quem espera resposta, a agenda do dia e quanto cada real em anúncio trouxe.` : "Peça ao administrador da sua empresa para concluir a configuração.",
+        passos: passosGuia.map(p => ({ rotulo: p.rotulo, feito: p.feito })),
+        acao: proximoGuia ? { rotulo: proximoGuia.botao, fn: () => ctx.navegar(proximoGuia.rota) } : null,
+        // plano 1500c · RC-229: «Ver um exemplo» desenha o Início com números de mentira (selo EXEMPLO, nada gravado) — a demonstração não fica no vazio
+        acoes: [{ rotulo: "Ver um exemplo", fn: () => { verExemplo = true; redesenhar(); } }] })));
+      const guia = h("ol", { class: "ini-guia", "aria-label": "Primeiros passos" }, passosGuia.map((p, i) => h("li", { class: ["ini-guia-item", p.feito && "feito"], dataset: { passo: p.id } },
+        h("span", { class: "ini-guia-n", "aria-hidden": "true" }, p.feito ? ui.icone("check") : String(i + 1)),
+        h("div", { class: "ini-guia-txt" }, h("b", null, p.rotulo), h("span", { class: "rel-nota" }, p.feito ? "Feito." : p.ajuda)),
+        !p.feito && p.rota ? h("a", { class: p === proximoGuia ? "bt bt-prim bt-p" : "bt bt-sec bt-p", href: p.rota, dataset: { k: `guia-${p.id}` } }, p.botao) : null)));
+      if (passosGuia.length) corpo.append(h("section", { class: "rel-cartao ini-guia-cartao rel-entra", "aria-labelledby": "ini-gu" },
+        h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ini-gu", class: "rel-h2" }, "Comece por aqui"),
+          h("p", { class: "rel-nota" }, `${passosGuia.filter(p => p.feito).length} de ${passosGuia.length} prontos`)), guia));
       if (onbRes) corpo.append(cartaoChecklist(onbRes));
       relogio = null;
       trocar();
@@ -967,8 +1372,9 @@ export async function montar(ctx) {
     btKpis.addEventListener("click", () => {
       const atuais = aplicarEscolhaKpis(kpisPadrao, kpisAlt, lerJson(chaveKpis, {}));
       const opcoes = [...kpisPadrao, ...kpisAlt.filter(a => !kpisPadrao.some(p => p.id === a.id))];
+      // plano 1500c · RC-206: cada opção com o valor de agora («Receita do mês — R$ 12.400») — dá para escolher vendo o número
       const sels = atuais.map((k, i) => h("select", { class: "sel", "aria-label": `Indicador ${i + 1}`, dataset: { pos: String(i) } },
-        opcoes.map(o => h("option", { value: o.id, selected: o.id === k.id }, o.rotulo))));
+        opcoes.map(o => h("option", { value: o.id, selected: o.id === k.id }, rotuloOpcaoKpi(o, { brl: brl0, int })))));
       const msg = h("small", { class: "rel-nota", role: "status" });
       let fl = null;
       const fechar = () => { if (fl) fl.fechar(); };
@@ -996,7 +1402,10 @@ export async function montar(ctx) {
       }); }
       fl = ui.flutuante(btKpis, caixa, { classe: "ini-kpis-flut" });
     });
-    corpo.append(h("div", { class: "ini-kpis-rod" }, btKpis));
+    // plano 1500c · RC-254: «Resumo do mês» — uma página para imprimir/salvar em PDF com os números do mês (mostrar ao sócio)
+    const btResumo = h("button", { type: "button", class: "bt bt-fant bt-p ini-resumo-bt", dataset: { k: "resumo-mes" } }, ui.icone("folha"), "Resumo do mês");
+    btResumo.addEventListener("click", () => abrirResumoMes(d, voc));
+    corpo.append(h("div", { class: "ini-kpis-rod" }, btResumo, btKpis));
 
     // ---- blocos (cada um é uma função: a ordem e o que fica recolhido vêm de L.blocosInicio + os blocos novos desta rodada + a ordem que a pessoa guardou)
     const numLink = (valor, rot, hash, k, destaque, chave) => {
@@ -1005,7 +1414,12 @@ export async function montar(ctx) {
         ? h("a", { class: "ini-numero", href: hash, dataset: { k } }, conteudo)
         : h("div", { class: "ini-numero" }, conteudo);
     };
+    const numLead = (v, rot, chave, href, k) => {
+      const conteudo = [num(v, int, "ini-n", chave), h("span", { class: "ini-n-l" }, rot)];
+      return podeCrm ? h("a", { class: "ini-numero", href, dataset: { k } }, conteudo) : h("div", { class: "ini-numero" }, conteudo);
+    };
     const espera = +c.espera_mais_antiga_min;
+    const limEspera = limiteEspera(c);      // plano 1500c · RC-301
     const temAgenda = !!(agenda && Array.isArray(agenda.consultas));
     const agendaFalhou = !!(agenda && agenda.erro);     // não deu para ler agora (≠ conta sem agenda): «Tentar de novo»
     const agendaLendo = !!(agenda && agenda.lendo);     // 1ª pintura pelo cache, com a agenda a caminho
@@ -1016,14 +1430,15 @@ export async function montar(ctx) {
       h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { k }, on: { click: () => carregar({ forcar: true }) } }, "Tentar de novo"));
     const construtores = {
       // o estado de cada consulta (passou · agora · próxima) é do relógio de AGORA: o relógio de 60 s refaz este bloco
-      agora: () => blocoAgora(c, proximasConsultas(agenda, { hoje: d.hoje, agora: Date.now() }), temAgenda, espera),
+      agora: () => blocoAgora(c, proximasConsultas(agenda, { hoje: d.hoje, agora: Date.now() }), temAgenda, espera),     // RC-200: duração padrão vem da agenda
 
       atendimento: () => h("section", { class: "rel-cartao ini-atend rel-entra", "aria-labelledby": "ini-at", style: "--i:1" },
         h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ini-at", class: "rel-h2" }, "Atendimento agora"),
           +c.aguardando > 0 && Number.isFinite(espera)
             // plano 1000 (CR-158): o termo da vertical («paciente esperando há…»), não «cliente» fixo
             // plano 1000b · RB-160: com maiúscula e sem singular errado — «Paciente esperando há…» (um) ou «A mais antiga espera há…» (vários)
-            ? h("p", { class: `ini-espera${espera >= 30 ? " rel-txt-aten" : ""}` }, ui.icone("relogio"), ` ${fraseEspera(+c.aguardando, L.duracaoMin(espera), { contato: voc.contato })}`)
+            // plano 1500c · RC-299/RC-301: a mesma escrita de espera da fila e o vermelho no prazo da empresa
+            ? h("p", { class: `ini-espera${espera >= limEspera ? " rel-txt-aten" : ""}` }, ui.icone("relogio"), ` ${fraseEspera(+c.aguardando, textoEspera(espera), { contato: voc.contato })}`)
             : h("p", { class: "rel-nota" }, "ninguém esperando resposta")),
         h("div", { class: "ini-numeros ini-numeros-4" },
           numLink(c.aguardando, "aguardando resposta", "#/conversas?aba=aguardando", "c-ag", +c.aguardando > 0, "conversas.aguardando"),
@@ -1033,12 +1448,14 @@ export async function montar(ctx) {
 
       leads: () => h("section", { class: "rel-cartao ini-leads rel-entra", "aria-labelledby": "ini-ld", style: "--i:2" },
         h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ini-ld", class: "rel-h2" }, "Leads")),
+        // plano 1500c · RC-297: cada número abre a lista de quem são (hoje · de anúncio hoje · os 7 dias, hoje incluso)
         h("div", { class: "ini-numeros ini-numeros-3" },
-          h("div", { class: "ini-numero" }, num(l.hoje, int, "ini-n", "leads.hoje"), h("span", { class: "ini-n-l" }, "hoje")),
-          h("div", { class: "ini-numero" }, num(l.hoje_anuncio, int, "ini-n", "leads.hoje_anuncio"), h("span", { class: "ini-n-l" }, "de anúncio hoje")),
-          h("div", { class: "ini-numero" }, num(l.semana, int, "ini-n", "leads.semana"), h("span", { class: "ini-n-l" }, "nos últimos 7 dias"))),
+          numLead(l.hoje, "hoje", "leads.hoje", `#/contatos?criado_de=${d.hoje || L.hojeSP()}`, "ld-hoje"),
+          numLead(l.hoje_anuncio, "de anúncio hoje", "leads.hoje_anuncio", `#/contatos?criado_de=${d.hoje || L.hojeSP()}&origem=anuncio`, "ld-an"),
+          numLead(l.semana, "nos últimos 7 dias", "leads.semana", `#/contatos?criado_de=${somarDiasIso(d.hoje || L.hojeSP(), -6)}`, "ld-sem")),
         +l.semana ? barraOrigem(l) : null,
-        +l.semana ? h("p", { class: "rel-nota" }, `${l.semana_anuncio || 0} dos ${l.semana} leads criados nos últimos 7 dias vieram de anúncio. É contagem do CRM, não conversões informadas pelo Meta/Google.`) : null,
+        // plano 1500c · RC-183: um lead só → frase no singular
+        +l.semana ? h("p", { class: "rel-nota" }, `${notaLeadsAnuncio(+l.semana, +l.semana_anuncio || 0)} É contagem do CRM, não conversões informadas pelo Meta/Google.`) : null,
         atalhosLeadsInicio({ crm: podeCrm, ads: podeAds }).length ? h("div", { class: "rel-cartao-rodape" },
           atalhosLeadsInicio({ crm: podeCrm, ads: podeAds }).map(a => h("a", { class: "rel-link", href: a.href }, a.rotulo))) : null),
 
@@ -1071,19 +1488,28 @@ export async function montar(ctx) {
             h("p", { class: "ini-mes-l" },
               h("span", { class: `rel-var rel-var-${chipMes.cls}` }, chipMes.v == null ? chipMes.txt : `${chipMes.seta} ${chipMes.txt}`),
               h("span", { class: "rel-nota" }, ` vs. ${brl0(mv.anterior)} no mesmo período do mês passado`)),
-            h("p", { class: "rel-nota" }, `${ganhos} ${ganhos === 1 ? vmin("negocio", "negócio") : vmin("negocios", "negócios")} ${adj("ganho", ganhos)} no mês · mês passado inteiro: ${brl0(mv.anteriorInteiro)}`)),
+            // plano 1500c · RC-196: a diferença em reais, com sinal, ao lado do chip em %
+            textoDiferenca(mv.atual, mv.anterior, brl0) ? h("p", { class: ["ini-mes-dif", mv.atual >= mv.anterior ? "ini-dif-cima" : "ini-dif-baixo"], dataset: { k: "vd-dif" } }, textoDiferenca(mv.atual, mv.anterior, brl0)) : null,
+            // plano 1500c · RC-194: «N ganhas no mês» abre o relatório de vendas (quais foram); sem relatório, o quadro
+            h("p", { class: "rel-nota" }, (podeRel || podeCrm) && ganhos > 0
+              ? h("a", { class: "rel-link", href: podeRel ? "#/relatorios/vendas" : "#/crm", dataset: { k: "vd-ganhos" } }, `${ganhos} ${ganhos === 1 ? vmin("negocio", "negócio") : vmin("negocios", "negócios")} ${adj("ganho", ganhos)} no mês`)
+              : `${ganhos} ${ganhos === 1 ? vmin("negocio", "negócio") : vmin("negocios", "negócios")} ${adj("ganho", ganhos)} no mês`, ` · mês passado inteiro: ${brl0(mv.anteriorInteiro)}`)),
           linhaMetaVd,
           h("div", { class: "ini-barras", role: "img", "aria-label": `Receita deste mês${ateDia}: ${brl0(mv.atual)}; mesmo período do mês passado: ${brl0(mv.anterior)}` },
             barraMes("Este mês", mv.atual, "ini-b-atual"), barraMes(`Mês passado${ateDia}`, mv.anterior, "ini-b-antes")),
           h("div", { class: "ini-numeros ini-numeros-2" },
             (podeCrm ? h("a", { class: "ini-numero", href: "#/crm", dataset: { k: "n-ab" } }, num(n.abertos, int, "ini-n", "negocios.abertos"), h("span", { class: "ini-n-l" }, txtAbertos))
               : h("div", { class: "ini-numero" }, num(n.abertos, int, "ini-n", "negocios.abertos"), h("span", { class: "ini-n-l" }, txtAbertos))),
-            h("div", { class: "ini-numero", title: "soma do valor previsto × a probabilidade de cada etapa" }, num(n.previsao_ponderada, brl0, "ini-n", "negocios.previsao_ponderada"), h("span", { class: "ini-n-l" }, "previsão pela chance de cada etapa"))));
+            // plano 1500c · RC-195: a previsão abre o resumo do quadro e o «i» explica no toque (antes só title, que o celular não mostra)
+            h("div", { class: "ini-numero-env" },
+              (podeCrm ? h("a", { class: "ini-numero", href: "#/crm?resumo=1", dataset: { k: "n-prev" } }, num(n.previsao_ponderada, brl0, "ini-n", "negocios.previsao_ponderada"), h("span", { class: "ini-n-l" }, "previsão pela chance de cada etapa"))
+                : h("div", { class: "ini-numero" }, num(n.previsao_ponderada, brl0, "ini-n", "negocios.previsao_ponderada"), h("span", { class: "ini-n-l" }, "previsão pela chance de cada etapa"))),
+              botaoAjuda("vd-prev", "Previsão", `Soma do valor previsto multiplicado pela chance (probabilidade) da etapa de cada ${voc.negocio} ${adj("aberto", 1)}.`))));
       },
 
       tarefas: () => {
         const lista = h("ul", { class: "ini-tarefas" });
-        (t.proximas || []).forEach(tf => lista.append(itemTarefa(tf)));
+        ordenarTarefas(t.proximas).forEach(tf => lista.append(itemTarefa(tf)));     // plano 1500c · RC-193: atrasadas no topo
         if (!lista.childElementCount) lista.append(h("li", { class: "rel-vazio-txt ini-tf-vazio" }, ui.vazio({ tipo: "sem_resultado", tema: "crm", titulo: "Nenhuma tarefa aberta com você." })));
         const numT = (v, rot, hash, k, cls, chave) => podeTarefas
           ? h("a", { class: "ini-numero", href: hash, dataset: { k } }, num(v, int, cls, chave), h("span", { class: "ini-n-l" }, rot))
@@ -1110,7 +1536,12 @@ export async function montar(ctx) {
               h("p", { class: "ini-canal-n" }, k.nome, k.numero_exibicao ? h("span", { class: "rel-nota" }, ` · ${k.numero_exibicao}`) : null),
               h("p", { class: "rel-nota" }, e.texto, k.ultima_entrada_em ? ` · última mensagem recebida ${L.quandoSP(k.ultima_entrada_em)}` : " · nenhuma mensagem recebida ainda"),
               // plano 1000 (CR-175): o texto técnico da API (em inglês) só para o admin, recolhido; para todos, a frase do estado já está acima
-              k.status === "erro" && k.ultimo_erro && admin ? h("details", { class: "ini-canal-erro" }, h("summary", null, "Detalhe técnico"), h("p", null, String(k.ultimo_erro).slice(0, 200))) : null)));
+              // plano 1500c · RC-214: «Copiar» o erro para mandar ao suporte (antes era preciso selecionar o texto)
+              k.status === "erro" && k.ultimo_erro && admin ? h("details", { class: "ini-canal-erro" }, h("summary", null, "Detalhe técnico"), h("p", null, String(k.ultimo_erro).slice(0, 200)),
+                typeof ui.copiar === "function" ? h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { k: `cn-copiar-${k.id}` },
+                  on: { click: () => ui.copiar(`${k.nome || "Número"}${k.numero_exibicao ? ` (${k.numero_exibicao})` : ""}: ${String(k.ultimo_erro)}`, { aviso: "Erro copiado." }) } }, "Copiar") : null) : null),
+            // plano 1500c · RC-213: «Testar» manda uma mensagem ao próprio número do admin — só quando o servidor diz que sabe (canais[].pode_testar)
+            admin && k.pode_testar === true ? botaoTestarCanal(k) : null));
         }
         if (!canais.length) lc.append(h("li", { class: "rel-vazio-txt" }, ctx.pode("admin")
           ? "Nenhum número conectado. Conecte o WhatsApp da empresa em Configurações → Números."
@@ -1124,40 +1555,48 @@ export async function montar(ctx) {
       horas: () => blocoHoras(porHora, porDia, temAgenda),
       metas: () => blocoMetas(metas, n, d.hoje, agendaMes),
       funil: () => blocoFunil(funil),
+      esfriando: () => blocoEsfriando(esfriando),
+      equipe: () => blocoEquipe(equipe),
+      desde: () => blocoDesde(desde),
     };
-    const NOMES = { agora: "Agora", atendimento: "Atendimento", tarefas: "Tarefas", numeros: "Números de WhatsApp", vendas: "Vendas", funil: "Funil do mês", leads: "Leads", horas: "Agenda de hoje e da semana", metas: "Metas do mês" };
+    const NOMES = { agora: "Agora", atendimento: "Atendimento", tarefas: "Tarefas", numeros: "Números de WhatsApp", vendas: "Vendas", funil: "Funil do mês", leads: "Leads", horas: "Agenda de hoje e da semana", metas: "Metas do mês",
+      esfriando: `${cap(voc.negocios)} esfriando`, equipe: "Equipe no mês", desde: "Desde que você começou" };
+    // plano 1500c · RC-339/RC-219/RC-325: os blocos novos só existem quando o servidor manda o campo (RPC antiga: nada inventado)
+    const esfriando = podeCrm ? listaEsfriando(d) : null, equipe = admin ? equipeMes(d) : null, desde = admin ? desdeInicio(d) : null;
     const { abertos, recolhidos } = L.blocosInicio(d);
     // B5: número desconectado no aparelho abre o bloco dos números (L.blocosInicio só olha o status de cadastro)
     if ((d.canais || []).some(k => k && k.estado === "desconectado") && recolhidos.includes("numeros")) { recolhidos.splice(recolhidos.indexOf("numeros"), 1); abertos.push("numeros"); }
     // os blocos novos: «Agora» abre quando há alguém esperando ou consulta pela frente; as barras quando há consulta na semana; as metas quando há meta;
     // o funil do mês (B1) só existe quando o servidor manda funil_mes (RPC antiga: nenhum bloco, nada inventado) e abre com algum lead ou venda no mês
     const funil = funilMes(d, { voc });
-    const novos = [["agora", (+c.aguardando || 0) > 0 || (temAgenda && (prox.visiveis.length > 0 || prox.futuras.length > 0)) || !!(podeCrm && listaSemData(d))],
-      ["horas", temAgenda && porDia.total > 0], ["metas", !!(metas.vendas || metas.consultas)], funil ? ["funil", !funil.vazio] : null].filter(Boolean);
+    const novos = [["agora", (+c.aguardando || 0) > 0 || (temAgenda && (prox.visiveis.length > 0 || prox.futuras.length > 0)) || !!(podeCrm && listaSemData(d)) || !!aniversariantesHoje(d)],
+      ["horas", temAgenda && porDia.total > 0], ["metas", !!(metas.vendas || metas.consultas)], funil ? ["funil", !funil.vazio] : null,
+      esfriando ? ["esfriando", true] : null, desde ? ["desde", true] : null, equipe ? ["equipe", false] : null].filter(Boolean);
     for (const [id, aberto] of novos) (aberto ? abertos : recolhidos).push(id);
     const prefs = lerBlocos();
     const padrao = ids => ids.slice().sort((a, b) => BLOCOS_INICIO.indexOf(a) - BLOCOS_INICIO.indexOf(b));
     const ordemAbertos = ordenarBlocos(padrao(abertos), prefs.ordem), ordemRecolhidos = ordenarBlocos(padrao(recolhidos), prefs.ordem);
     const personalizado = prefs.ordem.length > 0 || prefs.recolhidos.length > 0;
-    const bloco = (id, lista, i) => envolverBloco(id, construtores[id](), NOMES[id], { recolhido: prefs.recolhidos.includes(id), podeAntes: i > 0, podeDepois: i < lista.length - 1,
+    // RC-208: o recolhido é relido (recolher não redesenha mais; o relógio refaz «Agora»/barras com a preferência de agora)
+    const bloco = (id, lista, i) => envolverBloco(id, construtores[id](), NOMES[id], { recolhido: lerBlocos().recolhidos.includes(id), podeAntes: i > 0, podeDepois: i < lista.length - 1,
       ordemAtual: [...ordemAbertos, ...ordemRecolhidos] });
 
     // sem pendência (e com algo a dizer na manchete): o selo "Tudo em dia."
     if (!m.pendencia && m.contexto) {
-      corpo.append(h("div", { class: "ini-em-dia rel-entra" }, ui.vazio({ tipo: "em_dia", titulo: "Tudo em dia.", texto: "Ninguém esperando resposta e nenhuma tarefa para hoje." })));
+      // plano 1500c · RC-188: o tempo livre tem um próximo passo — as oportunidades paradas há 7+ dias no quadro
+      corpo.append(h("div", { class: "ini-em-dia rel-entra" }, ui.vazio({ tipo: "em_dia", titulo: "Tudo em dia.", texto: "Ninguém esperando resposta e nenhuma tarefa para hoje.",
+        acao: podeCrm ? { rotulo: `Ver ${voc.negocios} ${adj("parado")} há 7+ dias`, fn: () => ctx.navegar("#/crm?parados=7") } : null })));
     }
     if (abertos.length) corpo.append(h("div", { class: "ini-grade" }, ordemAbertos.map((id, i) => bloco(id, ordemAbertos, i))));
     if (recolhidos.length) {
       const det = h("details", { class: "ini-mais", open: maisAberto },
         h("summary", {}, h("span", { class: "ini-mais-t" }, "Mais detalhes"), h("span", { class: "rel-nota" }, ordemRecolhidos.map(id => NOMES[id]).join(" · "))),
         h("div", { class: "ini-grade" }, ordemRecolhidos.map((id, i) => bloco(id, ordemRecolhidos, i))));
-      det.addEventListener("toggle", () => { maisAberto = det.open; });
+      // plano 1500c · RC-207: aberto/fechado fica guardado neste aparelho (junto da ordem dos blocos)
+      det.addEventListener("toggle", () => { maisAberto = det.open; const p = lerBlocos(); if (p.mais !== det.open) { p.mais = det.open; gravarBlocos(p); } });
       corpo.append(det);
     }
-    if (personalizado) {
-      corpo.append(h("div", { class: "ini-blocos-rodape" }, h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { k: "bl-restaurar" },
-        on: { click: () => { gravarBlocos(null); ui.toast("Ordem e blocos de volta ao padrão.", { tipo: "info" }); redesenhar(); } } }, ui.icone("reabrir"), "Restaurar ordem")));
-    }
+    if (personalizado) corpo.append(rodapeRestaurar());
     // O atendimento e as tarefas abertas têm prioridade sobre o checklist de configuração.
     if (onbRes) corpo.append(cartaoChecklist(onbRes));
 
@@ -1223,14 +1662,20 @@ export async function montar(ctx) {
         }
       }
       const sp = h("span", { class: "ini-kpi-sp", "aria-hidden": "true" });
-      if (serie && k.valor !== null) sparkline(sp, serie, k.rotulo); else sp.classList.add("ini-kpi-sp-vazia");
+      // plano 1500c · RC-189: o resumo da linha no formato do KPI (R$ com milhar, inteiro, %)
+      const fmtK = k.formato === "brl" ? (v => L.textoMoeda(v, { centavos: false })) : k.formato === "pct" ? pct : int;
+      if (serie && k.valor !== null) sparkline(sp, serie, k.rotulo, fmtK); else sp.classList.add("ini-kpi-sp-vazia");
+      // plano 1500c · RC-234: quando a linha mede OUTRA coisa que o número grande («conversas novas por dia» sob «Esperando resposta»), uma legenda visível
+      const legLinha = srv && !srv.mesma && serie && k.valor !== null && srv.linha ? h("span", { class: "ini-kpi-sp-leg", "aria-hidden": "true" }, `linha: ${srv.linha}`) : null;
       // plano 1000 (CR-179): sem «title» (o leitor lia a ajuda duas vezes: title + aria-describedby) — o hover usa a dica da biblioteca (ui.dica, sem descrever de novo)
       const cartao = h(k.href ? "a" : "div", { class: ["ini-kpi", `ini-kpi-${k.tom || "neutro"}`, serie && "ini-kpi-com-linha"], href: k.href, dataset: { k: `kpi-${k.id}`, kpi: k.id }, "aria-describedby": idAj },
         h("span", { class: "ini-kpi-l" }, k.rotulo),
         h("span", { class: "ini-kpi-linha" }, valorEl,
-          chip ? h("span", { class: `rel-var rel-var-${chip.cls}`, title: `contra o dia ${L.ddmmIso(varH.dia)}` }, chip.v == null ? chip.txt : `${chip.seta} ${chip.txt}`) : null),
+          chip ? h("span", { class: `rel-var rel-var-${chip.cls}`, title: `contra o dia ${L.ddmmIso(varH.dia)}` }, chip.v == null ? chip.txt : `${chip.seta} ${chip.txt}`) : null,
+          // plano 1500c · RC-235: contra quando, à vista (antes só no title, que o toque não mostra)
+          chip ? h("span", { class: "ini-kpi-vs-dia" }, rotuloContraDia(varH.dia, d.hoje || L.hojeSP())) : null),
         h("span", { class: "ini-kpi-sub rel-nota" }, k.sub || ""),
-        sp,
+        sp, legLinha,
         h("span", { class: "sr-only", id: idAj }, ajuda));
       if (typeof ui.dica === "function") { try { ui.dica(cartao, ajuda, { descrever: false }); } catch { /* sem dica: a ajuda continua para o leitor de tela */ } }
       // plano 1000b · RB-179: o «i» é um botão À PARTE (fora do link: botão dentro de <a> não vale) — no toque mostra a ajuda sem navegar;
@@ -1253,7 +1698,8 @@ export async function montar(ctx) {
       if (aguard > 0) {
         colCv.append(...[
           h("p", { class: "ini-agora-n" }, num(aguard, int, "ini-agora-num"), " ", h("span", { class: "ini-agora-l" }, aguard === 1 ? `${voc.contato} esperando resposta` : `${voc.contatos} esperando resposta`)),
-          Number.isFinite(espera) && espera >= 1 ? h("p", { class: `rel-nota ini-agora-espera${espera >= 30 ? " rel-txt-aten" : ""}` }, ui.icone("relogio"), ` a mais antiga espera há ${L.duracaoMin(espera)}`) : null,
+          // plano 1500c · RC-299: a mesma escrita da fila (duracaoCurta); RC-301: o vermelho no prazo da empresa
+          Number.isFinite(espera) && espera >= 1 ? h("p", { class: `rel-nota ini-agora-espera${espera >= limEspera ? " rel-txt-aten" : ""}` }, ui.icone("relogio"), ` a mais antiga espera há ${textoEspera(espera)}`) : null,
           fila && fila.length ? h("ol", { class: "ini-espera-lista", "aria-label": `${cap(voc.contatos)} esperando resposta` }, fila.map(itemEspera)) : null,
           // plano 1000b · RB-178: «+2 na fila» leva às Conversas aguardando (quando a pessoa pode abrir)
           fila && fila.length && aguard > fila.length ? h("p", { class: "rel-nota" }, podeConversas
@@ -1269,6 +1715,13 @@ export async function montar(ctx) {
             ? h("div", { class: "ini-agora-acoes" }, botaoSemDono(semDono))
             : h("p", { class: "rel-nota" }, `${+c.abertas || 0} ${plural(+c.abertas || 0, "aberta", "abertas")} no total`));
       }
+      // plano 1500c · RC-338: aniversariantes do dia — a recepção manda os parabéns daqui (abre a conversa ou a ficha)
+      const aniv = aniversariantesHoje(d);
+      if (aniv) colCv.append(h("div", { class: "ini-aniv", dataset: { k: "aniv" } },
+        h("p", { class: "ini-aniv-t" }, `${aniv.length === 1 ? "Faz aniversário hoje" : `${aniv.length} fazem aniversário hoje`}`),
+        h("ul", { class: "ini-aniv-lista" }, aniv.slice(0, 4).map(x => h("li", null, h("span", { class: "ini-aniv-nome" }, x.nome),
+          x.conversaId != null && podeConversas ? h("a", { class: "bt bt-fant bt-p", href: `#/conversas/${encodeURIComponent(x.conversaId)}`, dataset: { k: `aniv-${x.contatoId ?? x.conversaId}` }, "aria-label": `Dar parabéns a ${x.nome}` }, "Dar parabéns")
+            : x.contatoId != null && podeConversas ? h("a", { class: "bt bt-fant bt-p", href: `#/conversas?contato=${encodeURIComponent(x.contatoId)}`, dataset: { k: `aniv-${x.contatoId}` }, "aria-label": `Dar parabéns a ${x.nome}` }, "Dar parabéns") : null)))));
       const colAg = h("div", { class: "ini-agora-col ini-agora-ag" }, h("p", { class: "rel-olho" }, cap(palavra.varios)));
       if (agendaLendo) colAg.append(h("p", { class: "rel-nota" }, "Lendo a agenda…"));
       else if (agendaFalhou) colAg.append(h("p", { class: "rel-nota rel-txt-aten" }, "Não consegui ler a agenda agora."), botaoTentar("ag-tentar"));
@@ -1287,9 +1740,21 @@ export async function montar(ctx) {
         else colAg.append(h("p", { class: "rel-nota" }, `Nenhuma hoje. Próximas da semana:`));
         colAg.append(h("ol", { class: "ini-prox", "aria-label": semana ? `Próximas ${palavra.varios} da semana` : `${cap(palavra.varios)} de hoje` }, itens.map(it => itemConsulta(it, semana))));
         const sobra = semana ? 0 : prox.restantes - prox.visiveis.length;
-        if (sobra > 0 || podeAgenda) colAg.append(h("div", { class: "rel-cartao-rodape ini-agora-rodape" }, sobra > 0 ? h("span", { class: "rel-nota" }, `+${sobra} depois`) : null,
+        // plano 1500c · RC-203: «+3 depois» abre a agenda de hoje
+        if (sobra > 0 || podeAgenda) colAg.append(h("div", { class: "rel-cartao-rodape ini-agora-rodape" }, sobra > 0
+          ? (podeAgenda ? h("a", { class: "rel-link", href: `#/agenda?dia=${d.hoje || L.hojeSP()}`, dataset: { k: "px-depois" } }, `+${sobra} depois`) : h("span", { class: "rel-nota" }, `+${sobra} depois`)) : null,
           podeAgenda ? h("a", { class: "rel-link", href: "#/agenda" }, "Ver agenda") : null));
       }
+      // plano 1500c · RC-201: as de hoje que passaram sem presença marcada — cada uma abre o negócio para marcar Compareceu/Faltou
+      const semPres = temAgenda && podeCrm ? prox.semPresenca || [] : [];
+      if (semPres.length) colAg.append(h("div", { class: "ini-sempres", dataset: { k: "sempres" } },
+        h("p", { class: "ini-sempres-t" }, ui.icone("alerta"), h("span", null, `${semPres.length} ${plural(semPres.length, "passou", "passaram")} sem presença marcada`)),
+        h("ol", { class: "ini-sempres-lista", "aria-label": `${cap(palavra.varios)} de hoje sem presença marcada` }, semPres.slice(0, 4).map(it => {
+          const nome = it.nome || it.titulo || `${cap(palavra.um)} sem nome`, hora = L.horaSP(it.inicio);
+          return h("li", { class: "ini-sempres-item" }, h("span", { class: "rel-num ini-sempres-h" }, hora), h("span", { class: "ini-sempres-nome" }, nome),
+            h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { k: `pr-${it.negocio_id}` }, "aria-label": `Marcar a presença de ${nome}, às ${hora}`,
+              on: { click: () => pontes.abrirNegocio(it.negocio_id, { aba: "presenca", aoMudar: () => carregar({ forcar: true }) }) } }, "Marcar presença"));
+        }))));
       // plano 1000 (CR-217): quem está «agendado» sem data — a agenda e o lembrete não sabem dele; cada um abre o negócio para marcar
       const semData = podeCrm ? listaSemData(d) : null;
       if (semData) colAg.append(blocoSemData(semData));
@@ -1304,8 +1769,10 @@ export async function montar(ctx) {
     function blocoSemData(sd) {
       const sobra = sd.total - sd.itens.length;
       return h("div", { class: "ini-semdata", dataset: { k: "semdata" } },
-        h("p", { class: "ini-semdata-t" }, ui.icone("alerta"), h("span", null, `${sd.total} ${voc.feminino ? "agendada" : "agendado"}${sd.total === 1 ? "" : "s"} sem data`)),
-        h("p", { class: "rel-nota" }, `Na etapa de agendamento sem ${palavra.um} marcada: a agenda e o lembrete não sabem ${voc.feminino ? "dela" : "dele"}${sd.total === 1 ? "" : "s"}.`),
+        // plano 1500c · RC-215: frase única com o termo explícito («2 oportunidades em Agendou sem data») — antes o gênero do negócio
+        // («agendadas») e «não sabem dela» (do paciente) se misturavam
+        h("p", { class: "ini-semdata-t" }, ui.icone("alerta"), h("span", null, fraseSemData(sd, voc))),
+        h("p", { class: "rel-nota" }, `Sem ${palavra.um} marcada, não ${sd.total === 1 ? "aparece" : "aparecem"} na agenda e o lembrete não sai.`),
         sd.itens.length ? h("ol", { class: "ini-semdata-lista", "aria-label": "Agendados sem data" }, sd.itens.map(it => {
           const nome = it.nome || `${cap(voc.negocio)} sem nome`;
           return h("li", { class: "ini-semdata-item" },
@@ -1328,28 +1795,46 @@ export async function montar(ctx) {
         assumir.addEventListener("click", () => assumirConversa(it, assumir));
       }
       const abrir = podeConversas ? h("a", { class: "bt bt-sec bt-p", href: `#/conversas/${encodeURIComponent(it.id)}`, dataset: { k: `ag-ver-${it.id}` }, "aria-label": `Abrir a conversa de ${nome}` }, "Abrir") : null;
-      return h("li", { class: ["ini-espera-item", it.espera !== null && it.espera >= 30 && "ini-espera-longa"], dataset: { conversa: it.id } },
+      // plano 1500c · RC-228: «Marcar» abre a agenda já procurando a pessoa (marcarConsulta com a busca pelo nome)
+      const marcar = podeAgenda && escreve && it.nome && typeof ctx.carregar === "function"
+        ? h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { k: `ag-marcar-${it.id}` }, "aria-label": `Marcar ${palavra.um} para ${nome}`,
+          on: { click: async () => {
+            try { const ag = await ctx.carregar("agenda"); await ag.marcarConsulta(ctx, { busca: it.nome, aoMudar: () => carregar({ forcar: true }) }); }
+            catch (e) { console.error(e); ui.toast("Não deu para abrir a agenda agora.", { tipo: "erro" }); }
+          } } }, "Marcar") : null;
+      // plano 1500c · RC-204: três faixas de espera (ok < 5 min · atenção · passou do prazo), com texto além da cor
+      const fx = faixaEspera(it.espera, limEspera);
+      return h("li", { class: ["ini-espera-item", `ini-espera-${fx.faixa}`, fx.faixa === "ruim" && "ini-espera-longa"], dataset: { conversa: it.id, faixa: fx.faixa } },
         typeof ui.avatar === "function" ? ui.avatar(nome, it.id, null, { tamanho: "p" }) : null,
         h("div", { class: "ini-espera-txt" }, h("p", { class: "ini-espera-nome" }, nome),
-          espTxt || pilulas.length ? h("p", { class: "ini-espera-meta" }, ...[espTxt ? h("span", { class: "ini-espera-t rel-nota" }, espTxt) : null, ...pilulas].filter(Boolean)) : null),
-        assumir || abrir ? h("div", { class: "ini-espera-acoes" }, ...[assumir, abrir].filter(Boolean)) : null);
+          espTxt || pilulas.length ? h("p", { class: "ini-espera-meta" }, ...[espTxt ? h("span", { class: "ini-espera-t rel-nota" }, espTxt, fx.texto ? h("b", { class: "ini-espera-fx" }, ` · ${fx.texto}`) : null) : null, ...pilulas].filter(Boolean)) : null),
+        assumir || abrir || marcar ? h("div", { class: "ini-espera-acoes" }, ...[assumir, abrir, marcar].filter(Boolean)) : null);
     }
     function itemConsulta(it, semana) {
       const hora = L.horaSP(it.inicio);
       const rotDia = semana ? (it.dia === somarDiasIso(d.hoje, 1) ? "amanhã" : `${SEMANA[diaSemanaIso(it.dia)]} ${L.ddmmIso(it.dia)}`) : null;
       const selo = it.estado === "agora" ? h("span", { class: "ini-prox-selo" }, h("i", { class: "ini-prox-ponto", "aria-hidden": "true" }), "agora")
         : it.estado === "proxima" ? h("span", { class: "ini-prox-selo" }, ui.relativo(it.inicio)) : rotDia ? h("span", { class: "ini-prox-selo" }, rotDia) : null;
+      // plano 1500c · RC-300: «Abrir a consulta de Maria, às 14:00» (antes «Abrir Maria das 14:00», que soava como sobrenome)
+      const quem = it.nome || it.titulo || "";
       const abrir = podeCrm && it.negocio_id
-        ? h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { k: `px-${it.negocio_id}` }, "aria-label": `Abrir ${it.nome || it.titulo || palavra.um} das ${hora}`,
+        ? h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { k: `px-${it.negocio_id}` }, "aria-label": rotuloAbrirConsulta(quem, hora, palavra.um),
           on: { click: () => pontes.abrirNegocio(it.negocio_id, { aoMudar: () => carregar({ forcar: true }) }) } }, "Abrir")
         // plano 1000 (CR-253): consulta sem negócio (marcada direto na agenda) não fica sem ação — «Ver na agenda» do dia dela
         : podeAgenda ? h("a", { class: "bt bt-sec bt-p", href: `#/agenda?dia=${encodeURIComponent(it.dia || d.hoje || "")}`, dataset: { k: `px-ag-${it.dia || ""}-${hora}` },
-          "aria-label": `Ver na agenda: ${it.nome || it.titulo || palavra.um} das ${hora}` }, "Ver na agenda") : null;
-      return h("li", { class: ["ini-prox-item", `ini-prox-${it.estado}`] },
+          "aria-label": rotuloAbrirConsulta(quem, hora, palavra.um, { agenda: true }) }, "Ver na agenda") : null;
+      // plano 1500c · RC-202: a de amanhã que o paciente ainda não confirmou ganha o selo e «Pedir confirmação» (abre a conversa com ele);
+      // só quando a agenda manda o campo `confirmacao` (sem ele, nada é inventado)
+      const naoConf = precisaConfirmar(it, somarDiasIso(d.hoje || L.hojeSP(), 1));
+      const pedir = naoConf && podeConversas && escreve && it.contato_id != null
+        ? h("a", { class: "bt bt-fant bt-p", href: `#/conversas?contato=${encodeURIComponent(it.contato_id)}`, dataset: { k: `px-conf-${it.negocio_id || it.contato_id}` },
+          "aria-label": `Pedir confirmação a ${quem || palavra.um}` }, "Pedir confirmação") : null;
+      return h("li", { class: ["ini-prox-item", `ini-prox-${it.estado}`, naoConf && "ini-prox-naoconf"] },
         h("span", { class: "ini-prox-hora" }, h("b", { class: "rel-num" }, hora), selo),
         h("div", { class: "ini-prox-txt" }, h("p", { class: "ini-prox-nome" }, it.nome || it.titulo || `${cap(palavra.um)} sem nome`),
-          h("p", { class: "rel-nota" }, [it.servico, it.etapa].filter(Boolean).join(" · ") || (it.titulo && it.nome ? it.titulo : ""))),
-        abrir ? h("div", { class: "ini-prox-acoes" }, abrir) : null);
+          h("p", { class: "rel-nota" }, [it.servico, it.etapa].filter(Boolean).join(" · ") || (it.titulo && it.nome ? it.titulo : "")),
+          naoConf ? h("p", { class: "ini-prox-conf" }, ui.icone("alerta"), h("span", null, "não confirmada")) : null),
+        abrir || pedir ? h("div", { class: "ini-prox-acoes" }, ...[abrir, pedir].filter(Boolean)) : null);
     }
 
     /** Barras da agenda: hoje hora a hora (com a linha do agora) ou os próximos 7 dias; cada barra lê no teclado; «Ver como tabela» embaixo. */
@@ -1385,27 +1870,35 @@ export async function montar(ctx) {
           const nomes = x.itens.map(i => [i.nome || i.titulo, i.servico].filter(Boolean).join(" · ")).join("; ");
           return `${rot}: ${x.n} ${plural(x.n, palavra.um, palavra.varios)}${nomes ? ` — ${nomes}` : ""}`;
         };
-        const lista = h("ol", { class: "ini-bv-lista", "aria-label": hojeMode ? `${cap(palavra.varios)} de hoje por hora` : `${cap(palavra.varios)} por dia nos próximos 7 dias` });
+        // plano 1500c · RC-199: as barras são uma lista de opções (listbox/option) com a posição («3 de 11») — o leitor diz que dá para andar
+        // e escolher; RC-198: Enter/toque abre a agenda daquele dia (e da hora, no modo Hoje)
+        const lista = h("ol", { class: "ini-bv-lista", role: "listbox", "aria-orientation": "horizontal",
+          "aria-label": `${hojeMode ? `${cap(palavra.varios)} de hoje por hora` : `${cap(palavra.varios)} por dia nos próximos 7 dias`}. Enter abre a agenda.` });
         // tabindex itinerante: uma parada de Tab no gráfico (a hora corrente ou hoje); as setas, Home e End andam entre as barras
         const atual = barraAtual(itens, { hojeMode, horaAgora });
-        const itinerar = alvo => { for (const o of lista.querySelectorAll(".ini-bv")) o.setAttribute("tabindex", o === alvo ? "0" : "-1"); };
+        const itinerar = alvo => { for (const o of lista.querySelectorAll(".ini-bv")) { o.setAttribute("tabindex", o === alvo ? "0" : "-1"); o.setAttribute("aria-selected", String(o === alvo)); } };
+        const hrefBarra = x => (hojeMode ? `#/agenda?dia=${d.hoje || L.hojeSP()}&hora=${p2(x.h)}:00` : `#/agenda?dia=${x.dia}`);
         itens.forEach((x, i) => {
           const agoraCls = hojeMode ? (x.h === horaAgora ? "ini-bv-agora" : x.h < horaAgora ? "ini-bv-passou" : null) : (x.hoje ? "ini-bv-agora" : null);
           // a maior barra para em 85% do trilho: sobra lugar para o número em cima dela
-          const li = h("li", { class: ["ini-bv", !x.n && "ini-bv-0", agoraCls], tabindex: i === atual ? "0" : "-1", "aria-label": texto(x), style: { "--i": i },
-            dataset: { k: `bv-${hojeMode ? x.h : x.dia}` } },
+          const li = h("li", { class: ["ini-bv", !x.n && "ini-bv-0", agoraCls, podeAgenda && "ini-bv-link"], tabindex: i === atual ? "0" : "-1", role: "option", "aria-selected": String(i === atual),
+            "aria-posinset": String(i + 1), "aria-setsize": String(itens.length), "aria-label": texto(x), style: { "--i": i },
+            dataset: { k: `bv-${hojeMode ? x.h : x.dia}`, href: podeAgenda ? hrefBarra(x) : null } },
             h("span", { class: "ini-bv-trilho", style: { "--h": `${(Math.max(x.n ? 8 : 0, x.n / max * 85)).toFixed(1)}%` } },
-              x.n ? h("span", { class: "ini-bv-n" }, String(x.n)) : null,
+              // plano 1500c · RC-197: o «0» discreto nas barras vazias (leitura rápida sem passar o mouse)
+              h("span", { class: ["ini-bv-n", !x.n && "ini-bv-n0"] }, String(x.n)),
               h("i", { class: "ini-bv-barra" })),
             h("span", { class: "ini-bv-r" }, hojeMode ? `${p2(x.h)}h` : x.rotulo));
           const mostrar = () => { dica.textContent = texto(x); };
           li.addEventListener("mouseenter", mostrar); li.addEventListener("focus", () => { mostrar(); itinerar(li); });
+          if (podeAgenda) li.addEventListener("click", () => ctx.navegar(hrefBarra(x)));
           lista.append(li);
         });
         lista.addEventListener("mouseleave", () => { dica.textContent = ""; });
         lista.addEventListener("keydown", ev => {
           const bs = [...lista.querySelectorAll(".ini-bv")], i = bs.indexOf(document.activeElement);
           if (i < 0) return;
+          if ((ev.key === "Enter" || ev.key === " ") && podeAgenda && bs[i].dataset.href) { ev.preventDefault(); ctx.navegar(bs[i].dataset.href); return; }     // RC-198
           const j = ev.key === "ArrowRight" ? i + 1 : ev.key === "ArrowLeft" ? i - 1 : ev.key === "Home" ? 0 : ev.key === "End" ? bs.length - 1 : null;
           if (j === null || !bs[j]) return;
           ev.preventDefault(); itinerar(bs[j]); bs[j].focus();
@@ -1442,8 +1935,15 @@ export async function montar(ctx) {
         return sec;
       }
       const alvo = h("div", { class: "ini-funil-g" });
-      G.funil(alvo, { etapas: f.etapas.map(e => ({ nome: e.nome, qtd: e.qtd, tipo: e.tipo, conversao: e.conversao, valorTxt: "" })),
-        resumo: `Funil de ${mes}: ${f.etapas.map(e => `${e.nome} ${e.qtd}`).join(", ")}.` });
+      // plano 1500c · RC-217: a etapa dos ganhos diz quanto foi ganho (a receita do mês); RC-341: cada etapa abre quem são, com o recorte do mês
+      const receita = fin(n.receita_mes) ? +n.receita_mes : null;
+      const hrefs = linksFunilMes(d.hoje || L.hojeSP(), { crm: podeCrm, conversas: podeConversas, agenda: podeAgenda, rel: podeRel });
+      G.funil(alvo, { etapas: f.etapas.map(e => ({ nome: e.nome, qtd: e.qtd, tipo: e.tipo, conversao: e.conversao, ...(e.dica ? { dica: e.dica } : {}),
+        valorTxt: e.id === "ganhos" && receita !== null ? L.textoMoeda(receita, { centavos: false }) : "", href: hrefs[e.id] || null })),
+        resumo: `Funil de ${mes}: ${f.etapas.map(e => `${e.nome} ${e.qtd}`).join(", ")}${receita !== null ? `; ganhos somam ${L.textoMoeda(receita, { centavos: false })}` : ""}.` });
+      // plano 1500c · RC-218: «Do lead à venda» melhorou ou piorou contra o mês passado (quando o servidor manda funil_mes_anterior)
+      const cmp = funilComparado(d);
+      const chipF = cmp ? chipPontos(cmp.atual, cmp.anterior) : null;     // em pontos percentuais (taxa contra taxa), não «291%»
       // os cartões entram quando o bloco já está na página (como as outras contagens): a contagem de ui.kpi começa do zero e para
       // de vez se o número ainda não estiver no documento — montado antes da troca do esqueleto, ficava «0»
       const kpis = typeof ui.kpi === "function" ? h("div", { class: "ini-funil-kpis" }) : null;
@@ -1451,15 +1951,69 @@ export async function montar(ctx) {
         ui.kpi({ rotulo: "Leads no mês", valor: f.leads, formato: "compacto", ajuda: "Leads que entraram no funil do dia 1 até hoje (contagem do servidor)." }),
         ui.kpi({ rotulo: "Do lead à venda", valor: f.geral, formato: "pct",
           ajuda: `${cap(voc.negocios)} ${fem ? "ganhas" : "ganhos"} no mês ÷ leads do mês. Cada etapa conta o que aconteceu no mês, não a mesma turma.` })));
-      sec.append(...[kpis, alvo,
+      sec.append(...[kpis,
+        chipF ? h("p", { class: "ini-funil-cmp", dataset: { k: "fn-cmp" } }, h("span", { class: `rel-var rel-var-${chipF.cls}` }, chipF.v == null ? chipF.txt : `${chipF.seta} ${chipF.txt}`),
+          h("span", { class: "rel-nota" }, ` do lead à venda vs. ${pct(cmp.anterior)} no mês passado`)) : null,
+        alvo,
         h("p", { class: "rel-nota ini-funil-nota" }, "Cada etapa conta o que aconteceu no mês (não é a mesma turma de leads): a taxa pode passar de 100%.")].filter(Boolean));
       return sec;
+    }
+
+    /** plano 1500c · RC-339: negócios sem nenhuma interação há 7+ dias — até 5, cada um abre o negócio; «Ver todos» no quadro filtrado. */
+    function blocoEsfriando(es) {
+      const sobra = es.total - es.itens.length;
+      return h("section", { class: "rel-cartao ini-esfr rel-entra", "aria-labelledby": "ini-ef", style: "--i:4" },
+        h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ini-ef", class: "rel-h2" }, `${cap(voc.negocios)} esfriando`),
+          h("p", { class: "rel-nota" }, `${es.total} sem mensagem nem tarefa há 7+ dias`)),
+        h("ol", { class: "ini-esfr-lista" }, es.itens.map(it => {
+          const nome = it.nome || `${cap(voc.negocio)} sem nome`;
+          return h("li", { class: "ini-esfr-item" },
+            h("div", { class: "ini-esfr-txt" }, h("p", { class: "ini-esfr-nome" }, nome),
+              h("p", { class: "rel-nota" }, [it.etapa, it.dias !== null ? `parado há ${it.dias} ${it.dias === 1 ? "dia" : "dias"}` : null, it.valor ? L.textoMoeda(it.valor, { centavos: false }) : null].filter(Boolean).join(" · "))),
+            h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { k: `ef-${it.id}` }, "aria-label": `Abrir ${nome} para retomar`,
+              on: { click: () => pontes.abrirNegocio(it.id, { aoMudar: () => carregar({ forcar: true }) }) } }, "Retomar"));
+        })),
+        h("div", { class: "rel-cartao-rodape" }, h("a", { class: "rel-link", href: "#/crm?parados=7", dataset: { k: "ef-todos" } }, sobra > 0 ? `Ver todos (+${sobra})` : "Ver no quadro")));
+    }
+    /** plano 1500c · RC-219: quem fechou mais no mês e quem respondeu mais rápido (admin) — tabela ordenada pelo valor ganho. */
+    function blocoEquipe(eq) {
+      const melhorTpr = Math.min(...eq.map(x => (x.tpr === null ? Infinity : x.tpr)));
+      return h("section", { class: "rel-cartao ini-equipe rel-entra", "aria-labelledby": "ini-eq", style: "--i:8" },
+        h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ini-eq", class: "rel-h2" }, "Equipe no mês"), h("p", { class: "rel-nota" }, "do dia 1 até hoje")),
+        h("div", { class: "ini-equipe-rol" }, h("table", { class: "ini-equipe-tab" },
+          h("caption", { class: "sr-only" }, "Equipe no mês: ganhos, valor e tempo médio da 1ª resposta por pessoa"),
+          h("thead", null, h("tr", null, h("th", { scope: "col" }, "Pessoa"), h("th", { scope: "col", class: "num" }, "Ganhos"), h("th", { scope: "col", class: "num" }, "Valor"), h("th", { scope: "col", class: "num" }, "1ª resposta"))),
+          h("tbody", null, eq.map((x, i) => h("tr", { class: i === 0 && x.valor > 0 ? "ini-equipe-top" : null },
+            h("th", { scope: "row" }, i === 0 && x.valor > 0 ? h("span", { class: "ini-equipe-coroa", "aria-label": "1º lugar" }, "1º ") : null, x.nome),
+            h("td", { class: "num" }, int(x.ganhos)), h("td", { class: "num" }, L.textoMoeda(x.valor, { centavos: false })),
+            h("td", { class: ["num", x.tpr !== null && x.tpr === melhorTpr && "ini-equipe-rapido"] }, x.tpr === null ? "—" : duracaoCurta(x.tpr))))))));
+    }
+    /** plano 1500c · RC-325: o primeiro mês × o mês atual — o argumento da renovação, com a seta do sentido bom. */
+    function blocoDesde(ds) {
+      const fmtL = (id, v) => (id === "receita" ? L.textoMoeda(v, { centavos: false }) : id === "tpr" ? duracaoCurta(v) : int(v));
+      return h("section", { class: "rel-cartao ini-desde rel-entra", "aria-labelledby": "ini-ds", style: "--i:5" },
+        h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ini-ds", class: "rel-h2" }, "Desde que você começou"),
+          h("p", { class: "rel-nota" }, `${mesPorExtenso(ds.primeiro.mes)} × agora`)),
+        h("ul", { class: "ini-desde-lista" }, ds.linhas.map(x => h("li", { class: ["ini-desde-item", x.melhor ? "melhor" : "pior"] },
+          h("span", { class: "ini-desde-r" }, x.rotulo),
+          h("span", { class: "ini-desde-v rel-num" }, h("s", { class: "ini-desde-antes", "aria-label": `antes ${fmtL(x.id, x.antes)}` }, fmtL(x.id, x.antes)), " → ",
+            h("b", null, fmtL(x.id, x.agora))),
+          h("span", { class: "ini-desde-sel" }, x.melhor ? "melhorou" : "piorou")))));
     }
 
     /** Leads da semana: quanto veio de anúncio × outras origens, numa barra de proporção (contagem do CRM). */
     function barraOrigem(l) {
       const total = Math.max(1, +l.semana || 0), an = Math.max(0, +l.semana_anuncio || 0), pct = Math.round(an / total * 100);
-      return h("div", { class: "ini-origem", role: "img", "aria-label": `${an} de ${total} leads vieram de anúncio (${pct}%)` },
+      // plano 1500c · RC-233: com leads.semana_meta/semana_google o anúncio se divide em Meta e Google (duas cores); sem eles, como antes
+      const pl = divisaoPlataformas(l);
+      if (pl) {
+        const pM = Math.round(pl.meta / total * 100), pG = Math.round(pl.google / total * 100), pO = Math.max(0, 100 - pM - pG);
+        return h("div", { class: "ini-origem", role: "img", "aria-label": `${rotuloOrigem(total, an, pct)}: Meta ${pl.meta}, Google ${pl.google}` },
+          h("span", { class: "ini-origem-t ini-origem-t2" }, h("i", { class: "ini-origem-meta", style: { "--w": `${pM}%` } }), h("i", { class: "ini-origem-google", style: { "--w": `${pG}%`, "--x": `${pM}%` } })),
+          h("span", { class: "ini-origem-leg" }, h("span", null, h("i", { class: "ini-origem-m ini-origem-meta" }), `Meta · ${pM}%`),
+            h("span", null, h("i", { class: "ini-origem-m ini-origem-google" }), `Google · ${pG}%`), h("span", null, h("i", { class: "ini-origem-m" }), `outras origens · ${pO}%`)));
+      }
+      return h("div", { class: "ini-origem", role: "img", "aria-label": rotuloOrigem(total, an, pct) },     // plano 1500c · RC-183
         h("span", { class: "ini-origem-t" }, h("i", { class: "ini-origem-an", style: { "--w": `${pct}%` } })),
         h("span", { class: "ini-origem-leg" }, h("span", null, h("i", { class: "ini-origem-m ini-origem-an" }), `anúncio · ${pct}%`), h("span", null, h("i", { class: "ini-origem-m" }), `outras origens · ${100 - pct}%`)));
     }
@@ -1495,12 +2049,17 @@ export async function montar(ctx) {
       if (editando) {
         // um redesenho forçado no meio da digitação devolve o rascunho aos campos (o pulso nem redesenha: metasEditando)
         const rasc = metasEditando && rascunhoMetas ? rascunhoMetas : null;
-        const fV = ui.campo({ nome: "meta_vendas", rotulo: "Meta de vendas no mês (R$)", tipo: "moeda", valor: rasc ? rasc.vendas : metas.vendas || "", ajuda: `Receita ${fem ? "das" : "dos"} ${vmin("negocios", "negócios")} ${adj("ganho")} no mês.` });     // plano 1000b · RB-157
+        // plano 1500c · RC-232: um ponto de partida — o mês passado inteiro na ajuda e «Usar +10%» que preenche o campo
+        const sug = sugestaoMetaVendas(n);
+        const fV = ui.campo({ nome: "meta_vendas", rotulo: "Meta de vendas no mês (R$)", tipo: "moeda", valor: rasc ? rasc.vendas : metas.vendas || "",
+          ajuda: `Receita ${fem ? "das" : "dos"} ${vmin("negocios", "negócios")} ${adj("ganho")} no mês.${sug ? ` Mês passado: ${fmtBrl(sug.mesPassado)}.` : ""}` });     // plano 1000b · RB-157
         const fC = ui.campo({ nome: "meta_consultas", rotulo: `Meta de ${palavra.varios} no mês`, tipo: "numero", min: 0, passo: 1, inputmode: "numeric", valor: rasc ? rasc.consultas : metas.consultas || "",
           ajuda: `${cap(palavra.varios)} da Agenda que já aconteceram no mês (sem canceladas nem faltas).` });
         const inV = fV.querySelector("input"), inC = fC.querySelector("input");
         inV.dataset.k = "mt-v"; inC.dataset.k = "mt-c";
         const fechar = () => { metasEditando = false; rascunhoMetas = null; };
+        // RC-261: o leitor de dinheiro do CRM (lerNumero) vem agora, com o formulário à vista; se falhar, ui.lerMoeda como antes (RB-064)
+        if (!lerNumeroCrm) import(`./crm-logica.js?v=${ctx.versao}`).then(m => { if (typeof m.lerNumero === "function") lerNumeroCrm = m.lerNumero; }).catch(() => {});
         const salvar = () => {
           // plano 1000b · RB-064 (pendência do CRM): o valor é lido como no negócio (crm-logica.lerNumero: «1,234.56» = «1.234,56»); sem ele, ui.lerMoeda
           // plano 1000b · RB-172: zero/negativo é erro no campo — antes «-5» virava «Metas retiradas» sem explicar
@@ -1524,8 +2083,11 @@ export async function montar(ctx) {
           rascunhoMetas = { vendas: inV.value, consultas: inC.value };
           if (!temAlguma) metasEditando = [inV, inC].some(i => String(i.value || "").trim() !== "");
         };
+        const btSug = sug ? h("button", { type: "button", class: "bt bt-fant bt-p ini-metas-sug", dataset: { k: "mt-sug" }, "aria-label": `Usar a meta de ${fmtBrl(sug.mais10)} (mês passado mais 10%)`,
+          on: { click: () => { inV.value = String(sug.mais10).replace(".", ","); digitou(); if (typeof inV.focus === "function") inV.focus(); } } }, `Usar +10% (${fmtBrl(sug.mais10)})`) : null;
         form = h("form", { class: "ini-metas-form", on: { submit: ev => { ev.preventDefault(); salvar(); }, input: digitou } },
           h("div", { class: "ini-metas-campos" }, fV, fC),
+          btSug ? h("div", { class: "ini-metas-sug-l" }, btSug) : null,
           h("div", { class: "ini-metas-acoes" },
             h("button", { type: "submit", class: "bt bt-prim bt-p", dataset: { k: "mt-salvar" } }, "Guardar metas"),
             temAlguma ? h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { k: "mt-cancelar" }, on: { click: () => { fechar(); redesenhar(); } } }, "Cancelar") : null,
@@ -1540,6 +2102,11 @@ export async function montar(ctx) {
         temAlguma && !editando ? h("div", { class: "rel-cartao-rodape" }, h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { k: "mt-editar" }, on: { click: () => { metasEditando = true; rascunhoMetas = null; redesenhar(); } } }, ui.icone("editar"), "Ajustar metas")) : null);
     }
 
+    /** «Restaurar ordem»: a ordem e os recolhidos voltam ao padrão («Mais detalhes» aberto continua como a pessoa deixou). */
+    function rodapeRestaurar() {
+      return h("div", { class: "ini-blocos-rodape" }, h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { k: "bl-restaurar" },
+        on: { click: () => { const mais = lerBlocos().mais; gravarBlocos(mais ? { ordem: [], recolhidos: [], mais } : null); ui.toast("Ordem e blocos de volta ao padrão.", { tipo: "info" }); redesenhar(); } } }, ui.icone("reabrir"), "Restaurar ordem"));
+    }
     /** Envelopa um bloco: o corpo vira recolhível (aria-expanded) e o topo ganha «antes / depois / recolher»; tudo guardado por empresa e conta. */
     function envolverBloco(id, sec, nome, { recolhido, podeAntes, podeDepois, ordemAtual }) {
       const topo = sec.firstElementChild && sec.firstElementChild.classList.contains("rel-cartao-topo") ? sec.firstElementChild : null;
@@ -1552,7 +2119,16 @@ export async function montar(ctx) {
       const btDepois = h("button", { type: "button", class: "bt-icone ini-bl-bt", disabled: !podeDepois, "aria-label": `Mover «${nome}» para depois`, title: "Mover para depois", dataset: { k: `bl-dep-${id}` }, on: { click: () => mover(1) } }, ui.icone("seta-dir"));
       const btRec = h("button", { type: "button", class: "bt-icone ini-bl-bt ini-bl-rec", "aria-expanded": String(!recolhido), "aria-controls": corpoB.id,
         "aria-label": recolhido ? `Mostrar «${nome}»` : `Recolher «${nome}»`, title: recolhido ? "Mostrar" : "Recolher", dataset: { k: `bl-rec-${id}` },
-        on: { click: () => { const p = lerBlocos(); p.recolhidos = recolhido ? p.recolhidos.filter(x => x !== id) : [...new Set([...p.recolhidos, id])]; gravarBlocos(p); redesenhar(); } } }, ui.icone("seta-baixo"));
+        // plano 1500c · RC-208: recolher/mostrar só alterna este bloco e grava a preferência — sem redesenhar a tela (os KPIs e as linhas ficam)
+        on: { click: () => {
+          const agora = !corpoB.hidden;          // vai recolher?
+          const p = lerBlocos(); p.recolhidos = agora ? [...new Set([...p.recolhidos, id])] : p.recolhidos.filter(x => x !== id); gravarBlocos(p);
+          corpoB.hidden = agora; sec.classList.toggle("ini-rec", agora);
+          btRec.setAttribute("aria-expanded", String(!agora));
+          btRec.setAttribute("aria-label", agora ? `Mostrar «${nome}»` : `Recolher «${nome}»`); btRec.setAttribute("title", agora ? "Mostrar" : "Recolher");
+          const rod = raiz.querySelector(".ini-blocos-rodape");
+          if (!rod && (p.ordem.length || p.recolhidos.length)) corpo.insertBefore(rodapeRestaurar(), corpo.querySelector(".ini-onb") || null);
+        } } }, ui.icone("seta-baixo"));
       const barra = h("div", { class: "ini-bl-barra", role: "group", "aria-label": `Organizar o bloco ${nome}` }, btAntes, btDepois, btRec);
       if (topo) topo.append(barra); else sec.insertBefore(barra, corpoB);
       if (recolhido) { sec.classList.add("ini-rec"); corpoB.hidden = true; }
@@ -1569,11 +2145,21 @@ export async function montar(ctx) {
     const itens = [];
     if (podeCrm && typeof ctx.novoNegocio === "function") itens.push(["negocio", typeof V.novo === "function" ? V.novo("negocio") : "Nova oportunidade", "funil", () => pontes.novoNegocio({}, { aoCriar: () => carregar({ forcar: true }) })]);
     if (podeTarefas && typeof ctx.carregar === "function") itens.push(["tarefa", "Nova tarefa", "tarefa", async () => {
+      const T = await modTarefas();
+      const t = await T.mod.formTarefa(T.kit, null, {});
+      // plano 1500c · RC-227: depois do redesenho o foco volta ao «Nova tarefa» (antes ia para o topo da página)
+      if (t) { ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); await carregar({ forcar: true }); focarK("rap-tarefa"); }
+    }]);
+    // plano 1500c · RC-296: «Novo paciente/cliente» — o cadastro rápido do CRM (crm-listas.formContato) sem ir à lista
+    if (podeCrm && typeof ctx.carregar === "function") itens.push(["contato", typeof V.novo === "function" ? V.novo("contato") : `Novo ${vmin("contato", "cliente")}`, "contato", async () => {
       const crm = await ctx.carregar("crm");
       const kk = await crm.kit(ctx);
-      const T = await kk.mod("tarefas");
-      const t = await T.formTarefa(kk, null, {});
-      if (t) { ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); carregar({ forcar: true }); }
+      const Ls = await kk.mod("listas");
+      const novo = await Ls.formContato(kk, {});
+      if (novo && minha === montagem) {
+        ui.toast(`${cap(vmin("contato", "cliente"))} cadastrad${typeof V.art === "function" ? V.art("contato") : "o"}.`, { tipo: "ok", ms: 6000, acao: novo.id != null ? { rotulo: "Abrir", fn: () => ctx.navegar(`#/contatos/${encodeURIComponent(novo.id)}`) } : undefined });
+        focarK("rap-contato");
+      }
     }]);
     if (podeAgenda && typeof ctx.carregar === "function") itens.push(["consulta", `Marcar ${palavra.um}`, "calendario", async () => {
       const ag = await ctx.carregar("agenda");
@@ -1601,6 +2187,8 @@ export async function montar(ctx) {
         // plano 1000b · RB-260: lembra o item (e a rolagem) — ao voltar, o Início devolve o foco a este «Fazer agora»
         h("a", { class: destaque ? "bt bt-prim bt-p" : "bt bt-sec bt-p", href: i.rota, dataset: { k: `onb-${i.id}` }, on: { click: () => {
           memVolta = { dono: `${ctx.cliente.id}|${contaId}`, item: i.id, y: typeof scrollY === "number" ? scrollY : 0, mais: maisAberto, em: Date.now() };
+          // plano 1500c · RC-216: também na sessão da aba — recarregar a página (ou o app trocar de versão) não perde o lugar
+          try { sessionStorage.setItem(CHAVE_VOLTA, JSON.stringify(memVolta)); } catch { /* sem armazenamento: fica só a memória */ }
         } } }, "Fazer agora"),
         h("button", { type: "button", class: "bt bt-fant bt-p", title: "Marcar como feito só neste aparelho", dataset: { k: `onb-ok-${i.id}` }, on: { click: () => marcarPulado(i, true) } }, "Já está bom")));
     // plano 1000 (CR-252): «Já está bom» por engano tem volta — «Desfazer» no aviso e «desmarcar» em «Já feitos»
@@ -1634,6 +2222,74 @@ export async function montar(ctx) {
         } } }, "Dispensar por 7 dias")));
   }
 
+  /** plano 1500c · RC-195/RC-243: o «i» que explica no toque (ui.flutuante), igual ao dos KPIs (RB-179) — fora de links. */
+  function botaoAjuda(k, nome, texto) {
+    const bt = h("button", { type: "button", class: "bt-icone ini-i-bt", "aria-label": `O que é «${nome}»?`, "aria-haspopup": "dialog", dataset: { k: `aj-${k}` } }, ui.icone("info"));
+    bt.addEventListener("click", ev => {
+      if (ev && typeof ev.preventDefault === "function") ev.preventDefault();
+      if (typeof ui.flutuante === "function") ui.flutuante(bt, h("p", { class: "ini-kpi-ajuda-txt" }, texto), { classe: "ini-kpi-ajuda-flut" });
+    });
+    return bt;
+  }
+
+  /**
+   * plano 1500c · RC-254: o resumo do mês numa folha só (A4) — montado à parte, na página, impresso pelo navegador (Salvar como PDF) e retirado
+   * depois. Fechar sem imprimir também tira. Só nós do DOM; os números são os de nx_inicio.
+   */
+  function abrirResumoMes(d, voc) {
+    const velho = document.querySelector(".ini-resumo-folha");
+    if (velho) velho.remove();
+    const hoje = d.hoje || L.hojeSP();
+    const mes = mesPorExtenso(String(hoje).slice(0, 7));
+    const linhas = linhasResumoMes(d, { voc, brl: v => L.textoMoeda(v, { centavos: false }) });
+    const fechar = () => { folha.remove(); document.documentElement.classList.remove("ini-imprimindo"); if (typeof removeEventListener === "function") removeEventListener("afterprint", fechar); focarK("resumo-mes"); };
+    const folha = h("section", { class: "ini-resumo-folha", role: "dialog", "aria-modal": "true", "aria-labelledby": "ini-rs-t", tabindex: "-1" },
+      h("header", { class: "ini-resumo-cab" }, h("p", { class: "rel-olho" }, ctx.cliente.nome || ""), h("h2", { id: "ini-rs-t", class: "ini-resumo-titulo" }, `Resumo de ${mes}`),
+        h("p", { class: "rel-nota" }, `do dia 1 até ${L.ddmmIso(hoje)} · números do Órbita`)),
+      h("dl", { class: "ini-resumo-lista" }, linhas.map(x => h("div", { class: ["ini-resumo-l", x.id === "roi" && "ini-resumo-destaque"] }, h("dt", null, x.rotulo), h("dd", { class: "rel-num" }, x.valor)))),
+      linhas.length ? null : h("p", { class: "rel-nota" }, "Ainda não há números deste mês."),
+      h("p", { class: "rel-nota ini-resumo-rod" }, "Contagens do CRM e das conversas; retorno dos anúncios só quando o gasto do mês está ligado."),
+      h("div", { class: "ini-resumo-acoes" },
+        h("button", { type: "button", class: "bt bt-prim", dataset: { k: "rs-imprimir" }, on: { click: () => { try { if (typeof print === "function") print(); } catch { /* sem impressão */ } } } }, "Imprimir ou salvar PDF"),
+        h("button", { type: "button", class: "bt bt-sec", dataset: { k: "rs-fechar" }, on: { click: fechar } }, "Fechar")));
+    folha.addEventListener("keydown", ev => { if (ev.key === "Escape") { ev.preventDefault(); fechar(); } });
+    document.body.append(folha);
+    document.documentElement.classList.add("ini-imprimindo");
+    if (typeof addEventListener === "function") addEventListener("afterprint", fechar);
+    if (typeof folha.focus === "function") folha.focus();
+    return folha;
+  }
+
+  /** plano 1500c · RC-213: «Testar» o número (nx_canal_testar) → «Enviado às 10:32» ao lado; erro volta o botão e explica. */
+  function botaoTestarCanal(k) {
+    const st = h("span", { class: "rel-nota ini-canal-teste", role: "status" });
+    const bt = h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { k: `cn-testar-${k.id}` }, "aria-label": `Testar o envio pelo número ${k.nome || ""}`.trim() }, "Testar");
+    bt.addEventListener("click", async () => {
+      if (bt.disabled) return;
+      bt.disabled = true; st.textContent = "Enviando…";
+      try {
+        await ctx.api.rpcC("nx_canal_testar", { p_canal: k.id });
+        if (minha !== montagem) return;
+        st.textContent = `Enviado às ${L.horaSP(new Date())}. Confira no seu WhatsApp.`;
+      } catch (e) { st.textContent = ctx.api.mensagemErro ? ctx.api.mensagemErro(e) : "Não foi possível testar agora."; }
+      finally { bt.disabled = false; }
+    });
+    return h("div", { class: "ini-canal-acoes" }, bt, st);
+  }
+
+  /** plano 1500c · IC-001: o cartão «cada R$ 1 virou R$ X» — a frase que vende o Órbita, com a conta à vista (receita ÷ gasto do mês). */
+  function cartaoRetorno(r) {
+    const mult = textoMultiplo(r.multiplo);
+    const frase = r.deAnuncio ? "em vendas que vieram dos anúncios" : "em vendas no mês (todas as origens)";
+    const conta = `${brl0(r.receita)} ${r.deAnuncio ? "de vendas de anúncio" : "de receita"} ÷ ${brl0(r.gasto)} investidos em anúncios no mês`;
+    return h("section", { class: ["ini-roi", "rel-entra", r.multiplo >= 1 ? "ini-roi-bom" : "ini-roi-baixo"], "aria-labelledby": "ini-roi-t", dataset: { k: "roi" } },
+      h("p", { class: "rel-olho ini-roi-olho" }, "Retorno dos anúncios · mês"),
+      h("h2", { id: "ini-roi-t", class: "ini-roi-frase" }, "Cada ", h("span", { class: "ini-roi-um" }, "R$ 1"), " virou ",
+        h("b", { class: "ini-roi-n rel-num", dataset: { n: "negocios.receita_mes" } }, mult), " ", h("em", { class: "narr" }, frase)),
+      h("p", { class: "rel-nota ini-roi-conta" }, conta),
+      podeAds ? h("a", { class: "rel-link", href: "#/anuncios", dataset: { k: "roi-ads" } }, "Ver campanhas") : null);
+  }
+
   /** A8: pílula de canal/origem só quando a biblioteca conhece a chave (chave desconhecida daria uma pílula vazia). */
   function pilulaSegura(chave, variante, plataforma = null) {
     if (!chave || typeof ui.pilula !== "function") return null;
@@ -1655,7 +2311,13 @@ export async function montar(ctx) {
     try {
       await ctx.api.rpcC("nx_cv_atribuir", { p_conversa: it.id, p_conta: contaId });
       if (minha !== montagem) return;
-      ui.toast("Conversa com você.", { tipo: "ok" });
+      // plano 1500c · RC-205: «Desfazer» devolve a quem estava (ou à fila, sem responsável) — tocar sem querer tem volta, já na tela da conversa
+      const anterior = it.atribuidaId && String(it.atribuidaId) !== String(contaId) ? it.atribuidaId : null;
+      ui.toast("Conversa com você.", { tipo: "ok", desfazer: () => {
+        Promise.resolve(ctx.api.rpcC("nx_cv_atribuir", { p_conversa: it.id, p_conta: anterior }))
+          .then(() => ui.toast(anterior ? `Conversa devolvida a ${it.atribuidaNome || "quem estava"}.` : "Conversa de volta à fila.", { tipo: "info" }),
+            e => ui.toast(ctx.api.mensagemErro ? ctx.api.mensagemErro(e) : "Não foi possível desfazer.", { tipo: "erro" }));
+      } });
       ctx.navegar(`#/conversas/${encodeURIComponent(it.id)}`);
     } catch (e) {
       if (minha !== montagem) return;
@@ -1667,8 +2329,13 @@ export async function montar(ctx) {
   /** plano 1000b · RB-260: voltando do «Fazer agora» (mesma empresa e conta, até 30 min): «Mais detalhes» como estava e o foco no mesmo item
       (que rola até ele); o item já saiu da lista (feito) → a mesma rolagem. Depois do foco que o shell põe no título. */
   function voltarAoLugar() {
-    const m = memVolta;
+    let m = memVolta;
     memVolta = null;
+    // plano 1500c · RC-216: sem a memória (página recarregada), o que ficou na sessão da aba — lido uma vez e apagado
+    try {
+      if (!m) { const s = JSON.parse(sessionStorage.getItem(CHAVE_VOLTA) || "null"); if (s && typeof s === "object") m = s; }
+      sessionStorage.removeItem(CHAVE_VOLTA);
+    } catch { /* sem armazenamento */ }
     if (!m || m.dono !== `${ctx.cliente.id}|${contaId}` || Date.now() - m.em > VALIDADE_VOLTA) return;
     setTimeout(() => {
       if (minha !== montagem) return;
@@ -1680,22 +2347,70 @@ export async function montar(ctx) {
   /** 1ª pintura: o esqueleto sai e o cabeçalho + o corpo entram com um fade curto (a troca não desloca nada). */
   function trocar() { if (colocado) return Promise.resolve(); colocado = true; return ui.trocarEsqueleto(raiz, [cab, corpo]); }
 
+  /** O módulo de tarefas do CRM (formTarefa) com o kit dele — carregado só quando a pessoa pede. */
+  async function modTarefas() {
+    const crm = await ctx.carregar("crm");
+    const kit = await crm.kit(ctx);
+    return { kit, mod: await kit.mod("tarefas") };
+  }
+  /** plano 1500c · RC-227: devolve o foco a um controle pelo data-k depois do redesenho (o teclado não volta ao topo). */
+  function focarK(k) {
+    if (minha !== montagem) return;
+    const el = raiz.querySelector(`[data-k="${CSS.escape(k)}"]`);
+    if (el && typeof el.focus === "function") el.focus();
+  }
+  /** plano 1500c · RC-192: «Amanhã» — grava o novo vencimento já (nx_tarefa_salvar), tira a linha da lista de hoje e «Desfazer» devolve o de antes. */
+  async function adiarTarefa(tf, bt, li) {
+    if (!bt || bt.disabled) return;
+    bt.disabled = true;
+    const antes = tf.vence_em || null, novo = adiarParaAmanha(antes);
+    try {
+      await ctx.api.rpcC("nx_tarefa_salvar", { p_tarefa: { id: tf.id, vence_em: novo } });
+      if (minha !== montagem) return;
+      if (li) li.hidden = true;
+      const voltar = async () => {
+        try { await ctx.api.rpcC("nx_tarefa_salvar", { p_tarefa: { id: tf.id, vence_em: antes } }); }
+        catch (e) { ui.toast(ctx.api.mensagemErro ? ctx.api.mensagemErro(e) : "Não foi possível desfazer.", { tipo: "erro" }); }
+        if (minha === montagem) carregar({ forcar: true });
+      };
+      ui.toast(`Adiada para amanhã, ${L.horaSP(novo)}.`, { tipo: "ok", desfazer: () => { voltar(); } });
+      carregar({ forcar: true });
+    } catch (e) {
+      bt.disabled = false;
+      ui.toast(ctx.api.mensagemErro ? ctx.api.mensagemErro(e) : "Não foi possível adiar a tarefa.", { tipo: "erro" });
+    }
+  }
+
   function itemTarefa(tf) {
     const id = `ini-tf-${tf.id}`;
     // plano 1000b · RB-169: sem internet nasce desligada, com a dica (marcarRede religa quando a rede volta)
     const off = semRede();
     const caixa = h("input", { type: "checkbox", id, class: "ini-check", dataset: { k: `tf-${tf.id}` }, disabled: !escreve || off,
       title: off ? "Sem internet: dá para concluir quando a conexão voltar" : null, "aria-label": `Concluir: ${tf.titulo}` });
-    const venc = tf.vence_em ? (tf.atrasada ? `atrasada · venceu ${ui.relativo(tf.vence_em)}` : `vence ${L.quandoSP(tf.vence_em)}`) : "sem prazo";
+    // plano 1500c · RC-193: quanto atrasou em negrito («venceu há 3 dias»), não no mesmo texto miúdo das outras
+    const venc = tf.vence_em ? (tf.atrasada ? ["atrasada · ", h("b", { class: "ini-tf-atraso" }, `venceu ${ui.relativo(tf.vence_em)}`)] : [`vence ${L.quandoSP(tf.vence_em)}`]) : ["sem prazo"];
     const alvoNome = tf.contato_nome ? ` · ${tf.contato_nome}` : "";
-    const abrir = tf.negocio_id || tf.contato_id
+    // plano 1500c · RC-191: a tarefa avulsa (sem negócio nem contato) também abre — o formulário da tarefa, para editar ou mudar o prazo
+    const podeForm = podeTarefas && escreve && typeof ctx.carregar === "function";
+    const abrir = tf.negocio_id || tf.contato_id || podeForm
       ? h("button", { type: "button", class: "ini-tf-abrir", dataset: { k: `tfa-${tf.id}` } }, tf.titulo)
       : h("span", { class: "ini-tf-t" }, tf.titulo);
     if (tf.negocio_id) abrir.addEventListener("click", () => pontes.abrirNegocio(tf.negocio_id, { aoMudar: () => carregar({ forcar: true }) }));
     else if (tf.contato_id) abrir.addEventListener("click", () => pontes.abrirContato(tf.contato_id, { aoMudar: () => carregar({ forcar: true }) }));
+    else if (podeForm) abrir.addEventListener("click", async () => {
+      try {
+        const T = await modTarefas();
+        const r = await T.mod.formTarefa(T.kit, tf, {});
+        if (r && minha === montagem) carregar({ forcar: true });
+      } catch (e) { console.error(e); ui.toast("Não deu para abrir a tarefa agora.", { tipo: "erro" }); }
+    });
+    // plano 1500c · RC-192: «Amanhã» adia direto daqui (mesma hora, nx_tarefa_salvar) com Desfazer — antes só pelo #/tarefas
+    const adiar = escreve && podeTarefas ? h("button", { type: "button", class: "bt bt-fant bt-p ini-tf-adiar", dataset: { k: `tfd-${tf.id}` }, "aria-label": `Adiar para amanhã: ${tf.titulo}` }, "Amanhã") : null;
+    if (adiar) adiar.addEventListener("click", () => adiarTarefa(tf, adiar, li));
     const li = h("li", { class: `ini-tf-item${tf.atrasada ? " atrasada" : ""}` },
       h("label", { class: "ini-tf-caixa", for: id }, caixa, h("span", { class: "ini-tf-marca", "aria-hidden": "true" })),
-      h("div", { class: "ini-tf-txt" }, abrir, h("p", { class: `rel-nota${tf.atrasada ? " rel-txt-ruim" : ""}` }, venc + alvoNome)));
+      h("div", { class: "ini-tf-txt" }, abrir, h("p", { class: `rel-nota${tf.atrasada ? " rel-txt-ruim" : ""}` }, ...venc, alvoNome)),
+      adiar);
     caixa.addEventListener("change", async () => {
       if (!caixa.checked) return;
       li.classList.add("feita");
@@ -1741,6 +2456,41 @@ export async function montar(ctx) {
     if (Date.now() - ultimaCarga > INTERVALO_PULSO) { clearTimeout(tPulso); tPulso = 0; carregar(); }
   };
   document.addEventListener("visibilitychange", aoVoltarVisivel);
+  // plano 1500c · RC-211: «R» atualiza o Início (sem modificador, fora de campos e de janelas abertas) e anuncia quando terminou
+  const aoTecla = ev => {
+    if (minha !== montagem || !ev || ev.defaultPrevented || ev.ctrlKey || ev.metaKey || ev.altKey || ev.repeat) return;
+    if (ev.key !== "r" && ev.key !== "R") return;
+    if (!teclaLivre(ev.target, document)) return;
+    if (btn.disabled || lendoForcado || metasEditando) return;
+    ev.preventDefault();
+    Promise.resolve(carregar({ forcar: true })).then(() => { if (minha === montagem && !falhouUltima && typeof ui.anunciar === "function") ui.anunciar("Atualizado"); });
+  };
+  document.addEventListener("keydown", aoTecla);
+  // plano 1500c · RC-298: no celular, puxar a página para baixo no topo atualiza (com indicador; sem animação em movimento reduzido)
+  const puxar = h("div", { class: "ini-puxar", "aria-hidden": "true", hidden: true }, h("span", { class: "ini-puxar-ic" }, ui.icone("reabrir")), h("span", { class: "ini-puxar-t" }, "Puxe para atualizar"));
+  cab.insertBefore(puxar, cab.firstChild);     // no cabeçalho (fica entre os redesenhos do corpo)
+  let y0 = null, dist = 0;
+  const LIMIAR_PUXAR = 70;
+  const aoToqueIni = ev => { const t = ev.touches && ev.touches[0]; y0 = t && (typeof scrollY !== "number" || scrollY <= 0) && !lendoForcado ? t.clientY : null; dist = 0; };
+  const aoToqueMove = ev => {
+    if (y0 === null) return;
+    const t = ev.touches && ev.touches[0];
+    dist = t ? Math.max(0, t.clientY - y0) : 0;
+    puxar.hidden = dist < 12;
+    puxar.classList.toggle("pronto", dist >= LIMIAR_PUXAR);
+    puxar.lastChild.textContent = dist >= LIMIAR_PUXAR ? "Solte para atualizar" : "Puxe para atualizar";
+    puxar.style.setProperty("--puxe", `${Math.min(LIMIAR_PUXAR, dist)}px`);
+  };
+  const aoToqueFim = () => {
+    if (y0 === null) return;
+    const vai = dist >= LIMIAR_PUXAR;
+    y0 = null; dist = 0; puxar.hidden = true; puxar.classList.remove("pronto");
+    if (vai && !btn.disabled && !lendoForcado) carregar({ forcar: true });
+  };
+  raiz.addEventListener("touchstart", aoToqueIni, { passive: true });
+  raiz.addEventListener("touchmove", aoToqueMove, { passive: true });
+  raiz.addEventListener("touchend", aoToqueFim);
+  raiz.addEventListener("touchcancel", aoToqueFim);
   // CR-181: caiu → o botão diz «Sem internet»; voltou → relê na hora
   const aoOffline = () => { if (minha === montagem) marcarRede(); };
   const aoOnline = () => { if (minha !== montagem) return; marcarRede(); clearTimeout(tPulso); tPulso = 0; carregar({ forcar: true }); };
@@ -1748,6 +2498,7 @@ export async function montar(ctx) {
   marcarRede();
   cancelarVisivel = () => {
     document.removeEventListener("visibilitychange", aoVoltarVisivel);
+    document.removeEventListener("keydown", aoTecla);     // RC-211
     if (typeof removeEventListener === "function") { removeEventListener("offline", aoOffline); removeEventListener("online", aoOnline); }
   };
   // relógio: a cada minuto «Agora» e as barras andam com a hora (sem RPC; nada é refeito com as metas em edição);
@@ -1759,7 +2510,7 @@ export async function montar(ctx) {
     if (hoje !== diaVisto) {
       diaVisto = hoje;
       // plano 1000b · RB-152: a data do cabeçalho também vira (antes ficava a de ontem até sair da tela)
-      dataEl.textContent = dataLonga(); dataEl.setAttribute("datetime", hoje);
+      pintarData(); dataEl.setAttribute("datetime", hoje);     // plano 1500c · RC-221: a longa e a curta
       carregar(); return;
     }
     if (relogio && !metasEditando) relogio();

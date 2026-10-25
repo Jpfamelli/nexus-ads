@@ -852,7 +852,8 @@ await teste("gráfico diário: topo do eixo ~8% acima da maior barra, em degraus
 });
 
 await teste("kanban: campanha em linha própria (nome inteiro no title); 'Faltou' e o valor na linha do nome; cabeçalhos com 2 linhas", () => {
-  assert.match(JS, /<span class="l-nome"><strong>\$\{esc\(L\.nome\)\}<\/strong>\$\{etq\}\$\{val\}<\/span>/);
+  // plano 1500c: AC-245 — no modo apresentação o nome sai em iniciais (nomeExibido)
+  assert.match(JS, /<span class="l-nome"><strong>\$\{esc\(OCULTAR_NOMES \? nomeExibido\(L\.nome, true\) : L\.nome\)\}<\/strong>\$\{etq\}\$\{val\}<\/span>/);
   assert.match(JS, /<span class="chips">\$\{origem\}<\/span><\/button>`;/);
   assert.match(JS, /class="chip chip-camp" title="\$\{esc\(camp \? camp\.nome : ""\)\}"/);
   const c = semComentarios(CSS);
@@ -892,7 +893,8 @@ await teste("curta: o número de cada cena é o MESMO da tarja de progresso (02 
 
 await teste("radar: a conta de alertas soma a conexão caída; a clínica lê regras leigas e a tradução do CTR; parado no celular", () => {
   assert.match(JS, /const nAtivos = atuais\.length \+ conexoesCaidas\(\);/);
-  assert.match(JS, /atualizarBadge\(nAtivos\);/);
+  // plano 1500c: AC-238 — o número do ícone soma a conexão caída, mas não os informativos (ritmo), como o Órbita (AD-045)
+  assert.match(JS, /atualizarBadge\(atuais\.filter\(a => a\.sev !== "info"\)\.length \+ conexoesCaidas\(\)\);/);
   // plano 1000 (AD-235/AD-237): r5/r6 trazem a condição leiga escrita; a condição técnica também sai escapada
   // plano 1000 (AD-010): a r1 também traz descricaoLeiga do núcleo (régua por plataforma / parada sem meta)
   assert.match(JS, /const condR = leigo \? `<span title="\$\{esc\(cond\)\}">\$\{esc\(r\.descricaoLeiga \|\| condLeiga\(r\)\)\}<\/span>` : esc\(cond\);/);

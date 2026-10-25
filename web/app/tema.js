@@ -116,6 +116,16 @@ export function corTexto(bg) {
   return contraste(bg, PRETO) >= cb ? PRETO : BRANCO;
 }
 
+/** plano 1500c · UCC-071: texto legível sobre dois fundos (o botão e o seu hover): corTexto(a) se passa 4,5:1 nos dois; senão, entre tinta, branco
+    e preto, a que tem o MAIOR contraste mínimo. */
+export function textoSobreDois(a, b) {
+  const base = corTexto(a);
+  if (contraste(base, a) >= 4.5 && contraste(base, b) >= 4.5) return base;
+  let melhor = base, nota = Math.min(contraste(base, a), contraste(base, b));
+  for (const c of [TINTA, BRANCO, PRETO]) { const n = Math.min(contraste(c, a), contraste(c, b)); if (n > nota) { nota = n; melhor = c; } }
+  return melhor;
+}
+
 /** Ajusta a luminosidade (HSL) de `cor` em passos de 4% até ter contraste ≥ `alvo` com `fundo`.
     Tenta primeiro no sentido que afasta do fundo; se não chegar, no outro; último recurso: corTexto(fundo). */
 export function ajustarContraste(cor, fundo, alvo = 4.5) {
@@ -255,7 +265,10 @@ export function derivarTema(cores = {}) {
   if (secLuz.mudou) avisos.push({ campo: "secundaria", texto: escuro
     ? "A cor secundária ficou escura demais sobre o fundo; usamos um tom mais claro para texto."
     : "A cor secundária ficou clara demais sobre o fundo; usamos um tom mais escuro para texto." });
-  const primTxt = corTexto(prim);
+  // plano 1500c · UCC-071: o texto do botão primário vale também no hover (--c-prim-hi): a cor que passa 4,5:1 nos DOIS fundos
+  // o hover anda para LONGE da cor do texto (texto escuro → hover mais claro; texto claro → mais escuro): o contraste não cai no hover
+  const primHi = misturar(prim, luminancia(corTexto(prim)) < .2 ? BRANCO : PRETO, .12);
+  const primTxt = textoSobreDois(prim, primHi);
   // o botão primário fica "apagado" se quase não se destaca do fundo
   if (contraste(prim, fundo) < 1.6) avisos.push({ campo: "primaria", texto: "A cor primária quase some sobre o fundo; os botões vão aparecer pouco." });
 
@@ -282,7 +295,8 @@ export function derivarTema(cores = {}) {
     "--c-texto": texto,
     "--c-texto-2": garantirContraste(misturar(fundo, texto, .72), [superficies[2]]),
     // Rótulos menores também precisam de 4,5:1; 56% falha em vários fundos claros.
-    "--c-texto-3": ajustarContraste(misturar(fundo, texto, .56), superficies[2], 4.5).cor,
+    // plano 1500c · UCC-072: contra TODAS as superfícies onde o rótulo aparece (página, cartão, poço, sup-2, sup-3), não só a sup-3
+    "--c-texto-3": garantirContraste(ajustarContraste(misturar(fundo, texto, .56), superficies[2], 4.5).cor, [fundo, sup, poco, sup2, superficies[2]], 4.5),
     "--c-sup": sup,                       // cartão
     "--c-poco": poco,                     // área rebaixada (campos, fundo de bloco dentro do cartão)
     "--c-sup-2": sup2,
@@ -290,7 +304,7 @@ export function derivarTema(cores = {}) {
     "--c-borda": misturar(fundo, texto, .12),
     "--c-borda-2": misturar(fundo, texto, .20),
     "--c-prim": prim,
-    "--c-prim-hi": escuro ? misturar(prim, BRANCO, .12) : misturar(prim, PRETO, .12),
+    "--c-prim-hi": primHi,
     "--c-prim-txt": primTxt,
     "--c-prim-luz": primLuz.cor,
     "--c-prim-suave": primSuave,

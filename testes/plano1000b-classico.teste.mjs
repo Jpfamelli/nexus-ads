@@ -159,7 +159,8 @@ test("AB-145/AB-146 · credenciais conferidas antes de salvar; desligar a integr
   assert.match(P.erroCredencial("google_customer_id", "123-456-78"), /10 números/);
   assert.equal(P.erroCredencial("meta_access_token", ""), "", "em branco = mantém o salvo");
   assert.match(PJS, /const msg = erroCredencial\(i\.name, i\.value\);\n\s+if \(msg\) \{ i\.focus\(\); return avisoForm\(st, msg, true\); \}/);
-  assert.match(PJS, /if \(antes\.ativo && !ativo\) \{[\s\S]{0,200}if \(!confirm\(`Desligar a integração do \$\{nomeC\}\?/);
+  // plano 1500c: AC-242 — a pergunta continua, agora no diálogo do próprio painel (confirmar) em vez do confirm() nativo
+  assert.match(PJS, /if \(antes\.ativo && !ativo\) \{[\s\S]{0,200}if \(!\(await confirmar\(`Desligar a integração do \$\{nomeC\}\?/);
 });
 
 test("AB-147 · meta negativa não apaga a meta calada", () => {
@@ -212,7 +213,8 @@ test("AB-011/AB-137/AB-152 · tabela de campanhas acessível: aria-sort no <th>,
   assert.match(CSS, /th\[aria-sort="descending"\] button::after/);
   assert.match(PJS, /<tfoot><tr><th scope="row">Total<\/th>/);
   assert.match(CSS, /#tbl-campanhas tfoot th\[scope="row"\]/);
-  assert.match(PJS, /<span class="sr-only">\$\{esc\(NIVEL_CPA\[pontoCpa\(r\.t\.cpa\)\]\)\}: <\/span>/);
+  // plano 1500c: AC-224 — o nível do custo é contra a meta DA CAMPANHA (pontoCpa recebe a campanha)
+  assert.match(PJS, /<span class="sr-only">\$\{esc\(NIVEL_CPA\[pontoCpa\(r\.t\.cpa, r\.c\)\]\)\}: <\/span>/);
 });
 
 test("AB-012 · trilha do herói: sem base a taxa é null (marcador vazio), nunca «0%»", () => {
@@ -354,7 +356,7 @@ test("AB-016/AB-253 · diário: semana sem conversa sem «— por conversa»; in
   const t = M.relDiario(M.R);
   assert.doesNotMatch(t, /— por conversa/);
   assert.match(t, /nenhuma conversa na semana/);
-  assert.match(montarDe({ metricas: serie(1, 20) }).relDiario(129), /• Investido: R\$\s30,00 .*\(média dos 7 dias: R\$\s30,00\)/);
+  assert.match(montarDe({ metricas: serie(1, 20) }).relDiario(129), /• Investido: R\$\s30,00 .*\(média dos 7 dias anteriores: R\$\s30,00\)/);   // plano 1500c: AC-013 — média dos 7 dias ANTERIORES
 });
 
 test("AB-018 · melhor/pior da semana com o nome curto e «por conversão» no Google", () => {
@@ -417,7 +419,7 @@ test("AB-171 · mensal cita a campanha pelo nome curto", () => {
   const M0 = montarDe({ metricas: serie(1, 120, { cn: longo }) });
   const iso = N.isoDe(M0.dataDe(ultimoMes(M0).de + 3));
   const M = montarDe({ metricas: serie(1, 120, { cn: longo }), leads: [leadF(iso, { valor: 900 })] });
-  const linha = M.relMensal(ultimoMes(M)).split("\n").find(l => l.startsWith("• Anúncio que mais trouxe resultado"));
+  const linha = M.relMensal(ultimoMes(M)).split("\n").find(l => l.startsWith("• Campanha que mais trouxe resultado"));   // plano 1500c: AC-018 — é a campanha
   assert.ok(linha && !linha.includes(longo) && linha.includes(Object.values(M.CAMP).find(c => c.nome === longo).curto), linha);
 });
 

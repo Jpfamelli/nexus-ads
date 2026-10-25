@@ -473,7 +473,8 @@ test("CA-210 · bloqueio por cima de consultas marcadas avisa antes de salvar (2
   porTexto(C.alvo, "button", "Bloquear horário").click();   // plano 1000 · CA-278: o botão virou «Bloquear horário» (um nome só)
   await esperar(10);
   assert.match(erros[0], /Há 2 consultas marcadas neste período/);
-  assert.equal(C.reg.chamadas.filter(c => c.nome === "nx_agenda_dia").length, 1, "o mesmo período não é lido de novo");
+  // plano 1500c: a prévia do horário herdado lê hoje (CC-235); a conta aqui é só a do período do bloqueio
+  assert.equal(C.reg.chamadas.filter(c => c.nome === "nx_agenda_dia" && c.p.p_data === dia).length, 1, "o mesmo período não é lido de novo");
   assert.ok(C.reg.chamadas.some(c => c.nome === "nx_agenda_bloqueio_salvar"), "o 2º toque salva");
 });
 
@@ -663,7 +664,13 @@ test("CA-176 / CA-178 · «Avisar paciente» depois de remarcar e de desmarcar d
     return undefined;
   };
   const T = await montarAgenda({ data: seg, consultas: [consultaEm(seg, "10:00")], rpc, rascunhoStorage: st,
-    modal: async o => { if (o.aoAbrir) { o.aoAbrir({ el: null }); await esperar(10); } return primaria(o).fn(erroModal([])); } });
+    modal: async o => {
+      if (o.aoAbrir) { o.aoAbrir({ el: null }); await esperar(10); }
+      // plano 1500c: desmarcar pede uma escolha de motivo (CC-322) — aqui, «Prefiro não dizer»
+      const sem = o.corpo && o.corpo.querySelectorAll(".ag-motivo-chip").find(b => b.textContent === A.MOTIVO_SEM);
+      if (sem) sem.click();
+      return primaria(o).fn(erroModal([]));
+    } });
   try {
     T.alvo.querySelector(".ag-bloco").click();
     porTexto(T.reg.pops.at(-1), "button", "Remarcar").click();
@@ -702,7 +709,8 @@ test("CA-177 · motivo de desmarcação em chips (radiogroup) + detalhe livre vi
   const T = await montarAgenda({ data: seg, consultas: [consultaEm(seg, "10:00")], rpc: async n => (n === "nx_agenda_desmarcar" ? { ok: true } : undefined),
     modal: async o => {
       const chips = o.corpo.querySelectorAll(".ag-motivo-chip");
-      assert.deepEqual(chips.map(c => c.textContent), [...A.MOTIVOS_DESMARCAR]);
+      // plano 1500c: «Prefiro não dizer» entra no fim da lista (CC-322)
+      assert.deepEqual(chips.map(c => c.textContent), [...A.MOTIVOS_DESMARCAR, A.MOTIVO_SEM]);
       assert.equal(o.corpo.querySelector(".ag-motivos").getAttribute("role"), "radiogroup");
       chips[1].click();
       assert.equal(chips[1].getAttribute("aria-checked"), "true");
@@ -822,7 +830,8 @@ test("CA-191 · «Compareceu» oferece «Abrir negócio» no aviso (sem mover a 
     assert.deepEqual(T.reg.navegou, ["#/crm/negocio/801"]);
     T.alvo.querySelector(".ag-pres-faltou").click();
     await esperar(10);
-    assert.equal(T.reg.desfazer.at(-1).acao, undefined);
+    // plano 1500c: «Faltou» oferece «Remarcar» (CC-222) — continua sem «Abrir negócio»
+    assert.equal(T.reg.desfazer.at(-1).acao.rotulo, "Remarcar");
   } finally { T.sair(); }
 });
 
@@ -979,7 +988,7 @@ test("CA-200 · celular: as abas da faixa de dias controlam o painel do dia (ari
 
 test("CA-203 · celular: a lista do dia abre com uma linha («2 consultas · 1 falta · 1 encaixe») e sem os 4 cartões", async () => {
   assert.equal(A.textoResumoDia({ total: 1, feitas: 0, faltas: 0, encaixes: 0 }, { futuro: true }), "1 consulta", "dia por vir: sem as faltas (CA-190); plano 1000b: CB-178 — sem «0 encaixes»");
-  assert.equal(A.textoResumoDia({ total: 0 }), "vazio");
+  assert.equal(A.textoResumoDia({ total: 0 }), "Sem consultas");   // plano 1500c: «vazio» virou «Sem consultas» (CC-303)
   const pas = passadaSeg();
   const T = await montarAgenda({ data: pas, movel: true, consultas: [consultaEm(pas, "09:00", { encaixe: true }), consultaEm(pas, "10:00", { negocio_id: 802, marco: "faltou", encaixe: false })] });
   try {
@@ -1049,13 +1058,18 @@ test("CA-206 · celular: «Dia seguinte» e «Semana seguinte» no detalhe abrem
   const D = await montarAgenda({ data: futuraSeg(), consultas: [consultaEm(futuraSeg(), "10:00")] });
   try {
     D.alvo.querySelector(".ag-bloco").click();
-    assert.equal(D.reg.pops.at(-1).querySelector(".ag-det-atalhos"), null, "no desktop o arrasto continua sendo o caminho");
+    // plano 1500c: o desktop também ganha os atalhos (remarcar sem mouse, CC-218) — o arrasto continua valendo
+    assert.ok(D.reg.pops.at(-1).querySelector(".ag-det-atalhos"), "no desktop os atalhos também aparecem");
   } finally { D.sair(); }
 });
 
 test("CA-208 · «Copiar para os dias úteis» leva as faixas de segunda para terça a sexta (sábado fica)", async () => {
-  const C = await montarConfig({ cfg: { horario_fonte: "agenda", horario: { 1: [["08:00", "12:00"], ["13:00", "18:00"]], 6: [["08:00", "12:00"]] }, duracao_min: 30, capacidade: 1, antecedencia_horas: 2, dias_a_frente: 30 } });
+  const esperar = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise(r => setTimeout(r, 0)); };
+  // plano 1500c: «Copiar para…» abre a escolha dos dias (CC-231), com os úteis já marcados — confirmar sem mexer = os dias úteis
+  const C = await montarConfig({ cfg: { horario_fonte: "agenda", horario: { 1: [["08:00", "12:00"], ["13:00", "18:00"]], 6: [["08:00", "12:00"]] }, duracao_min: 30, capacidade: 1, antecedencia_horas: 2, dias_a_frente: 30 },
+    modal: async o => primaria(o).valor });
   C.alvo.querySelector('.agc-dia[data-dia="1"] .agc-copiar').click();
+  await esperar(4);
   const faixas = id => C.alvo.querySelectorAll(`.agc-dia[data-dia="${id}"] .agc-faixa`).map(l => l.querySelectorAll("input").map(i => i.value));
   for (const id of ["2", "3", "4", "5"]) {
     assert.deepEqual(faixas(id), [["08:00", "12:00"], ["13:00", "18:00"]], `dia ${id}`);
@@ -1539,7 +1553,8 @@ test("CA-283 · Desfazer que só conseguiu devolver como encaixe avisa («voltou
   assert.equal(A.avisoVoltaEncaixe(await A.voltarAoHorario(api(() => ({ ok: true })), 7, "2026-10-10T13:00:00Z", null, true)), "", "já era encaixe");
   const seg = futuraSeg();
   const T = await montarAgenda({ data: seg, consultas: [consultaEm(seg, "10:00", { encaixe: false, marco: "agendada" })],
-    modal: async o => (o.titulo === "Desmarcar consulta" ? primaria(o).fn(erroModal([])) : null),
+    // plano 1500c: desmarcar pede um motivo (CC-322) — «Prefiro não dizer»
+    modal: async o => { if (o.titulo !== "Desmarcar consulta") return null; o.corpo.querySelectorAll(".ag-motivo-chip").find(b => b.textContent === A.MOTIVO_SEM).click(); return primaria(o).fn(erroModal([])); },
     rpc: async (n, p) => (n === "nx_agenda_desmarcar" ? { ok: true } : n === "nx_agenda_marcar" ? (p.p_encaixe ? { ok: true } : { ok: false, erro: "horario_ocupado" }) : undefined) });
   try {
     T.alvo.querySelector(".ag-bloco").click();

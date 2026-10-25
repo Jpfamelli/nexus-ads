@@ -71,17 +71,29 @@ export function criarRede(o = {}) {
     return true;
   }
 
+  // plano 1500c · UCC-011: com a aba escondida não se gasta bateria tentando a cada 30 s — a tentativa espera a aba voltar à vista
+  const docRede = o.doc !== undefined ? o.doc : globalThis.document;
+  const escondida = () => !!(docRede && (docRede.hidden === true || docRede.visibilityState === "hidden"));
+  let esperandoVista = false;
   function agendarTentativa() {
     if (timer || !falhando()) return;
     const espera = ESPERAS_MS[Math.min(tentativa, ESPERAS_MS.length - 1)];
     proxima = agora() + espera;
     timer = agendar(async () => {
-      timer = null; proxima = null; tentativa += 1;
+      timer = null; proxima = null;
+      if (escondida()) { esperandoVista = true; emitir(estado); return; }
+      tentativa += 1;
       await tentar();
       if (falhando()) agendarTentativa(); else tentativa = 0;
     }, espera);
     emitir(estado);
   }
+  const aoVisivel = () => {
+    if (escondida() || !esperandoVista) return;
+    esperandoVista = false;
+    if (falhando()) tentarAgora();
+  };
+  if (docRede && typeof docRede.addEventListener === "function") docRede.addEventListener("visibilitychange", aoVisivel);
 
   /** A internet voltou? O servidor responde? A sonda é uma chamada real do app: ela mesma reporta sucesso()/falha(). */
   async function tentar() {
@@ -161,6 +173,7 @@ export function criarRede(o = {}) {
       if (timerRec) cancelar(timerRec);
       timer = timerRec = null; assinantes.clear(); aoVoltarFns.clear();
       if (jan && typeof jan.removeEventListener === "function") { jan.removeEventListener("offline", aoOffline); jan.removeEventListener("online", aoOnline); }
+      if (docRede && typeof docRede.removeEventListener === "function") docRede.removeEventListener("visibilitychange", aoVisivel);   // plano 1500c · UCC-011
     },
   };
 }
@@ -170,7 +183,8 @@ export function criarRede(o = {}) {
    ============================================================ */
 export const ESPERAS_ABERTURA = Object.freeze([2000, 4000, 8000, 16000]);
 // cliente_pausado (empresa pausada pela Nexus): repetir não adianta — sem ele o app tentava 12 vezes (~2,5 min) e não oferecia «Sair»
-const CODIGOS_DE_CONTA = new Set(["sessao_invalida", "conta_pendente", "conta_suspensa", "credenciais_invalidas", "sem_acesso", "teste_expirado", "cliente_pausado"]);
+// plano 1500c · UCC-013: exportado — o pulso para nos mesmos códigos (repetir não adianta)
+export const CODIGOS_DE_CONTA = new Set(["sessao_invalida", "conta_pendente", "conta_suspensa", "credenciais_invalidas", "sem_acesso", "teste_expirado", "cliente_pausado"]);
 
 /** Erro da CONTA ou da sessão (repetir não adianta; só aqui «Sair» faz sentido). Rede e servidor NÃO são erro de conta. */
 export function erroDeConta(e) { return CODIGOS_DE_CONTA.has(String((e && (e.codigo || e.message)) || "")); }

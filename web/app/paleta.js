@@ -29,6 +29,12 @@ export function abrir(amb) {
     h("kbd", null, ">"), " ações  ", h("kbd", null, "#"), " protocolo");
   let itensLocais = [], itensDados = [], itens = [], sel = -1, seq = 0, api = null, contaSecao = 0, tStatus = 0;
 
+  /** plano 1500c · UCC-087: índice do item com o nome igual ao termo (sem acento/maiúscula e sem o prefixo «>»/«#»), ou -1. */
+  function exatoEm(lista, digitado) {
+    const t = C.normalizar(String(digitado || "").replace(/^[>#]\s*/, "")).trim();
+    if (!t) return -1;
+    return lista.findIndex(it => C.normalizar(String(it.titulo || "")).trim() === t);
+  }
   function marcar(i) {
     sel = itens.length ? (i + itens.length) % itens.length : -1;
     itens.forEach((it, j) => it.el.setAttribute("aria-selected", String(j === sel)));
@@ -40,7 +46,8 @@ export function abrir(amb) {
     itens = [...itensLocais, ...itensDados];
     itens.forEach((it, i) => { it.el.id = `pal-op-${i}`; it.el.onmousemove = () => { if (sel !== i) marcar(i); }; });
     const mantido = anterior ? itens.indexOf(anterior) : -1;
-    marcar(mantido >= 0 ? mantido : 0);
+    // plano 1500c · UCC-087: sem nada para manter, marca o item cujo nome É o que foi digitado (senão o 1º)
+    marcar(mantido >= 0 ? mantido : Math.max(0, exatoEm(itens, campo.value)));
     vazio.hidden = itens.length > 0 || !vazio.textContent;
     campo.setAttribute("aria-expanded", String(itens.length > 0));   // plano 1000b · UB-177: sem resultados, a lista não está «expandida»
   }
@@ -108,6 +115,14 @@ export function abrir(amb) {
       const ac = C.filtrar(todas, termo, { limite: 5 });
       if (ir.length) grupos.push(["Ir para", ir.map(aDestino)]);
       if (ac.length) grupos.push(["Ações", ac.map(aAcao)]);
+      // plano 1500c · UC-014: artigos da Central de ajuda (3+ letras), depois das ações — amb.ajuda(termo) → [{rotulo, hash, icone}]
+      let aj = [];
+      try { aj = typeof amb.ajuda === "function" ? amb.ajuda(termo) || [] : []; } catch { aj = []; }
+      if (aj.length) grupos.push(["Ajuda", aj.map(a => ({ icone: a.icone || "ajuda", l1: a.rotulo, l2: "artigo", hash: a.hash, id: a.id }))]);
+      // plano 1500c · UCC-138: empresas da conta pelo nome (amb.empresas(termo) → [{id, nome, fazer}])
+      let em = [];
+      try { em = typeof amb.empresas === "function" ? amb.empresas(termo) || [] : []; } catch { em = []; }
+      if (em.length) grupos.push(["Empresas", em.map(e => ({ icone: "empresa", l1: `Trocar para ${e.nome}`, l2: "empresa", fazer: e.fazer }))]);
     }
     for (const [titulo, lista] of grupos) {
       const ls = lista.map(d => linha(d, termo));
@@ -188,6 +203,10 @@ export function abrir(amb) {
   campo.addEventListener("keydown", ev => {
     if (ev.key === "ArrowDown") { ev.preventDefault(); marcar(sel + 1); }
     else if (ev.key === "ArrowUp") { ev.preventDefault(); marcar(sel - 1); }
+    // plano 1500c · UCC-070: PageUp/PageDown andam 5; Home/End vão às pontas (com o campo vazio ou com Ctrl/⌘ — com texto, o cursor do campo é da pessoa)
+    else if (ev.key === "PageDown" && itens.length) { ev.preventDefault(); marcar(Math.min(itens.length - 1, sel + 5)); }
+    else if (ev.key === "PageUp" && itens.length) { ev.preventDefault(); marcar(Math.max(0, sel - 5)); }
+    else if ((ev.key === "Home" || ev.key === "End") && itens.length && (!campo.value || ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); marcar(ev.key === "Home" ? 0 : itens.length - 1); }
     else if (ev.key === "Enter") { ev.preventDefault(); escolher(itens[sel]); }
     else if (ev.key === "Escape") { ev.preventDefault(); if (api) api.fechar(null); }   // um Esc fecha (no campo de busca o navegador só limparia o texto)
   });
@@ -195,6 +214,7 @@ export function abrir(amb) {
   aoDigitar();
 
   let fecharFora = () => {};
+  let soltarAltura = () => {};
   const fimP = ui.modal({
     titulo: "Buscar e comandos", largura: "m",
     corpo: h("div", { class: "pilha-p" }, h("label", { class: "busca-grande" }, ui.icone("busca"), campo), res, vazio, status, dica),
@@ -202,11 +222,22 @@ export function abrir(amb) {
       api = a;
       fecharFora = () => a.fechar(null);
       a.el.classList.add("busca-g");
+      soltarAltura = seguirAlturaUtil(a.el);   // plano 1500c · UCC-116
       const rod = a.el.querySelector(".modal-rod"); if (rod) rod.hidden = true;
       setTimeout(() => { campo.focus(); if (campo.value) campo.setSelectionRange(campo.value.length, campo.value.length); }, 0);
     },
-  }).finally(() => { buscar.cancelar(); seq++; clearTimeout(tStatus); guardarBusca(campo.value); });
+  }).finally(() => { buscar.cancelar(); seq++; clearTimeout(tStatus); guardarBusca(campo.value); soltarAltura(); });
   return { fechar: () => fecharFora(), fim: fimP };
+}
+
+/* plano 1500c · UCC-116: com o teclado do celular aberto, a paleta cabe no que sobra da tela (visualViewport), não atrás do teclado.
+   Põe --altura-util no diálogo e acompanha o resize; devolve a função que solta o ouvinte. Sem visualViewport, nada muda. */
+export function seguirAlturaUtil(el, vv = globalThis.visualViewport) {
+  if (!el || !vv || typeof vv.addEventListener !== "function") return () => {};
+  const aplicar = () => { const a = Math.round(Number(vv.height) || 0); if (a > 0) el.style.setProperty("--altura-util", a + "px"); };
+  aplicar();
+  vv.addEventListener("resize", aplicar);
+  return () => vv.removeEventListener("resize", aplicar);
 }
 
 /* plano 1000 (CR-259): a última busca vale por 2 min, só na memória desta aba (nunca no aparelho: são nomes e telefones de pessoas) */

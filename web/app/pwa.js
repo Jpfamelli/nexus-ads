@@ -83,6 +83,25 @@ export async function buscarVersaoComPrazo(buscarFn, url, prazoMs = PRAZO_VERSAO
   } finally { clearTimeout(timer); }
 }
 
+/** plano 1500c · UCC-052: UMA leitura do versao.json para o app inteiro (a faixa de versão e a conferência de migração do shell): a resposta
+    vale `validadeMs` (60 s) e duas chamadas ao mesmo tempo dividem o mesmo pedido. Falha (null) não fica guardada. → {ler({forcar}), ultimo} */
+export function criarLeitorVersao(buscar, { agora = () => Date.now(), validadeMs = 60_000 } = {}) {
+  let valor = null, em = -Infinity, emVoo = null;
+  return {
+    get ultimo() { return valor; },
+    ler({ forcar = false } = {}) {
+      if (!forcar && valor && agora() - em < validadeMs) return Promise.resolve(valor);
+      if (emVoo) return emVoo;
+      emVoo = Promise.resolve().then(() => buscar()).catch(() => null).then(r => {
+        emVoo = null;
+        if (r && typeof r === "object") { valor = r; em = agora(); }
+        return r || null;
+      });
+      return emVoo;
+    },
+  };
+}
+
 /**
  * Máquina da faixa de versão (pura: relógio, busca e ações entram por parâmetro).
  *   versao, buscar(): Promise<{versao, sw}|null>, agora(), ocupado(): boolean, recarregou(): number|null (ms da última recarga por versão)
@@ -201,7 +220,11 @@ export function iniciar(o) {
   };
   const mostrarFaixa = pronta => {
     if (!o.alvo || faixa) return;
-    faixa = criarFaixaVersao(o.ui, o.produto ? o.produto() : "Órbita", () => { aplicarOuRecarregar(v, recarregar); },   // plano 1000b · UB-172
+    faixa = criarFaixaVersao(o.ui, o.produto ? o.produto() : "Órbita", () => {
+      // plano 1500c · UC-037: as notas vão junto para a versão nova (que as mostra uma vez)
+      if (pronta && pronta.versao && pronta.notas) { try { guardarNovidades(globalThis.localStorage, pronta.versao, pronta.notas); } catch { /* sem armazenamento */ } }
+      aplicarOuRecarregar(v, recarregar);
+    },   // plano 1000b · UB-172
       { notas: pronta && pronta.notas, aoDepois: () => { v.dispensar(); if (faixa) { faixa.remove(); faixa = null; } } });
     o.alvo.appendChild(faixa);   // plano 1000b · UB-169: a faixa já é role=status — um ui.anunciar a mais fazia o leitor falar duas vezes
   };
@@ -221,10 +244,13 @@ export function iniciar(o) {
     try { for (const n of await globalThis.caches.keys()) if (n.startsWith("orbita-")) await globalThis.caches.delete(n); } catch { /* ok */ }
     recarregar();
   };
+  // plano 1500c · UCC-052: a leitura é a mesma que o shell usa (o.leitorVersao); sem ela, um leitor próprio
+  const leitor = o.leitorVersao || criarLeitorVersao(() => buscarVersaoComPrazo(buscarFn, new URL(`versao.json?t=${Date.now()}`, loc.href).href, o.prazoVersaoMs));
   const v = criarVersao({
     versao: o.versao,
     // plano 1000b · UB-171: prazo de 5 s (rede presa não acumula consultas penduradas)
-    buscar: () => buscarVersaoComPrazo(buscarFn, new URL(`versao.json?t=${Date.now()}`, loc.href).href, o.prazoVersaoMs),
+    // a faixa sempre lê de novo (o ritmo dela já é 1/min no máximo); o resultado fica valendo 60 s para o shell (versaoRemota) não repetir o pedido
+    buscar: () => leitor.ler({ forcar: true }),
     ocupado: () => temDialogo() || !!(o.ocupado && o.ocupado()),
     recarregou: () => lerNum(CHAVE_RECARGA),
     aoPronta: pronta => mostrarFaixa(pronta),
@@ -259,6 +285,7 @@ export function iniciar(o) {
   const api = {
     get versao() { return v; },
     get registro() { return reg; },
+    leitorVersao: leitor,   // plano 1500c · UCC-052
     aplicar: () => v.aplicar(),
     verificar: () => v.verificar(),
     /** Manda ao service worker as telas que ainda não foram abertas (e tudo que a página já carregou). */
@@ -281,13 +308,15 @@ export function iniciar(o) {
 
   // ociosidade: qualquer toque, tecla ou rolagem zera o relógio
   for (const ev of ["pointerdown", "keydown", "touchstart", "wheel"]) ouvir(doc, ev, () => v.interagiu(), { passive: true, capture: true });
-  const ocio = setInterval(() => { v.tique(); }, INTERVALO_OCIOSIDADE_MS);
+  // plano 1500c · UCC-053: com a aba escondida o tique não roda (a volta à aba confere de novo; uma aba esquecida não recarrega no escuro)
+  const ocio = setInterval(() => { if (doc && doc.hidden) return; v.tique(); }, INTERVALO_OCIOSIDADE_MS);
   fins.push(() => clearInterval(ocio));
   // versão: ao voltar para a aba, ao reconectar (no máximo 1 vez por minuto — AS-207) e a cada 10 min
   ouvir(doc, "visibilitychange", () => { if (doc.visibilityState === "visible") v.verificar({ seNaoRecente: true }); });
   ouvir(jan, "online", () => { v.verificar({ seNaoRecente: true }); });
   // plano 1000b · UB-170: com a aba escondida o relógio não busca o versao.json (a volta à aba já confere)
-  const relogio = setInterval(() => { verificarSeVisivel(doc, v); }, o.verificarMs || VERIFICAR_A_CADA_MS);
+  // plano 1500c · UCC-129: um relógio só de 10 min — o shell pendura nele o que também roda nesse ritmo (o.aoVerificar: a conferência de migração)
+  const relogio = setInterval(() => { if (verificarSeVisivel(doc, v) === null) return; if (typeof o.aoVerificar === "function") { try { o.aoVerificar(); } catch { /* o relógio continua */ } } }, o.verificarMs || VERIFICAR_A_CADA_MS);
   fins.push(() => clearInterval(relogio));
 
   // AS-295: o desligamento de emergência recarregou esta aba — diz o porquê uma vez
@@ -429,9 +458,17 @@ export function atualizarMetasApple({ doc = globalThis.document, titulo, icone =
 }
 
 /* ---------- instalar o app (menu da conta e folha «Mais») ---------- */
+/** plano 1500c · UCC-058: instalado também quando abre em window-controls-overlay (desktop), minimal-ui ou tela cheia. */
+export const MODOS_INSTALADO = Object.freeze(["standalone", "window-controls-overlay", "minimal-ui", "fullscreen"]);
 export function emStandalone({ janela = globalThis.window, nav = globalThis.navigator } = {}) {
-  try { return !!(janela && janela.matchMedia && janela.matchMedia("(display-mode: standalone)").matches) || (nav && nav.standalone === true); } catch { return false; }
+  try {
+    if (nav && nav.standalone === true) return true;
+    return !!(janela && janela.matchMedia && MODOS_INSTALADO.some(m => janela.matchMedia(`(display-mode: ${m})`).matches));
+  } catch { return false; }
 }
+/** plano 1500c · UCC-061: Firefox no computador não instala app da web (não há beforeinstallprompt): o menu mostra o que dá para fazer. */
+export function ehFirefoxDesktop({ ua = "" } = {}) { return /firefox\//i.test(ua) && !/android|mobile|tablet/i.test(ua); }
+export const PASSOS_FIREFOX = Object.freeze(["O Firefox no computador não instala apps da web; dá para deixar o sistema sempre à mão:", "Clique com o botão direito na aba e escolha «Fixar aba» — ela fica aberta à esquerda.", "Ou abra no Chrome ou no Edge e use «Instalar o app» para ter o ícone na área de trabalho."]);
 export function ehIOS({ ua = "", plataforma = "", toques = 0 } = {}) {
   return /iphone|ipad|ipod/i.test(ua) || (plataforma === "MacIntel" && toques > 1);   // iPad com Safari "desktop"
 }
@@ -440,6 +477,45 @@ export function modoDeInstalacao({ evento = null, janela = globalThis.window, na
   if (emStandalone({ janela, nav })) return null;
   if (evento && typeof evento.prompt === "function") return "evento";
   if (ehIOS({ ua: (nav && nav.userAgent) || "", plataforma: (nav && nav.platform) || "", toques: (nav && nav.maxTouchPoints) || 0 })) return "ios";
+  if (ehFirefoxDesktop({ ua: (nav && nav.userAgent) || "" })) return "firefox";   // plano 1500c · UCC-061
   return null;
 }
 export const PASSOS_IOS = Object.freeze(["Toque no botão Compartilhar (o quadrado com a seta para cima).", "Escolha «Adicionar à Tela de Início».", "Confirme em «Adicionar»: o app aparece na tela do aparelho."]);
+
+/** plano 1500c · UCC-131/UCC-132/UCC-135: nome curto do navegador para o diagnóstico («Chrome 141», «Safari 18», «Firefox 140», «Edge 141»,
+    «Samsung Internet 28»). Só nome e versão principal: nada que identifique a pessoa. */
+export function nomeDoNavegador(ua = "") {
+  const s = String(ua || "");
+  const tenta = [[/EdgA?\/(\d+)/, "Edge"], [/SamsungBrowser\/(\d+)/, "Samsung Internet"], [/OPR\/(\d+)/, "Opera"], [/Firefox\/(\d+)/, "Firefox"],
+    [/FxiOS\/(\d+)/, "Firefox"], [/CriOS\/(\d+)/, "Chrome"], [/Chrome\/(\d+)/, "Chrome"], [/Version\/(\d+)[\d.]* (?:Mobile\/\S+ )?Safari\//, "Safari"]];
+  for (const [re, nome] of tenta) { const m = re.exec(s); if (m) return `${nome} ${m[1]}`; }
+  return s ? "outro" : "—";
+}
+/** plano 1500c · UCC-131: o estado do modo sem internet para o «Sobre»: sem suporte, preparando (sem controlador) ou ativo com a versão do cache. */
+export function estadoDoSW(nav = globalThis.navigator) {
+  const sw = nav && nav.serviceWorker;
+  if (!sw) return { estado: "sem_suporte", texto: "Funciona sem internet: não (navegador sem suporte)" };
+  const ctl = sw.controller;
+  if (!ctl) return { estado: "preparando", texto: "Funciona sem internet: ainda não (preparando nesta abertura)" };
+  const v = versaoDaUrl(ctl.scriptURL);
+  return { estado: "ativo", versao: v, texto: `Funciona sem internet: sim (cópia da versão ${v || "—"})` };
+}
+
+/* plano 1500c · UC-037: as notas da versão aplicada ficam no aparelho (nx-novidades = {versao, notas, vistas}) — na primeira abertura da versão
+   nova o shell avisa «Atualizado: veja o que mudou» (uma vez) e o menu Ajuda mostra «Novidades» enquanto for a mesma versão. */
+export const CHAVE_NOVIDADES = "nx-novidades";
+export function guardarNovidades(ls, versao, notas) {
+  const lista = Array.isArray(notas) ? notas.filter(t => typeof t === "string" && t.trim()).map(t => t.trim().slice(0, 140)).slice(0, 3) : [];
+  if (!ls || !versao || !lista.length) return false;
+  try { ls.setItem(CHAVE_NOVIDADES, JSON.stringify({ versao: String(versao), notas: lista, vistas: false })); return true; } catch { return false; }
+}
+export function novidadesDaVersao(ls, versaoAtual) {
+  try {
+    const o = JSON.parse((ls && ls.getItem(CHAVE_NOVIDADES)) || "null");
+    if (!o || o.versao !== String(versaoAtual) || !Array.isArray(o.notas)) return { notas: [], vistas: true };
+    return { notas: o.notas.filter(t => typeof t === "string").slice(0, 3), vistas: !!o.vistas };
+  } catch { return { notas: [], vistas: true }; }
+}
+export function marcarNovidadesVistas(ls) {
+  try { const o = JSON.parse(ls.getItem(CHAVE_NOVIDADES) || "null"); if (o) { o.vistas = true; ls.setItem(CHAVE_NOVIDADES, JSON.stringify(o)); } } catch { /* ok */ }
+}

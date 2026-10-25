@@ -224,6 +224,15 @@ function caixaToasts() {
     motivo de aoFechar: "tempo" | "fechado" | "desfazer" | "acao" | "fila" | o que fechar(motivo) receber. Todo toast é anunciado ao leitor de tela
     (erro, de forma urgente). Plano 100 · A10: `ms: 0` não fecha sozinho; `fixo: true` também não sai da fila quando chegam outros (avisos de
     estado que duram enquanto o problema durar: número de WhatsApp caído); `acao` é um botão próprio («Ver número»). */
+/** plano 1500c · UCC-080: quantos avisos comuns ficam à vista ao mesmo tempo. */
+export const MAX_TOASTS = 3;
+/** plano 1500c · UCC-141: aviso comprido fica mais tempo — piso de 4,5 s (7 s com botão) + ~60 ms por letra além das 60 primeiras (leitura
+    lenta de ~200 palavras por minuto), no máximo 10 s. O erro continua com 12 s fixos (AS-211). */
+export function duracaoToast(texto, { comBotao = false } = {}) {
+  const base = comBotao ? 7000 : 4500;
+  const extra = Math.max(0, String(texto ?? "").length - 60) * 60;
+  return Math.min(10000, base + extra);
+}
 export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, fixo = false, aoFechar = null } = {}) {
   // plano 1000 (AS-296): com a faixa de conexão à vista, o erro «sem internet»/«servidor demorou» de cada tela não vira um toast a mais (o shell decide)
   if (_suprimirToast && !desfazer && !fixo) {
@@ -235,7 +244,13 @@ export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, 
   // plano 1000 (AS-211): erro fica 12 s (WCAG 2.2.1: tempo para ler e alcançar o botão); os demais como antes
   // plano 1000b · UB-274: no toque (sem mouse para pausar nem foco de teclado) o erro COM ação fica até a pessoa fechar no X
   const comAcao = !!(acao && typeof acao.fn === "function" && String(acao.rotulo || "").trim());
-  const dur = ms ?? (tipo === "erro" ? (comAcao && toqueGrosso() ? 0 : 12000) : desfazer || acao ? 7000 : 4500);
+  const dur = ms ?? (tipo === "erro" ? (comAcao && toqueGrosso() ? 0 : 12000) : duracaoToast(texto, { comBotao: !!(desfazer || acao) }));   // plano 1500c · UCC-141
+  // plano 1500c · UCC-080: o MESMO aviso repetido (mesmo texto e tipo, sem botão) não empilha: o que está à vista ganha «2×» e o relógio recomeça
+  const chave = !desfazer && !comAcao && !fixo ? `${tipo}|${String(texto)}` : null;
+  if (chave) {
+    const igual = [...caixa.children].find(c => c.__chave === chave && !c.classList.contains("saindo"));
+    if (igual && typeof igual.__repetir === "function") { igual.__repetir(dur); return { fechar: m => igual.__fechar(typeof m === "string" && m ? m : "fechado"), el: igual, agrupado: true }; }
+  }
   let timer = null, fechado = false;
   const fechar = (motivo = "fechado") => {
     if (fechado) return; fechado = true;
@@ -252,10 +267,20 @@ export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, 
     temAcao ? h("button", { type: "button", class: "toast-acao", on: { click: () => { fechar("acao"); try { acao.fn(); } catch (e) { console.error(e); } } } }, String(acao.rotulo).trim()) : null,
     h("button", { type: "button", class: "toast-x", "aria-label": "Fechar aviso", on: { click: () => fechar("fechado") } }, icone("fechar")));
   el.__fechar = fechar;
+  if (chave) {
+    let vezes = 1;
+    const cont = h("span", { class: "toast-vezes", hidden: true });
+    el.querySelector("p").appendChild(cont);
+    el.__chave = chave;
+    el.__repetir = d => {
+      vezes += 1; cont.textContent = ` (${vezes}×)`; cont.hidden = false;
+      if (d > 0 && !fechado) { clearTimeout(timer); timer = setTimeout(() => fechar("tempo"), d); }
+    };
+  }
   caixa.appendChild(el);
-  // fila de 4: os mais antigos saem; um toast fixo não conta nem sai (ele dura enquanto o estado durar)
+  // plano 1500c · UCC-080: no máximo 3 à vista (antes 4); os mais antigos saem; um toast fixo não conta nem sai (ele dura enquanto o estado durar)
   const vivos = [...caixa.children].filter(c => !c.classList.contains("saindo") && !c.classList.contains("toast-fixo"));
-  for (const c of vivos.slice(0, Math.max(0, vivos.length - 4))) { if (c.__fechar) c.__fechar("fila"); else c.remove(); }
+  for (const c of vivos.slice(0, Math.max(0, vivos.length - MAX_TOASTS))) { if (c.__fechar) c.__fechar("fila"); else c.remove(); }
   mostrarNoTopo(caixa);
   if (dur > 0) {
     timer = setTimeout(() => fechar("tempo"), dur);
@@ -270,6 +295,14 @@ export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, 
   }
   anunciar(String(texto), { urgente: tipo === "erro" });
   return { fechar: (motivo = "fechado") => fechar(typeof motivo === "string" && motivo ? motivo : "fechado"), el };
+}
+
+/** plano 1500c · UCC-007: o aviso de um erro da API com o caminho dele — erro de plano (teste vencido, módulo desligado, limite) traz e.acao
+    {rotulo, hash} do api.js e o aviso ganha o botão («Ver planos»). `navegar(hash)` do ctx; sem ele, troca o location.hash. */
+export function toastDeErro(e, { navegar } = {}) {
+  const a = e && e.acao && typeof e.acao.hash === "string" && /^#\//.test(e.acao.hash) ? e.acao : null;
+  const acao = a ? { rotulo: String(a.rotulo || "Ver"), fn: () => { if (typeof navegar === "function") navegar(a.hash); else if (typeof location !== "undefined") location.hash = a.hash; } } : null;
+  return toast(mensagemErro(e), { tipo: "erro", acao });
 }
 
 /** Anúncio só para leitor de tela (aria-live). `urgente` usa a região assertiva (erros). */
@@ -358,6 +391,11 @@ export function criarCamadas(amb = {}) {
 }
 export const camadas = criarCamadas();
 
+/** plano 1500c · UCC-069: o que recebe o Tab dentro de um painel (na ordem do documento). */
+function focaveisDe(raiz) {
+  return [...raiz.querySelectorAll("a[href], button:not(:disabled), input:not(:disabled):not([type=hidden]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])")]
+    .filter(el => !el.hidden && !(el.closest && el.closest("[hidden]")));
+}
 function focarPrimeiro(raiz) {
   const alvo = raiz.querySelector("[autofocus], input:not([type=hidden]):not(:disabled), select:not(:disabled), textarea:not(:disabled)")
     || raiz.querySelector("button:not(:disabled), [href], [tabindex]:not([tabindex='-1'])");
@@ -442,7 +480,7 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
         if (feito) return; feito = true;
         if (camada) camada.liberar();
         dlg.classList.add("saindo");
-        setTimeout(() => { try { dlg.close(); } catch { /* ok */ } dlg.remove(); if (anterior && anterior.focus && anterior.isConnected) try { anterior.focus({ preventScroll: true }); } catch { /* ok */ } }, 160);
+        setTimeout(() => { try { dlg.close(); } catch { /* ok */ } dlg.remove(); devolverFoco(anterior); }, 160);   // plano 1500c · UCC-143
         resolve(v);
       },
       erro(texto) {
@@ -503,6 +541,8 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
       corpoEl,
       h("footer", { class: "modal-rod" }, botoes));
     dlg.addEventListener("cancel", ev => { ev.preventDefault(); tentarFechar(); });
+    // plano 1500c · UCC-144: o Esc é do modal do topo — não sobe para a tela (nem para outro modal/gaveta embaixo); o cancel nativo continua
+    dlg.addEventListener("keydown", ev => { if (ev.key === "Escape") ev.stopPropagation(); });
     dlg.addEventListener("mousedown", ev => { if (fecharFora && ev.target === dlg) dlg.dataset.fora = "1"; });
     dlg.addEventListener("click", ev => { if (fecharFora && ev.target === dlg && dlg.dataset.fora === "1") tentarFechar(); delete dlg.dataset.fora; });
     dlg.addEventListener("submit", ev => { ev.preventDefault(); if (primario && !primario.disabled) primario.click(); });
@@ -513,6 +553,20 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
     focoInicial(dlg, corpoEl.querySelector("input,select,textarea") ? corpoEl : dlg.querySelector(".modal-rod"));
     if (aoAbrir) try { aoAbrir(api); } catch (e) { console.error(e); }
   });
+}
+
+/** plano 1500c · UCC-143: ao fechar um modal o foco volta ao botão que o abriu; se ele sumiu (a lista foi redesenhada, o item foi excluído),
+    cai no título da tela (h1 do conteúdo, que ganha tabindex=-1) em vez de ir parar no <body>. → o elemento focado ou null. */
+export function devolverFoco(anterior, doc = globalThis.document) {
+  const focar = el => { try { el.focus({ preventScroll: true }); return true; } catch { return false; } };
+  if (anterior && typeof anterior.focus === "function" && anterior.isConnected && anterior !== (doc && doc.body) && focar(anterior)) return anterior;
+  if (!doc || typeof doc.querySelector !== "function") return null;
+  // outro modal ainda aberto embaixo: o foco fica nele (não pula para a tela por trás)
+  const aberto = [...doc.querySelectorAll("dialog[open]")].pop();
+  const alvo = aberto || doc.querySelector("#conteudo h1, main h1, h1");
+  if (!alvo) return null;
+  if (!aberto && !alvo.hasAttribute("tabindex")) alvo.setAttribute("tabindex", "-1");
+  return focar(alvo) ? alvo : null;
 }
 
 /** Ícone do botão de perigo do confirmar() (plano 1000 · AS-212): a lixeira só quando o rótulo é de exclusão («Excluir», «Apagar», «Remover»);
@@ -640,7 +694,7 @@ export function menu(ancora, itens) {
     else if (ev.key === "ArrowUp") { ev.preventDefault(); (lista[(i - 1 + lista.length) % lista.length] || lista[0])?.focus(); }
     else if (ev.key === "Home") { ev.preventDefault(); lista[0]?.focus(); }
     else if (ev.key === "End") { ev.preventDefault(); lista[lista.length - 1]?.focus(); }
-    else if (ev.key === "Escape") { ev.preventDefault(); fechar(); ancora.focus(); }
+    else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); fechar(); ancora.focus(); }   // plano 1500c · UCC-144: o Esc fecha só o menu (não o modal/tela de baixo)
     else if (ev.key === "Tab") fechar();
     // plano 1000b · UB-139: busca pela 1ª letra do rótulo (a partir do item seguinte ao focado; «E» de novo passa ao próximo com E)
     else if (typeof ev.key === "string" && ev.key.length === 1 && /\S/.test(ev.key) && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
@@ -692,12 +746,38 @@ export function flutuante(ancora, conteudo, { classe = "", aoFechar, largura, ro
     pop.style.left = `${x}px`; pop.style.top = `${y}px`;
   }
   function fora(ev) { if (!pop.contains(ev.target) && !ancora.contains(ev.target)) fechar(); }
-  function tecla(ev) { if (ev.key === "Escape") { ev.preventDefault(); fechar(); ancora.focus(); } }
+  function tecla(ev) {
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); fechar(); ancora.focus(); return; }   // plano 1500c · UCC-144
+    // plano 1500c · UCC-069: é um diálogo — o Tab circula dentro dele (sair por Tab deixava o painel aberto sem foco)
+    if (ev.key === "Tab") {
+      const f = focaveisDe(pop);
+      if (!f.length) { ev.preventDefault(); return; }
+      const i = f.indexOf(document.activeElement);
+      if (ev.shiftKey && (i <= 0)) { ev.preventDefault(); f[f.length - 1].focus(); }
+      else if (!ev.shiftKey && (i === f.length - 1 || i < 0)) { ev.preventDefault(); f[0].focus(); }
+    }
+  }
+  // plano 1500c · UCC-079: tela que muda de tamanho ou rola reposiciona o painel (num quadro); a âncora fora da tela (ou removida) fecha
+  let quadro = 0;
+  function seguir() {
+    if (quadro) return;
+    const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : fn => setTimeout(fn, 16);
+    quadro = raf(() => {
+      quadro = 0;
+      if (!pop.isConnected) return;
+      if (!ancora.isConnected) { fechar(); return; }
+      const r = ancora.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > innerHeight) { fechar(); return; }
+      posicionar();
+    });
+  }
+  function rolou(ev) { if (ev && ev.target && pop.contains && pop.contains(ev.target)) return; seguir(); }
   function fechar() {
     if (!pop.isConnected) return;
     document.removeEventListener("pointerdown", fora, true);
     pop.removeEventListener("keydown", tecla);
-    removeEventListener("resize", fechar);
+    removeEventListener("resize", seguir);
+    document.removeEventListener("scroll", rolou, true);
     ancora.setAttribute("aria-expanded", "false");
     try { pop.hidePopover(); } catch { /* ok */ }
     pop.remove();
@@ -708,7 +788,7 @@ export function flutuante(ancora, conteudo, { classe = "", aoFechar, largura, ro
   mostrarNoTopo(pop);
   posicionar();
   ancora.setAttribute("aria-expanded", "true");
-  setTimeout(() => { document.addEventListener("pointerdown", fora, true); addEventListener("resize", fechar); focarPrimeiro(pop); }, 0);
+  setTimeout(() => { if (!pop.isConnected) return; document.addEventListener("pointerdown", fora, true); addEventListener("resize", seguir); document.addEventListener("scroll", rolou, true); focarPrimeiro(pop); }, 0);
   _menuAberto = { pop, fechar };
   return { el: pop, fechar, posicionar };
 }
@@ -927,16 +1007,20 @@ function aoVoltarOnline() {
     if (typeof f === "function") { try { f(); } catch (e) { console.error(e); } }
   }
 }
-const RE_CODIGO_REDE = /^(sem_conexao|tempo_esgotado|servico_indisponivel|http_(408|429|5\d\d))$/;
-/** erroCartao(erro, tentarDeNovo) → Node (texto de api.mensagemErro, sem URL nem jargão). Com `tentarDeNovo`, refaz sozinho em "orbita:online". */
-export function erroCartao(erro, tentarDeNovo) {
+// plano 1500c · UCC-009: tempo_esgotado (consulta pesada no servidor) NÃO é falta de internet — fica fora daqui e ganha a frase própria
+const RE_CODIGO_REDE = /^(sem_conexao|servico_indisponivel|http_(408|429|5\d\d))$/;
+/** erroCartao(erro, tentarDeNovo, {nivel = 2}) → Node (texto de api.mensagemErro, sem URL nem jargão). Com `tentarDeNovo`, refaz sozinho em
+    "orbita:online". plano 1500c · UCC-010: `nivel` (2–6) dá o h2…h6 do título, para o cartão dentro de uma seção não quebrar a hierarquia. */
+export function erroCartao(erro, tentarDeNovo, { nivel = 2 } = {}) {
   const frase = mensagemErro(erro);
-  const semRede = RE_ERRO_REDE.test(String((erro && (erro.message || erro.codigo)) || "")) || RE_ERRO_IMPORT.test(String((erro && erro.message) || ""))
-    || RE_CODIGO_REDE.test(String((erro && erro.codigo) || "")) || (typeof navigator !== "undefined" && navigator.onLine === false);
+  const pesada = String((erro && erro.codigo) || "") === "tempo_esgotado";
+  const semRede = !pesada && (RE_ERRO_REDE.test(String((erro && (erro.message || erro.codigo)) || "")) || RE_ERRO_IMPORT.test(String((erro && erro.message) || ""))
+    || RE_CODIGO_REDE.test(String((erro && erro.codigo) || "")) || (typeof navigator !== "undefined" && navigator.onLine === false));
+  const n = Math.min(6, Math.max(2, Math.round(Number(nivel)) || 2));
   const el = h("div", { class: "vazio vazio-erro", role: "alert" },
     h("div", { class: "vazio-ic", "aria-hidden": "true" }, icone("alerta")),
     h("div", { class: "vazio-txt" },
-      h("h2", null, "Não foi possível carregar"),
+      h(`h${n}`, null, "Não foi possível carregar"),
       h("p", null, frase),
       tentarDeNovo && semRede ? h("p", { class: "vazio-auto" }, "Quando a internet voltar, tentamos de novo sozinhos.") : null,
       tentarDeNovo ? h("div", { class: "linha vazio-acoes" },
@@ -1457,10 +1541,14 @@ export function etiqueta({ nome, cor } = {}, { remover } = {}) {
     remover ? h("button", { type: "button", class: "etiq-x", "aria-label": `Tirar a etiqueta ${nome}`, on: { click: remover } }, icone("fechar")) : null);
 }
 
-function iniciais(nome) {
+/** plano 1500c · UCC-077: por caractere (grafema), não por unidade UTF-16 — «😀 Ana» vira «😀A», nunca meio emoji (U+FFFD). Exportada para teste. */
+const _grafemas = (() => { try { return typeof Intl !== "undefined" && Intl.Segmenter ? new Intl.Segmenter("pt-BR", { granularity: "grapheme" }) : null; } catch { return null; } })();
+function letras(palavra) { return _grafemas ? [..._grafemas.segment(palavra)].map(x => x.segment) : Array.from(palavra); }
+export function iniciais(nome) {
   const p = String(nome || "").trim().split(/\s+/).filter(Boolean);
   if (!p.length) return "?";
-  return ((p[0][0] || "") + (p.length > 1 ? p[p.length - 1][0] : (p[0][1] || ""))).toUpperCase();
+  const a = letras(p[0]);
+  return ((a[0] || "") + (p.length > 1 ? (letras(p[p.length - 1])[0] || "") : (a[1] || ""))).toUpperCase();
 }
 function hashNum(s) { let x = 0; for (const ch of String(s || "")) x = (x * 31 + ch.codePointAt(0)) >>> 0; return x; }
 
@@ -1475,7 +1563,8 @@ export function tomAvatar(nome, id) {
 /** avatar(nome, id, img?, {tamanho: "p"|"g", estado: "online"|"ausente"|"ocupado"}) — iniciais sobre uma cor estável por nome; `estado` põe o ponto no canto. */
 export function avatar(nome, id, img, { tamanho, estado } = {}) {
   const i = tomAvatar(nome, id);
-  const el = h("span", { class: ["avatar", tamanho === "g" && "avatar-g", tamanho === "p" && "avatar-p"], style: { "--cor": `var(--pal-${i})` }, "aria-hidden": "true", title: nome || null, dataset: { tom: i } });
+  // plano 1500c · UC-030: «dado-pessoal» — o modo apresentação (html.apresentacao) borra fotos e iniciais de clientes
+  const el = h("span", { class: ["avatar", "dado-pessoal", tamanho === "g" && "avatar-g", tamanho === "p" && "avatar-p"], style: { "--cor": `var(--pal-${i})` }, "aria-hidden": "true", title: nome || null, dataset: { tom: i } });
   const src = typeof img === "string" && (/^data:image\/(png|jpeg|webp);base64,/.test(img) || /^https:\/\//.test(img)) ? img : null;
   if (src) el.appendChild(h("img", { src, alt: "" }));
   else el.textContent = iniciais(nome);
@@ -1669,10 +1758,15 @@ function dataDe(iso) {
 export function brl(v, { centavos = true } = {}) { const n = Number(v); return v === null || v === undefined || v === "" || !Number.isFinite(n) ? vazioFmt : (centavos ? _fmt.brl : _fmt.brl0).format(n); }
 export function num(v) { const n = Number(v); return v === null || v === undefined || v === "" || !Number.isFinite(n) ? vazioFmt : _fmt.num.format(n); }
 /** pct(0.234) → "23%"; pct(0.234, 1) → "23,4%" (recebe fração) */
+/** plano 1500c · UCC-078: um formatador por número de casas (criar Intl.NumberFormat a cada chamada pesava em listas grandes). */
+const _fmtPct = new Map();
 export function pct(v, casas = 0) {
   const n = Number(v);
   if (v === null || v === undefined || !Number.isFinite(n)) return vazioFmt;
-  return new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: casas, maximumFractionDigits: casas }).format(n);
+  const c = Math.max(0, Math.min(20, Math.round(Number(casas)) || 0));
+  let f = _fmtPct.get(c);
+  if (!f) { f = new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: c, maximumFractionDigits: c }); _fmtPct.set(c, f); }
+  return f.format(n);
 }
 /** "AAAA-MM-DD" do dia no fuso de SP */
 export function hojeSP(d = new Date()) { return _fmt.dia.format(d); }
@@ -2171,6 +2265,8 @@ let _ouvindoZ = null;             // o document em que já ouvimos o teclado
 function aoTeclaZ(ev) {
   if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey || String(ev.key || "").toLowerCase() !== "z") return;
   if (dentroDeCampo(ev.target)) return;                    // dentro de texto o Ctrl+Z é do navegador
+  // plano 1500c · UCC-074: com um diálogo aberto o Ctrl+Z não desfaz o que aconteceu na tela de trás
+  try { if (typeof document !== "undefined" && document.querySelector("dialog[open]")) return; } catch { /* ok */ }
   const item = _desfazer[_desfazer.length - 1];
   if (!item) return;
   ev.preventDefault();

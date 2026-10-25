@@ -106,6 +106,7 @@ export function acaoTeclaAgenda(ev) {
   if (k === "s") return "semana";
   if (k === "m") return "mes";
   if (k === "l") return "lista";
+  if (k === "n") return "marcar";     // plano 1500c · CC-300: N abre «Marcar consulta» (a ação mais usada)
   return null;
 }
 export const ATALHO_MODO = Object.freeze({ dia: "D", semana: "S", mes: "M", lista: "L" });
@@ -370,7 +371,7 @@ export function cortesDeBloqueios(bloqueios, iso) {
  * CA-164/CA-165: o destino de um arrasto (dia `iso`, `min` de início, `duracao` em minutos) cai num bloqueio ou num horário já cheio?
  * → {motivo: "bloqueado", rotulo} | {motivo: "lotado", ocupados, capacidade} | null. `ignorar` = a própria consulta (não conta contra ela mesma).
  */
-export function conflitoNoDestino({ iso, min, duracao = 30, bloqueios = [], consultas = [], config = null, ignorar = null } = {}) {
+export function conflitoNoDestino({ iso, min, duracao = 30, bloqueios = [], consultas = [], config = null, ignorar = null, ocupados: ocupadosServidor = null } = {}) {
   const fim = min + Math.max(5, Number(duracao) || 30);
   for (const b of bloqueiosDoDia(bloqueios, iso)) {
     const [corte] = cortesDeBloqueios([b], iso);
@@ -379,8 +380,29 @@ export function conflitoNoDestino({ iso, min, duracao = 30, bloqueios = [], cons
   const dur = Number(config && config.duracao_min) || 30;
   const capacidade = Math.max(1, Number(config && config.capacidade) || 1);
   const mesma = c => ignorar && c && c.negocio_id === ignorar.negocio_id && c.inicio === ignorar.inicio;
-  const ocupados = consultasDoDia(consultas, iso).filter(c => !mesma(c)).map(c => minutosDaConsulta(c, dur)).filter(p => p && p.ini < fim && p.fim > min).length;
+  // plano 1500c · CC-169: «lotado» é o PICO de consultas ao mesmo tempo no trecho (09:00–09:15 + 09:15–09:30 nunca são 2 juntas), não a soma
+  // CC-190: `ocupados` (trechos anônimos da clínica inteira, quando o servidor mandar) vale no lugar das consultas visíveis; a própria sai uma vez
+  let base = consultasDoDia(consultas, iso).filter(c => !mesma(c));
+  if (Array.isArray(ocupadosServidor)) {
+    let tirou = !ignorar;
+    base = ocupadosServidor.filter(o => { if (!tirou && o && o.inicio === ignorar.inicio) { tirou = true; return false; } return true; });
+  }
+  const ocupados = picoSimultaneo(base.map(c => minutosDaConsulta(c, dur)).filter(p => p && p.dia === iso), min, fim);
   return ocupados >= capacidade ? { motivo: "lotado", ocupados, capacidade } : null;
+}
+/** Plano 1500c · CC-169/CC-170: o máximo de intervalos ({ini, fim} em minutos) abertos AO MESMO TEMPO dentro de [de, ate) — varredura de
+    eventos; o que termina às 09:15 não encosta no que começa às 09:15. */
+export function picoSimultaneo(intervalos, de = -Infinity, ate = Infinity) {
+  const ev = [];
+  for (const p of intervalos || []) {
+    if (!p) continue;
+    const a = Math.max(Number(p.ini), de), b = Math.min(Number(p.fim), ate);
+    if (b > a) ev.push([a, 1], [b, -1]);
+  }
+  ev.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  let n = 0, max = 0;
+  for (const [, d] of ev) { n += d; if (n > max) max = n; }
+  return max;
 }
 /** O horário (HH:MM) onde o clique caiu na coluna: eixo.ini + fração da altura, arredondado PARA BAIXO ao passo da agenda. */
 export function horaDoClique(fracao, eixo, passoMin = 30) {
@@ -453,17 +475,25 @@ export function alternarLegenda(ativos, item) {
 
 /** Ocupação do dia: minutos marcados sobre a capacidade do expediente (faixas − intervalos, × atendimentos simultâneos).
     pct = null quando a configuração não diz o horário (então a capacidade é estimada em 10 h e `estimada` = true) e também quando o dia é fechado. */
-export function ocupacaoDoDia(consultas, iso, config, bloqueios = []) {
+export function ocupacaoDoDia(consultas, iso, config, bloqueios = [], { ocupados = null } = {}) {
   const dur = Number(config && config.duracao_min) || 30;
   const itens = consultasDoDia(consultas, iso);
-  let marcados = 0;
-  for (const c of itens) { const p = minutosDaConsulta(c, dur); if (p) marcados += p.fim - p.ini; }
   const faixas = faixasDoDia(config, iso);
   const simult = Math.max(1, Number(config && config.capacidade) || 1);
   const estimada = faixas === null;
   // CA-196: o horário bloqueado (feriado, meia folga) sai da capacidade — meio dia bloqueado não mostra «10% ocupado» sobre o dia inteiro
   const cortes = [...intervalosDaConfig(config), ...cortesDeBloqueios(bloqueios, iso)];
-  const capacidade = (estimada ? 10 * 60 : subtrair(faixas, cortes).reduce((s, [a, b]) => s + (b - a), 0)) * simult;
+  const abertas = estimada ? null : subtrair(faixas, cortes);
+  // plano 1500c · CC-171: falta não ocupa a cadeira e o encaixe das 20h (fora do expediente) não enche o dia — cada consulta conta só o que
+  // cai nas faixas abertas. CC-190: com `ocupados` (trechos sem dados pessoais que o servidor manda para o atendente restrito), a conta é da
+  // clínica inteira e não só das consultas que ele enxerga
+  const falta = c => !!c && (c.presenca === "faltou" || c.marco === "faltou" || !!(c.campos && c.campos.presenca === "faltou"));
+  const trechos = Array.isArray(ocupados)
+    ? ocupados.map(o => minutosDaConsulta(o, dur)).filter(p => p && p.dia === iso)
+    : itens.filter(c => !falta(c)).map(c => minutosDaConsulta(c, dur)).filter(Boolean);
+  let marcados = 0;
+  for (const p of trechos) marcados += abertas ? abertas.reduce((s, [a, b]) => s + Math.max(0, Math.min(b, p.fim) - Math.max(a, p.ini)), 0) : p.fim - p.ini;
+  const capacidade = (estimada ? 10 * 60 : abertas.reduce((s, [a, b]) => s + (b - a), 0)) * simult;
   const fechado = !estimada && capacidade === 0;
   return { n: itens.length, marcados, capacidade, estimada, fechado, pct: capacidade > 0 ? Math.min(1, marcados / capacidade) : null };
 }
@@ -482,8 +512,8 @@ export function textoOcupacao(oc) {
   return `${Math.round(oc.pct * 100)}% ocupado${oc.estimada ? " (estimado)" : ""}`;
 }
 /** Ocupação média dos dias abertos de um período (null se nenhum dia tem capacidade). */
-export function ocupacaoDoPeriodo(consultas, dias, config, bloqueios = []) {
-  const abertos = (dias || []).map(d => ocupacaoDoDia(consultas, d, config, bloqueios)).filter(o => o.pct !== null);
+export function ocupacaoDoPeriodo(consultas, dias, config, bloqueios = [], opcoes = {}) {
+  const abertos = (dias || []).map(d => ocupacaoDoDia(consultas, d, config, bloqueios, opcoes)).filter(o => o.pct !== null);   // plano 1500c · CC-190
   if (!abertos.length) return null;
   return abertos.reduce((s, o) => s + o.pct, 0) / abertos.length;
 }
@@ -589,7 +619,8 @@ export function classificarConsulta(c, config, { iso = null, vizinhas = [] } = {
   if (p && vizinhas.length) {
     const eu = minutosDaConsulta(c, dur);
     const simult = Math.max(1, Number(config && config.capacidade) || 1);
-    const juntas = vizinhas.filter(o => o !== c).map(o => minutosDaConsulta(o, dur)).filter(o => o && eu && o.dia === eu.dia && o.ini < eu.fim && o.fim > eu.ini).length;
+    // plano 1500c · CC-170: o pico de vizinhas AO MESMO TEMPO durante a consulta (vizinhas encadeadas não somam)
+    const juntas = eu ? picoSimultaneo(vizinhas.filter(o => o !== c).map(o => minutosDaConsulta(o, dur)).filter(o => o && o.dia === eu.dia), eu.ini, eu.fim) : 0;
     acimaDaCapacidade = juntas >= simult;
   }
   return { feita, falta, encaixe: foraDoHorario || acimaDaCapacidade };
@@ -622,6 +653,150 @@ export function rotuloDoBloco(c, { inicio = "", fim = "", nome = "", feita = fal
   const pres = c && c.presenca === "compareceu" ? "compareceu" : (c && c.presenca === "faltou") || falta ? "faltou" : null;
   return [`${inicio}${fim ? ` às ${fim}` : ""}`, nome, c && c.servico, feita ? "concluída" : null, encaixe ? "encaixe" : null, pres, proxima ? "próxima consulta" : null]
     .filter(Boolean).join(", ");
+}
+
+/* ============================================================ plano 1500c (frente agenda): contas puras novas */
+/** CC-174/CC-265/CC-332: o bloqueio de `iso` fecha o dia inteiro? (o que começa antes e termina depois conta) */
+export function diaTodoBloqueado(bloqueios, iso) {
+  const ini = instanteNoFuso(iso), fim = instanteNoFuso(diaISO(iso, 1));
+  return bloqueiosDoDia(bloqueios, iso).some(b => Date.parse(b.inicio) <= ini && Date.parse(b.fim) >= fim);
+}
+/** CC-265: há bloqueio de PARTE do dia (meio dia, almoço extra)? */
+export function bloqueioParcial(bloqueios, iso) { return !diaTodoBloqueado(bloqueios, iso) && bloqueiosDoDia(bloqueios, iso).length > 0; }
+/** CC-177/CC-288: o próximo dia de atendimento a partir de `iso + passo` (pula dia fechado pela configuração e dia todo bloqueado; até 60 dias).
+    Sem configuração de horário, o próprio `iso + passo`. */
+export function proximoDiaAberto(config, iso, { passo = 1, bloqueios = [] } = {}) {
+  let d = diaISO(iso, Math.max(1, Number(passo) || 1));
+  if (faixasDoDia(config, d) === null) return d;
+  for (let i = 0; i < 60; i++, d = diaISO(d, 1)) {
+    const f = faixasDoDia(config, d);
+    if (f && f.length && !diaTodoBloqueado(bloqueios, d)) return d;
+  }
+  return null;
+}
+/** CC-168/CC-286: a Agenda ficou aberta e o dia de São Paulo virou (23:59 → 00:01)? */
+export function diaVirou(ultimoHoje, hojeAgora) { return dataAgendaValida(ultimoHoje) && dataAgendaValida(hojeAgora) && hojeAgora !== ultimoHoje; }
+/** CC-172/CC-284: quantos dias à frente a agenda abre (Configurações › Agenda, até 180); sem a configuração, 180. */
+export function limiteDiasAgenda(config) { const n = Math.floor(Number(config && config.dias_a_frente)); return n >= 1 ? Math.min(180, n) : 180; }
+/** CC-172/CC-284: «Ver mais 14 dias» ainda tem o que mostrar? (o próximo pedido começaria antes do último dia aberto) */
+export function podeVerMais({ janelaIni, janelaDias = 0, hoje, config = null } = {}) {
+  if (!dataAgendaValida(janelaIni) || !dataAgendaValida(hoje)) return false;
+  return diaISO(janelaIni, janelaDias) <= diaISO(hoje, limiteDiasAgenda(config));
+}
+/** CC-172: o aviso do limite («A agenda abre até 30 dias à frente (Configurações › Agenda).»). */
+export function textoLimiteDias(config) {
+  const n = limiteDiasAgenda(config);
+  return n >= 180 ? LIMITE_DIAS_TXT : `A agenda abre até ${n} dias à frente (Configurações › Agenda).`;
+}
+/** CC-173: a data pedida passa do limite? → «A agenda só abre até 20/11.» (null quando está dentro). */
+export function avisoAlemDoLimite(data, hoje, config) {
+  if (!dataAgendaValida(data) || !dataAgendaValida(hoje)) return null;
+  const ultimo = diaISO(hoje, limiteDiasAgenda(config));
+  return data > ultimo ? `A agenda só abre até ${ultimo.slice(8, 10)}/${ultimo.slice(5, 7)}.` : null;
+}
+/** CC-201: o primeiro horário livre de hoje à tarde (a partir das 12:00); null se não há. */
+export function hojeATarde(grupos, hojeISO) {
+  const g = (grupos || []).find(x => x.dia === hojeISO);
+  return (g && g.itens.find(s => s.min >= 12 * 60 && s.livre !== false)) || null;
+}
+/** CC-201: o primeiro horário livre a partir da segunda-feira da semana que vem. */
+export function proximaSemana(grupos, hojeISO) {
+  const seg = diaISO(segundaDe(hojeISO), 7);
+  for (const g of grupos || []) if (g.dia >= seg) { const s = g.itens.find(x => x.livre !== false); if (s) return s; }
+  return null;
+}
+/** CC-200: os horários do dia em Manhã (até 12h), Tarde (12h–18h) e Noite. Só os períodos com horário. */
+export function periodosDoDia(itens) {
+  const p = [["Manhã", x => x.min < 12 * 60], ["Tarde", x => x.min >= 12 * 60 && x.min < 18 * 60], ["Noite", x => x.min >= 18 * 60]];
+  return p.map(([rotulo, f]) => ({ rotulo, itens: (itens || []).filter(f) })).filter(g => g.itens.length);
+}
+/** CC-203: distância de edição (Levenshtein) entre dois textos curtos. */
+function distancia(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let ant = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(ant[j] + 1, cur[j - 1] + 1, ant[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    ant = cur;
+  }
+  return ant[n];
+}
+/** CC-203: «Avalição» → «Avaliação» (o serviço cadastrado mais parecido, até 2 letras de diferença); igual ou longe demais → null. */
+export function servicoParecido(nome, servicos) {
+  const v = normServico(nome);
+  if (v.length < 3) return null;
+  let melhor = null, dist = 3;
+  for (const s of servicos || []) {
+    const k = normServico(s);
+    if (!k) continue;
+    if (k === v) return null;
+    const d = distancia(v, k);
+    if (d < dist) { dist = d; melhor = s; }
+  }
+  return melhor;
+}
+/** CC-293/CC-325: a busca de «Procurar paciente» confere até `limite` negócios (abertos e ganhos) — o corte para 8 vem DEPOIS de ler as consultas. */
+export function escolherCandidatos(negocios, limite = 30) {
+  return (Array.isArray(negocios) ? negocios : []).filter(n => n && (n.status === "aberto" || n.status === "ganho")).slice(0, Math.max(1, limite));
+}
+/** CC-248: uma assinatura barata da resposta da agenda (sem serializar tudo): as chaves que mudam a tela, num hash curto. */
+export function assinaturaAgenda(r) {
+  if (!r || typeof r !== "object") return "";
+  const partes = [];
+  for (const c of Array.isArray(r.consultas) ? r.consultas : []) if (c) partes.push(`${c.negocio_id}|${c.inicio}|${c.fim || ""}|${c.status || ""}|${c.presenca ?? ""}|${c.servico || ""}|${c.dono_id ?? ""}|${c.dono_nome || ""}|${c.nome || c.titulo || ""}|${c.encaixe ?? ""}|${c.marco || ""}|${c.atualizado_em || ""}|${c.confirmada_em || ""}`);
+  for (const b of Array.isArray(r.bloqueios) ? r.bloqueios : []) if (b) partes.push(`b${b.id}|${b.inicio}|${b.fim}|${b.motivo || ""}`);
+  const cfg = r.config ? JSON.stringify(r.config) : "";
+  let hsh = 2166136261;
+  for (const ch of `${partes.join("\n")}#${cfg}#${Array.isArray(r.ocupados) ? r.ocupados.length : ""}`) { hsh ^= ch.codePointAt(0); hsh = Math.imul(hsh, 16777619) >>> 0; }
+  return `${partes.length}:${hsh.toString(36)}`;
+}
+/** CC-228: «tel:+55…» sem a crm-logica (o detalhe aberto antes de ela chegar): só dígitos, com +55 quando o número é brasileiro sem DDI. */
+export function telLocal(t) {
+  const d = String(t || "").replace(/\D/g, "");
+  if (d.length < 8) return null;
+  return `tel:+${d.length <= 11 ? `55${d}` : d}`;
+}
+/** CC-227: o link do WhatsApp do aparelho (wa.me) com o texto pronto; sem número válido, null. */
+export function linkWhatsAppAgenda(t, texto = "") {
+  const d = String(t || "").replace(/\D/g, "");
+  if (d.length < 10) return null;
+  return `https://wa.me/${d.length <= 11 ? `55${d}` : d}${texto ? `?text=${encodeURIComponent(texto)}` : ""}`;
+}
+/** CC-256: a taxa de faltas das consultas que já passaram (falta = presença «faltou» ou etapa de faltas) → {faltas, de, pct} ou null sem nenhuma. */
+export function taxaFaltas(consultas, agora = Date.now()) {
+  const passadas = (consultas || []).filter(c => c && Number.isFinite(Date.parse(c.inicio)) && Date.parse(c.inicio) < agora);
+  if (!passadas.length) return null;
+  const faltas = passadas.filter(c => classificarConsulta(c, null).falta).length;
+  return { faltas, de: passadas.length, pct: faltas / passadas.length };
+}
+const csvCampo = v => { const t = String(v ?? ""); return /[";\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+/** CC-258: as consultas do período em CSV (separador «;», como o Excel em português abre): data, hora, paciente, serviço, profissional, presença, origem. */
+export function csvDaAgenda(consultas, { nomes = {}, contato = "Paciente" } = {}) {
+  const linhas = [["Data", "Hora", contato, "Serviço", "Profissional", "Presença", "Origem"]];
+  for (const c of [...(consultas || [])].sort((a, b) => Date.parse(a.inicio) - Date.parse(b.inicio))) {
+    const p = partesSP(c && c.inicio);
+    if (!p) continue;
+    const pres = c.presenca === "compareceu" ? "Compareceu" : c.presenca === "faltou" ? "Faltou" : c.status === "ganho" ? "Concluída" : "";
+    const prof = c.dono_id ? (nomes[String(c.dono_id)] || c.dono_nome || "") : "";
+    const orig = origemDo(c);
+    linhas.push([`${p.dia.slice(8, 10)}/${p.dia.slice(5, 7)}/${p.dia.slice(0, 4)}`, horaTxt(p.min), c.nome || c.titulo || "", c.servico || "", prof, pres, orig === SEM_ORIGEM ? "" : orig]);
+  }
+  return `${String.fromCodePoint(0xfeff)}${linhas.map(l => l.map(csvCampo).join(";")).join("\r\n")}\r\n`;
+}
+/** CC-261: a lista do dia em texto para mandar ao profissional: «Amanhã · Sex 24/10\n08:00 Maria Souza (Avaliação)…». */
+export function textoCompartilharDia(consultas, iso, hojeISO) {
+  const itens = consultasDoDia(consultas, iso);
+  const rot = rotuloDoDia(iso, hojeISO);
+  const cab = rot === "Hoje" || rot === "Amanhã" ? `${rot} · ${nomeDia(iso, true)}` : nomeDia(iso, true);
+  if (!itens.length) return `${cab}: sem consultas.`;
+  return [cab, ...itens.map(c => { const p = partesSP(c.inicio); return `${p ? horaTxt(p.min) : ""} ${c.nome || c.titulo || "Consulta"}${c.servico ? ` (${c.servico})` : ""}`; })].join("\n");
+}
+/** CC-294: «Última: 12/09 (compareceu)» — a consulta que já passou e a presença registrada; "" sem nada. */
+export function textoUltimaConsulta(em, presenca = null) {
+  const p = em ? partesSP(em) : null;
+  if (!p) return "";
+  return `Última: ${p.dia.slice(8, 10)}/${p.dia.slice(5, 7)}${presenca === "compareceu" ? " (compareceu)" : presenca === "faltou" ? " (faltou)" : ""}`;
 }
 
 /* ---------- peças de tela (recebem o `h` do ui: dá para montar sem navegador) ---------- */
@@ -661,14 +836,14 @@ export function montarLegenda({ h, itens = [], ativos = new Set(), aoAlternar, n
 
 /** Mini-calendário do mês com densidade: 6 × 7 botões (cada um com contagem, barra de ocupação, hoje e bloqueio), setas de mês e teclado. */
 export function montarMiniCalendario({ h, mes, consultas = [], bloqueios = [], config = null, hoje, selecionado = null, aoEscolher, aoMudarMes, num = String, carregando = false, compacto = false,
-  aoAbrirSemana = null } = {}) {
+  aoAbrirSemana = null, ocupacao = {} } = {}) {   // plano 1500c · CC-190: ocupacao = {ocupados} (trechos da clínica inteira)
   const comSemanas = typeof aoAbrirSemana === "function";      // CA-270: o número da semana (à esquerda) abre a semana inteira
   const celulas = gradeDoMes(mes);
   const dentro = celulas.filter(c => !c.foraDoMes).map(c => c.iso);
   const porDia = consultasPorDia(consultas);           // CA-218: uma passada; cada célula olha só as do próprio dia
   const doDia = iso => porDia.get(iso) || [];
   const total = dentro.reduce((s, d) => s + doDia(d).length, 0);
-  const ocDentro = dentro.map(d => ocupacaoDoDia(doDia(d), d, config, bloqueios)).filter(o => o.pct !== null);
+  const ocDentro = dentro.map(d => ocupacaoDoDia(doDia(d), d, config, bloqueios, ocupacao)).filter(o => o.pct !== null);
   const media = ocDentro.length ? ocDentro.reduce((s, o) => s + o.pct, 0) / ocDentro.length : null;
   const el = h("section", { class: ["ag-mes", compacto && "ag-mes-compacto", comSemanas && "ag-mes-com-semanas"], "aria-label": `Mês de ${nomeDoMes(mes)}`, "aria-busy": carregando ? "true" : null });
   el.appendChild(h("header", { class: "ag-mes-cab" },
@@ -687,14 +862,19 @@ export function montarMiniCalendario({ h, mes, consultas = [], bloqueios = [], c
       grade.appendChild(h("button", { type: "button", class: "ag-mes-semana dado", tabindex: "-1", "aria-label": `Abrir a semana de ${dm(cel.iso)} a ${dm(fim)}`, title: `Semana ${semanaISO(cel.iso)} · abrir a semana (W)`,
         dataset: { iso: cel.iso }, on: { click: () => aoAbrirSemana(cel.iso) } }, String(semanaISO(cel.iso))));
     }
-    const oc = cel.foraDoMes || carregando ? null : ocupacaoDoDia(doDia(cel.iso), cel.iso, config, bloqueios);
+    const oc = cel.foraDoMes || carregando ? null : ocupacaoDoDia(doDia(cel.iso), cel.iso, config, bloqueios, ocupacao);
     const n = oc ? oc.n : 0;
     const diaTodo = !cel.foraDoMes && bloqueiosDoDia(bloqueios, cel.iso).some(b => Date.parse(b.fim) - Date.parse(b.inicio) >= 24 * 3600e3 - 1);
+    // plano 1500c · CC-265: a tarde bloqueada (bloqueio de parte do dia) também aparece — meio hachurado e «bloqueio parcial»
+    const parcial = !cel.foraDoMes && !diaTodo && bloqueioParcial(bloqueios, cel.iso);
     const nivel = nivelOcupacao(oc && oc.pct);
     const txtOc = textoOcupacao(oc);
-    const partes = [nomeDia(cel.iso, true), oc ? `${num(n)} ${n === 1 ? "consulta" : "consultas"}` : null, txtOc || null, diaTodo ? "bloqueado" : null, cel.iso === selecionado ? "selecionado" : null].filter(Boolean);
-    const b = h("button", { type: "button", "aria-keyshortcuts": comSemanas ? "W" : null, class: ["ag-mes-dia", `ag-ocup-${nivel}`, cel.foraDoMes && "ag-mes-fora", cel.iso === hoje && "hoje", cel.iso === selecionado && "sel", diaTodo && "ag-mes-bloq", oc && oc.fechado && "ag-mes-fechado", hoje && cel.iso < hoje && "ag-mes-passado"],
-      "aria-label": partes.join(", "), "aria-current": cel.iso === hoje ? "date" : null, tabindex: cel.iso === foco ? "0" : "-1", dataset: { iso: cel.iso },
+    // plano 1500c · CC-264: ao passar o mouse (title) ou focar (aria-description), as 5 primeiras consultas do dia
+    const primeiras = n ? consultasDoDia(doDia(cel.iso), cel.iso).slice(0, 5).map(c => { const p = partesSP(c.inicio); return `${p ? horaTxt(p.min) : ""} ${c.nome || c.titulo || "Consulta"}`; }) : [];
+    const quem = primeiras.length ? `${primeiras.join(" · ")}${n > 5 ? ` e mais ${n - 5}` : ""}` : null;
+    const partes = [nomeDia(cel.iso, true), oc ? `${num(n)} ${n === 1 ? "consulta" : "consultas"}` : null, txtOc || null, diaTodo ? "bloqueado" : parcial ? "bloqueio parcial" : null, cel.iso === selecionado ? "selecionado" : null].filter(Boolean);
+    const b = h("button", { type: "button", "aria-keyshortcuts": comSemanas ? "W" : null, class: ["ag-mes-dia", `ag-ocup-${nivel}`, cel.foraDoMes && "ag-mes-fora", cel.iso === hoje && "hoje", cel.iso === selecionado && "sel", diaTodo && "ag-mes-bloq", parcial && "ag-mes-parcial", oc && oc.fechado && "ag-mes-fechado", hoje && cel.iso < hoje && "ag-mes-passado"],
+      "aria-label": partes.join(", "), "aria-description": quem, title: quem, "aria-current": cel.iso === hoje ? "date" : null, tabindex: cel.iso === foco ? "0" : "-1", dataset: { iso: cel.iso },
       style: { "--p": oc && oc.pct !== null ? oc.pct.toFixed(3) : "0" }, on: { click: () => aoEscolher && aoEscolher(cel.iso) } },
       h("b", { class: "ag-mes-num dado" }, cel.iso.slice(8, 10)),
       h("span", { class: ["ag-mes-n", n > 0 && "tem"], "aria-hidden": "true" }, n > 0 ? num(n) : ""),
@@ -727,14 +907,22 @@ export function pendentesDePresenca(consultas, iso, L, agora = Date.now()) {
 }
 
 export function montarPainelDia({ h, iso, consultas = [], config = null, hoje, aoAbrir, aoMarcar, horaBR = x => x, num = String, pode = false, titulo = null, presenca = null, vazio = null,
-  telBR = String, imprimir = null } = {}) {
+  telBR = String, imprimir = null, contatos = null, desmarcadas = null, compartilhar = null } = {}) {   // plano 1500c · CC-225/CC-226: contatos = {hrefTel, aoConversar, aoLembrar, lembrado}
   const r = resumoDoDia(consultas, iso, config);
   const futuro = !!hoje && iso > hoje;
   const el = h("aside", { class: "ag-painel", "aria-label": "Resumo do dia" });
   // CA-189: «Imprimir dia» (desktop): o @media print do agenda.css deixa só este painel, com hora, paciente, serviço e telefone
+  // plano 1500c · CC-302: «Amanhã» e «Ontem» ditos pelo nome (antes «Dia por vir»/«Dia passado»)
+  const subDia = iso === hoje ? nomeDia(iso, true) : hoje && iso === diaISO(hoje, 1) ? "Amanhã" : hoje && iso === diaISO(hoje, -1) ? "Ontem" : (hoje && iso < hoje ? "Dia passado" : "Dia por vir");
   el.appendChild(h("header", { class: "ag-painel-cab" }, h("h2", { class: "ag-painel-titulo" }, titulo || (iso === hoje ? "Hoje" : nomeDia(iso, true))),
-    h("p", { class: "ag-painel-sub" }, iso === hoje ? nomeDia(iso, true) : (hoje && iso < hoje ? "Dia passado" : "Dia por vir")),
-    typeof imprimir === "function" && r.itens.length ? h("button", { type: "button", class: "bt bt-fant bt-p ag-painel-imprimir", on: { click: () => imprimir(iso) } }, "Imprimir dia") : null));
+    h("p", { class: "ag-painel-sub" }, subDia),
+    typeof imprimir === "function" && r.itens.length ? h("button", { type: "button", class: "bt bt-fant bt-p ag-painel-imprimir", on: { click: () => imprimir(iso) } }, "Imprimir dia") : null,
+    typeof compartilhar === "function" && r.itens.length ? h("button", { type: "button", class: "bt bt-fant bt-p ag-painel-compartilhar", on: { click: () => compartilhar(iso) } }, "Compartilhar") : null));   // plano 1500c · CC-261
+  // plano 1500c · CC-270: as desmarcadas do dia (quando o servidor mandar), recolhidas — quem chega à tarde sabe que a das 10h caiu
+  if (Array.isArray(desmarcadas) && desmarcadas.length) {
+    el.appendChild(h("details", { class: "ag-desmarcadas" }, h("summary", null, `${num(desmarcadas.length)} ${desmarcadas.length === 1 ? "desmarcada" : "desmarcadas"} neste dia`),
+      h("ul", null, desmarcadas.map(x => h("li", null, h("span", { class: "dado" }, horaBR(x.inicio)), ` ${x.nome || x.titulo || "Consulta"}${x.motivo ? ` · ${x.motivo}` : ""}`)))));
+  }
   const kpi = (valor, rotulo, cls) => h("div", { class: ["ag-kpi", cls] }, h("b", { class: "dado", dataset: { valor: String(valor) } }, num(valor)), h("span", null, rotulo));
   // CA-190: dia por vir não tem concluídas nem faltas — os zeros eram ruído (o que houver de verdade continua à mostra)
   el.appendChild(h("div", { class: "ag-painel-kpis" },
@@ -756,50 +944,80 @@ export function montarPainelDia({ h, iso, consultas = [], config = null, hoje, a
     return el;
   }
   const lista = h("ol", { class: "ag-painel-lista" });
-  for (const it of r.itens) lista.appendChild(itemDoPainel({ h, it, presenca, pode, aoAbrir, horaBR, telBR }));
+  for (const it of r.itens) lista.appendChild(itemDoPainel({ h, it, presenca, pode, aoAbrir, horaBR, telBR, contatos }));
   el.appendChild(lista);
   return el;
 }
-/** CA-203: a linha curta do dia no celular: «2 consultas · 1 falta · 1 encaixe» (dia por vir: sem as faltas — CA-190); dia vazio: «vazio». */
-export function textoResumoDia(r, { futuro = false, num = String } = {}) {
-  if (!r || !r.total) return "vazio";
+/** CA-203: a linha curta do dia no celular: «2 consultas · 1 falta · 1 encaixe» (dia por vir: sem as faltas — CA-190).
+    Plano 1500c · CC-303: dia vazio diz «Sem consultas» (o «vazio» soava como erro); dia por vir aberto, «Livre». */
+export function textoResumoDia(r, { futuro = false, num = String, livre = false } = {}) {
+  if (!r || !r.total) return futuro && livre ? "Livre" : "Sem consultas";
   const n = (v, um, varios) => `${num(v)} ${v === 1 ? um : varios}`;
   return [n(r.total, "consulta", "consultas"), r.feitas ? n(r.feitas, "concluída", "concluídas") : null, futuro && !r.faltas ? null : n(r.faltas, "falta", "faltas"),
     r.encaixes ? n(r.encaixes, "encaixe", "encaixes") : null].filter(Boolean).join(" · ");   // plano 1000b · CB-178: sem «0 encaixes»
 }
 /** Uma consulta da lista (painel do dia e visão «Lista»): hora, paciente, serviço, selos e, se já passou, «Compareceu / Faltou». */
-function itemDoPainel({ h, it, presenca = null, pode = false, aoAbrir = null, horaBR = x => x, telBR = String }) {
+function itemDoPainel({ h, it, presenca = null, pode = false, aoAbrir = null, horaBR = x => x, telBR = String, contatos = null }) {
   const c = it.c, nome = c.nome || c.titulo || "Consulta sem nome";
   const pr = presenca && presenca.L ? presencaDaConsulta(c, presenca.L, presenca.agora) : null;
   const grupo = pr && pr.possivel && typeof presenca.aoMarcar === "function"
     ? montarPresenca({ h, c, estado: pr.estado, aoMarcar: presenca.aoMarcar, icone: presenca.icone, rotulos: presenca.L.PRESENCAS, desabilitado: !pode }) : null;
   // a presença marcada já aparece no botão pressionado: o selo «Faltou» fica só para a falta pela etapa
-  const selos = [it.feita ? ["Concluída", "pilula-ok"] : null, it.falta && !(grupo && pr.estado === "faltou") ? ["Faltou", "pilula-ruim"] : null, it.encaixe ? ["Encaixe", "pilula-aten"] : null].filter(Boolean);
+  // plano 1500c · CC-239/CC-324: «Confirmada» (quando o servidor mandar confirmada_em) e «IA» (marcado_por = 'ia')
+  const selos = [it.feita ? ["Concluída", "pilula-ok"] : null, it.falta && !(grupo && pr.estado === "faltou") ? ["Faltou", "pilula-ruim"] : null, it.encaixe ? ["Encaixe", "pilula-aten"] : null,
+    c.confirmada_em && !it.feita ? ["Confirmada", "pilula-ok"] : null, c.marcado_por === "ia" ? ["Marcada pela IA", "pilula-info"] : null].filter(Boolean);
   const bt = h("button", { type: "button", class: ["ag-painel-item", it.feita && "feita"], "aria-haspopup": "dialog", on: { click: () => aoAbrir && aoAbrir(c, bt) } },
     h("span", { class: "ag-painel-hora dado" }, horaBR(c.inicio)),
     h("span", { class: "ag-painel-txt" }, h("b", null, nome), c.servico ? h("small", null, c.servico) : null,
       c.telefone ? h("small", { class: "ag-so-impressao dado" }, telBR(c.telefone)) : null),
     selos.length ? h("span", { class: "ag-painel-selos" }, selos.map(([t, cls]) => h("span", { class: ["pilula", cls] }, t))) : null);
-  return h("li", { class: ["ag-painel-li", grupo && "com-presenca"], dataset: { negocio: c.negocio_id ?? null } }, bt, grupo);
+  // plano 1500c · CC-225: ligar e abrir a conversa direto da linha (44 px, celular); CC-226: «Lembrar» nas consultas de amanhã, com a marca «lembrado»
+  let rapidas = null;
+  if (contatos) {
+    const tel = c.telefone && typeof contatos.hrefTel === "function" ? contatos.hrefTel(c.telefone) : null;
+    const lembrado = typeof contatos.lembrado === "function" && contatos.lembrado(c);
+    const podeLembrar = typeof contatos.podeLembrar === "function" && contatos.podeLembrar(c);
+    const bts = [
+      tel ? h("a", { class: "bt-icone ag-li-tel", href: tel, "aria-label": `Ligar para ${nome}`, title: `Ligar · ${telBR(c.telefone)}` }, contatos.icone ? contatos.icone("telefone") : "☎") : null,
+      c.contato_id != null && typeof contatos.aoConversar === "function" ? h("button", { type: "button", class: "bt-icone ag-li-conversa", "aria-label": `Abrir a conversa de ${nome}`, title: "Abrir conversa",
+        on: { click: () => contatos.aoConversar(c) } }, contatos.icone ? contatos.icone("whatsapp") : "✉") : null,
+      lembrado ? h("span", { class: "pilula pilula-ok ag-li-lembrado" }, "Lembrado")
+        : podeLembrar && typeof contatos.aoLembrar === "function" ? h("button", { type: "button", class: "bt bt-fant bt-p ag-li-lembrar", "aria-label": `Lembrar ${nome}`, on: { click: () => contatos.aoLembrar(c) } },
+          contatos.icone ? contatos.icone("sino") : null, "Lembrar") : null,
+    ].filter(Boolean);
+    if (bts.length) rapidas = h("span", { class: "ag-li-rapidas" }, bts);
+  }
+  return h("li", { class: ["ag-painel-li", grupo && "com-presenca", rapidas && "com-rapidas"], dataset: { negocio: c.negocio_id ?? null, nome: normServico(`${nome} ${c.servico || ""}`) } }, bt, rapidas, grupo);
 }
 /** CA-269: a visão «Lista» — os dias do período em ordem, cada um com as consultas (hora, paciente, serviço, selos, presença) ou «Livre».
     Para o celular, onde a grade de horas mostra uma consulta num mar vazio. */
 export function montarListaDias({ h, dias = [], consultas = [], config = null, hoje = "", presenca = null, pode = false, aoAbrir = null, aoMarcar = null,
-  horaBR = x => x, telBR = String, num = String, uid = "l" } = {}) {
+  horaBR = x => x, telBR = String, num = String, uid = "l", bloqueios = [], contatos = null } = {}) {
   const el = h("div", { class: "ag-lista" });
   for (const iso of dias) {
     const r = resumoDoDia(consultas, iso, config);
     const id = `ag-lista-${uid}-${iso}`;
     const rot = rotuloDoDia(iso, hoje);
     const titulo = rot === "Hoje" || rot === "Amanhã" ? `${rot} · ${nomeDia(iso, true)}` : nomeDia(iso, true);
-    const sec = h("section", { class: ["ag-lista-dia", iso === hoje && "hoje", hoje && iso < hoje && "passado"], "aria-labelledby": id, dataset: { iso } },
+    const passado = !!hoje && iso < hoje;
+    // plano 1500c · CC-174/CC-175/CC-304: dia bloqueado diz o motivo, dia fechado diz «Fechado» (sem «Marcar») e dia passado sem consulta não é «livre»
+    const travas = bloqueiosDoDia(bloqueios, iso);
+    const fechado = Array.isArray(faixasDoDia(config, iso)) && faixasDoDia(config, iso).length === 0;
+    const todoBloq = diaTodoBloqueado(bloqueios, iso);
+    const selo = r.total ? `${num(r.total)} ${r.total === 1 ? "consulta" : "consultas"}` : passado ? "sem consultas" : todoBloq ? "bloqueado" : fechado ? "fechado" : "livre";
+    const sec = h("section", { class: ["ag-lista-dia", iso === hoje && "hoje", passado && "passado", (todoBloq || fechado) && !r.total && "ag-lista-fechado"], "aria-labelledby": id, dataset: { iso } },
       h("h3", { class: "ag-lista-tit", id }, h("span", null, titulo),
-        h("small", { class: "dado" }, r.total ? `${num(r.total)} ${r.total === 1 ? "consulta" : "consultas"}` : "livre")));
+        h("small", { class: "dado" }, selo)));
+    if (travas.length) sec.appendChild(h("p", { class: "ag-lista-bloq" }, travas.map(b => textoBloqueioNoDia(b, iso)).join(" · ")));
     if (r.itens.length) {
       const ol = h("ol", { class: "ag-painel-lista" });
-      for (const it of r.itens) ol.appendChild(itemDoPainel({ h, it, presenca, pode, aoAbrir, horaBR, telBR }));
+      for (const it of r.itens) ol.appendChild(itemDoPainel({ h, it, presenca, pode, aoAbrir, horaBR, telBR, contatos }));
       sec.appendChild(ol);
-    } else if (pode && typeof aoMarcar === "function" && !(hoje && iso < hoje)) {
+    } else if (todoBloq || passado) {
+      /* o motivo do bloqueio já está escrito; dia passado não marca */
+    } else if (fechado) {
+      sec.appendChild(h("p", { class: "ag-livre ag-livre-leitura ag-lista-fechado-txt" }, "Fechado neste dia"));
+    } else if (pode && typeof aoMarcar === "function") {
       sec.appendChild(h("button", { type: "button", class: "ag-livre ag-lista-livre", "aria-label": `Marcar consulta em ${nomeDia(iso, true)}`, on: { click: () => aoMarcar(iso) } },
         h("span", null, "Livre"), h("span", { class: "ag-livre-acao" }, "Marcar")));
     }
@@ -825,7 +1043,7 @@ export function montarPresenca({ h, c, estado = null, aoMarcar, icone = null, ro
   for (const est of ["compareceu", "faltou"]) {
     const on = estado === est;
     const b = h("button", { type: "button", class: ["ag-pres-bt", `ag-pres-${est}`], dataset: { estado: est }, "aria-pressed": String(on), disabled: desabilitado,
-      title: on ? "Tocar de novo limpa a marcação" : null },
+      title: on ? "Tocar de novo pergunta se quer limpar a marcação" : null },   // plano 1500c · CC-221: limpar pede confirmação
       typeof icone === "function" ? icone(P[est].icone) : null, P[est].rotulo);
     b.addEventListener("click", () => { if (aoMarcar) aoMarcar(c, est, b); });
     el.appendChild(b);
@@ -871,29 +1089,50 @@ export function primeiroNomeAgenda(nome) {
   let i = 0;
   while (i < partes.length - 1 && TRATAMENTOS.has(partes[i].normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\.$/, ""))) i++;
   if (TRATAMENTOS.has(partes[i].normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\.$/, ""))) return "";   // só o título
-  return partes[i].charAt(0).toLocaleUpperCase("pt-BR") + partes[i].slice(1);
+  // plano 1500c · CC-210: nome todo em maiúsculas («MARIA SOUZA») vira «Maria» (a mesma regra proposta para o cv-logica)
+  const p = partes[i].length > 1 && partes[i] === partes[i].toLocaleUpperCase("pt-BR") && partes[i] !== partes[i].toLocaleLowerCase("pt-BR")
+    ? partes[i].toLocaleLowerCase("pt-BR") : partes[i];
+  return p.charAt(0).toLocaleUpperCase("pt-BR") + p.slice(1);
 }
 const saudacao = c => { const n = primeiroNomeAgenda(c && c.nome); return `Olá${n ? `, ${n}` : ""}!`; };
 const quandoTxt = (p, hojeISO) => (p.dia === hojeISO ? "hoje" : p.dia === diaISO(hojeISO, 1) ? "amanhã" : `dia ${p.dia.slice(8, 10)}/${p.dia.slice(5, 7)} (${semanaLonga(p.dia)})`);
-/** E6: texto curto do lembrete (a pessoa confere e envia): «Olá, Mariana! Passando para lembrar da sua consulta (Avaliação) amanhã às 10:00. Podemos confirmar?» */
-export function textoLembrete(c, hojeISO) {
+/** Plano 1500c · CC-205: a palavra do que a Agenda marca na vertical (consulta · visita · entrega; vocab.compromisso, sempre feminina). */
+export function palavraCompromisso(vocab = null) { return vocab && typeof vocab.min === "function" && vocab.compromisso ? vocab.min("compromisso") : "consulta"; }
+const servicoTxt = c => { const s = String((c && c.servico) || "").trim(); return s ? ` (${s})` : ""; };
+/** E6: texto curto do lembrete (a pessoa confere e envia): «Olá, Mariana! Passando para lembrar da sua consulta (Avaliação) amanhã às 10:00. Podemos confirmar?»
+    Plano 1500c · CC-205/CC-206: a palavra da vertical e, com `empresa`/`endereco`, de onde é e onde fica («Aqui é da Clínica Sorriso… na Rua X, 10»). */
+export function textoLembrete(c, hojeISO, { vocab = null, empresa = "", endereco = "" } = {}) {
   const p = c && partesSP(c.inicio);
   if (!p) return "";
-  const servico = String((c && c.servico) || "").trim();
-  return `${saudacao(c)} Passando para lembrar da sua consulta${servico ? ` (${servico})` : ""} ${quandoTxt(p, hojeISO)} às ${horaTxt(p.min)}. Podemos confirmar?`;
+  const pal = palavraCompromisso(vocab), emp = String(empresa || "").trim(), end = String(endereco || "").replace(/\s+/g, " ").trim().slice(0, 160);
+  if (emp || end) return `${saudacao(c)}${emp ? ` Aqui é da ${emp}.` : ""} Lembrando da sua ${pal}${servicoTxt(c)} ${quandoTxt(p, hojeISO)} às ${horaTxt(p.min)}${end ? `, na ${end}` : ""}. Podemos confirmar?`;
+  return `${saudacao(c)} Passando para lembrar da sua ${pal}${servicoTxt(c)} ${quandoTxt(p, hojeISO)} às ${horaTxt(p.min)}. Podemos confirmar?`;
 }
-/** CA-176: a confirmação logo depois de marcar (rascunho na conversa; nada sai sozinho). */
-export function textoConfirmacao(c, hojeISO) {
+/** CA-176: a confirmação logo depois de marcar (rascunho na conversa; nada sai sozinho). CC-205: a palavra da vertical. */
+export function textoConfirmacao(c, hojeISO, { vocab = null } = {}) {
   const p = c && partesSP(c.inicio);
   if (!p) return "";
-  const servico = String((c && c.servico) || "").trim();
-  return `${saudacao(c)} Sua consulta${servico ? ` (${servico})` : ""} está marcada para ${quandoTxt(p, hojeISO)} às ${horaTxt(p.min)}. Qualquer imprevisto, é só avisar por aqui.`;
+  const pal = palavraCompromisso(vocab);
+  return `${saudacao(c)} Sua ${pal}${servicoTxt(c)} está marcada para ${quandoTxt(p, hojeISO)} às ${horaTxt(p.min)}. Qualquer imprevisto, é só avisar por aqui.`;
 }
-/** CA-178: o aviso de que a consulta foi desmarcada (rascunho; a pessoa confere e envia). */
-export function textoDesmarcacao(c, hojeISO) {
+/** CA-178: o aviso de que a consulta foi desmarcada (rascunho; a pessoa confere e envia). CC-207: com o serviço; CC-205: a palavra da vertical. */
+export function textoDesmarcacao(c, hojeISO, { vocab = null } = {}) {
   const p = c && partesSP(c.inicio);
   if (!p) return "";
-  return `${saudacao(c)} Sua consulta de ${quandoTxt(p, hojeISO)} às ${horaTxt(p.min)} foi desmarcada. Quer escolher um novo horário?`;
+  return `${saudacao(c)} Sua ${palavraCompromisso(vocab)}${servicoTxt(c)} de ${quandoTxt(p, hojeISO)} às ${horaTxt(p.min)} foi desmarcada. Quer escolher um novo horário?`;
+}
+/** Plano 1500c · CC-178: o aviso de remarcação («Sua consulta (Avaliação) foi remarcada para amanhã às 10:00.») — `c.inicio` já é o horário NOVO. */
+export function textoRemarcacao(c, hojeISO, { vocab = null } = {}) {
+  const p = c && partesSP(c.inicio);
+  if (!p) return "";
+  return `${saudacao(c)} Sua ${palavraCompromisso(vocab)}${servicoTxt(c)} foi remarcada para ${quandoTxt(p, hojeISO)} às ${horaTxt(p.min)}. Se não puder, é só avisar por aqui.`;
+}
+/** Plano 1500c · CC-223: para quem faltou — «Sentimos sua falta na consulta de hoje. Vamos remarcar?». */
+export function textoFalta(c, hojeISO, { vocab = null } = {}) {
+  const p = c && partesSP(c.inicio);
+  if (!p) return "";
+  const quando = p.dia === hojeISO ? "de hoje" : p.dia === diaISO(hojeISO, -1) ? "de ontem" : `do dia ${p.dia.slice(8, 10)}/${p.dia.slice(5, 7)}`;
+  return `${saudacao(c)} Sentimos sua falta na ${palavraCompromisso(vocab)}${servicoTxt(c)} ${quando}. Vamos remarcar? Me diga o melhor dia e horário.`;
 }
 /** E6: a conversa do contato onde o lembrete entra: a aberta; sem aberta, a mais recente (a mesma regra de #/conversas?contato=). */
 export function conversaDoContato(conversas) {
@@ -1071,7 +1310,8 @@ async function procurarNegocios(ctx, q) {
   const { api } = ctx;
   const r = await api.rpcC("nx_buscar", { p_q: q });
   // plano 1000b · CB-170: até 30 (a janela mostra 8 e «Ver mais»; homônimos não ficam de fora)
-  if (r && Array.isArray(r.negocios)) return r.negocios.filter(n => n.status === "aberto").slice(0, 30);
+  // plano 1500c · CC-198: e até 10 já GANHOS (tratamento fechado) para «Marcar retorno» — quem chama separa pelo status
+  if (r && Array.isArray(r.negocios)) return [...r.negocios.filter(n => n.status === "aberto").slice(0, 30), ...r.negocios.filter(n => n.status === "ganho").slice(0, 10)];
   const crm = await ctx.carregar("crm");
   const k = await crm.kit(ctx);
   const mapa = new Map();
@@ -1139,7 +1379,8 @@ export function palavrasAgenda(vocab = null) {
 /** Plano 1000b · CB-150: a busca roda com 2 caracteres de qualquer tipo («quatro números» não era a regra). */
 export const LIMITE_DIAS_TXT = "A agenda abre até 180 dias à frente.";
 export const TEXTO_BUSCA_CURTA = "Digite pelo menos 2 letras ou números.";
-export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = null, base = null, aoMudar = null, soEscolher = false, config = null, avisar = null, aoBloquear = null, busca = "" } = {}) {
+export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = null, base = null, aoMudar = null, soEscolher = false, config = null, avisar = null, aoBloquear = null, busca = "",
+  encaixeAgora = false } = {}) {   // plano 1500c · CC-253: «Encaixar agora» (quem chegou sem hora): o horário de agora já vem escolhido como encaixe
   const { ui, api } = ctx;
   if (!ctx.pode("atendente")) {
     // CA-005: quem só vê a agenda (papel leitura) recebe a explicação — antes o atalho «Agenda» não abria nada nem dizia por quê
@@ -1191,8 +1432,16 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   const listaServ = h("datalist", { id: `ag-serv-${uid}` });
   servInput.setAttribute("list", listaServ.getAttribute("id"));
   const avisoServ = h("p", { class: "campo-ajuda ag-serv-aviso", "aria-live": "polite" });
+  // plano 1500c · CC-204: no toque o datalist quase não aparece — os serviços da configuração viram chips acima do campo (o CSS mostra só no toque)
+  const chipsServ = h("div", { class: "ag-serv-chips", role: "group", "aria-label": "Serviços cadastrados" });
   const outraData = ui.campo({ rotulo: "Ver a partir de", nome: "data", tipo: "data", valor: aPartirInicial });
   outraData.querySelector("input").setAttribute("min", hoje);   // plano 1000b · CB-169: o seletor não oferece dia passado
+  // plano 1500c · CC-202: retorno em 1 semana, 15 ou 30 dias sem contar no calendário
+  const retornos = h("div", { class: "ag-retornos", role: "group", "aria-label": "Retorno em" },
+    [[7, "Em 1 semana"], [15, "15 dias"], [30, "30 dias"]].map(([n, rot]) => h("button", { type: "button", class: "bt bt-fant bt-p ag-retorno", dataset: { dias: String(n) },
+      on: { click: () => { outraData.querySelector("input").value = diaISO(hoje, n); aoTrocarData(); } } }, rot)));
+  // plano 1500c · CC-245: a observação da consulta («trazer exames») vai junto (p_observacao: o servidor grava na nota da marcação)
+  const obsEl = soEscolher ? null : ui.campo({ rotulo: "Observação (opcional)", nome: "observacao", max: 200, placeholder: "Ex.: trazer exames" });
   const atalhos = h("div", { class: "ag-atalhos" });
   const diasEl = h("div", { class: "ag-dias", role: "radiogroup", "aria-label": "Dia" });
   const horasEl = h("div", { class: "ag-horas", role: "radiogroup", "aria-label": "Horário" });
@@ -1211,7 +1460,7 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   const quem = h("section", { class: "ag-quem", "aria-label": "Quem", hidden: soEscolher && !(sel && sel.id) }, passo(1, "Quem"), secBusca, escolhido, btBloquear);
   const quando = h("section", { class: "ag-quando", "aria-label": "Quando", hidden: !sel },
     soEscolher && !(sel && sel.id) ? null : passo(2, "Quando"),
-    h("div", { class: "agenda-form-grade" }, servicoEl, outraData), avisoServ, listaServ, outroDia, atalhos, diasEl, horasEl, maisEl, info, encaixeEl);
+    chipsServ, h("div", { class: "agenda-form-grade" }, servicoEl, outraData), avisoServ, listaServ, retornos, outroDia, atalhos, diasEl, horasEl, maisEl, info, encaixeEl, obsEl);   // plano 1500c · CC-202/CC-204/CC-245
   const formulario = h("form", { class: "agenda-form", novalidate: true }, quem, quando, statusEl, faltaEl);
   const avisarOutroDia = txt => { outroDiaTxt.textContent = txt || ""; outroDia.hidden = !txt; };
   radiosComSetas(diasEl); radiosComSetas(horasEl);
@@ -1224,12 +1473,23 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
     const v = servicoValor();
     if (!v || !dur || !Object.keys(dur).length) { avisoServ.textContent = ""; return; }
     const k = Object.keys(dur).find(n => normServico(n) === normServico(v));
-    avisoServ.textContent = k ? `Duração de «${k}»: ${dur[k]} min.` : `Serviço sem duração própria: ${Number(cfgAgenda.duracao_min) || 30} min (padrão).`;
+    ui.limpar(avisoServ);
+    if (k) { avisoServ.textContent = `Duração de «${k}»: ${dur[k]} min.`; return; }
+    // plano 1500c · CC-203: «Avalição» não vira serviço novo sem a pessoa saber — «Quis dizer Avaliação?» troca num toque
+    const parecido = servicoParecido(v, Object.keys(dur));
+    avisoServ.append(`Serviço sem duração própria: ${Number(cfgAgenda.duracao_min) || 30} min (padrão).`);
+    if (parecido) avisoServ.append(" ", h("button", { type: "button", class: "bt-link ag-serv-parecido", on: { click: () => { servInput.value = parecido; avisarServico(); if (sel) { ultimoServicoLido = parecido; carregarHorarios(); } } } }, `Quis dizer ${parecido}?`));
   }
   function pintarServicos() {
     ui.limpar(listaServ);
+    ui.limpar(chipsServ);
     // plano 1000b · CB-185: a sugestão mostra a duração («Avaliação · 30 min»); o valor continua só o nome
-    for (const [nome, min] of Object.entries((cfgAgenda && cfgAgenda.duracoes) || {})) listaServ.appendChild(h("option", { value: nome, label: Number(min) > 0 ? `${nome} · ${min} min` : nome }));
+    const servs = Object.entries((cfgAgenda && cfgAgenda.duracoes) || {});
+    for (const [nome, min] of servs) listaServ.appendChild(h("option", { value: nome, label: Number(min) > 0 ? `${nome} · ${min} min` : nome }));
+    // CC-204: os 6 primeiros da configuração em chips (44 px no toque)
+    for (const [nome] of servs.slice(0, 6)) chipsServ.appendChild(h("button", { type: "button", class: "ag-serv-chip", dataset: { servico: nome },
+      on: { click: () => { servInput.value = nome; avisarServico(); if (sel) { ultimoServicoLido = nome; carregarHorarios(); } } } }, nome));
+    chipsServ.hidden = !servs.length;
     avisarServico();
   }
   pintarServicos();
@@ -1240,8 +1500,10 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   servInput.addEventListener("input", avisarServico);
 
   /* ---------- CA-171: «Confirmar» só vale com a oportunidade e o horário ---------- */
+  // plano 1500c · CC-199: vindo da busca, «Confirmar» espera a ficha (no máximo 1,5 s) — o aviso «será remarcada» aparece antes do 2º toque
+  let fichaPendente = false;
   function atualizarConfirmar() {
-    const falta = !sel ? `Escolha ${P.a} ${P.neg}.` : !slotSel ? "Escolha um dia e um horário livre." : "";
+    const falta = !sel ? `Escolha ${P.a} ${P.neg}.` : !slotSel ? "Escolha um dia e um horário livre." : fichaPendente ? "Conferindo se já tem consulta marcada…" : "";
     faltaEl.textContent = falta;
     if (!btConf) return;
     btConf.setAttribute("aria-disabled", String(!!falta));
@@ -1267,17 +1529,26 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   function selecionarSlot(slot) {
     slotSel = slot || null;
     diaSel = slot ? slot.dia : (grupos[0] && grupos[0].dia) || null;
-    encaixeChk.checked = false; encaixeEl.hidden = true;     // outro horário: o encaixe era daquele
+    // plano 1500c · CC-299/CC-318: escolher um horário LOTADO (só supervisor+) já liga o encaixe, com o aviso; outro horário desliga
+    const lotado = !!(slot && slot.livre === false);
+    encaixeChk.checked = lotado; encaixeEl.hidden = !lotado;
     desenharAtalhos(); desenharDias(); desenharHoras();
-    info.textContent = slot ? `${rotuloDoDia(slot.dia, hoje)}, ${ui.horaBR(slot.inicio)} · duração prevista ${ui.num(duracao)} min · horário de São Paulo` : "";
+    // plano 1500c · CC-049: «horário de Brasília», o mesmo nome dos Departamentos (cv-config)
+    info.textContent = slot ? `${rotuloDoDia(slot.dia, hoje)}, ${ui.horaBR(slot.inicio)} · duração prevista ${ui.num(duracao)} min · horário de Brasília${lotado ? " · encaixe" : ""}` : "";
     atualizarConfirmar();
   }
   function desenharAtalhos() {
     ui.limpar(atalhos);
     const pl = primeiroLivre(grupos), am = amanhaDeManha(grupos, hoje);
+    // plano 1500c · CC-201: «Hoje à tarde» e «Próxima semana», os pedidos mais comuns no telefone (sem repetir o que já é outro atalho)
+    const ta = hojeATarde(grupos, hoje), ps = proximaSemana(grupos, hoje);
+    const ja = new Set([pl, am].filter(Boolean).map(s => s.inicio));
+    const bt = (s, rot, cls, ic = null) => h("button", { type: "button", class: ["bt", "bt-fant", "bt-p", cls, slotSel && s.inicio === slotSel.inicio && "ativo"], on: { click: () => selecionarSlot(s) } }, ic, rot);
     atalhos.append(...[
-      pl ? h("button", { type: "button", class: ["bt", "bt-fant", "bt-p", slotSel && pl.inicio === slotSel.inicio && "ativo"], on: { click: () => selecionarSlot(pl) } }, ui.icone("relogio"), "Primeiro livre") : null,
-      am ? h("button", { type: "button", class: ["bt", "bt-fant", "bt-p", slotSel && am.inicio === slotSel.inicio && "ativo"], on: { click: () => selecionarSlot(am) } }, "Amanhã de manhã") : null,
+      pl ? bt(pl, "Primeiro livre", "ag-at-primeiro", ui.icone("relogio")) : null,
+      am ? bt(am, "Amanhã de manhã", "ag-at-amanha") : null,
+      ta && !ja.has(ta.inicio) ? bt(ta, "Hoje à tarde", "ag-at-tarde") : null,
+      ps && !ja.has(ps.inicio) ? bt(ps, "Próxima semana", "ag-at-semana") : null,
     ].filter(Boolean));
   }
   function desenharDias() {
@@ -1297,13 +1568,42 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   function desenharHoras() {
     ui.limpar(horasEl);
     const g = grupos.find(x => x.dia === diaSel);
-    for (const s of (g ? g.itens : [])) {
-      const on = slotSel && s.inicio === slotSel.inicio;
-      const vagas = (Number(s.capacidade) || 1) - (Number(s.ocupados) || 0);
-      horasEl.appendChild(h("button", { type: "button", role: "radio", class: "ag-hora-pill dado", "aria-checked": String(!!on), tabindex: on ? "0" : "-1", title: `${vagas} vaga${vagas === 1 ? "" : "s"}`,
-        "aria-label": `${horaTxt(s.min)}, ${vagas} vaga${vagas === 1 ? "" : "s"}`, on: { click: () => selecionarSlot(s) } }, horaTxt(s.min),
-        // plano 1000b · CB-184: horário que aceita mais de um mostra as vagas na pílula (no toque ninguém via o title)
-        (Number(s.capacidade) || 1) > 1 ? h("small", { class: "ag-hora-vagas", "aria-hidden": "true" }, `${vagas} ${vagas === 1 ? "vaga" : "vagas"}`) : null));
+    // plano 1500c · CC-299: os horários LOTADOS do dia aparecem também («10:00 · lotado»): a recepção sabe que está cheio, não fechado
+    const itens = [...(g ? g.itens : []), ...(lotadosPorDia.get(diaSel) || [])].sort((a, b) => a.min - b.min);
+    const encaixa = ctx.pode("supervisor") && !soEscolher;
+    const diaRot = diaSel ? rotuloDoDia(diaSel, hoje) : "";
+    // plano 1500c · CC-200: em Manhã / Tarde / Noite, sem caixa com rolagem própria (a janela rola)
+    for (const per of periodosDoDia(itens)) {
+      const caixa = h("div", { class: "ag-horas-per", role: "group", "aria-label": per.rotulo }, h("p", { class: "ag-horas-per-tit", "aria-hidden": "true" }, per.rotulo));
+      for (const s of per.itens) {
+        if (s.livre === false) {
+          caixa.appendChild(encaixa
+            ? h("button", { type: "button", role: "radio", class: "ag-hora-pill ag-hora-lotada dado", "aria-checked": String(!!(slotSel && s.inicio === slotSel.inicio)), tabindex: slotSel && s.inicio === slotSel.inicio ? "0" : "-1",
+              "aria-label": `${diaRot}, ${horaTxt(s.min)}, lotado: escolher marca como encaixe`, title: "Lotado: escolher marca como encaixe", on: { click: () => selecionarSlot(s) } }, horaTxt(s.min), h("small", { class: "ag-hora-vagas", "aria-hidden": "true" }, "lotado"))
+            : h("span", { class: "ag-hora-pill ag-hora-lotada dado", "aria-label": `${diaRot}, ${horaTxt(s.min)}, lotado` }, horaTxt(s.min), h("small", { class: "ag-hora-vagas", "aria-hidden": "true" }, "lotado")));
+          continue;
+        }
+        const on = slotSel && s.inicio === slotSel.inicio;
+        const vagas = (Number(s.capacidade) || 1) - (Number(s.ocupados) || 0);
+        // plano 1500c · CC-320: o nome da pílula diz o dia («Sex 24/10, 10:00, 1 vaga»)
+        caixa.appendChild(h("button", { type: "button", role: "radio", class: "ag-hora-pill dado", "aria-checked": String(!!on), tabindex: on ? "0" : "-1", title: `${vagas} vaga${vagas === 1 ? "" : "s"}`,
+          "aria-label": `${diaRot ? `${diaRot}, ` : ""}${horaTxt(s.min)}, ${vagas} vaga${vagas === 1 ? "" : "s"}`, on: { click: () => selecionarSlot(s) } }, horaTxt(s.min),
+          // plano 1000b · CB-184: horário que aceita mais de um mostra as vagas na pílula (no toque ninguém via o title)
+          (Number(s.capacidade) || 1) > 1 ? h("small", { class: "ag-hora-vagas", "aria-hidden": "true" }, `${vagas} ${vagas === 1 ? "vaga" : "vagas"}`) : null));
+      }
+      horasEl.appendChild(caixa);
+    }
+  }
+  /** CC-299: os horários lotados (livre = false) por dia, guardados ao lado dos livres. */
+  const lotadosPorDia = new Map();
+  function guardarLotados(horarios, limpar = false) {
+    if (limpar) lotadosPorDia.clear();
+    for (const s of horarios || []) {
+      if (!s || s.livre !== false) continue;
+      const p = partesSP(s.inicio);
+      if (!p) continue;
+      if (!lotadosPorDia.has(p.dia)) lotadosPorDia.set(p.dia, []);
+      if (!lotadosPorDia.get(p.dia).some(x => x.inicio === s.inicio)) lotadosPorDia.get(p.dia).push({ ...s, dia: p.dia, min: p.min });
     }
   }
   const argsLivres = de => ({ p_a_partir: de, p_dias: 14, p_servico: servicoValor() || null, p_negocio: sel ? sel.id : null });
@@ -1316,12 +1616,35 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
     ui.limpar(atalhos); ui.limpar(diasEl); ui.limpar(horasEl);
     try {
       const de = dataValor();
+      // plano 1500c · CC-173: data depois do limite de dias à frente — o motivo é o limite, não a falta de horário
+      const alem = avisoAlemDoLimite(de, hoje, cfgAgenda);
+      if (alem) {
+        grupos = []; slotSel = null; diaSel = null; lotadosPorDia.clear(); atualizarConfirmar();
+        info.textContent = `${alem} Escolha uma data até lá (o limite fica em Configurações › Agenda).`;
+        return;
+      }
       const r = await api.rpcC("nx_agenda_livres", argsLivres(de));
       if (minha !== seqH) return;
       janelaIni = de; janelaDias = 14;
       duracao = r.duracao_min;
       grupos = agruparLivres(r.horarios);
-      maisEl.hidden = false;
+      guardarLotados(r.horarios, true);
+      // plano 1500c · CC-172: «Ver mais 14 dias» respeita o limite configurado (dias_a_frente), não os 180 fixos
+      maisEl.hidden = !podeVerMais({ janelaIni, janelaDias, hoje, config: cfgAgenda });
+      if (encaixeAgora && inicial) {
+        // CC-253: o horário de agora (arredondado para cima, de 5 em 5 min) já escolhido como encaixe
+        const n = partesSP(new Date());
+        const min = n ? Math.min(23 * 60 + 55, Math.ceil((n.min + 1) / 5) * 5) : null;
+        if (n && min !== null) {
+          const s = { inicio: isoNoFuso(hoje, horaTxt(min)), dia: hoje, min, livre: false, capacidade: 1, ocupados: 1 };
+          if (!lotadosPorDia.has(hoje)) lotadosPorDia.set(hoje, []);
+          lotadosPorDia.get(hoje).push(s);
+          if (!grupos.some(g => g.dia === hoje)) grupos = [{ dia: hoje, itens: [] }, ...grupos];
+          selecionarSlot(s);
+          info.textContent = `Encaixe agora: hoje às ${horaTxt(min)} (passa da capacidade e da antecedência). Confira e confirme.`;
+          return;
+        }
+      }
       if (!grupos.length) { slotSel = null; diaSel = null; atualizarConfirmar(); info.textContent = "Não há horários livres nos 14 dias a partir desta data. Veja mais dias, tente outra data ou confira as configurações da agenda."; return; }
       let escolha = null;
       if (inicial && preferido) escolha = slotMaisPerto(grupos, preferido.dia, preferido.hora);
@@ -1345,7 +1668,8 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   }
   /** CA-173: mais 14 dias depois do último pedido, somados ao fim da lista (retornos de 30/60 dias sem trocar a data à mão). */
   async function verMaisDias() {
-    if (!sel || !janelaIni || janelaDias >= 180) return;
+    // plano 1500c · CC-172: o limite é o da configuração (dias_a_frente, até 180), contado de hoje
+    if (!sel || !janelaIni || !podeVerMais({ janelaIni, janelaDias, hoje, config: cfgAgenda })) return;
     const minha = ++seqH;
     const de = diaISO(janelaIni, janelaDias);
     maisEl.disabled = true;
@@ -1354,11 +1678,13 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
       if (minha !== seqH) return;
       janelaDias += 14;
       if (duracao == null) duracao = r.duracao_min;
+      guardarLotados(r.horarios);
       const novos = agruparLivres(r.horarios).filter(g => !grupos.some(x => x.dia === g.dia));
       grupos = grupos.concat(novos);
-      maisEl.hidden = janelaDias >= 180;
+      const noLimite = !podeVerMais({ janelaIni, janelaDias, hoje, config: cfgAgenda });
+      maisEl.hidden = noLimite;
       // plano 1000b · CB-168: o botão some no limite — o aviso diz por quê
-      const limite = janelaDias >= 180 ? ` ${LIMITE_DIAS_TXT}` : "";
+      const limite = noLimite ? ` ${textoLimiteDias(cfgAgenda)}` : "";
       if (!novos.length) { info.textContent = `Nenhum horário livre até ${ui.dataBR ? ui.dataBR(diaISO(janelaIni, janelaDias - 1)) : diaISO(janelaIni, janelaDias - 1)}.${limite}`; return; }
       if (slotSel) { desenharAtalhos(); desenharDias(); } else selecionarSlot(primeiroLivre(grupos));
       const primeiroNovo = diasEl.querySelector(`[data-dia="${novos[0].dia}"]`);
@@ -1367,15 +1693,21 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
     } catch (e) { if (minha === seqH) ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
     finally { maisEl.disabled = false; }
   }
-  servInput.addEventListener("change", () => { if (sel) carregarHorarios(); });
-  outraData.querySelector("input").addEventListener("change", () => {
+  // plano 1500c · CC-321: digitar o serviço já relê os horários (a duração muda) — antes só ao sair do campo, e a pílula tocada era da duração antiga
+  let ultimoServicoLido = servicoValor();
+  const releituraServico = () => { if (sel && servicoValor() !== ultimoServicoLido) { ultimoServicoLido = servicoValor(); carregarHorarios(); } };
+  const releituraServicoDepois = typeof ui.debounce === "function" ? ui.debounce(releituraServico, 500) : releituraServico;
+  servInput.addEventListener("input", releituraServicoDepois);
+  servInput.addEventListener("change", () => { if (releituraServicoDepois.cancelar) releituraServicoDepois.cancelar(); if (sel) { ultimoServicoLido = servicoValor(); carregarHorarios(); } });
+  function aoTrocarData() {
     // plano 1000b · CB-169: data passada (digitada) vira hoje, com o aviso — o servidor só tem horário de hoje em diante
     const campo = outraData.querySelector("input");
     let aviso = "";
     if (campo.value && campo.value < hoje) { campo.value = hoje; aviso = "Essa data já passou: mostrando a partir de hoje."; }
     if (sel) { slotSel = null; carregarHorarios().then(() => { if (aviso && !info.textContent.startsWith(aviso)) info.textContent = `${aviso} ${info.textContent}`.trim(); }); }
     else if (aviso) info.textContent = aviso;
-  });
+  }
+  outraData.querySelector("input").addEventListener("change", aoTrocarData);
 
   /* ---------- busca enquanto digita ---------- */
   /** A ficha diz em que etapa a oportunidade está AGORA (o «Desfazer» devolve o cartão a ela) e, na busca, traz o serviço e a consulta atual. */
@@ -1397,10 +1729,23 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   function escolher(item, { teclado = false } = {}) {
     sel = { id: item.id, titulo: item.titulo || item.contato_nome || "Negócio", servico: "", funil_nome: item.estagio_nome || "", consultaAtual: null, contato_id: item.contato_id ?? null, nome: item.contato_nome || null, antes: null };
     focarHoraAoCarregar = teclado;
+    fichaPendente = true;     // CC-199
     pintarEscolhido();
     carregarHorarios({ inicial: true });
     // a ficha traz o serviço e a consulta atual (se houver, o aviso de que será remarcada); a duração já vem do servidor pelo negócio
     lerFicha({ completar: true });
+    const meu = sel;
+    const soltar = () => { if (sel === meu && fichaPendente) { fichaPendente = false; atualizarConfirmar(); } };
+    Promise.race([fichaP || Promise.resolve(), new Promise(r => setTimeout(r, 1500))]).then(soltar, soltar);
+  }
+  /** CC-198: retorno de quem já foi atendido — a gaveta do CRM cria a oportunidade com o mesmo contato e ela já fica escolhida. */
+  async function marcarRetorno(g) {
+    try {
+      await ctx.novoNegocio({ ...(g.contato_id != null ? { contato_id: g.contato_id } : {}), nome: g.contato_nome || g.titulo || "" }, { aoCriar: n => {
+        if (!n || n.atualizado || n.id === null || n.id === undefined) return;
+        escolher({ id: n.id, titulo: n.titulo || n.nome || g.contato_nome || "Retorno", estagio_nome: n.estagio_nome || "", contato_id: n.contato_id ?? g.contato_id ?? null, contato_nome: n.contato_nome || g.contato_nome || null });
+      } });
+    } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
   }
   async function novoPaciente() {
     const q = inputBusca.value.trim();
@@ -1432,13 +1777,23 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
     if (q.length < 2) { if (q.length) resultados.appendChild(h("p", { class: "campo-ajuda" }, TEXTO_BUSCA_CURTA)); return; }
     resultados.setAttribute("aria-busy", "true");
     try {
-      const itens = await procurarNegocios(ctx, q);
+      const todos = await procurarNegocios(ctx, q);
       if (minha !== seqB) return;
       ui.limpar(resultados);
+      const itens = todos.filter(n => n.status !== "ganho");
+      const ganhos = btNovo ? todos.filter(n => n.status === "ganho") : [];
+      // plano 1500c · CC-198: «Já atendidos» (negócio ganho) com «Marcar retorno»: cria a oportunidade nova já com o contato e a escolhe
+      if (ganhos.length) {
+        maisRes.appendChild(h("div", { class: "ag-ja-atendidos" }, h("p", { class: "ag-ja-atendidos-tit" }, "Já atendidos"),
+          ganhos.slice(0, 5).map(g => h("div", { class: "ag-ja-atendido" }, h("span", null, h("b", null, g.contato_nome || g.titulo || P.contato), g.titulo && g.titulo !== g.contato_nome ? h("small", null, ` · ${g.titulo}`) : null),
+            h("button", { type: "button", class: "bt bt-sec bt-p ag-retorno-bt", on: { click: () => marcarRetorno(g) } }, "Marcar retorno")))));
+      }
       if (!itens.length) { resultados.appendChild(h("p", { class: "campo-ajuda" }, btNovo ? `${P.nenhuma} ${P.neg} ${P.aberta} com esse nome. Toque em «${P.novoContato}» para cadastrar.` : `${P.nenhuma} ${P.neg} ${P.aberta} com esse nome. Crie ou atualize pelo CRM.`)); return; }
+      // plano 1500c · CC-197: o final do telefone separa homônimos («Maria Silva · final 4321»), quando a busca trouxer o número
+      const finalTel = item => { const d = String(item.telefone || item.contato_telefone || "").replace(/\D/g, ""); return d.length >= 4 ? `final ${d.slice(-4)}` : null; };
       const opcao = (item, i) => h("button", { type: "button", class: "agenda-resultado", role: "option", id: `ag-res-${uid}-${i}`, tabindex: "-1", "aria-selected": "false", on: { click: () => escolher(item) } },
         h("b", null, item.titulo || item.contato_nome || "Negócio"),
-        h("small", null, [item.contato_nome && item.contato_nome !== item.titulo ? item.contato_nome : null, item.estagio_nome].filter(Boolean).join(" · ")));
+        h("small", null, [item.contato_nome && item.contato_nome !== item.titulo ? item.contato_nome : null, finalTel(item), item.estagio_nome].filter(Boolean).join(" · ")));
       // plano 1000b · CB-170: 8 à vista e «Ver mais» com o resto (as setas andam só nas que aparecem: achados = o que está na lista)
       achados = itens.slice(0, 8);
       achados.forEach((item, i) => resultados.appendChild(opcao(item, i)));
@@ -1477,7 +1832,7 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
 
   /* ---------- a janela ---------- */
   pintarEscolhido();
-  const titulo = soEscolher ? "Escolher horário da consulta" : sel && sel.consultaAtual ? "Remarcar consulta" : "Marcar consulta";
+  const titulo = soEscolher ? "Escolher horário da consulta" : encaixeAgora ? "Encaixar agora" : sel && sel.consultaAtual ? "Remarcar consulta" : "Marcar consulta";
   const modal = ui.modal({
     titulo, corpo: formulario, largura: "m",
     descricao: soEscolher ? `Escolha o dia e o horário. A consulta é gravada junto com ${P.a} ${P.neg}.` : "Escolha o dia e o horário. A disponibilidade é validada de novo ao salvar.",
@@ -1502,12 +1857,15 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
       { rotulo: soEscolher ? "Usar este horário" : "Confirmar consulta", tipo: "primario", fn: async m => {
         if (!sel) { m.erro(`Escolha ${P.uma} ${P.neg} ${P.aberta} para continuar.`); return false; }
         if (!slotSel) { m.erro("Escolha um dia e um horário livre."); return false; }
+        if (fichaPendente) { m.erro("Conferindo se já tem consulta marcada… toque de novo em um instante."); return false; }   // plano 1500c · CC-199
         if (soEscolher) return { ok: true, consulta_em: slotSel.inicio, servico: servicoValor() || null };
         try {
           // a etapa de antes ainda está chegando? espera um instante (no máximo 1,5 s): depois de marcar o cartão já estará em «Agendada»
           if (!sel.antes && fichaP) await Promise.race([fichaP, new Promise(r => setTimeout(r, 1500))]);
           const params = { p_negocio: sel.id, p_inicio: slotSel.inicio, p_servico: servicoValor() || null };
           if (!encaixeEl.hidden && encaixeChk.checked) params.p_encaixe = true;
+          const obs = obsEl ? String(obsEl.querySelector("input").value || "").trim().slice(0, 200) : "";
+          if (obs) params.p_observacao = obs;      // plano 1500c · CC-245
           const conteudo = JSON.stringify(params);
           if (conteudo !== reqConteudo) { reqAtual = Lg.novaReq(); reqConteudo = conteudo; }
           const { resultado } = await Lg.escreverComReq(api, "nx_agenda_marcar", params, { req: reqAtual, aoStatus: t => { statusEl.textContent = t; statusEl.hidden = false; } });
@@ -1569,20 +1927,33 @@ export function rotuloAvisar(tipo, vocab = null) {
 }
 /** CA-177: motivos padronizados de desmarcação (viram o começo do p_motivo; o detalhe livre continua opcional). */
 export const MOTIVOS_DESMARCAR = Object.freeze(["Paciente cancelou", "Vai remarcar", "Erro de marcação", "Clínica cancelou"]);
-/** O p_motivo: «Paciente cancelou · viajou» (até 200 caracteres); nada escolhido nem escrito → null. */
-export function motivoDesmarcar(chip, texto) {
-  const t = [chip && MOTIVOS_DESMARCAR.includes(chip) ? chip : null, String(texto || "").trim() || null].filter(Boolean).join(" · ");
+/** Plano 1500c · CC-322: o chip que diz «não quero dizer o motivo» (vale como escolha; não vai para o p_motivo). */
+export const MOTIVO_SEM = "Prefiro não dizer";
+/** Plano 1500c · CC-208: os motivos pela vertical («Cliente cancelou», «A empresa cancelou»); sem vocabulário, os de clínica de sempre. */
+export function motivosDesmarcar(vocab = null) {
+  if (!(vocab && typeof vocab.min === "function" && vocab.vertical && vocab.vertical !== "odonto")) return [...MOTIVOS_DESMARCAR];
+  return [`${vocab.contato} cancelou`, "Vai remarcar", "Erro de marcação", "A empresa cancelou"];
+}
+/** O p_motivo: «Paciente cancelou · viajou» (até 200 caracteres); nada escolhido nem escrito → null. CC-208: `lista` = os motivos da vertical. */
+export function motivoDesmarcar(chip, texto, lista = MOTIVOS_DESMARCAR) {
+  const validos = [...MOTIVOS_DESMARCAR, ...(Array.isArray(lista) ? lista : [])];
+  const t = [chip && chip !== MOTIVO_SEM && validos.includes(chip) ? chip : null, String(texto || "").trim() || null].filter(Boolean).join(" · ");
   return t ? t.slice(0, 200) : null;
 }
 
 /** Desmarcar (motivo em chips + detalhe opcional) com «Desfazer»: marcar de volta o mesmo horário. Com `avisar`, «Avisar paciente» (CA-178). */
 export async function desmarcarConsulta(ctx, c, { aoMudar = null, avisar = null, aoFaltou = null } = {}) {
-  if (!ctx.pode("atendente")) return null;
+  if (!ctx.pode("atendente")) {
+    // plano 1500c · CC-331: quem só vê a agenda recebe a mesma explicação do marcar (antes nada acontecia)
+    if (ctx.ui && typeof ctx.ui.toast === "function") ctx.ui.toast("Seu acesso só permite ver a agenda. Para desmarcar, peça a alguém da equipe com acesso de atendente.", { tipo: "info" });
+    return null;
+  }
   const { ui, api } = ctx;
   const h = ui.h;
   let motivoSel = null;
+  const motivos = [...motivosDesmarcar(ctx.vocab), MOTIVO_SEM];   // plano 1500c · CC-208 (vertical) e CC-322 («Prefiro não dizer» também é escolha)
   const chips = h("div", { class: "ag-motivos", role: "radiogroup", "aria-label": "Motivo" });
-  const botoesMotivo = MOTIVOS_DESMARCAR.map((m, i) => h("button", { type: "button", role: "radio", class: "ag-motivo-chip", "aria-checked": "false", tabindex: i === 0 ? "0" : "-1", dataset: { motivo: m },
+  const botoesMotivo = motivos.map((m, i) => h("button", { type: "button", role: "radio", class: "ag-motivo-chip", "aria-checked": "false", tabindex: i === 0 ? "0" : "-1", dataset: { motivo: m },
     on: { click: () => escolherMotivo(m) } }, m));
   chips.append(...botoesMotivo);
   function escolherMotivo(m) {
@@ -1604,9 +1975,16 @@ export async function desmarcarConsulta(ctx, c, { aoMudar = null, avisar = null,
       h("div", { class: "pilha-p" }, h("p", { class: "ag-motivos-rot" }, "Motivo"), chips), detalhe),
     acoes: [
       { rotulo: "Voltar", tipo: "neutro", valor: false },
-      { rotulo: "Desmarcar consulta", tipo: "perigo", fn: async () => erroResposta(await api.rpcC("nx_agenda_desmarcar", {
-        p_negocio: c.negocio_id, p_motivo: motivoDesmarcar(motivoSel, detalhe.querySelector("textarea").value),
-      })) },
+      { rotulo: "Desmarcar consulta", tipo: "perigo", fn: async m => {
+        const det = detalhe.querySelector("textarea").value;
+        // plano 1500c · CC-322: um toque no motivo (ou «Prefiro não dizer») antes de desmarcar — o relatório de motivos nasce com dado
+        if (!motivoSel && !String(det || "").trim()) {
+          if (m && typeof m.erro === "function") m.erro("Escolha um motivo (ou «Prefiro não dizer»).");
+          const b = botoesMotivo[0]; if (b) try { b.focus(); } catch { /* ok */ }
+          return false;
+        }
+        return erroResposta(await api.rpcC("nx_agenda_desmarcar", { p_negocio: c.negocio_id, p_motivo: motivoDesmarcar(motivoSel, det, motivos) }));
+      } },
     ],
   });
   if (!(r && r.ok)) return null;
@@ -1661,7 +2039,8 @@ export async function montar(ctx) {
   let agrupar = preferencias.agrupar;      // dia com 2+ responsáveis: uma coluna por pessoa
   let corPor = preferencias.cor;           // cor dos blocos: por serviço ou por profissional (item 39)
   let extras = normalizarExtrasAgenda({});
-  try { extras = normalizarExtrasAgenda(JSON.parse(localStorage.getItem(chavePreferencias) || "{}")); } catch { /* padrão */ }
+  let profEscolhido = false;               // plano 1500c · CC-268: a pessoa já escolheu um filtro de profissional alguma vez?
+  try { const bruto = JSON.parse(localStorage.getItem(chavePreferencias) || "{}"); extras = normalizarExtrasAgenda(bruto); profEscolhido = !!(bruto && typeof bruto.prof === "string"); } catch { /* padrão */ }
   let filtroProf = extras.prof;            // CA-187: «todos», «eu» ou o id de um profissional
   let mostrarFechados = extras.fechados === "mostrar";   // CA-186
   let atalhosLigados = extras.atalhos !== "desligados";  // plano 1000b · CB-151: T, D, S, M, L, [ e ] podem ser desligados na paleta
@@ -1673,6 +2052,16 @@ export async function montar(ctx) {
   let mensagemAtualizacao = "";
   let eixoAtual = null;
   let nomesDonos = null;
+  let equipe = null;                       // plano 1500c · CC-191/CC-192: a equipe (base.usuarios: id, nome, papel) — filtro e colunas por responsável
+  let ultimoHojeTela = hojeInicial;        // plano 1500c · CC-168: o «hoje» do último desenho (a virada do dia relê)
+  let assinaturaAtual = "";                // plano 1500c · CC-248: a assinatura barata do que está na tela
+  let filtroNome = "";                     // plano 1500c · CC-266: «Filtrar nesta tela»
+  let semConfirmar = false;                // plano 1500c · CC-240: o servidor ainda não tem nx_agenda_confirmar
+  let redesenhoPendente = false;           // plano 1500c · CC-249: o tique com a aba escondida deixa o redesenho para a volta
+  /* plano 1500c · CC-226: «lembrado» fica marcado neste aparelho até o dia seguinte (sem conteúdo da consulta: só negocio|inicio) */
+  const chaveLembrados = chavePreferencias ? `${chavePreferencias}:lembrados` : null;
+  const lembrados = (() => { try { const v = JSON.parse(localStorage.getItem(chaveLembrados) || "{}"); return v && v.dia === hojeInicial && Array.isArray(v.itens) ? new Set(v.itens) : new Set(); } catch { return new Set(); } })();
+  const marcarLembrado = c => { lembrados.add(`${c.negocio_id}|${c.inicio}`); try { if (chaveLembrados) localStorage.setItem(chaveLembrados, JSON.stringify({ dia: ui.hojeSP(), itens: [...lembrados].slice(-200) })); } catch { /* ok */ } };
   let legendaAtivos = new Set();           // chaves destacadas pela legenda (vazio = todas à mostra)
   let proximaAtual = null;                 // a próxima consulta do período carregado (destacada na grade e no resumo)
   let seqBloco = 0;                        // ordem de entrada dos blocos (animação em escada)
@@ -1753,12 +2142,13 @@ export async function montar(ctx) {
     const verMes = h("button", { type: "button", class: "bt bt-sec bt-p agenda-mes-bt", on: { click: abrirMesMovel } }, ui.icone("calendario"), "Mês");
     ctl.lista = h("button", { type: "button", class: "bt bt-sec bt-p agenda-lista-bt", "aria-pressed": String(modo === "lista"), on: { click: () => trocarModo(modo === "lista" ? "semana" : "lista") } }, "Lista");
     // CA-188: «quando é minha consulta?» sem navegar semana a semana
-    const procurar = h("button", { type: "button", class: "bt bt-sec bt-p agenda-procurar", "aria-haspopup": "dialog", on: { click: procurarPaciente } }, ui.icone("busca"), h("span", { class: "agenda-procurar-rot" }, "Procurar paciente"));
+    // plano 1500c · CC-209: «Procurar paciente/cliente» e «Marcar consulta/visita» pela vertical
+    const procurar = h("button", { type: "button", class: "bt bt-sec bt-p agenda-procurar", "aria-haspopup": "dialog", on: { click: procurarPaciente } }, ui.icone("busca"), h("span", { class: "agenda-procurar-rot" }, `Procurar ${palavrasAgenda(ctx.vocab).contato}`));
     ctl.atualizar = h("button", { type: "button", class: "bt bt-sec bt-p agenda-atualizar", on: { click: atualizarAgora } }, "Atualizar");
     ctl.estado = h("span", { class: "agenda-atualizacao", role: "status", "aria-live": "polite" });
     // CA-220: «Atualizada às 14:02» sempre à vista (fora da região viva: a releitura de 60 s não é lida em voz alta); cinza depois de 5 min
     ctl.carimbo = h("span", { class: "agenda-atualizada dado", hidden: true });
-    ctl.marcar = ctx.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim agenda-marcar", on: { click: () => abrirAgendamento(null, { dia: movel || modo === "dia" ? data : null }) } }, ui.icone("mais"), "Marcar consulta") : null;
+    ctl.marcar = ctx.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim agenda-marcar", "aria-keyshortcuts": "N", on: { click: () => abrirAgendamento(null, { dia: movel || modo === "dia" ? data : null }) } }, ui.icone("mais"), `Marcar ${palavraCompromisso(ctx.vocab)}`) : null;
     const acoes = h("div", { class: "agenda-acoes" }, ctl.estado, ctl.carimbo, ctl.alternador, h("div", { class: "agenda-vista-movel" }, verMes, ctl.lista), procurar, ctl.atualizar, ctl.marcar);
     controles.append(periodo, acoes);
     observarCabecalho();
@@ -1846,14 +2236,31 @@ export async function montar(ctx) {
       caixa.appendChild(montarMiniCalendario({ h, mes: meu, consultas: d ? d.consultas : [], bloqueios: d ? d.bloqueios : [], config: d && d.config ? d.config : (atual && atual.config) || null,
         hoje: ui.hojeSP(), selecionado: data, num: ui.num, carregando: !d, compacto: true,
         aoEscolher: iso => { if (fecharCom) fecharCom(iso); }, aoMudarMes: delta => { mes = mesISO(mes, delta); pintar(); } }));
-      if (d && d.erro) caixa.appendChild(h("p", { class: "agenda-erro" }, api.mensagemErro(d.erro)));
-      if (d) return;
+      // plano 1500c · CC-327: o erro não fica guardado para sempre — «Tentar de novo» apaga e pede outra vez (voltar ao mês também tenta)
+      if (d && d.erro) {
+        pedidos.delete(meu);
+        caixa.appendChild(h("div", { class: "agenda-erro ag-mes-erro", role: "alert" }, h("p", null, api.mensagemErro(d.erro)),
+          h("button", { type: "button", class: "bt bt-sec bt-p ag-mes-tentar", on: { click: () => pintar() } }, "Tentar de novo")));
+        return;
+      }
+      if (d) { preCarregar(mesISO(meu, 1)); return; }      // CC-251: o mês seguinte já vem em segundo plano
       try {
-        const r = await api.rpcC("nx_agenda_dia", { p_data: meu, p_dias: diasNoMes(meu) }, { cache: true });
-        pedidos.set(meu, { consultas: Array.isArray(r && r.consultas) ? r.consultas : [], bloqueios: Array.isArray(r && r.bloqueios) ? r.bloqueios : [], config: (r && r.config) || null });
+        const r = await ler(meu);
+        pedidos.set(meu, r);
       } catch (e) { pedidos.set(meu, { consultas: [], bloqueios: [], config: null, erro: e }); }
       if (vivo && mes === meu && caixa.isConnected) pintar();
     }
+    async function ler(meu) {
+      const r = await api.rpcC("nx_agenda_dia", { p_data: meu, p_dias: diasNoMes(meu) }, { cache: true });
+      return { consultas: Array.isArray(r && r.consultas) ? r.consultas : [], bloqueios: Array.isArray(r && r.bloqueios) ? r.bloqueios : [], config: (r && r.config) || null };
+    }
+    /** CC-251: pede o mês em segundo plano (sem pintar; o erro não fica guardado). */
+    function preCarregar(m) {
+      if (pedidos.has(m) || preCarregando.has(m) || !vivo) return;
+      preCarregando.add(m);
+      ler(m).then(r => { if (!pedidos.has(m)) pedidos.set(m, r); }).catch(() => { /* ao abrir o mês, ele tenta de novo */ }).finally(() => preCarregando.delete(m));
+    }
+    const preCarregando = new Set();
     pintar();
     const iso = await ui.modal({ titulo: "Escolher o dia", corpo: caixa, largura: "p", protegerTexto: false,
       // o foco vai para o dia selecionado (depois do foco inicial do modal, que cai no rodapé)
@@ -1866,7 +2273,9 @@ export async function montar(ctx) {
   async function atualizarAgora() {
     if (atualizandoManual || !vivo) return;
     atualizandoManual = true; mensagemAtualizacao = "Buscando alterações…"; montarCabecalho();
+    notasLidas.clear();                   // plano 1500c · CC-328: a última nota também é relida
     const ok = await carregar({ silencioso: true, forcar: true, manual: true });
+    if (ok && nomesDonos) releNomes();    // plano 1500c · CC-329: a equipe é relida junto
     if (!vivo) return;
     atualizandoManual = false;
     // CA-220: o carimbo à vista já diz a hora; quem usa leitor de tela ouve a confirmação pelo status do período
@@ -1883,6 +2292,7 @@ export async function montar(ctx) {
     if (!acao) return;
     ev.preventDefault();
     if (acao === "hoje") { data = ui.hojeSP(); gravarPreferencias(); carregar(); }
+    else if (acao === "marcar") { if (ctx.pode("atendente")) abrirAgendamento(null, { dia: movel || modo === "dia" ? data : null }); }   // plano 1500c · CC-300
     else if (acao === "anterior" || acao === "proximo") mover(acao === "anterior" ? -1 : 1);
     else trocarModo(acao);       // CA-259: D/S/M/L
   }
@@ -1909,14 +2319,22 @@ export async function montar(ctx) {
         // M16/M30: a 1ª pintura é a última agenda guardada para este período; a rede atualiza em seguida
         if (!vivo || minha !== sequencia || atual || !dc || typeof dc !== "object") return;
         atual = dc; chaveAtual = chave; doCache = !!Lg;      // desenhado sem a crm-logica (sem presença): a rede redesenha mesmo igual
+        assinaturaAtual = assinaturaAgenda(dc);             // plano 1500c · CC-248
         desenhar();
       } });
       if (!vivo || minha !== sequencia) return false;
       await lgPronto;                                                          // a presença (E1) precisa da crm-logica: já veio em paralelo
       if (!vivo || minha !== sequencia) return false;
-      const igual = (doCache || (auto && antes && antes === atual)) && JSON.stringify(atual) === JSON.stringify(r);     // nada mudou desde o guardado (ou desde a última leitura): não refaz a grade
+      // plano 1500c · CC-248: compara uma assinatura barata (chaves que mudam a tela, num hash) em vez de serializar as duas respostas inteiras
+      const assNova = assinaturaAgenda(r);
+      const igual = (doCache || (auto && antes && antes === atual)) && assinaturaAtual === assNova;     // nada mudou desde o guardado (ou desde a última leitura): não refaz a grade
       atual = r || { consultas: [], bloqueios: [] };
+      assinaturaAtual = assNova;
       chaveAtual = chave;
+      // plano 1500c · CC-268: na 1ª vez, quem atende (não admin) e tem consultas próprias abre na «Minha agenda»
+      if (!profEscolhido && eu && !ctx.pode("admin") && filtroProf === "todos" && Array.isArray(atual.consultas) && atual.consultas.some(c => c && String(c.dono_id ?? "") === eu)) {
+        profEscolhido = true; filtroProf = "eu"; gravarPreferencias();
+      }
       // leitura certa: o aviso de agenda guardada/sem conexão não pode ficar preso
       if (mensagemAtualizacao && !mensagemAtualizacao.startsWith("Atualizada às")) { mensagemAtualizacao = ""; montarCabecalho(); }
       if (!igual) desenhar();
@@ -1934,23 +2352,45 @@ export async function montar(ctx) {
         return false;
       }
       if (e && e.comCache) return false;
-      atual = null; chaveAtual = "";
+      atual = null; chaveAtual = ""; assinaturaAtual = "";
       ui.limpar(conteudo);
-      conteudo.appendChild(ui.erroCartao(e, () => carregar({ forcar: true })));
+      // plano 1500c · CC-237: sem internet e sem cópia guardada, o cartão diz que é a conexão (o erro genérico não dizia)
+      conteudo.appendChild(offline()
+        ? h("div", { class: "agenda-erro ag-sem-rede", role: "alert" }, ui.icone("info"),
+          h("p", null, "Sem internet e nenhuma agenda guardada neste aparelho. Conecte e toque em «Tentar de novo»."),
+          h("button", { type: "button", class: "bt bt-sec bt-p ag-sem-rede-tentar", on: { click: () => carregar({ forcar: true }) } }, "Tentar de novo"))
+        : ui.erroCartao(e, () => carregar({ forcar: true })));
       return false;
     }
   }
 
   /* ============================================================ desenho */
   /** Nomes dos responsáveis (da base do CRM; só quando o dia tem 2+ pessoas). */
-  async function carregarNomes() {
-    if (nomesDonos) return nomesDonos;
-    try {
-      const crm = await ctx.carregar("crm");
-      const k = await crm.kit(ctx);
-      nomesDonos = Object.fromEntries((k.base.usuarios || []).map(u => [u.id, u.nome]));
-    } catch { nomesDonos = {}; }
-    return nomesDonos;
+  let nomesP = null, idsRelidos = new Set();
+  async function carregarNomes({ forcar = false } = {}) {
+    if (nomesDonos && !forcar) return nomesDonos;
+    if (nomesP) return nomesP;
+    nomesP = (async () => {
+      try {
+        const crm = await ctx.carregar("crm");
+        // plano 1500c · CC-329: relendo de propósito, a base do CRM em memória é esquecida (senão volta a mesma equipe velha)
+        if (forcar && typeof crm.invalidarBase === "function") try { crm.invalidarBase(ctx.cliente && ctx.cliente.id); } catch { /* ok */ }
+        const k = await crm.kit(ctx);
+        const us = Array.isArray(k.base.usuarios) ? k.base.usuarios : [];
+        nomesDonos = Object.fromEntries(us.map(u => [u.id, u.nome]));
+        // plano 1500c · CC-191/CC-192: quem atende (não «somente leitura», aprovado) — o filtro e as colunas por responsável usam a equipe
+        equipe = us.filter(u => u && u.id != null && u.aprovado !== false && u.papel !== "leitura").map(u => ({ id: String(u.id), nome: u.nome || "Profissional", papel: u.papel || "" }));
+      } catch { nomesDonos = {}; equipe = []; }
+      nomesP = null;
+      return nomesDonos;
+    })();
+    return nomesP;
+  }
+  /** Plano 1500c · CC-329: a equipe lida fica velha (profissional novo vira «Responsável»): «Atualizar» e um dono desconhecido sem nome releem —
+      em segundo plano, e a tela só redesenha se a equipe mudou de fato. */
+  function releNomes() {
+    const antes = JSON.stringify([nomesDonos, equipe]);
+    return carregarNomes({ forcar: true }).then(() => { if (vivo && atual && JSON.stringify([nomesDonos, equipe]) !== antes) desenhar(); });
   }
 
   /* CA-163: redesenhar (presença, legenda, «Por serviço», nomes chegando, releitura) não tira o foco de quem usa o teclado nem a rolagem:
@@ -1989,28 +2429,46 @@ export async function montar(ctx) {
     seqBloco = 0;
     // linhas de servidor antigo (sem `presenca`): vale o que já foi lido da ficha (E1)
     const todas = (Array.isArray(atual.consultas) ? atual.consultas : []).map(comPresencaLida);
+    const hoje = ui.hojeSP();
+    ultimoHojeTela = hoje;            // plano 1500c · CC-168
+    // plano 1500c · CC-330: filtro guardado com alguém que saiu da equipe (e sem consulta no período) volta para «todos», com aviso
+    if (filtroProf !== "todos" && filtroProf !== "eu") {
+      const noPeriodo = todas.some(c => c && String(c.dono_id ?? "") === filtroProf);
+      if (!noPeriodo && equipe && !equipe.some(u => u.id === filtroProf)) {
+        filtroProf = "todos"; gravarPreferencias();
+        ui.toast("O profissional escolhido no filtro não está mais na equipe: mostrando todos.", { tipo: "info" });
+      } else if (!noPeriodo && !equipe) carregarNomes().then(() => { if (vivo && atual) desenhar(); });
+    }
     // CA-187: o filtro por profissional vale para tudo o que a tela mostra (grade, ocupação, legenda, painel, próxima)
     const consultas = filtrarPorProfissional(todas, filtroProf, eu);
     const bloqueios = Array.isArray(atual.bloqueios) ? atual.bloqueios : [];
     const config = atual.config || {};
     ordemServicos = config.duracoes && typeof config.duracoes === "object" ? Object.keys(config.duracoes) : [];   // CA-266
     ordemProfAtual = ordemProfissionais(todas, nomesDonos ? Object.keys(nomesDonos) : null);   // plano 1000b · CB-175 (revisão: pela equipe)
+    // plano 1500c · CC-190: com «todos», a ocupação usa os trechos da clínica inteira quando o servidor mandar (`ocupados`, sem dados pessoais)
+    const opOcup = filtroProf === "todos" && Array.isArray(atual.ocupados) ? { ocupados: atual.ocupados } : {};
     const iv = intervalo();
     const carregados = Array.from({ length: iv.dias }, (_, i) => diaISO(iv.de, i));
-    const hoje = ui.hojeSP();
     const fonte = config.horario_fonte;
     const legendaFonte = fonte === "agenda" ? "Horário da agenda"
       : fonte === "departamento" ? "Horário herdado do departamento"
         : fonte === "padrao" ? "Horário padrão · seg a sex, 8h–18h" : null;
-    const nota = h("p", { class: "agenda-fuso" }, "Horários no fuso de São Paulo.");
+    // plano 1500c · CC-305: no horário padrão, o admin vai direto para configurar
+    const fonteEl = !legendaFonte ? null : fonte === "padrao" && ctx.pode("admin")
+      ? h("a", { class: "agenda-fonte-link", href: "#/config/agenda", title: "Ajustar em Configurações › Agenda", on: { click: ev => { ev.preventDefault(); ctx.navegar("#/config/agenda"); } } }, legendaFonte, " · ajustar")
+      : h("small", null, legendaFonte);
+    // plano 1500c · CC-049: «horário de Brasília», o mesmo nome dos Departamentos (cv-config)
+    const nota = h("p", { class: "agenda-fuso" }, "Horários no horário de Brasília.");
     proximaAtual = proximaConsulta(consultas);
+    // plano 1500c · CC-306: empresa nova (horário padrão e nenhuma consulta) — o admin ganha o roteiro de 3 passos
+    const roteiro = ctx.pode("admin") && fonte === "padrao" && !todas.length ? montarRoteiro() : null;
 
     // mês (desktop): mini-calendário com densidade no lugar da grade; tocar um dia abre o dia
     if (!movel && modo === "mes") {
       eixoAtual = null;
-      conteudo.append(montarMiniCalendario({ h, mes: primeiroDoMes(data), consultas, bloqueios, config, hoje, selecionado: data, num: ui.num,
+      conteudo.append(...[roteiro, montarMiniCalendario({ h, mes: primeiroDoMes(data), consultas, bloqueios, config, hoje, selecionado: data, num: ui.num, ocupacao: opOcup,
         aoEscolher: iso => { data = iso; modo = "dia"; gravarPreferencias(); carregar(); }, aoMudarMes: delta => mover(delta),
-        aoAbrirSemana: iso => { data = iso; modo = "semana"; gravarPreferencias(); carregar(); } }), nota);     // CA-270
+        aoAbrirSemana: iso => { data = iso; modo = "semana"; gravarPreferencias(); carregar(); } }), nota].filter(Boolean));     // CA-270
       return;
     }
 
@@ -2032,19 +2490,29 @@ export async function montar(ctx) {
     const visiveis = consultas.filter(c => { const p = c.inicio && partesSP(c.inicio); return p && mostrados.includes(p.dia); });
     const nDentro = visiveis.length;
     const nBloq = bloqueios.filter(b => mostrados.some(d => bloqueiosDoDia([b], d).length)).length;
-    const donos = new Set(consultasDoDia(consultas, data).map(c => c.dono_id || "sem"));
-    const porDono = !movel && modo === "dia" && donos.size >= 2;
     const temResponsaveis = todas.some(c => c.dono_id);
+    // plano 1500c · CC-192: «Por responsável» mostra também quem da equipe está livre no dia (coluna vazia para tocar e marcar); equipe grande
+    // (mais de 8) fica só com quem tem consulta
+    const donos = new Set(consultasDoDia(consultas, data).map(c => (c.dono_id != null ? String(c.dono_id) : "sem")));
+    if (temResponsaveis && equipe && equipe.length && equipe.length <= 8 && filtroProf === "todos") for (const u of equipe) donos.add(u.id);
+    const porDono = !movel && modo === "dia" && donos.size >= 2;
     // E2: os nomes vêm nas linhas (dono_nome); a base do CRM só é lida se alguma linha não trouxer o campo (servidor antigo)
     const precisaNomes = faltamNomes(todas);
     nomesAtuais = { ...(nomesDonos || {}), ...nomesDasConsultas(todas) };
     // revisão 1000b · CB-175: com «cor por profissional», a equipe (base) é lida uma vez — é ela que fixa a cor de cada um
-    if ((precisaNomes || corPor === "profissional") && !nomesDonos) carregarNomes().then(() => { if (vivo && atual) desenhar(); });   // os nomes chegam uma vez; a legenda redesenha com eles
-    const ocup = ocupacaoDoPeriodo(visiveis, mostrados, config, bloqueios);
+    // plano 1500c · CC-191/CC-192: com responsáveis nas consultas, a equipe também é lida (filtro e colunas mostram quem está sem consulta)
+    if ((precisaNomes || corPor === "profissional" || temResponsaveis) && !nomesDonos) carregarNomes().then(() => { if (vivo && atual) desenhar(); });   // os nomes chegam uma vez; a legenda redesenha com eles
+    // plano 1500c · CC-329: dono desconhecido e sem nome na linha (profissional cadastrado depois) relê a equipe uma vez
+    else if (nomesDonos && !nomesP) {
+      const novo = todas.find(c => c && c.dono_id != null && !(typeof c.dono_nome === "string" && c.dono_nome.trim()) && !Object.hasOwn(nomesDonos, String(c.dono_id)) && !idsRelidos.has(String(c.dono_id)));
+      if (novo) { idsRelidos.add(String(novo.dono_id)); releNomes(); }
+    }
+    const ocup = ocupacaoDoPeriodo(visiveis, mostrados, config, bloqueios, opOcup);
     // CA-187: «Profissional» — todos, a minha agenda ou a de cada um (lembrado nas preferências)
     let filtroEl = null;
     if (temResponsaveis || filtroProf !== "todos") {
-      const ids = [...new Set(todas.map(c => c.dono_id).filter(x => x != null).map(String))];
+      // plano 1500c · CC-191: as opções vêm da equipe (quem atende) e de quem tem consulta — o dentista com a semana vazia também aparece
+      const ids = [...new Set([...todas.map(c => c.dono_id).filter(x => x != null).map(String), ...(equipe || []).map(u => u.id)])];
       if (filtroProf !== "todos" && filtroProf !== "eu" && !ids.includes(filtroProf)) ids.push(filtroProf);
       const nomeDe = id => nomesAtuais[id] || "Profissional";
       const opcoes = [["todos", "Todos os profissionais"], eu ? ["eu", "Minha agenda"] : null,
@@ -2076,13 +2544,31 @@ export async function montar(ctx) {
     const caixaProxima = h("span", { class: "agenda-proxima-caixa" }, chipProxima);
     // CA-262: período sem nenhuma consulta oferece marcar ali mesmo (o celular já tem «Livre · Marcar» no dia)
     const marcarVazio = !nDentro && !movel && !emLista && ctx.pode("atendente")
-      ? h("button", { type: "button", class: "bt bt-sec bt-p agenda-marcar-vazio", on: { click: () => abrirAgendamento(null, { dia: modo === "dia" ? data : null }) } }, ui.icone("mais"), "Marcar consulta")
+      ? h("button", { type: "button", class: "bt bt-sec bt-p agenda-marcar-vazio", on: { click: () => abrirAgendamento(null, { dia: modo === "dia" ? data : null }) } }, ui.icone("mais"), `Marcar ${palavraCompromisso(ctx.vocab)}`)
       : null;
     if (!proxima) completarProxima(caixaProxima, { de: inicioBuscaProxima(iv.de, iv.dias, hoje), umDia, hoje, chave: chaveAtual });
+    const temHoje = periodoTemHoje(iv.de, iv.dias, hoje) || (movel && data === hoje);
+    // plano 1500c · CC-252: «Próximo livre: hoje 15:30» à vista (com o paciente no telefone), que abre a marcação nele
+    const caixaLivre = temHoje && ctx.pode("atendente") ? h("span", { class: "agenda-prox-livre-caixa" }) : null;
+    if (caixaLivre) completarProximoLivre(caixaLivre, hoje);
+    // plano 1500c · CC-253: quem chegou sem hora — supervisor+ encaixa no horário de agora
+    const encaixarAgoraBt = temHoje && ctx.pode("supervisor")
+      ? h("button", { type: "button", class: "bt bt-fant bt-p agenda-encaixar-agora", on: { click: () => abrirAgendamento(null, { dia: hoje, encaixeAgora: true }) } }, ui.icone("relogio"), "Encaixar agora") : null;
+    // plano 1500c · CC-256: a taxa de faltas das consultas já passadas do período; CC-324: quantas a IA marcou
+    const tf = taxaFaltas(visiveis);
+    const nIA = visiveis.filter(c => c && c.marcado_por === "ia").length;
+    // plano 1500c · CC-258/CC-260/CC-266/CC-323: exportar, imprimir a semana, filtrar por nome e a tela da recepção (desktop)
+    const ferramentas = h("div", { class: "agenda-ferramentas" },
+      visiveis.length ? h("label", { class: "agenda-filtro-nome-rot" }, h("span", { class: "sr-only" }, "Filtrar nesta tela"),
+        h("input", { type: "search", class: "agenda-filtro-nome", placeholder: "Filtrar nesta tela", value: filtroNome, autocomplete: "off",
+          on: { input: ev => { filtroNome = String(ev.target.value || ""); aplicarFiltroNome(); } } })) : null,
+      !movel && visiveis.length ? h("button", { type: "button", class: "bt bt-fant bt-p agenda-exportar", on: { click: () => exportarCSV(visiveis, mostrados) } }, "Exportar CSV") : null,
+      !movel && (modo === "semana" || emLista) && visiveis.length ? h("button", { type: "button", class: "bt bt-fant bt-p agenda-imprimir-semana", on: { click: () => imprimirSemana(carregados, consultas, config, bloqueios, hoje) } }, "Imprimir semana") : null,
+      !movel && temHoje ? h("button", { type: "button", class: "bt bt-fant bt-p agenda-tv", "aria-haspopup": "dialog", on: { click: abrirTV } }, "Tela da recepção") : null);
 
     const resumo = h("section", { class: "agenda-resumo", "aria-label": "Resumo do período" },
       h("div", { class: "agenda-resumo-data" },
-        h("b", null, titulo), legendaFonte ? h("small", null, legendaFonte) : null),
+        h("b", null, titulo), fonteEl),
       filtroEl, fechadosBt,
       porDono ? ui.segmentado({ opcoes: [{ valor: "juntos", rotulo: "Juntos" }, { valor: "responsavel", rotulo: "Por responsável" }], valor: agrupar, tipo: "filtro", rotulo: "Agrupar a agenda do dia", classe: "agenda-agrupar",
         aoMudar: v => { agrupar = v; gravarPreferencias(); desenhar(); } }) : null,
@@ -2092,8 +2578,10 @@ export async function montar(ctx) {
         // plano 1000b · CB-192: com o filtro de profissional a conta é só da agenda filtrada — o rótulo diz isso (a clínica pode estar cheia)
         ocup === null ? null : h("span", { class: "agenda-resumo-ocup", title: filtroProf === "todos" ? "Horas marcadas sobre o expediente dos dias mostrados"
           : `Horas marcadas ${filtroProf === "eu" ? "da sua agenda" : `da agenda de ${nomesAtuais[filtroProf] || "quem foi escolhido"}`} sobre o expediente dos dias mostrados (as dos outros profissionais não entram)` },
-          anelOcupacao(h, { pct: ocup }, { tamanho: 22 }), h("b", { class: "dado" }, `${Math.round(ocup * 100)}%`), filtroProf === "todos" ? " ocupado" : filtroProf === "eu" ? " da sua agenda" : " desta agenda")),
-      caixaProxima, marcarVazio);
+          anelOcupacao(h, { pct: ocup }, { tamanho: 22 }), h("b", { class: "dado" }, `${Math.round(ocup * 100)}%`), filtroProf === "todos" ? " ocupado" : filtroProf === "eu" ? " da sua agenda" : " desta agenda"),
+        tf ? h("span", { class: "agenda-resumo-faltas", title: "Das consultas que já passaram nos dias mostrados" }, "Faltas: ", h("b", { class: "dado" }, `${Math.round(tf.pct * 100)}%`), ` (${ui.num(tf.faltas)} de ${ui.num(tf.de)})`) : null,
+        nIA ? h("span", { class: "agenda-resumo-ia" }, h("b", { class: "dado" }, ui.num(nIA)), ` ${nIA === 1 ? "marcada" : "marcadas"} pela IA`) : null),
+      caixaProxima, caixaLivre, marcarVazio, encaixarAgoraBt, ferramentas);
 
     // legenda das cores: por serviço ou por profissional (a troca só aparece quando há responsáveis nas consultas)
     const itensLegenda = legendaDe(visiveis, { por: corPor, nomes: nomesAtuais, ordem: ordemServicos, ordemProf: ordemProfAtual });
@@ -2105,41 +2593,51 @@ export async function montar(ctx) {
 
     // E1: «Compareceu / Faltou» nas consultas que já passaram (servidor sem nx_agenda_presenca → some); E5: vazio com a ilustração da agenda
     const presencaPainel = Lg && !semPresenca ? { L: Lg, aoMarcar: marcarPresenca, aoLote: marcarPresencaLote, icone: ui.icone } : null;
+    const contatosLinha = contatosDaLinha(hoje);     // plano 1500c · CC-225/CC-226
+    const desmarcadasDia = Array.isArray(atual.desmarcadas) ? atual.desmarcadas.filter(x => x && partesSP(x.inicio) && partesSP(x.inicio).dia === data) : null;   // CC-270
     const painel = () => montarPainelDia({ h, iso: data, consultas, config, hoje, horaBR: ui.horaBR, num: ui.num, pode: ctx.pode("atendente"),
       presenca: presencaPainel, vazio: typeof ui.vazio === "function" ? ui.vazio : null, telBR: typeof ui.telBR === "function" ? ui.telBR : String,
-      imprimir: movel ? null : imprimirDia,
+      imprimir: movel ? null : imprimirDia, contatos: contatosLinha, desmarcadas: desmarcadasDia,
+      // plano 1500c · CC-261: no celular, «Compartilhar» manda a lista do dia em texto (navigator.share) ao profissional
+      compartilhar: movel && typeof navigator !== "undefined" && navigator && typeof navigator.share === "function" ? iso => compartilharDia(iso, consultas, hoje) : null,
       aoAbrir: (c, bt) => abrirDetalhe(c, bt), aoMarcar: iso => abrirAgendamento(null, { dia: iso }) });
     if (presencaPainel) lerPresencasQueFaltam(emLista ? visiveis : consultasDoDia(consultas, data));
 
     if (emLista) {
-      conteudo.append(...[movel ? barraDoDia(hoje, { lista: true }) : null, resumo, montarListaDias({ h, dias: carregados, consultas, config, hoje, presenca: presencaPainel, pode: ctx.pode("atendente"),
-        aoAbrir: (c, bt) => abrirDetalhe(c, bt), aoMarcar: iso => abrirAgendamento(null, { dia: iso }), horaBR: ui.horaBR, telBR: typeof ui.telBR === "function" ? ui.telBR : String, num: ui.num, uid: idTela }), nota].filter(Boolean));
+      conteudo.append(...[movel ? barraDoDia(hoje, { lista: true }) : null, roteiro, resumo, montarListaDias({ h, dias: carregados, consultas, config, hoje, presenca: presencaPainel, pode: ctx.pode("atendente"),
+        aoAbrir: (c, bt) => abrirDetalhe(c, bt), aoMarcar: iso => abrirAgendamento(null, { dia: iso }), horaBR: ui.horaBR, telBR: typeof ui.telBR === "function" ? ui.telBR : String, num: ui.num, uid: idTela,
+        bloqueios, contatos: contatosLinha }), nota].filter(Boolean));   // plano 1500c · CC-174: os bloqueios entram na Lista
     } else if (movel) {
       const r = resumoDoDia(consultas, data, config);
+      const faixasHoje = faixasDoDia(config, data);
       // CA-203: no celular os 4 cartões de números saem (CSS) e a linha do resumo diz o essencial: «2 consultas · 1 falta · 1 encaixe»
       const lista = h("details", { class: "ag-painel-det", open: r.total > 0 }, h("summary", { class: "ag-painel-sum" }, h("span", null, "Lista do dia"),
-        h("span", { class: "ag-painel-sum-n dado" }, textoResumoDia(r, { futuro: data > hoje, num: ui.num }))), painel());
+        h("span", { class: "ag-painel-sum-n dado" }, textoResumoDia(r, { futuro: data > hoje, num: ui.num, livre: !(Array.isArray(faixasHoje) && !faixasHoje.length) && !diaTodoBloqueado(bloqueios, data) }))), painel());
       // CA-200: a faixa de dias (abas) controla o painel do dia (role=tabpanel, aria-labelledby a aba escolhida)
       const painelDia = h("div", { class: "ag-dia-painel", id: `ag-dia-painel-${idTela}`, role: "tabpanel", "aria-labelledby": `ag-aba-${idTela}-${data}` },
         visaoDoDiaMovel(data, consultas, bloqueios, config, eixo, hoje));
-      conteudo.append(...[barraDoDia(hoje), resumo, legenda, faixaDeDias(carregados, consultas, hoje, config, bloqueios), painelDia, lista, nota].filter(Boolean));
+      ligarDeslizar(painelDia);     // plano 1500c · CC-262
+      conteudo.append(...[barraDoDia(hoje), roteiro, resumo, legenda, faixaDeDias(carregados, consultas, hoje, config, bloqueios, opOcup), painelDia, lista, nota].filter(Boolean));
     } else {
       let colunas;
       if (modo === "dia" && porDono && agrupar === "responsavel") {
+        const nomeCol = d => nomesAtuais[d] || ((equipe || []).find(u => u.id === d) || {}).nome;
         const ordem = [...donos].sort((a, b) => (a === "sem") - (b === "sem") || String(a).localeCompare(String(b)));
-        colunas = ordem.map(d => ({ iso: data, chave: String(d), dono: d, rotulo: d === "sem" ? "Sem responsável" : (nomesAtuais[d] || "Responsável"), titulo: d === "sem" ? "Sem responsável" : (nomesAtuais[d] || "…"),
-          consultas: consultasDoDia(consultas, data).filter(c => (c.dono_id || "sem") === d), bloqueios: bloqueiosDoDia(bloqueios, data), hoje: data === hoje }));
+        colunas = ordem.map(d => ({ iso: data, chave: String(d), dono: d, rotulo: d === "sem" ? "Sem responsável" : (nomeCol(d) || "Responsável"), titulo: d === "sem" ? "Sem responsável" : (nomeCol(d) || "…"),
+          consultas: consultasDoDia(consultas, data).filter(c => (c.dono_id != null ? String(c.dono_id) : "sem") === d), bloqueios: bloqueiosDoDia(bloqueios, data), hoje: data === hoje }));
         if (precisaNomes) carregarNomes().then(n => { if (!vivo) return; for (const t of conteudo.querySelectorAll("[data-dono]")) { const id = t.dataset.dono; if (id !== "sem") t.textContent = nomesAtuais[id] || n[id] || "Responsável"; } });
       } else {
         colunas = mostrados.map(iso => ({ iso, chave: iso, rotulo: `${nomeDia(iso, true)} ${ui.dataBR(iso)}`, consultas: consultasDoDia(consultas, iso),
           bloqueios: bloqueiosDoDia(bloqueios, iso), hoje: iso === hoje }));
       }
-      const grade = montarGrade(colunas, eixo, config, { modoDia: modo === "dia" });
+      const grade = montarGrade(colunas, eixo, config, { modoDia: modo === "dia", ocupacao: opOcup });
       // «Dia»: a grade e, ao lado, o painel do dia (consultas, concluídas, faltas, encaixes e a lista)
-      conteudo.append(...[resumo, legenda, modo === "dia" ? h("div", { class: "ag-dia-layout" }, grade, painel()) : grade, nota].filter(Boolean));
+      conteudo.append(...[roteiro, resumo, legenda, modo === "dia" ? h("div", { class: "ag-dia-layout" }, grade, painel()) : grade, nota].filter(Boolean));
     }
     posicionarAgora();
     animarNumeros();
+    aplicarFiltroNome();
+    if (tvAberta) tvAberta.pintar();     // CC-323: a tela da recepção acompanha a releitura
     if (movel) focarNoDia();
   }
 
@@ -2193,10 +2691,20 @@ export async function montar(ctx) {
     const p = partesSP(c.inicio);
     if (!p) return;
     if (p.dia !== data && (movel || modo === "dia")) { data = p.dia; gravarPreferencias(); montarCabecalho(); desenhar(); }
-    const alvo = [...conteudo.querySelectorAll(".ag-item.ag-proxima .ag-bloco")][0] || conteudo.querySelector(".ag-item .ag-bloco") || blocoDaTela(c.negocio_id);
+    // plano 1500c · CC-187: procura o bloco DESTA consulta (pelo negócio); escondida no «+N», o foco vai para o «+N» e a lista abre
+    let alvo = blocoDaTela(c.negocio_id);
+    let maisBt = null;
+    if (!alvo && c.negocio_id != null) {
+      const v = String(c.negocio_id);
+      const li = [...conteudo.querySelectorAll(".ag-item.ag-mais")].find(x => String(x.dataset.mais || "").split(",").includes(v));
+      maisBt = li ? li.querySelector(".ag-mais-bt") : null;
+      alvo = maisBt;
+    }
+    if (!alvo) alvo = conteudo.querySelector(".ag-item.ag-proxima .ag-bloco");
     if (!alvo) return;
     try { alvo.scrollIntoView({ block: "center", behavior: ui.comportamentoRolagem() }); } catch { /* ok */ }
     try { alvo.focus({ preventScroll: true }); } catch { alvo.focus(); }
+    if (maisBt) maisBt.click();
   }
 
   /** Celular: ao abrir um dia (ou trocar de dia) leva a vista para o que importa — a linha de agora (hoje) ou a 1ª consulta —, sem brigar com a rolagem de quem já rolou. */
@@ -2213,15 +2721,17 @@ export async function montar(ctx) {
   }
 
   /** Celular: sete botões de dia (rolável), com a quantidade de consultas; escolher troca o dia sem pedir nada ao servidor. */
-  function faixaDeDias(dias, consultas, hoje, config = null, bloqueios = []) {
+  function faixaDeDias(dias, consultas, hoje, config = null, bloqueios = [], opOcup = {}) {
     const el = h("div", { class: "ag-faixa", role: "tablist", "aria-label": "Dias da semana" });
     for (const iso of dias) {
-      const oc = ocupacaoDoDia(consultas, iso, config, bloqueios);   // anel de ocupação atrás do número do dia (item 40); CA-196: sem o horário bloqueado
+      const oc = ocupacaoDoDia(consultas, iso, config, bloqueios, opOcup);   // anel de ocupação atrás do número do dia (item 40); CA-196: sem o horário bloqueado
       const n = oc.n, txtOc = textoOcupacao(oc);
       const sel = iso === data;
-      el.appendChild(h("button", { type: "button", role: "tab", class: ["ag-faixa-d", sel && "sel", iso === hoje && "hoje", oc.fechado && "fechado"], "aria-selected": String(sel), tabindex: sel ? "0" : "-1",
+      // plano 1500c · CC-332: dia todo bloqueado (feriado) aparece na faixa — classe e «bloqueado» no nome
+      const bloq = diaTodoBloqueado(bloqueios, iso);
+      el.appendChild(h("button", { type: "button", role: "tab", class: ["ag-faixa-d", sel && "sel", iso === hoje && "hoje", oc.fechado && "fechado", bloq && "bloqueado"], "aria-selected": String(sel), tabindex: sel ? "0" : "-1",
         id: `ag-aba-${idTela}-${iso}`, "aria-controls": `ag-dia-painel-${idTela}`,
-        "aria-label": `${nomeDia(iso, true)}, ${n} ${n === 1 ? "consulta" : "consultas"}${txtOc ? `, ${txtOc}` : ""}`, dataset: { iso },
+        "aria-label": `${nomeDia(iso, true)}, ${n} ${n === 1 ? "consulta" : "consultas"}${bloq ? ", bloqueado" : ""}${txtOc && !bloq ? `, ${txtOc}` : ""}`, dataset: { iso },
         on: { click: () => { const mudou = data !== iso; data = iso; gravarPreferencias(); montarCabecalho(); desenhar();
           // plano 1000b · CB-172: trocar o dia na faixa redesenha sem dizer nada — o status curto diz o dia e quantas consultas
           if (mudou) anunciar(`${nomeDia(iso, true)}: ${n} ${n === 1 ? "consulta" : "consultas"}`); } } },
@@ -2240,11 +2750,37 @@ export async function montar(ctx) {
     });
     // o dia escolhido sempre à vista na faixa
     queueMicrotask(() => { const s = el.querySelector(".sel"); if (s && s.scrollIntoView) try { s.scrollIntoView({ block: "nearest", inline: "center" }); } catch { /* ok */ } });
-    return el;
+    // plano 1500c · CC-263: setas nas pontas da faixa trocam a semana (antes só as do cabeçalho)
+    return h("div", { class: "ag-faixa-caixa" },
+      h("button", { type: "button", class: "bt-icone ag-faixa-sem-ant", "aria-label": "Semana anterior", on: { click: () => mover(-1) } }, ui.icone("seta-esq")),
+      el,
+      h("button", { type: "button", class: "bt-icone ag-faixa-sem-prox", "aria-label": "Próxima semana", on: { click: () => mover(1) } }, ui.icone("seta-dir")));
+  }
+  /** Plano 1500c · CC-262: no dia do celular, deslizar para o lado (mais de 80 px, quase sem mexer na vertical) troca o dia. */
+  function ligarDeslizar(el) {
+    let x0 = null, y0 = null;
+    el.addEventListener("touchstart", ev => { const t = ev.touches && ev.touches[0]; if (!t || ev.touches.length > 1) { x0 = null; return; } x0 = t.clientX; y0 = t.clientY; }, { passive: true });
+    el.addEventListener("touchend", ev => {
+      const t = ev.changedTouches && ev.changedTouches[0];
+      if (x0 === null || !t) return;
+      const dx = t.clientX - x0, dy = t.clientY - y0;
+      x0 = null;
+      if (Math.abs(dx) < 80 || Math.abs(dy) > Math.abs(dx) / 2 || arrasto) return;
+      data = diaISO(data, dx < 0 ? 1 : -1); gravarPreferencias(); carregar();
+      anunciar(nomeDia(data, true));
+    });
   }
 
   function visaoDoDiaMovel(iso, consultas, bloqueios, config, eixo, hoje) {
     const itens = consultasDoDia(consultas, iso), travas = bloqueiosDoDia(bloqueios, iso);
+    // plano 1500c · CC-176: dia fechado pela configuração não vira «Livre · Marcar» — diz que está fechado e leva ao próximo dia de atendimento
+    const faixas = faixasDoDia(config, iso);
+    if (!itens.length && !travas.length && Array.isArray(faixas) && !faixas.length) {
+      const prox = proximoDiaAberto(config, iso, { bloqueios });
+      return h("div", { class: "ag-livre ag-livre-leitura ag-dia-fechado" }, h("span", null, "Fechado neste dia"),
+        ctx.pode("atendente") && prox && !(hoje && prox < hoje)
+          ? h("button", { type: "button", class: "bt bt-sec bt-p ag-prox-aberto", on: { click: () => abrirAgendamento(null, { dia: prox }) } }, `Marcar ${rotuloDoDia(prox, hoje).toLowerCase()}`) : null);
+    }
     if (!itens.length && !travas.length) {
       // plano 1000b · CB-148: dia que já passou não oferece «Marcar» (a janela abria a partir de hoje e a pessoa achava que marcou ontem)
       return ctx.pode("atendente") && !(hoje && iso < hoje)
@@ -2255,29 +2791,31 @@ export async function montar(ctx) {
   }
 
   /* ---------- a grade ---------- */
-  function montarGrade(colunas, eixo, config, { movel: ehMovel = false, modoDia = false } = {}) {
+  function montarGrade(colunas, eixo, config, { movel: ehMovel = false, modoDia = false, ocupacao = {} } = {}) {
     const horas = eixo.fim - eixo.ini;
     const passo = Number(config.passo_min) || Number(config.duracao_min) || 30;
-    const cab = h("div", { class: "ag-topo" }, h("span", { class: "ag-canto", "aria-hidden": "true" }), colunas.map(c => cabecalhoDaColuna(c, ehMovel, modoDia, config)));
+    const cab = h("div", { class: "ag-topo" }, h("span", { class: "ag-canto", "aria-hidden": "true" }), colunas.map(c => cabecalhoDaColuna(c, ehMovel, modoDia, config, ocupacao)));
     const regua = h("div", { class: "ag-regua", "aria-hidden": "true" },
       Array.from({ length: horas }, (_, i) => h("span", { class: "ag-hora-rot dado", style: { "--i": String(i) } }, `${String(eixo.ini + i).padStart(2, "0")}h`)),
       colunas.some(c => c.hoje) ? h("span", { class: "ag-agora-rot dado", hidden: true }) : null);   // o rótulo da linha de «agora» (item 42) fica na régua
     const iFoco = Math.max(0, colunas.findIndex(c => c.iso === data));   // CA-197: uma coluna só na ordem do Tab (a do dia escolhido); setas andam entre elas
     const corpo = h("div", { class: "ag-corpo" }, regua, colunas.map((c, i) => colunaDoDia(c, eixo, config, passo, i === iFoco)));
+    // plano 1500c · CC-220: a instrução das colunas é dita uma vez (aria-describedby comum), não repetida no nome de cada dia
+    const instrucao = ctx.pode("atendente") ? h("p", { class: "sr-only", id: `ag-col-instr-${idTela}` }, "Enter marca consulta neste dia; setas para cima e para baixo escolhem o horário; Page Up e Page Down andam uma hora.") : null;
     const grade = h("div", { class: ["ag-grade", ehMovel && "ag-movel"], style: { "--horas": String(horas), "--colunas": String(colunas.length) }, role: "group",
       "aria-label": ehMovel ? "Agenda do dia" : "Agenda", "aria-description": "Nas consultas, as setas andam entre elas" },
-      ehMovel ? null : cab, corpo);
+      instrucao, ehMovel ? null : cab, corpo);
     ligarRovingBlocos(grade);
     return grade;
   }
 
-  function cabecalhoDaColuna(c, ehMovel, modoDia, config) {
+  function cabecalhoDaColuna(c, ehMovel, modoDia, config, ocupacao = {}) {
     if (c.dono !== undefined) {
       return h("div", { class: ["ag-dia-cab", "ag-dono-cab"] }, h("b", { class: "ag-dono-nome", dataset: { dono: c.dono } }, c.titulo),
-        h("span", { class: "ag-dia-total", title: `${c.consultas.length} consultas` }, ui.num(c.consultas.length)));
+        h("span", { class: "ag-dia-total", title: `${c.consultas.length} consultas` }, c.consultas.length ? ui.num(c.consultas.length) : "livre"));   // plano 1500c · CC-192
     }
     const ehHoje = c.hoje;
-    const oc = ocupacaoDoDia(c.consultas, c.iso, config, c.bloqueios), txtOc = textoOcupacao(oc);
+    const oc = ocupacaoDoDia(c.consultas, c.iso, config, c.bloqueios, ocupacao), txtOc = textoOcupacao(oc);
     // na semana, a data é um botão que abre o dia; em «Dia» é só texto
     const dataTxt = [h("span", { class: "ag-dia-sem" }, modoDia ? nomeDia(c.iso, true).replace(/,.*$/, "").replace(/\.$/, "") : semanaCurta(c.iso)), h("b", { class: "ag-dia-num dado" }, diaDoMes(c.iso))];
     const dataEl = modoDia ? dataTxt : h("button", { type: "button", class: "ag-dia-abrir", "aria-label": `Abrir o dia ${nomeDia(c.iso, true)}`, title: "Ver só este dia",
@@ -2285,7 +2823,10 @@ export async function montar(ctx) {
     return h("div", { class: ["ag-dia-cab", ehHoje && "hoje"], "aria-current": ehHoje ? "date" : null },
       dataEl,
       h("span", { class: "ag-dia-total", title: `${c.consultas.length} ${c.consultas.length === 1 ? "consulta" : "consultas"}` }, c.consultas.length ? ui.num(c.consultas.length) : ""),
-      ctx.pode("atendente") && !(c.iso < ui.hojeSP()) ? h("button", { type: "button", class: "bt-icone ag-dia-mais",   // plano 1000b · CB-148: sem «+» em dia passado "aria-label": `Marcar consulta em ${nomeDia(c.iso, true)}`, title: "Marcar consulta neste dia",
+      // plano 1000b · CB-148: sem «+» em dia passado
+      // plano 1500c · CC-165: o comentário tinha engolido o aria-label e o title (o «+» ficava sem nome) — cada um na sua linha
+      ctx.pode("atendente") && !(c.iso < ui.hojeSP()) ? h("button", { type: "button", class: "bt-icone ag-dia-mais",
+        "aria-label": `Marcar ${palavraCompromisso(ctx.vocab)} em ${nomeDia(c.iso, true)}`, title: `Marcar ${palavraCompromisso(ctx.vocab)} neste dia`,
         on: { click: () => abrirAgendamento(null, { dia: c.iso }) } }, ui.icone("mais")) : null,
       // barra de ocupação do dia (item 40): largura = fração do expediente marcada; a cor sobe com o nível
       txtOc ? h("i", { class: ["ag-dia-ocup", `ag-ocup-${nivelOcupacao(oc.pct)}`], style: { "--p": oc.pct === null ? "0" : oc.pct.toFixed(3) }, title: txtOc, "aria-hidden": "true" }) : null,
@@ -2296,8 +2837,9 @@ export async function montar(ctx) {
     const duracaoPadrao = Number(config.duracao_min) || 30;
     const edita = ctx.pode("atendente");
     // CA-197: pelo teclado a coluna também marca — Enter abre «Marcar» no dia; ↑↓ movem um cursor de horário visível; ←→ trocam de coluna
+    // plano 1500c · CC-220: o nome é só o dia; a instrução vem do aria-describedby comum (o leitor não repete tudo a cada troca de dia)
     const col = h("ol", { class: ["ag-col", c.hoje && "hoje", edita && "ag-edita"], dataset: { iso: c.iso, chave: c.chave },
-      "aria-label": edita ? `${c.rotulo}. Enter marca consulta neste dia; setas para cima e para baixo escolhem o horário` : c.rotulo,
+      "aria-label": c.rotulo, "aria-describedby": edita ? `ag-col-instr-${idTela}` : null,
       tabindex: edita ? (focavel ? "0" : "-1") : null });
     if (edita) col.addEventListener("keydown", ev => teclaNaColuna(ev, col, c, eixo, config, passo));
     // horário fechado (fora do expediente, almoço, dia inteiro)
@@ -2310,10 +2852,18 @@ export async function montar(ctx) {
       const pos = posicaoNoDia(b, c.iso, eixo);
       if (!pos) continue;
       const motivo = [b.motivo, ui.periodoBR(b.inicio, b.fim, " · ")].filter(Boolean).join(" · ") || "Dia indisponível";
-      col.appendChild(h("li", { class: "ag-bloq", title: `Horário bloqueado — ${motivo}`, style: { "--t": String(pos.topo), "--d": String(pos.altura) } },
-        h("span", { class: "ag-bloq-rot" }, ui.icone("fechar"), h("span", { "aria-hidden": "true" }, b.motivo || "Bloqueado")),
+      // plano 1500c · CC-281: com altura (≥ 45 min), o período curto aparece no próprio bloco («12:00–13:00»): no toque ninguém via o title
+      const txtBloq = textoBloqueioNoDia(b, c.iso);
+      const periodoCurto = pos.altura >= 0.75 ? (/das (\d\d:\d\d) às (\d\d:\d\d)/.exec(txtBloq) || []).slice(1).join("–") || (/dia todo/.test(txtBloq) ? "o dia todo" : "") : "";
+      // plano 1500c · CC-280: para o admin o bloqueio é um botão que abre o editar (sem ir às Configurações)
+      const editaBloq = ctx.pode("admin") && b.id != null;
+      const miolo = [h("span", { class: "ag-bloq-rot" }, ui.icone("fechar"), h("span", { "aria-hidden": "true" }, b.motivo || "Bloqueado")),
+        periodoCurto ? h("span", { class: "ag-bloq-periodo dado", "aria-hidden": "true" }, periodoCurto) : null,
         // plano 1000b · CB-182: o período do bloqueio em texto (o title não é lido no toque nem pelo leitor de tela)
-        h("span", { class: "sr-only ag-bloq-txt" }, textoBloqueioNoDia(b, c.iso))));
+        h("span", { class: "sr-only ag-bloq-txt" }, txtBloq)];
+      col.appendChild(h("li", { class: ["ag-bloq", editaBloq && "ag-bloq-edita"], title: `Horário bloqueado — ${motivo}`, style: { "--t": String(pos.topo), "--d": String(pos.altura) } },
+        editaBloq ? h("button", { type: "button", class: "ag-bloq-bt", "aria-haspopup": "dialog", "aria-label": `${txtBloq}. Editar bloqueio`,
+          on: { click: ev => { ev.stopPropagation(); editarBloqueioDaGrade(b, c.iso); } } }, miolo) : miolo));
     }
     // consultas, lado a lado quando se sobrepõem
     const blocos = [];
@@ -2344,10 +2894,16 @@ export async function montar(ctx) {
     const apagado = legendaAtivos.size > 0 && !legendaAtivos.has(k.chave);
     // CA-198: o leitor de tela ouve também «encaixe» e «faltou» (pela etapa), como o painel do dia mostra nos selos
     const cl = classificarConsulta(c, col.config || null, { iso: col.iso, vizinhas: col.vizinhas || [] });
-    const bt = h("button", { type: "button", class: ["ag-bloco", curto && "curto", feita && "feita", arrastavel && "ag-arrastavel"], "aria-haspopup": "dialog",
-      "aria-label": rotuloDoBloco(c, { inicio, fim, nome, feita, falta: cl.falta, encaixe: cl.encaixe, proxima: ehProxima }),
-      title: [`${inicio}${fim ? `–${fim}` : ""}`, nome, c.servico, corPor === "profissional" ? k.rotulo : null, arrastavel ? "Arraste para remarcar" : null].filter(Boolean).join(" · ") },
-      h("span", { class: "ag-bloco-l1" }, h("span", { class: "ag-bloco-hora dado" }, inicio), h("b", { class: "ag-bloco-nome" }, nome)),
+    // plano 1500c · CC-324: o que a IA marcou sozinha ganha o ícone; CC-239: a confirmada (confirmada_em, quando o servidor mandar) o selo
+    const ia = c.marcado_por === "ia", confirmada = !!c.confirmada_em && !feita;
+    const extrasRot = [confirmada ? "confirmada" : null, ia ? "marcada pela IA" : null, c.obs ? `observação: ${c.obs}` : null].filter(Boolean).join(", ");
+    const bt = h("button", { type: "button", class: ["ag-bloco", curto && "curto", feita && "feita", arrastavel && "ag-arrastavel", confirmada && "confirmada"], "aria-haspopup": "dialog",
+      "aria-label": `${rotuloDoBloco(c, { inicio, fim, nome, feita, falta: cl.falta, encaixe: cl.encaixe, proxima: ehProxima })}${extrasRot ? `, ${extrasRot}` : ""}`,
+      // plano 1500c · CC-218: o title cita os atalhos de remarcar do detalhe (teclado sem mouse)
+      title: [`${inicio}${fim ? `–${fim}` : ""}`, nome, c.servico, c.obs || null, corPor === "profissional" ? k.rotulo : null, arrastavel ? "Arraste para remarcar (ou Enter › Dia seguinte)" : null].filter(Boolean).join(" · ") },
+      h("span", { class: "ag-bloco-l1" }, h("span", { class: "ag-bloco-hora dado" }, inicio), h("b", { class: "ag-bloco-nome" }, nome),
+        ia && typeof ui.icone === "function" ? h("span", { class: "ag-bloco-ia", "aria-hidden": "true", title: "Marcada pela IA" }, ui.icone("ia")) : null,
+        confirmada ? h("span", { class: "ag-bloco-conf", "aria-hidden": "true" }, "✓") : null),
       c.servico ? h("span", { class: "ag-bloco-serv" }, c.servico) : null,
       feita ? ui.icone("check") : null);
     bt.addEventListener("click", ev => {
@@ -2355,7 +2911,7 @@ export async function montar(ctx) {
       if (ignorarClique) { ignorarClique = false; return; }   // o clique que fecha um arrasto não abre o detalhe
       abrirDetalhe(c, bt);
     });
-    const item = h("li", { class: ["ag-item", ehProxima && "ag-proxima", apagado && "apagado"], dataset: { cols: b.cols, chave: k.chave, negocio: c.negocio_id ?? null },
+    const item = h("li", { class: ["ag-item", ehProxima && "ag-proxima", apagado && "apagado"], dataset: { cols: b.cols, chave: k.chave, negocio: c.negocio_id ?? null, nome: normServico(`${nome} ${c.servico || ""}`) },   // CC-266
       style: { "--t": String(b.topo), "--d": String(b.altura), "--col": String(b.col), "--cols": String(b.cols), "--cor-bloco": `var(--pal-${cor})`, "--i": String(seqBloco++) } },
       ehProxima ? h("span", { class: "ag-proxima-selo", "aria-hidden": "true" }, "Próxima") : null, bt);
     if (arrastavel) bt.addEventListener("pointerdown", ev => iniciarArrasto(ev, bt, item, c, col));
@@ -2492,7 +3048,8 @@ export async function montar(ctx) {
     if (horarioAberto(cfg, d.iso, d.min) === false) return "fechado";
     const a = quem || arrasto || ultimoArrasto;    // quem = {c, duracao} (atalho do detalhe, CA-206); senão o arrasto
     const k = conflitoNoDestino({ iso: d.iso, min: d.min, duracao: a ? a.duracao : 30, config: cfg, ignorar: a ? a.c : null,
-      bloqueios: atual && Array.isArray(atual.bloqueios) ? atual.bloqueios : [], consultas: atual && Array.isArray(atual.consultas) ? atual.consultas : [] });
+      bloqueios: atual && Array.isArray(atual.bloqueios) ? atual.bloqueios : [], consultas: atual && Array.isArray(atual.consultas) ? atual.consultas : [],
+      ocupados: atual && Array.isArray(atual.ocupados) ? atual.ocupados : null });   // plano 1500c · CC-190
     if (k) { d.conflito = k; return k.motivo; }
     return null;
   }
@@ -2586,7 +3143,15 @@ export async function montar(ctx) {
     if (!p) return false;
     const dur = Number(atual && atual.config && atual.config.duracao_min) || 30;
     const m = minutosDaConsulta(c, dur);
-    return remarcarPara(c, { iso: diaISO(p.dia, dias), hora: horaTxt(p.min), min: p.min }, { c, duracao: m ? m.fim - m.ini : dur });
+    const iso = diaDoAtalho(p.dia, dias);
+    if (!iso) { ui.toast("Nenhum dia de atendimento nos próximos 60 dias.", { tipo: "info" }); return false; }
+    return remarcarPara(c, { iso, hora: horaTxt(p.min), min: p.min }, { c, duracao: m ? m.fim - m.ini : dur });
+  }
+  /** Plano 1500c · CC-177: o «Dia seguinte» é o próximo dia de ATENDIMENTO (pula domingo fechado e feriado bloqueado); a «Semana seguinte», o
+      primeiro dia aberto a partir de 7 dias depois. */
+  function diaDoAtalho(dia, dias) {
+    const cfg = (atual && atual.config) || {}, bl = atual && Array.isArray(atual.bloqueios) ? atual.bloqueios : [];
+    return dias >= 7 ? proximoDiaAberto(cfg, diaISO(dia, dias - 1), { bloqueios: bl }) : proximoDiaAberto(cfg, dia, { passo: dias, bloqueios: bl });
   }
   /** Confirmação «De → Para»; confirmar grava com p_req (nx_agenda_marcar, como a janela) e oferece Desfazer (volta como encaixe).
       encaixe = o destino está cheio e quem arrasta é supervisor+: grava como encaixe (p_encaixe), com o aviso na confirmação. */
@@ -2636,6 +3201,8 @@ export async function montar(ctx) {
     recarregar().then(() => { if (vivo) confirmarNoBloco(negocioId, "Consulta remarcada"); });   // E5: o bloco no horário novo confirma
     ui.acaoComDesfazer({
       texto: `Remarcada para ${rotuloDoDia(d.iso, hoje)} às ${d.hora}`,
+      // plano 1500c · CC-178: como marcar e desmarcar, a remarcação oferece escrever o aviso ao paciente (o novo horário; nada sai sozinho)
+      acao: avisarPaciente && c.contato_id != null ? { rotulo: rotuloAvisar("remarcacao", ctx.vocab), fn: () => avisarPaciente({ ...c, inicio: inicioNovo, fim: null }, "remarcacao") } : undefined,
       reverter: async () => {
         const av = avisoVoltaEncaixe(await voltarAoHorario(api, negocioId, anterior, servico, encaixeAntes));
         if (av) ui.toast(av, { tipo: "info" });
@@ -2675,14 +3242,25 @@ export async function montar(ctx) {
     if (ev.target !== col || ev.altKey || ev.ctrlKey || ev.metaKey) return;
     const p = Math.max(5, Number(passo) || 30);
     const ini = eixo.ini * 60, fim = eixo.fim * 60 - p;
-    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+    // plano 1500c · CC-219: PageUp/PageDown andam 1 h; Home/End vão ao começo e ao fim do expediente do dia
+    const salto = { ArrowDown: p, ArrowUp: -p, PageDown: 60, PageUp: -60 }[ev.key];
+    if (ev.key === "Home" || ev.key === "End") {
+      ev.preventDefault();
+      const fx = faixasDoDia(config, c.iso) || [];
+      cursorMin = ev.key === "Home" ? (fx.length ? fx[0][0] : ini) : (fx.length ? fx[fx.length - 1][1] - p : fim);
+      cursorMin = Math.max(ini, Math.min(fim, cursorMin));
+      mostrarCursor(col, eixo);
+      anunciar(`${horaTxt(cursorMin)}${horarioAberto(config, c.iso, cursorMin) === false ? ", fora do atendimento" : ""}`, { repetir: true });
+      return;
+    }
+    if (salto !== undefined) {
       ev.preventDefault();
       if (cursorMin === null) {
         // começa no que importa: agora (hoje), senão a 1ª faixa de atendimento, senão o topo do eixo
         const n = partesSP(new Date());
         const faixa = (faixasDoDia(config, c.iso) || [])[0];
         cursorMin = c.iso === (n && n.dia) ? Math.ceil(n.min / p) * p : faixa ? faixa[0] : ini;
-      } else cursorMin += ev.key === "ArrowDown" ? p : -p;
+      } else cursorMin += salto;
       cursorMin = Math.max(ini, Math.min(fim, cursorMin));
       mostrarCursor(col, eixo);
       anunciar(`${horaTxt(cursorMin)}${horarioAberto(config, c.iso, cursorMin) === false ? ", fora do atendimento" : ""}`, { repetir: true });
@@ -2730,6 +3308,16 @@ export async function montar(ctx) {
   let ultimoTique = Date.now();
   function tique() {
     if (!vivo) return;
+    // plano 1500c · CC-168: a Agenda ficou aberta e virou o dia — a data (se era hoje) e a coluna «hoje» andam, e o período é relido
+    const hojeAgora = ui.hojeSP();
+    if (diaVirou(ultimoHojeTela, hojeAgora) && !arrasto) {
+      const eraHoje = data === ultimoHojeTela;
+      ultimoHojeTela = hojeAgora;
+      if (eraHoje) { data = hojeAgora; gravarPreferencias(); }
+      diaFocado = "";
+      carregar({ forcar: true, silencioso: !!atual });
+      return;
+    }
     posicionarAgora();
     pintarCarimbo();
     const agora = Date.now(), antes = ultimoTique;
@@ -2737,7 +3325,10 @@ export async function montar(ctx) {
     if (atual && Array.isArray(atual.consultas) && !arrasto) {
       const lista = filtrarPorProfissional(atual.consultas.map(comPresencaLida), filtroProf, eu);
       const cruzou = lista.some(c => { const t = Date.parse(c && c.inicio); return Number.isFinite(t) && t > antes && t <= agora; });
-      if (cruzou || chaveConsulta(proximaConsulta(lista, agora)) !== chaveConsulta(proximaAtual)) desenhar();
+      if (cruzou || chaveConsulta(proximaConsulta(lista, agora)) !== chaveConsulta(proximaAtual)) {
+        // plano 1500c · CC-249: com a aba escondida o redesenho espera a volta (visibilitychange)
+        if (typeof document !== "undefined" && document.hidden) redesenhoPendente = true; else desenhar();
+      }
     }
     releituraAutomatica();
   }
@@ -2747,7 +3338,12 @@ export async function montar(ctx) {
     carregar({ silencioso: true, forcar: true, auto: true });
   }
   const relogio = setInterval(tique, 60_000);
-  const aoVoltarAba = () => { if (typeof document !== "undefined" && !document.hidden) { posicionarAgora(); releituraAutomatica({ minimo: 30_000 }); } };
+  const aoVoltarAba = () => {
+    if (typeof document !== "undefined" && !document.hidden) {
+      if (redesenhoPendente && vivo && atual) { redesenhoPendente = false; desenhar(); }   // plano 1500c · CC-249
+      posicionarAgora(); releituraAutomatica({ minimo: 30_000 });
+    }
+  };
   document.addEventListener("visibilitychange", aoVoltarAba);
 
   /* ============================================================ E1 · presença (nx_agenda_presenca, contrato 6) */
@@ -2782,6 +3378,13 @@ export async function montar(ctx) {
     const anterior = Lg.presencaDe(c);
     const pedido = Lg.proximaPresenca(anterior, est);
     const nome = c.nome || c.titulo || "Consulta";
+    // plano 1500c · CC-221: tocar de novo no botão marcado não limpa sem querer (duplo toque) — pergunta antes; a paleta já pergunta
+    if (pedido === "limpar" && botao) {
+      const ok = typeof ui.confirmar === "function"
+        ? await ui.confirmar({ titulo: "Limpar a presença?", texto: `${nome} está marcada como «${(Lg.PRESENCAS[anterior] || {}).rotulo || anterior}». Limpar a marcação?`, rotulo: "Limpar marcação" })
+        : true;   // shell sem ui.confirmar: segue como antes (o Desfazer devolve)
+      if (!ok || !vivo) return;
+    }
     let etapaAntes = null, r;
     try {
       r = await ui.carregando(botao, async () => {
@@ -2806,7 +3409,9 @@ export async function montar(ctx) {
       : `${nome} · ${pedido === "faltou" ? "faltou" : "compareceu"}${moveu ? " · foi para a etapa de faltas" : ""}`;
     ui.acaoComDesfazer({ texto,
       // CA-191: compareceu → atalho opcional para o negócio (fechar, próxima etapa); a decisão de etapa continua de quem atende
-      acao: pedido === "compareceu" && c.negocio_id != null ? { rotulo: palavrasAgenda(ctx.vocab).abrirNeg, fn: () => abrirFicha(c.negocio_id) } : undefined,   // CB-189
+      // plano 1500c · CC-222: faltou → «Remarcar» abre a janela com o negócio (o próximo passo natural)
+      acao: pedido === "compareceu" && c.negocio_id != null ? { rotulo: palavrasAgenda(ctx.vocab).abrirNeg, fn: () => abrirFicha(c.negocio_id) } // CB-189
+        : pedido === "faltou" && c.negocio_id != null && ctx.pode("atendente") ? { rotulo: "Remarcar", fn: () => abrirAgendamento({ ...c, inicio: null, consulta_em: null }) } : undefined,
       reverter: async () => {
         await api.rpcC("nx_agenda_presenca", { p_negocio: c.negocio_id, p_estado: Lg.voltaPresenca(anterior) });
         guardarPresenca(c, anterior);
@@ -2819,22 +3424,26 @@ export async function montar(ctx) {
   async function marcarPresencaLote(lista, botao) {
     if (!Lg || semPresenca || !ctx.pode("atendente") || !Array.isArray(lista) || !lista.length) return;
     const n = lista.length;
+    // plano 1500c · CC-224: cada consulta tem a caixa marcada (Compareceu); desmarcar a caixa grava «Faltou» — dia de chuva não é uma a uma
+    const caixas = lista.map(c => h("input", { type: "checkbox", class: "ag-lote-chk", checked: true, "aria-label": `${c.nome || c.titulo || "Consulta"} compareceu` }));
     const ok = await ui.modal({ titulo: `Marcar ${n} como «Compareceu»?`, largura: "p", protegerTexto: false,
-      corpo: h("div", { class: "pilha" }, h("p", null, "As consultas que já passaram e ainda não têm presença marcada:"),
-        h("ul", { class: "ag-lote-lista" }, lista.map(c => h("li", null, h("span", { class: "dado" }, ui.horaBR(c.inicio)), " ", c.nome || c.titulo || "Consulta")))),
-      acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: false }, { rotulo: `Marcar ${n}`, tipo: "primario", valor: true }] });
+      corpo: h("div", { class: "pilha" }, h("p", null, "As consultas que já passaram e ainda não têm presença marcada. Desmarque quem faltou:"),
+        h("ul", { class: "ag-lote-lista" }, lista.map((c, i) => h("li", null, h("label", { class: "ag-lote-item" }, caixas[i], h("span", { class: "dado" }, ui.horaBR(c.inicio)), " ", c.nome || c.titulo || "Consulta"))))),
+      acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: false }, { rotulo: `Gravar ${n}`, tipo: "primario", valor: true }] });
     if (!ok || !vivo) return;
+    const estados = new Map(lista.map((c, i) => [c, caixas[i].checked === false ? "faltou" : "compareceu"]));
     const feitas = [], falharam = [];
-    const gravar = async () => {
-      for (const c of lista) {
-        try { await api.rpcC("nx_agenda_presenca", { p_negocio: c.negocio_id, p_estado: "compareceu" }); feitas.push(c); guardarPresenca(c, "compareceu"); }
-        catch (e) {
-          if (Lg.rpcAusente(e)) { semPresenca = true; limparComandoPresenca(); break; }
-          falharam.push(c);
-          console.error("agenda: presença em lote", e);
-        }
+    // plano 1500c · CC-182: até 4 gravações ao mesmo tempo (15 consultas no fim do dia eram 15 idas e voltas em fila)
+    const gravar = () => comLimite(lista, 4, async c => {
+      if (semPresenca) return;
+      const est = estados.get(c);
+      try { await api.rpcC("nx_agenda_presenca", { p_negocio: c.negocio_id, p_estado: est }); feitas.push(c); guardarPresenca(c, est); }
+      catch (e) {
+        if (Lg.rpcAusente(e)) { semPresenca = true; limparComandoPresenca(); return; }
+        falharam.push(c);
+        console.error("agenda: presença em lote", e);
       }
-    };
+    });
     try { if (typeof ui.carregando === "function" && botao) await ui.carregando(botao, gravar); else await gravar(); } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
     if (vivo && atual) { desenhar(); recarregar(); }
     if (!feitas.length) { ui.toast(semPresenca ? "O servidor ainda não registra a presença da consulta." : "Nenhuma presença foi gravada. Tente de novo.", { tipo: "info" }); return; }
@@ -2843,9 +3452,17 @@ export async function montar(ctx) {
     const naoGravou = feitas.length < n ? (falharam.length
       ? ` · não gravaram: ${falharam.slice(0, 3).map(nomeLote).join(", ")}${falharam.length > 3 ? ` e mais ${falharam.length - 3}` : ""}. Marque essas uma a uma.`
       : ` (${n - feitas.length} não gravaram)`) : "";
-    ui.acaoComDesfazer({ texto: `${feitas.length} ${feitas.length === 1 ? "consulta marcada" : "consultas marcadas"} como «Compareceu»${naoGravou}`,
+    const nFaltou = feitas.filter(c => estados.get(c) === "faltou").length;
+    const resumoLote = nFaltou ? `${feitas.length - nFaltou} «Compareceu» e ${nFaltou} «Faltou»` : `${feitas.length} ${feitas.length === 1 ? "consulta marcada" : "consultas marcadas"} como «Compareceu»`;
+    ui.acaoComDesfazer({ texto: `${resumoLote}${naoGravou}`,
       reverter: async () => {
-        for (const c of feitas) { await api.rpcC("nx_agenda_presenca", { p_negocio: c.negocio_id, p_estado: "limpar" }); guardarPresenca(c, null); }
+        // plano 1500c · CC-181: uma que falha não para as outras — as que não voltaram são ditas pelo nome
+        const naoVoltaram = [];
+        await comLimite(feitas, 4, async c => {
+          try { await api.rpcC("nx_agenda_presenca", { p_negocio: c.negocio_id, p_estado: "limpar" }); guardarPresenca(c, null); }
+          catch (e) { naoVoltaram.push(c); console.error("agenda: desfazer presença em lote", e); }
+        });
+        if (naoVoltaram.length) ui.toast(`Não voltaram: ${naoVoltaram.slice(0, 3).map(nomeLote).join(", ")}${naoVoltaram.length > 3 ? ` e mais ${naoVoltaram.length - 3}` : ""}. Limpe essas uma a uma.`, { tipo: "erro" });
         if (vivo && atual) { desenhar(); recarregar(); }
       } });
   }
@@ -2858,6 +3475,139 @@ export async function montar(ctx) {
     if (typeof addEventListener === "function") addEventListener("afterprint", fim);
     try { globalThis.print(); } finally { setTimeout(fim, 1000); }
   }
+
+  /* ============================================================ plano 1500c (frente agenda): peças novas da tela */
+  /** CC-260: «Imprimir semana» — a folha leva os 7 dias em lista (hora, paciente, serviço, telefone) e some depois da impressão. */
+  function imprimirSemana(dias, consultas, config, bloqueios, hoje) {
+    if (typeof globalThis.print !== "function") return;
+    const folha = h("div", { class: "ag-folha-semana" }, h("h2", null, `Agenda · ${ui.dataCurtaBR(dias[0])} a ${ui.dataCurtaBR(dias[dias.length - 1])}`),
+      montarListaDias({ h, dias, consultas, config, hoje, bloqueios, horaBR: ui.horaBR, telBR: typeof ui.telBR === "function" ? ui.telBR : String, num: ui.num, uid: `imp${idTela}` }));
+    conteudo.appendChild(folha);
+    const corpo = document.body && document.body.classList ? document.body : null;
+    if (corpo) corpo.classList.add("ag-imprimindo-semana");
+    const fim = () => { if (corpo) corpo.classList.remove("ag-imprimindo-semana"); folha.remove(); if (typeof removeEventListener === "function") removeEventListener("afterprint", fim); };
+    if (typeof addEventListener === "function") addEventListener("afterprint", fim);
+    try { globalThis.print(); } finally { setTimeout(fim, 1000); }
+  }
+  /** CC-258: as consultas do período num arquivo CSV (abre no Excel). */
+  function exportarCSV(lista, dias) {
+    const csv = csvDaAgenda(lista, { nomes: nomesAtuais, contato: palavrasAgenda(ctx.vocab).contato.replace(/^./, x => x.toUpperCase()) });
+    const nome = `agenda-${dias[0]}${dias.length > 1 ? `-a-${dias[dias.length - 1]}` : ""}.csv`;
+    try {
+      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+      const a = h("a", { href: url, download: nome, hidden: true });
+      (document.body || conteudo).appendChild(a);
+      a.click();
+      setTimeout(() => { a.remove(); try { URL.revokeObjectURL(url); } catch { /* ok */ } }, 1000);
+      ui.toast(`Arquivo ${nome} baixado.`, { tipo: "ok" });
+    } catch (e) { ui.toast("Não foi possível gerar o arquivo neste aparelho.", { tipo: "erro" }); console.error(e); }
+  }
+  /** CC-261: manda a lista do dia em texto pelo compartilhar do celular (WhatsApp, e-mail…). */
+  async function compartilharDia(iso, consultas, hoje) {
+    const texto = textoCompartilharDia(consultas, iso, hoje);
+    try { await navigator.share({ title: "Agenda do dia", text: texto }); }
+    catch (e) { if (!(e && e.name === "AbortError")) { const ok = await copiarSemAviso(texto); ui.toast(ok ? "Lista copiada para colar onde quiser." : "Não foi possível compartilhar.", { tipo: "info" }); } }
+  }
+  /** CC-252: «Próximo livre: hoje 15:30» — nx_agenda_livres dos próximos 3 dias (guardado por 60 s); tocar abre a marcação nele. */
+  let livreCache = { em: 0, chave: "", slot: null, p: null };
+  function completarProximoLivre(caixa, hoje) {
+    if (offline()) return;
+    const chave = hoje;
+    const pintar = slot => {
+      if (!vivo || !slot) return;
+      ui.limpar(caixa);
+      const rot = `${rotuloDoDia(slot.dia, hoje)} ${horaTxt(slot.min)}`;
+      caixa.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p agenda-prox-livre", "aria-label": `Próximo horário livre: ${rot}. Marcar nele`,
+        on: { click: () => abrirAgendamento(null, { dia: slot.dia, hora: horaTxt(slot.min) }) } }, h("span", { class: "agenda-proxima-rot" }, "Próximo livre"), h("b", { class: "dado" }, rot)));
+    };
+    if (livreCache.chave === chave && Date.now() - livreCache.em < 60_000) { if (livreCache.slot) pintar(livreCache.slot); else if (livreCache.p) livreCache.p.then(() => pintar(livreCache.slot)); return; }
+    livreCache = { em: Date.now(), chave, slot: null, p: null };
+    const meu = livreCache;
+    meu.p = Promise.resolve(api.rpcC("nx_agenda_livres", { p_a_partir: hoje, p_dias: 3, p_servico: null, p_negocio: null }))
+      .then(r => { meu.slot = primeiroLivre(agruparLivres(r && r.horarios)); if (livreCache === meu) pintar(meu.slot); })
+      .catch(() => { if (livreCache === meu) livreCache = { em: 0, chave: "", slot: null, p: null }; });
+  }
+  /** CC-306: empresa nova — «Deixe a agenda pronta em 3 passos» (horário, serviços, feriados), só para o admin enquanto vale o horário padrão. */
+  function montarRoteiro() {
+    const passo = (n, t, d) => h("li", { class: "ag-roteiro-passo" }, h("span", { class: "ag-passo-n dado", "aria-hidden": "true" }, String(n)),
+      h("span", null, h("b", null, t), h("small", null, d)));
+    return h("section", { class: "cartao ag-roteiro", "aria-labelledby": `ag-roteiro-${idTela}` },
+      h("h2", { class: "ag-roteiro-tit", id: `ag-roteiro-${idTela}` }, "Deixe a agenda pronta em 3 passos"),
+      h("ol", { class: "ag-roteiro-lista" },
+        passo(1, "Horário de atendimento", "Os dias e horas em que a equipe atende (a IA usa o mesmo)."),
+        passo(2, "Serviços e durações", "Ex.: avaliação 30 min, limpeza 45 min."),
+        passo(3, "Feriados", "Um toque fecha os feriados nacionais do ano.")),
+      h("a", { class: "bt bt-prim bt-p ag-roteiro-ir", href: "#/config/agenda", on: { click: ev => { ev.preventDefault(); ctx.navegar("#/config/agenda"); } } }, "Configurar a agenda"));
+  }
+  /** CC-266: «Filtrar nesta tela» apaga (sem redesenhar) os blocos e as linhas que não casam com o nome ou o serviço digitado. */
+  function aplicarFiltroNome() {
+    const q = normServico(filtroNome);
+    for (const el of conteudo.querySelectorAll(".ag-item[data-nome], .ag-painel-li[data-nome]")) el.classList.toggle("ag-filtrado", !!q && !String(el.dataset.nome || "").includes(q));
+  }
+  /** CC-225/CC-226: ligar, conversar e «Lembrar» direto nas linhas do painel e da Lista. */
+  function contatosDaLinha(hoje) {
+    const comConv = !!(ctx.temModulo && ctx.temModulo("conversas"));
+    const pode = ctx.pode("atendente");
+    const amanha = diaISO(hoje, 1);
+    return {
+      icone: ui.icone,
+      hrefTel: t => (Lg ? Lg.hrefTel(t) : telLocal(t)),
+      aoConversar: comConv ? c => ctx.navegar(`#/conversas?contato=${encodeURIComponent(c.contato_id)}`) : null,
+      podeLembrar: c => comConv && pode && c && c.contato_id != null && c.status !== "ganho" && (partesSP(c.inicio) || {}).dia === amanha && Date.parse(c.inicio) > Date.now(),
+      aoLembrar: c => { lembrar(c).then(() => { if (vivo && atual) desenhar(); }); },
+      lembrado: c => !!c && lembrados.has(`${c.negocio_id}|${c.inicio}`) && (partesSP(c.inicio) || {}).dia >= hoje,
+    };
+  }
+  /** CC-240: «Confirmada» no detalhe — registra que o paciente confirmou (por telefone ou mensagem). Servidor sem a função: o botão some. */
+  async function confirmarConsulta(c, botao, pop) {
+    try {
+      const r = await ui.carregando(botao, () => api.rpcC("nx_agenda_confirmar", { p_negocio: c.negocio_id, p_inicio: c.inicio }));
+      erroResposta(r);
+      const linha = atual && Array.isArray(atual.consultas) ? atual.consultas.find(x => x && x.negocio_id === c.negocio_id && x.inicio === c.inicio) : null;
+      if (linha) linha.confirmada_em = (r && r.confirmada_em) || new Date().toISOString();
+      if (pop && typeof pop.fechar === "function") pop.fechar();
+      if (vivo && atual) desenhar();
+      ui.toast(`${c.nome || c.titulo || "Consulta"} · confirmada.`, { tipo: "ok" });
+    } catch (e) {
+      if (Lg && typeof Lg.rpcAusente === "function" && Lg.rpcAusente(e)) {
+        semConfirmar = true;
+        if (botao && typeof botao.remove === "function") botao.remove();
+        ui.toast("O servidor ainda não registra a confirmação da consulta. Assim que a atualização estiver no ar, o botão volta.", { tipo: "info" });
+        return;
+      }
+      ui.toast(api.mensagemErro(e), { tipo: "erro" });
+    }
+  }
+  /** CC-323: «Tela da recepção» — tela cheia, só leitura, letras grandes: os próximos atendimentos de hoje (primeiro nome e horário). */
+  let tvAberta = null;
+  function abrirTV() {
+    if (tvAberta || typeof document === "undefined" || !document.body) return;
+    const lista = h("ol", { class: "ag-tv-lista" });
+    const relogio = h("p", { class: "ag-tv-hora dado", "aria-hidden": "true" });
+    const fechar = h("button", { type: "button", class: "bt bt-sec ag-tv-fechar", on: { click: () => fecharTV() } }, "Sair da tela da recepção");
+    const el = h("div", { class: "ag-tv", role: "dialog", "aria-modal": "true", "aria-label": "Tela da recepção" },
+      h("header", { class: "ag-tv-cab" }, h("h2", null, "Próximos atendimentos"), relogio, fechar), lista);
+    const pintar = () => {
+      if (!tvAberta) return;
+      relogio.textContent = horaTxt((partesSP(new Date()) || { min: 0 }).min);
+      ui.limpar(lista);
+      const hojeAgora = ui.hojeSP();
+      const proximas = consultasDoDia(atual && Array.isArray(atual.consultas) ? atual.consultas : [], hojeAgora)
+        .filter(c => c.status !== "ganho" && Date.parse(c.fim || c.inicio) > Date.now() - 10 * 60_000).slice(0, 8);
+      if (!proximas.length) lista.appendChild(h("li", { class: "ag-tv-vazio" }, "Sem mais atendimentos hoje."));
+      for (const c of proximas) { const p = partesSP(c.inicio); lista.appendChild(h("li", null, h("b", { class: "dado" }, p ? horaTxt(p.min) : ""), h("span", null, primeiroNomeAgenda(c.nome || c.titulo) || "Paciente"))); }
+    };
+    const tecla = ev => { if (ev.key === "Escape") { ev.preventDefault(); fecharTV(); } };
+    const timer = setInterval(pintar, 30_000);
+    tvAberta = { el, pintar, fim: () => { clearInterval(timer); document.removeEventListener("keydown", tecla, true); el.remove(); try { if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen(); } catch { /* ok */ } } };
+    document.addEventListener("keydown", tecla, true);
+    document.body.appendChild(el);
+    pintar();
+    try { if (el.requestFullscreen) el.requestFullscreen().catch(() => { /* sem tela cheia: a camada cobre a janela */ }); } catch { /* ok */ }
+    try { fechar.focus(); } catch { /* ok */ }
+  }
+  function fecharTV() { const t = tvAberta; tvAberta = null; if (t) t.fim(); }
+
   function limparComandoPresenca() {
     if (typeof desregistrarPresenca === "function") try { desregistrarPresenca(); } catch { /* ok */ }
     desregistrarPresenca = null;
@@ -2918,10 +3668,21 @@ export async function montar(ctx) {
   async function irParaConsultaFora(c) {
     const p = partesSP(c && c.inicio);
     if (!p || !vivo) return;
-    data = p.dia; gravarPreferencias();
+    data = p.dia;
+    if (!movel && modo === "mes") modo = "dia";     // plano 1500c · CC-188: no Mês não há bloco para focar — abre o dia
+    gravarPreferencias();
     if (!(await carregar()) || !vivo) return;
     const alvo = blocoDaTela(c.negocio_id);
-    if (!alvo) return;
+    if (!alvo) {
+      // plano 1500c · CC-189: o filtro de profissional esconde a consulta — diz de quem é e oferece «Ver todos»
+      if (filtroProf !== "todos") {
+        const linha = atual && Array.isArray(atual.consultas) ? atual.consultas.find(x => x && x.negocio_id === c.negocio_id) : null;
+        const dono = linha && linha.dono_id != null ? (nomesAtuais[String(linha.dono_id)] || linha.dono_nome || "outro profissional") : "outro profissional";
+        ui.toast(`Está na agenda de ${dono}: o filtro «${filtroProf === "eu" ? "Minha agenda" : nomesAtuais[filtroProf] || "Profissional"}» esconde esta consulta.`, { tipo: "info",
+          acao: { rotulo: "Ver todos", fn: () => { filtroProf = "todos"; gravarPreferencias(); desenhar(); anunciarPeriodo(); const b = blocoDaTela(c.negocio_id); if (b) try { b.focus({ preventScroll: false }); } catch { b.focus(); } } } });
+      }
+      return;
+    }
     try { alvo.scrollIntoView({ block: "center", behavior: ui.comportamentoRolagem() }); } catch { /* ok */ }
     try { alvo.focus({ preventScroll: true }); } catch { alvo.focus(); }
   }
@@ -2940,16 +3701,51 @@ export async function montar(ctx) {
 
   /* ============================================================ E6 · «Lembrar» */
   const copiarSemAviso = async t => { try { return typeof ui.copiar === "function" ? !!(await ui.copiar(t, { aviso: null })) : false; } catch { return false; } };
+  /** Plano 1500c · CC-179: a conversa é do número oficial da Meta e a janela de 24 h fechou? (aparelho CodeWords não tem janela) */
+  function janelaFechadaMeta(conv) {
+    const prov = String(conv.provedor || conv.canal_provedor || (conv.canal && conv.canal.provedor) || "").toLowerCase();
+    if (!/meta|cloud|oficial/.test(prov)) return false;
+    if (Lg && typeof Lg.janelaAberta === "function") try { return !Lg.janelaAberta(conv); } catch { /* segue a conta local */ }
+    const ate = Date.parse(conv.janela_ate);
+    const ent = Date.parse(conv.ultima_entrada_em);
+    const fim = Number.isFinite(ate) ? ate : Number.isFinite(ent) ? ent + 24 * 3600e3 : NaN;
+    return !(fim > Date.now());
+  }
+  /** Plano 1500c · CC-206: o nome da empresa (ctx.cliente) e o endereço das configurações da IA (nx_cv_base; lido uma vez, só se houver Conversas). */
+  let empresaP = null;
+  function dadosDaEmpresa() {
+    if (!empresaP) {
+      const empresa = ctx.cliente && typeof ctx.cliente.nome === "string" ? ctx.cliente.nome.trim().slice(0, 80) : "";
+      empresaP = !(ctx.temModulo && ctx.temModulo("conversas")) ? Promise.resolve({ empresa, endereco: "" })
+        : Promise.resolve(api.rpcC("nx_cv_base", {}, { cache: true })).then(b => ({ empresa, endereco: (b && b.config && b.config.ia && typeof b.config.ia.endereco === "string" && b.config.ia.endereco) || (b && b.ia && typeof b.ia.endereco === "string" && b.ia.endereco) || "" }))
+          .catch(() => ({ empresa, endereco: "" }));
+    }
+    return empresaP;
+  }
   /** Abre a conversa do contato com o lembrete pronto no campo (rascunho da conversa; o composer mostra «Rascunho restaurado»). Nada é enviado
       sozinho. Sem conversa, ou com um rascunho da pessoa lá, o texto vai para a área de transferência (o rascunho dela nunca é sobrescrito). */
   async function lembrar(c, tipo = "lembrete") {
     // CA-176/CA-178: a mesma rotina deixa pronta a confirmação (depois de marcar) e o aviso de desmarcação
-    const texto = (tipo === "confirmacao" ? textoConfirmacao : tipo === "desmarcacao" ? textoDesmarcacao : textoLembrete)(c, ui.hojeSP());
+    // plano 1500c · CC-205/CC-206: a palavra da vertical; o lembrete diz de onde é (empresa) e onde fica (endereço da IA, quando houver)
+    const extra = tipo === "lembrete" ? await dadosDaEmpresa() : {};
+    if (!vivo) return;
+    const fn = { confirmacao: textoConfirmacao, desmarcacao: textoDesmarcacao, remarcacao: textoRemarcacao, falta: textoFalta }[tipo] || textoLembrete;
+    const texto = fn(c, ui.hojeSP(), { vocab: ctx.vocab || null, ...extra });
     if (!texto || !c || c.contato_id == null) return;
     let conv = null, leu = false;
     try { const r = await api.rpcC("nx_contato_ver", { p_id: c.contato_id }); conv = conversaDoContato(r && r.conversas); leu = !!(r && Array.isArray(r.conversas)); }
     catch { /* sem a ficha: a rota por contato escolhe a conversa */ }
     if (!vivo) return;
+    // plano 1500c · CC-179: no número da Meta, com a janela de 24 h fechada, texto livre não sai — copia e manda usar o modelo
+    if (conv && conv.status !== "resolvida" && janelaFechadaMeta(conv)) {
+      const copiou = await copiarSemAviso(texto);
+      if (!vivo) return;
+      ctx.navegar(`#/conversas/${encodeURIComponent(conv.id)}`);
+      ui.toast(`Fora das 24 h do número da Meta: texto livre não sai. Use o modelo de lembrete (botão de modelos da conversa).${copiou ? " O texto sugerido foi copiado." : ` Texto: ${texto}`}`, { tipo: "info", ms: 9000 });
+      if (tipo === "lembrete") marcarLembrado(c);
+      return;
+    }
+    if (tipo === "lembrete") marcarLembrado(c);      // CC-226: a linha mostra «Lembrado» até amanhã
     // plano 1000b · CB-195 / CB-200: sem conversa ABERTA o campo não aceita texto (resolvida = travada; a Nova conversa no número da Meta
     // só sai com modelo) — o texto vai para a área de transferência e o aviso diz o caminho, sem prometer «confira e envie»
     if (conv ? conv.status === "resolvida" : leu) {
@@ -2973,7 +3769,7 @@ export async function montar(ctx) {
   /** CA-256: o negócio abre na gaveta por cima da Agenda (como em Conversas) e a agenda relê se ele mudar; sem a ponte do shell, a rota do CRM. */
   function abrirFicha(id) {
     if (typeof ctx.abrirNegocio === "function") {
-      try { ctx.abrirNegocio(id, { aoMudar: () => { if (vivo) recarregar(); } }); return; } catch (e) { console.error(e); }
+      try { ctx.abrirNegocio(id, { aoMudar: () => { notasLidas.delete(id); if (vivo) recarregar(); } }); return; } catch (e) { console.error(e); }   // plano 1500c · CC-328
     }
     ctx.navegar(`#/crm/negocio/${encodeURIComponent(id)}`);
   }
@@ -2982,10 +3778,12 @@ export async function montar(ctx) {
   function abrirDetalhe(c, ancora) {
     const nome = c.nome || c.titulo || "Consulta sem nome";
     const p = partesSP(c.inicio);
-    const hrefTel = c.telefone && Lg ? Lg.hrefTel(c.telefone) : null;
+    // plano 1500c · CC-228: sem a crm-logica ainda (detalhe aberto no primeiro segundo), o tel: sai de uma regra local mínima
+    const hrefTel = c.telefone ? (Lg ? Lg.hrefTel(c.telefone) : telLocal(c.telefone)) : null;
     const comConversas = !!(c.contato_id && ctx.temModulo && ctx.temModulo("conversas"));
     const pode = ctx.pode("atendente");
     const futura = Date.parse(c.inicio) > Date.now() && c.status !== "ganho";
+    const feita = c.status === "ganho";
     selecionarConsulta(c);
     const pr = Lg && !semPresenca ? presencaDaConsulta(c, Lg) : null;
     const presencaEl = pr && pr.possivel ? montarPresenca({ h, c, estado: pr.estado, icone: ui.icone, rotulos: Lg.PRESENCAS, desabilitado: !pode,
@@ -2996,23 +3794,39 @@ export async function montar(ctx) {
     });
     const abrirNegocio = () => { pop.fechar(); abrirFicha(c.negocio_id); };
     // CA-206: no celular (sem arrasto) remarcar para o dia ou a semana seguinte no mesmo horário é um toque + a confirmação «De → Para»
-    const atalhosRemarcar = movel && pode && c.status !== "ganho" && p
+    // plano 1500c · CC-218: também no desktop (remarcar sem mouse); CC-177: o rótulo diz o dia REAL (o próximo dia de atendimento)
+    const dAm = p ? diaDoAtalho(p.dia, 1) : null, dSem = p ? diaDoAtalho(p.dia, 7) : null;
+    const atalhosRemarcar = pode && !feita && p && (dAm || dSem)
       ? h("div", { class: "ag-det-atalhos", role: "group", "aria-label": "Remarcar no mesmo horário" },
-        h("button", { type: "button", class: "bt bt-fant bt-p ag-det-amanha", "aria-label": `Remarcar para ${rotuloDoDia(diaISO(p.dia, 1), ui.hojeSP()).toLowerCase()} às ${horaTxt(p.min)}`,
-          on: { click: () => { pop.fechar(); remarcarAtalho(c, 1); } } }, "Dia seguinte"),
-        h("button", { type: "button", class: "bt bt-fant bt-p ag-det-semana", "aria-label": `Remarcar para ${rotuloDoDia(diaISO(p.dia, 7), ui.hojeSP()).toLowerCase()} às ${horaTxt(p.min)}`,
-          on: { click: () => { pop.fechar(); remarcarAtalho(c, 7); } } }, "Semana seguinte"))
+        dAm ? h("button", { type: "button", class: "bt bt-fant bt-p ag-det-amanha", "aria-label": `Remarcar para ${rotuloDoDia(dAm, ui.hojeSP()).toLowerCase()} às ${horaTxt(p.min)}`,
+          on: { click: () => { pop.fechar(); remarcarAtalho(c, 1); } } }, dAm === diaISO(p.dia, 1) ? "Dia seguinte" : `Próximo dia (${rotuloDoDia(dAm, ui.hojeSP()).toLowerCase()})`) : null,
+        dSem ? h("button", { type: "button", class: "bt bt-fant bt-p ag-det-semana", "aria-label": `Remarcar para ${rotuloDoDia(dSem, ui.hojeSP()).toLowerCase()} às ${horaTxt(p.min)}`,
+          on: { click: () => { pop.fechar(); remarcarAtalho(c, 7); } } }, dSem === diaISO(p.dia, 7) ? "Semana seguinte" : `${rotuloDoDia(dSem, ui.hojeSP())}`) : null)
       : null;
+    const faltou = !!(pr && pr.estado === "faltou") || c.marco === "faltou" || c.presenca === "faltou";
+    // plano 1500c · CC-227: sem o módulo Conversas, o WhatsApp do aparelho (wa.me) com o lembrete pronto
+    const waLink = !comConversas && pode && c.telefone ? linkWhatsAppAgenda(c.telefone, futura ? textoLembrete(c, ui.hojeSP(), { vocab: ctx.vocab || null }) : faltou ? textoFalta(c, ui.hojeSP(), { vocab: ctx.vocab || null }) : "") : null;
     const acoes = h("div", { class: "ag-det-acoes" },
       comConversas ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { pop.fechar(); ctx.navegar(`#/conversas?contato=${encodeURIComponent(c.contato_id)}`); } } }, ui.icone("whatsapp"), "Abrir conversa") : null,
+      waLink ? h("a", { class: "bt bt-sec bt-p ag-det-wa", href: waLink, target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), futura ? "Lembrar pelo WhatsApp" : "WhatsApp") : null,
       comConversas && pode && futura ? h("button", { type: "button", class: "bt bt-sec bt-p ag-det-lembrar", title: "Abre a conversa com o lembrete pronto no campo: você confere e envia",
         on: { click: () => { pop.fechar(); lembrar(c); } } }, ui.icone("sino"), "Lembrar") : null,
+      // plano 1500c · CC-223: quem faltou ganha a mensagem pronta para remarcar
+      comConversas && pode && faltou && !futura ? h("button", { type: "button", class: "bt bt-sec bt-p ag-det-falta", title: "Abre a conversa com a mensagem pronta no campo: você confere e envia",
+        on: { click: () => { pop.fechar(); lembrar(c, "falta"); } } }, ui.icone("sino"), "Escrever: remarcar") : null,
+      // plano 1500c · CC-240: confirmou por telefone? registra (nx_agenda_confirmar; servidor sem a função → o botão some)
+      pode && futura && !c.confirmada_em && !semConfirmar ? h("button", { type: "button", class: "bt bt-sec bt-p ag-det-confirmar", on: { click: ev => confirmarConsulta(c, ev.currentTarget || ev.target, pop) } }, ui.icone("check"), "Confirmada") : null,
       h("button", { type: "button", class: "bt bt-sec bt-p ag-det-negocio", on: { click: abrirNegocio } }, palavrasAgenda(ctx.vocab).abrirNeg),   // CB-189
-      pode ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { pop.fechar(); abrirAgendamento(c); } } }, "Remarcar") : null,
-      pode ? h("button", { type: "button", class: "bt bt-contorno-perigo bt-p", on: { click: () => { pop.fechar(); desmarcar(c); } } }, "Desmarcar") : null);
+      // plano 1500c · CC-180: consulta concluída não remarca nem desmarca (desmarcar apagava o horário do histórico)
+      pode && !feita ? h("button", { type: "button", class: "bt bt-sec bt-p ag-det-remarcar", on: { click: () => { pop.fechar(); abrirAgendamento(c); } } }, "Remarcar") : null);
+    // plano 1500c · CC-301: «Desmarcar» (perigo) numa linha própria, separado por divisória — um toque errado não cai nele
+    const perigo = pode && !feita ? h("div", { class: "ag-det-perigo" },
+      h("button", { type: "button", class: "bt bt-contorno-perigo bt-p ag-det-desmarcar", on: { click: () => { pop.fechar(); desmarcar(c); } } }, "Desmarcar")) : null;
     // CA-257: a observação/última nota do negócio («trazer exames»), numa linha — lida da ficha uma vez por negócio nesta tela
+    // plano 1500c · CC-245/CC-246: a observação da consulta e a última nota, quando o servidor já mandar na linha, dispensam a leitura da ficha
     const notaEl = h("p", { class: "ag-det-nota", hidden: true });
-    lerUltimaNota(c.negocio_id).then(t => { if (t) { notaEl.textContent = t; notaEl.title = t; notaEl.hidden = false; } });
+    const notaPronta = typeof c.obs === "string" && c.obs.trim() ? `Observação: ${c.obs.trim()}` : typeof c.ultima_nota === "string" ? (c.ultima_nota.trim() ? ultimaNota([{ texto: c.ultima_nota }]) : "") : null;
+    (notaPronta !== null ? Promise.resolve(notaPronta) : lerUltimaNota(c.negocio_id)).then(t => { if (t) { notaEl.textContent = t; notaEl.title = t; notaEl.hidden = false; } });
     const etapa = etapaDo(c), origemTxt = origemDo(c);
     const corpo = h("div", { class: "ag-det" },
       h("b", { class: "ag-det-nome" }, nome),
@@ -3025,10 +3839,13 @@ export async function montar(ctx) {
       // plano 1000b · CB-164: sem origem conhecida a linha sai («Origem: Origem não informada» não dizia nada)
       origemTxt !== SEM_ORIGEM ? h("span", { class: "ag-det-origem" }, h("span", { class: "ag-det-rot" }, "Origem: "), origemTxt) : null,
       etapa ? h("span", { class: "ag-det-origem ag-det-etapa" }, h("span", { class: "ag-det-rot" }, "Etapa: "), etapa) : null,
+      c.confirmada_em && !feita ? h("span", { class: "pilula pilula-ok ag-det-confirmada" }, "Confirmada") : null,   // CC-239
+      c.marcado_por === "ia" ? h("span", { class: "ag-det-origem ag-det-ia" }, ui.icone("ia"), "Marcada pela IA") : null,   // CC-324
       notaEl,
       presencaEl,
       atalhosRemarcar,
-      acoes);
+      acoes,
+      perigo);
     const pop = ui.flutuante(ancora, corpo, { classe: "flut-ag" });
     // plano 1000b · CB-163: o diálogo do detalhe ganha nome («Consulta de Mariana Costa, Qui., 02 de out. 10:00»)
     const rotuloDet = `Consulta de ${nome}${p ? `, ${nomeDia(p.dia)} ${horaTxt(p.min)}` : ""}`;
@@ -3036,7 +3853,7 @@ export async function montar(ctx) {
     return pop;
   }
   /** CA-257: o texto da nota mais recente (a fixada primeiro, como a ficha mostra) — "" sem nota ou sem a leitura. */
-  const notasLidas = new Map();
+  const notasLidas = new Map();     // plano 1500c · CC-328: esvaziada no «Atualizar» e quando a gaveta do negócio muda algo
   function lerUltimaNota(id) {
     if (id === null || id === undefined) return Promise.resolve("");
     if (!notasLidas.has(id)) {
@@ -3065,27 +3882,38 @@ export async function montar(ctx) {
   const abrirAgendamento = (pre = null, quando = null) => offline()
     ? (ui.toast("Sem internet: marcar exige conexão. Assim que a conexão voltar, tente de novo.", { tipo: "info" }), Promise.resolve(null))
     : marcarConsulta(ctx, { negocio: pre, dia: quando && quando.dia, hora: quando && quando.hora, base: data,
-    config: atual && atual.config ? atual.config : null, avisar: avisarPaciente,
+    config: atual && atual.config ? atual.config : null, avisar: avisarPaciente, encaixeAgora: !!(quando && quando.encaixeAgora),   // plano 1500c · CC-253
     aoBloquear: ctx.pode("admin") && quando && quando.dia && quando.hora ? bloquearHorario : null, aoMudar: aoMarcado });
   /** CA-215: «Bloquear este horário» (admin, a partir do clique no vazio): das HH:MM até HH:MM + o passo da agenda, motivo opcional
       (nx_agenda_bloqueio_salvar, o mesmo das Configurações). Consulta que já cai no trecho avisa antes (2º toque salva mesmo assim). */
-  async function bloquearHorario({ dia, hora }) {
+  async function bloquearHorario({ dia, hora, existente = null }) {
     if (!vivo || !dataAgendaValida(dia)) return;
     const cfg = (atual && atual.config) || {};
     const passo = Math.max(5, Number(cfg.passo_min) || Number(cfg.duracao_min) || 30);
-    const ini = paraMin(hora);
+    // plano 1500c · CC-280: editar o bloqueio tocado na grade (mesmo trecho e motivo; o servidor atualiza pelo id)
+    const ed = existente ? (() => { const i = partesSP(existente.inicio), f = partesSP(existente.fim); const todo = diaTodoBloqueado([existente], dia);
+      return { das: !todo && i && i.dia === dia ? horaTxt(i.min) : "", ate: !todo && f && f.dia === dia ? horaTxt(f.min) : "", todo, motivo: existente.motivo || "" }; })() : null;
+    const ini = ed ? (paraMin(ed.das) ?? 8 * 60) : paraMin(hora);
     if (ini === null) return;
     const ateMin = Math.min(23 * 60 + 59, ini + passo);
-    const das = ui.campo({ rotulo: "Das", nome: "das", tipo: "hora", valor: hora });
-    const ate = ui.campo({ rotulo: "Até", nome: "ate", tipo: "hora", valor: horaTxt(ateMin) });
-    const motivo = ui.campo({ rotulo: "Motivo (opcional)", nome: "motivo", max: 120, placeholder: "Ex.: reunião, folga, manutenção" });
+    const das = ui.campo({ rotulo: "Das", nome: "das", tipo: "hora", valor: ed ? ed.das : hora });
+    const ate = ui.campo({ rotulo: "Até", nome: "ate", tipo: "hora", valor: ed ? ed.ate : horaTxt(ateMin) });
+    const motivo = ui.campo({ rotulo: "Motivo (opcional)", nome: "motivo", max: 120, placeholder: "Ex.: reunião, folga, manutenção", valor: ed ? ed.motivo : undefined });
+    // plano 1500c · CC-229: «Dia inteiro» fecha o dia todo pela grade (grava sem das/até), sem ir às Configurações
+    const diaTodoChk = h("input", { type: "checkbox", name: "dia_inteiro", class: "ag-bloq-dia-todo", checked: !!(ed && ed.todo) });
+    const horas = h("div", { class: "agenda-form-grade", hidden: !!(ed && ed.todo) }, das, ate);
+    diaTodoChk.addEventListener("change", () => { horas.hidden = diaTodoChk.checked; });
     const corpo = h("div", { class: "pilha ag-bloquear" }, h("p", null, `${nomeDia(dia, true)}. Ninguém (nem a IA) marca consulta neste trecho.`),
-      h("div", { class: "agenda-form-grade" }, das, ate), motivo);
+      h("label", { class: "ag-encaixe ag-bloq-dia-todo-rot" }, diaTodoChk, h("span", null, "Dia inteiro")), horas, motivo);
     let conferido = "";
-    const r = await ui.modal({ titulo: "Bloquear horário", corpo, largura: "p", acoes: [
+    const r = await ui.modal({ titulo: ed ? "Editar bloqueio" : "Bloquear horário", corpo, largura: "p", acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: null },
-      { rotulo: "Bloquear", tipo: "primario", fn: async m => {
-        const vDas = das.querySelector("input").value, vAte = ate.querySelector("input").value, vMot = motivo.querySelector("input").value.trim();
+      ed && existente.id != null ? { rotulo: "Remover bloqueio", tipo: "neutro", fn: async m => {
+        try { return { ...erroResposta(await api.rpcC("nx_agenda_bloqueio_excluir", { p_id: existente.id })), removido: true }; } catch (e) { m.erro(api.mensagemErro(e)); return false; }
+      } } : null,
+      { rotulo: ed ? "Salvar bloqueio" : "Bloquear", tipo: "primario", fn: async m => {
+        const todo = diaTodoChk.checked;
+        const vDas = todo ? "00:00" : das.querySelector("input").value, vAte = todo ? "24:00" : ate.querySelector("input").value, vMot = motivo.querySelector("input").value.trim();
         const a = paraMin(vDas), b = paraMin(vAte);
         if (a === null || b === null || b <= a) { m.erro("O horário final precisa ser depois do inicial."); return false; }
         const caem = consultasDoDia(atual && Array.isArray(atual.consultas) ? atual.consultas : [], dia)
@@ -3096,17 +3924,31 @@ export async function montar(ctx) {
           m.erro(`${caem.length === 1 ? "Há 1 consulta" : `Há ${caem.length} consultas`} nesse trecho (${caem.slice(0, 2).map(x => `${horaTxt(x.p.ini)} ${x.c.nome || x.c.titulo || "consulta"}`).join(", ")}). Ela continua marcada — toque em «Bloquear» de novo para fechar mesmo assim.`);
           return false;
         }
-        try { return erroResposta(await api.rpcC("nx_agenda_bloqueio_salvar", { p_bloqueio: { data: dia, das: vDas, ate: vAte, motivo: vMot || null } })); }
+        const p = { ...(ed && existente.id != null ? { id: existente.id } : {}), data: dia, ...(todo ? {} : { das: vDas, ate: vAte }), motivo: vMot || null };
+        try { return erroResposta(await api.rpcC("nx_agenda_bloqueio_salvar", { p_bloqueio: p })); }
         catch (e) { m.erro(api.mensagemErro(e)); return false; }
       } },
-    ] });
+    ].filter(Boolean) });
     if (!(r && r.ok) || !vivo) return;
-    const texto = `Horário bloqueado: ${rotuloDoDia(dia, ui.hojeSP())}, ${das.querySelector("input").value}–${ate.querySelector("input").value}`;
+    if (r.removido) { recarregar(); ui.toast("Bloqueio removido.", { tipo: "ok" }); return; }
+    if (ed) { recarregar(); ui.toast("Bloqueio atualizado.", { tipo: "ok" }); return; }
+    const texto = `Horário bloqueado: ${rotuloDoDia(dia, ui.hojeSP())}, ${diaTodoChk.checked ? "o dia inteiro" : `${das.querySelector("input").value}–${ate.querySelector("input").value}`}`;
     recarregar();
     // plano 1000b · CB-199: fechou o horário errado? «Desfazer» exclui o bloqueio criado (sem ir às Configurações)
     if (r.id != null && typeof ui.acaoComDesfazer === "function") {
       ui.acaoComDesfazer({ texto, reverter: async () => { erroResposta(await api.rpcC("nx_agenda_bloqueio_excluir", { p_id: r.id })); if (vivo) recarregar(); } });
     } else ui.toast(`${texto}.`, { tipo: "ok" });
+  }
+  /** Plano 1500c · CC-280: tocar no bloqueio da grade (admin) abre o editar desse bloqueio. */
+  function editarBloqueioDaGrade(b, iso) {
+    if (!ctx.pode("admin")) return;
+    const i = partesSP(b.inicio), f = partesSP(new Date(Date.parse(b.fim) - 1));
+    // bloqueio de vários dias (férias) não é editado por um dia só (salvar cortaria o resto): vai às Configurações
+    if (!i || !f || i.dia !== f.dia) {
+      ui.toast("Bloqueio de vários dias: edite em Configurações › Agenda.", { tipo: "info", acao: { rotulo: "Abrir", fn: () => ctx.navegar("#/config/agenda") } });
+      return;
+    }
+    bloquearHorario({ dia: iso, hora: null, existente: b });
   }
   const desmarcar = c => desmarcarConsulta(ctx, c, { aoMudar: recarregar, avisar: avisarPaciente,
     aoFaltou: Lg && !semPresenca ? cc => marcarPresenca(cc, "faltou", null) : null });   // plano 1000b · CB-174
@@ -3115,7 +3957,8 @@ export async function montar(ctx) {
       em diante, com «Ir para» (leva a tela ao dia e foca o bloco). */
   async function procurarPaciente() {
     const caixa = h("div", { class: "pilha ag-procurar" });
-    const campo = ui.campo({ rotulo: "Paciente", nome: "paciente", tipo: "busca", placeholder: "Nome ou telefone", ajuda: "Mostra as próximas consultas de quem tem o nome ou telefone." });
+    const PC = palavrasAgenda(ctx.vocab), quemRot = PC.contato.charAt(0).toUpperCase() + PC.contato.slice(1);   // plano 1500c · CC-209
+    const campo = ui.campo({ rotulo: quemRot, nome: "paciente", tipo: "busca", placeholder: "Nome ou telefone", ajuda: "Mostra as próximas consultas de quem tem o nome ou telefone." });
     const input = campo.querySelector("input");
     // plano 1000b · CB-162: a lista NÃO é região viva (cada busca lia todos os nomes e datas); um status curto diz o resultado
     const lista = h("div", { class: "ag-procurar-lista" });
@@ -3133,7 +3976,8 @@ export async function montar(ctx) {
       dizer("Procurando…");
       try {
         const r = await api.rpcC("nx_buscar", { p_q: q });
-        const negocios = (r && Array.isArray(r.negocios) ? r.negocios : []).filter(n => n && (n.status === "aberto" || n.status === "ganho")).slice(0, 8);
+        // plano 1500c · CC-293: confere até 30 (cache, 4 por vez) e corta em 8 DEPOIS de achar quem tem consulta — a do 12º não some
+        const negocios = escolherCandidatos(r && Array.isArray(r.negocios) ? r.negocios : [], 30);
         // plano 1000b · CB-179: a ficha de cada um é lida uma vez por janela (cache por id), no máximo 4 ao mesmo tempo; se a busca já trouxer
         // consulta_em, nem lê
         const fichas = [];
@@ -3144,11 +3988,20 @@ export async function montar(ctx) {
         });
         if (minha !== seq || !vivo) return;
         const hojeIni = instanteNoFuso(ui.hojeSP());
-        const achadas = fichas.map(({ n, d }) => ({ n, em: d && d.negocio ? d.negocio.consulta_em : null, contato: d && d.contato ? d.contato.nome : null }))
-          .filter(x => x.em && Date.parse(x.em) >= hojeIni).sort((a, b) => Date.parse(a.em) - Date.parse(b.em));
+        const todasF = fichas.map(({ n, d }) => ({ n, em: d && d.negocio ? d.negocio.consulta_em : null, contato: d && d.contato ? d.contato.nome : null,
+          presenca: d && d.negocio ? ((d.negocio.campos && d.negocio.campos.presenca) || d.negocio.presenca || null) : null }));
+        const achadas = todasF.filter(x => x.em && Date.parse(x.em) >= hojeIni).sort((a, b) => Date.parse(a.em) - Date.parse(b.em)).slice(0, 8);
+        // plano 1500c · CC-294: quem não tem consulta futura mostra a última («Última: 12/09 (compareceu)»)
+        const comFutura = new Set(todasF.filter(x => x.em && Date.parse(x.em) >= hojeIni).map(x => x.n.id));
+        const ultimas = todasF.filter(x => x.em && Date.parse(x.em) < hojeIni && !comFutura.has(x.n.id)).sort((a, b) => Date.parse(b.em) - Date.parse(a.em)).slice(0, 5);
         ui.limpar(lista);
-        if (!achadas.length) { dizer(negocios.length ? "Nenhuma consulta de hoje em diante para esse nome." : "Ninguém com esse nome ou telefone."); return; }
-        dizer(`${achadas.length} ${achadas.length === 1 ? "consulta encontrada" : "consultas encontradas"}.`);
+        if (!achadas.length && !ultimas.length) { dizer(negocios.length ? "Nenhuma consulta de hoje em diante para esse nome." : "Ninguém com esse nome ou telefone."); return; }
+        dizer(achadas.length ? `${achadas.length} ${achadas.length === 1 ? "consulta encontrada" : "consultas encontradas"}.` : "Nenhuma consulta de hoje em diante para esse nome.");
+        for (const x of ultimas) {
+          const nome = x.n.contato_nome || x.contato || x.n.titulo || "Paciente";
+          lista.appendChild(h("div", { class: "ag-procurar-item ag-procurar-ultima" },
+            h("span", { class: "ag-procurar-txt" }, h("b", null, nome), h("small", { class: "dado" }, `${textoUltimaConsulta(x.em, x.presenca)}${x.n.titulo && x.n.titulo !== nome ? ` · ${x.n.titulo}` : ""}`))));
+        }
         for (const x of achadas) {
           const nome = x.n.contato_nome || x.contato || x.n.titulo || "Paciente";
           lista.appendChild(h("div", { class: "ag-procurar-item" },
@@ -3160,7 +4013,7 @@ export async function montar(ctx) {
     const depois = ui.debounce(buscar, 300);
     input.addEventListener("input", depois);
     input.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); if (depois.cancelar) depois.cancelar(); buscar(); } });
-    const escolha = await ui.modal({ titulo: "Procurar paciente", corpo: caixa, largura: "p", protegerTexto: false,
+    const escolha = await ui.modal({ titulo: `Procurar ${PC.contato}`, corpo: caixa, largura: "p", protegerTexto: false,
       aoAbrir: a => { fecharCom = v => a.fechar(v); try { input.focus(); } catch { /* ok */ } },
       acoes: [{ rotulo: "Fechar", tipo: "neutro", valor: null }] });
     if (!vivo || !escolha || !escolha.inicio) return;
@@ -3185,7 +4038,7 @@ export async function montar(ctx) {
      anunciar aria-keyshortcuts e a folha «?» não lista D/S/M/L */
   let desregistrarAtalhos = null, desregistrarModos = [];
   function aplicarAtalhos() {
-    const pares = [[ctl.anterior, "["], [ctl.proximo, "]"], [ctl.hoje, "T"],
+    const pares = [[ctl.anterior, "["], [ctl.proximo, "]"], [ctl.hoje, "T"], [ctl.marcar, "N"],   // plano 1500c · CC-300
       ...(ctl.alternador ? [...ctl.alternador.querySelectorAll("[data-valor]")].map(b => [b, ATALHO_MODO[b.dataset.valor]]) : [])];
     for (const [b, t] of pares) if (b && t) { if (atalhosLigados) b.setAttribute("aria-keyshortcuts", t); else b.removeAttribute("aria-keyshortcuts"); }
     if (ctl.hoje) ctl.hoje.setAttribute("title", ctl.hoje.classList.contains("agenda-hoje-atual") ? "Você já está vendo hoje" : atalhosLigados ? "Voltar para hoje (T)" : "Voltar para hoje");
@@ -3196,7 +4049,7 @@ export async function montar(ctx) {
     desregistrarAtalhos = ctx.comandos.registrar({ id: "agenda.atalhos", rotulo: atalhosLigados ? "Desligar atalhos de uma tecla da Agenda" : "Ligar atalhos de uma tecla da Agenda",
       palavras: "agenda atalhos teclado tecla acessibilidade leitor voz", fazer: () => {
         atalhosLigados = !atalhosLigados; gravarPreferencias(); aplicarAtalhos();
-        ui.toast(atalhosLigados ? "Atalhos de uma tecla ligados (T, D, S, M, L, [ e ])." : "Atalhos de uma tecla desligados. Para ligar de novo, use a paleta (Ctrl+K).", { tipo: "info" });
+        ui.toast(atalhosLigados ? "Atalhos de uma tecla ligados (T, N, D, S, M, L, [ e ])." : "Atalhos de uma tecla desligados. Para ligar de novo, use a paleta (Ctrl+K).", { tipo: "info" });
       } });
   }
   function irParaData() {
@@ -3219,6 +4072,7 @@ export async function montar(ctx) {
     vivo = false; sequencia++;
     limparArrasto();
     document.removeEventListener("keydown", aoTeclaAgenda);
+    fecharTV();      // plano 1500c · CC-323
     if (desarmarEngolir) desarmarEngolir();
     if (typeof desregistrar === "function") try { desregistrar(); } catch { /* ok */ }
     for (const f of [desregistrarData, desregistrarAtalhos, ...desregistrarModos]) if (typeof f === "function") try { f(); } catch { /* ok */ }

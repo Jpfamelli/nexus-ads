@@ -23,7 +23,8 @@ export function criarComposer(A) {
   let avisadoOutro = null, perguntandoOutro = false;   // CA-075: «conversa:dono» já confirmado para responder conversa de colega
   let rrAberto = false, rrItens = [], rrSel = 0;
 
-  const ta = h("textarea", { rows: 1, placeholder: "Mensagem  ·  / para respostas rápidas", "aria-label": "Mensagem", maxlength: 4096 });
+  // plano 1500c · CC-123: «Mensagem» só (a dica do / fica na linha de dicas do computador; o leitor de tela lia «barra»)
+  const ta = h("textarea", { rows: 1, placeholder: "Mensagem", "aria-label": "Mensagem", maxlength: 4096 });
   const contador = h("span", { class: "cvx-contador", hidden: true, "aria-live": "off" });
   const contadorAnuncio = h("span", { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true" });
   const rotNota = h("div", { class: "cvx-rot-nota" }, ui.icone("nota"), "Nota interna — só a equipe vê");
@@ -45,7 +46,7 @@ export function criarComposer(A) {
   const btEmoji = h("button", { type: "button", class: "bt-icone so-largo cvx-emoji-bt", "aria-label": "Inserir emoji", title: dicaEmojiSistema(), "aria-haspopup": "dialog", hidden: L.aparelhoDeToque() }, h("span", { class: "cvx-emoji-ic", "aria-hidden": "true" }, "😊"));
   // plano 50 · 36: o menu de respostas rápidas também abre por botão (no celular a «/» fica escondida no teclado)
   const btRR = h("button", { type: "button", class: "bt-icone cvx-rr-bt", "aria-label": "Respostas rápidas (/)", title: "Respostas rápidas: digite / ou toque aqui", "aria-expanded": "false", "aria-controls": "cvx-rr" }, ui.icone("raio"));
-  const btEnviar = h("button", { type: "button", class: "bt bt-prim cvx-enviar", "aria-label": "Enviar" }, ui.icone("enviar"));
+  const btEnviar = h("button", { type: "button", class: "bt bt-prim cvx-enviar", "aria-label": "Enviar", title: "Enviar (botão direito ou toque longo: Enviar e resolver)" /* plano 1500c · CC-067 */ }, ui.icone("enviar"));
   const btInfo = h("button", { type: "button", class: "bt-icone cvx-info", "aria-label": "Por que não dá para gravar áudio?", "aria-expanded": "false", title: "Por que não dá para gravar áudio?", hidden: true }, ui.icone("info"));
   const ferr = h("div", { class: "cvx-ferr" }, btClipe, btInfo, btAudio, btRR, btEmoji, btModelos, btNota, btIA, btMaisM);
   const linha = h("div", { class: "cvx-linha" }, ferr, campo, btEnviar);
@@ -58,8 +59,12 @@ export function criarComposer(A) {
   const avisoMudo = h("span", { class: "cvx-rec-mudo", role: "alert", hidden: true }, "Não estamos ouvindo nada — confira o microfone.");
   const avisoFimGravacao = h("span", { class: "cvx-rec-fim", hidden: true }, "");
   const pintarNivel = n => { try { nivelMic.style.setProperty("--nivel", Number(n).toFixed(2)); } catch { /* sem estilo: só a barrinha não anda */ } };
+  // plano 1500c · CC-095: pausar e continuar a gravação (interrupção no balcão não obriga a regravar); o relógio para junto
+  const rotGravando = h("span", { class: "cvx-rec-rot" }, "Gravando");
+  const rotPausar = h("span", null, "Pausar");
+  const btPausarGravacao = h("button", { type: "button", class: "bt bt-fant bt-p cvx-rec-pausa", "aria-pressed": "false", hidden: true }, ui.icone("pausa"), rotPausar);
   const painelGravacao = h("div", { class: "cvx-gravacao", role: "status", "aria-live": "polite", hidden: true },
-    h("span", { class: "cvx-rec-ponto", "aria-hidden": "true" }), h("span", {}, "Gravando"), tempoGravacao, nivelMic, btCancelarGravacao, avisoMudo, avisoFimGravacao);
+    h("span", { class: "cvx-rec-ponto", "aria-hidden": "true" }), rotGravando, tempoGravacao, nivelMic, btPausarGravacao, btCancelarGravacao, avisoMudo, avisoFimGravacao);
   const resp = h("div", { class: "cvx-resp", hidden: true });
   const seloRasc = h("div", { class: "cvx-rasc-selo" });       // "Rascunho restaurado · descartar" (o ctx.rascunho põe o selo aqui)
   let rasc = null;                                               // rascunho do campo ligado a esta conversa (ctx.rascunho.ligar)
@@ -182,8 +187,12 @@ export function criarComposer(A) {
     } else if (s === "resolvida") {
       trava.hidden = false; linha.hidden = !modoNota; dica.hidden = true;
       if (refazer) {
-        const b = h("button", { type: "button", class: "bt bt-prim bt-p", dataset: { acao: "reabrir" } }, A.icone("reabrir"), "Reabrir");
-        b.addEventListener("click", () => A.acoes.status("aberta", b));
+        // plano 1500c · CC-141: «Reabrir e responder» — reabre e já põe o cursor no campo
+        const b = h("button", { type: "button", class: "bt bt-prim bt-p", dataset: { acao: "reabrir" } }, A.icone("reabrir"), "Reabrir e responder");
+        b.addEventListener("click", async () => {
+          try { await A.acoes.status("aberta", b); } catch { return; }
+          setTimeout(() => { if (el.isConnected && podeTexto()) { try { ta.focus(); } catch { /* ok */ } } }, 0);
+        });
         trava.append(ui.icone("check"), h("p", null, textoResolvida(c)), b,
           h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => alternarNota(true) } }, ui.icone("nota"), "Nota interna"));
       }
@@ -219,7 +228,7 @@ export function criarComposer(A) {
     ta.placeholder = modoNota ? (estreito ? "Nota para a equipe" : "Escreva uma nota para a equipe (o cliente não vê)")
       // plano 1000b · CB-106: conversa em que o cliente nunca escreveu não «passou 24 h» — o mesmo critério da trava (JANELA_NUNCA_LONGO)
       : s === "janela" ? (c && c.ultima_entrada_em ? "Passaram 24 h: só mensagem aprovada (modelo)" : "Para começar, só mensagem aprovada (modelo)")
-      : estreito ? "Mensagem" : "Mensagem  ·  / para respostas rápidas";
+      : "Mensagem";   // CC-123
     // CA-074: a janela fecha em menos de 30 min — a hora no próprio campo
     const avisoJ = s === "ok" && !modoNota && c && L.canalTemJanela(provedorCanal()) ? L.avisoJanelaFechando(L.janela(c)) : "";
     avisoJanela.hidden = !avisoJ;
@@ -273,7 +282,9 @@ export function criarComposer(A) {
     // CA-004: sem a IA configurada (ia.ligada = false) o botão não aparece; com a cota do mês gasta, fica desligado dizendo por quê
     const iaEst = estadoIA();
     btIA.disabled = modoNota || s !== "ok" || pedindoIA || iaEst === "cota";
-    btIA.title = iaEst === "cota" ? "A cota de IA do mês acabou" : "Sugerir com IA";
+    // plano 1500c · CC-307: quantas sugestões restam no mês (e «quase no fim» a partir de 90%)
+    const cotaTxt = L.textoCotaIA(A.base && A.base.ia && A.base.ia.cota);
+    btIA.title = iaEst === "cota" ? "A cota de IA do mês acabou" : cotaTxt ? `Sugerir com IA · ${cotaTxt}` : "Sugerir com IA";
     btIA.setAttribute("aria-label", iaEst === "cota" ? "Sugerir resposta com IA (cota do mês acabou)" : "Sugerir resposta com IA");
     btRR.disabled = modoNota || s !== "ok";
     btRR.setAttribute("aria-expanded", String(rrAberto));
@@ -663,7 +674,20 @@ export function criarComposer(A) {
     ta.focus();
     const r = await A.acoes.enviar({ tipo: "texto", texto, respondeA: citada });
     if (r && r.persistido !== false) apagarRascunho();      // a mensagem está na fila (IndexedDB): o rascunho cumpriu o papel
+    return !!r;   // plano 1500c · CC-067: o «Enviar e resolver» só resolve o que saiu
   }
+  /** plano 1500c · CC-067: «Enviar e resolver» — botão direito (ou toque longo) no Enviar; envia e encadeia o Resolver (com Desfazer). */
+  async function enviarEResolver() {
+    if (modoNota || !ta.value.trim() || !podeTexto()) return;
+    const id = idDoCampo;
+    const ok = await enviarDoCampo();
+    if (ok && mesmaConversa(id) && typeof A.acoes.resolver === "function") A.acoes.resolver();
+  }
+  btEnviar.addEventListener("contextmenu", ev => {
+    if (modoNota || !ta.value.trim() || !podeTexto()) return;
+    ev.preventDefault();
+    ui.menu(btEnviar, [{ rotulo: "Enviar e resolver", icone: "check", fn: () => enviarEResolver() }]);
+  });
 
   /* ---------------- anexos */
   /** Anexo e gravação valem nos dois canais (Meta e CodeWords). No CodeWords a situação nunca é "janela" nem "sem_token" (ver situacao()). */
@@ -742,7 +766,8 @@ export function criarComposer(A) {
         return;
       }
       const rec = emWav ? new MediaRecorder(fluxo) : new MediaRecorder(fluxo, { mimeType: mimePreferido });
-      const atual = { rec, fluxo, partes: [], cancelar: false, timer: null, inicio: Date.now(), avisou: false, amostras: [], medidor: null, guarda: null };
+      const atual = { rec, fluxo, partes: [], cancelar: false, timer: null, inicio: Date.now(), avisou: false, amostras: [], medidor: null, guarda: null, pausadaEm: 0, pausadaMs: 0 };
+      const decorrido = () => (Date.now() - atual.inicio - atual.pausadaMs - (atual.pausadaEm ? Date.now() - atual.pausadaEm : 0)) / 1000;   // CC-095
       gravacao = atual;
       // CA-031: recarregar/fechar a página com a gravação no meio pergunta antes (o shell cuida do aviso do navegador)
       if (A.ctx && typeof A.ctx.naoAtualizar === "function") { try { atual.guarda = A.ctx.naoAtualizar(() => gravacao === atual); } catch { atual.guarda = null; } }
@@ -788,20 +813,32 @@ export function criarComposer(A) {
           }
           // a conversa mudou enquanto o áudio era convertido: ele não segue para outro cliente
           if (!mesmaConversa(idGravacao)) { ui.toast("Você trocou de conversa enquanto o áudio era preparado: nada foi enviado. Grave de novo na conversa certa.", { tipo: "info", ms: 8000 }); return; }
-          await anexar(new File([wav], `audio-orbita-${Date.now()}.wav`, { type: L.MIME_WAV }), { gravadoS: (Date.now() - atual.inicio) / 1000 });   // plano 1000b · CB-142
+          await anexar(new File([wav], `audio-orbita-${Date.now()}.wav`, { type: L.MIME_WAV }), { gravadoS: decorrido() });   // plano 1000b · CB-142 (1500c · CC-095: sem as pausas)
           return;
         }
         const ext = mime === "audio/mp4" ? "m4a" : "ogg";
         const arquivoAudio = new File([blob], `audio-orbita-${Date.now()}.${ext}`, { type: mime });
-        await anexar(arquivoAudio, { gravadoS: (Date.now() - atual.inicio) / 1000 });   // plano 1000b · CB-142: o modal sabe que é o áudio gravado
+        await anexar(arquivoAudio, { gravadoS: decorrido() });   // plano 1000b · CB-142: o modal sabe que é o áudio gravado (1500c · CC-095: sem as pausas)
       }, { once: true });
       rec.start(500);
       painelGravacao.hidden = false;
       tempoGravacao.textContent = "00:00";
+      // CC-095: o botão só aparece onde o MediaRecorder sabe pausar
+      btPausarGravacao.hidden = !(typeof rec.pause === "function" && typeof rec.resume === "function");
+      btPausarGravacao.setAttribute("aria-pressed", "false"); rotPausar.textContent = "Pausar"; rotGravando.textContent = "Gravando";
+      btPausarGravacao.onclick = () => {
+        if (gravacao !== atual) return;
+        try {
+          if (!atual.pausadaEm) { rec.pause(); atual.pausadaEm = Date.now(); rotGravando.textContent = "Pausada"; rotPausar.textContent = "Continuar"; btPausarGravacao.setAttribute("aria-pressed", "true"); }
+          else { rec.resume(); atual.pausadaMs += Date.now() - atual.pausadaEm; atual.pausadaEm = 0; rotGravando.textContent = "Gravando"; rotPausar.textContent = "Pausar"; btPausarGravacao.setAttribute("aria-pressed", "false"); }
+          painelGravacao.dataset.pausada = atual.pausadaEm ? "1" : "0";
+        } catch { ui.toast("Este navegador não deixou pausar a gravação.", { tipo: "info" }); }
+      };
       atualizar();
       btCancelarGravacao.focus();
       atual.timer = setInterval(() => {
-        const segundos = Math.floor((Date.now() - atual.inicio) / 1000);
+        const segundos = Math.floor(decorrido());   // CC-095: as pausas não contam
+        if (atual.pausadaEm) { tempoGravacao.textContent = tempoGravacaoTexto(segundos); avisoMudo.hidden = true; atual.amostras = []; return; }
         tempoGravacao.textContent = tempoGravacaoTexto(segundos);
         // plano 1000b · CB-037: enquanto o áudio não está «running», nada de amostras nem do aviso «Não estamos ouvindo nada»
         if (atual.medidor && atual.medidor.actx.state && atual.medidor.actx.state !== "running") { avisoMudo.hidden = true; atual.amostras = []; }
@@ -852,8 +889,12 @@ export function criarComposer(A) {
     ev.preventDefault();
     if (arquivos.length > 1) {
       const soImagens = arquivos.every(i => /^image\//.test(i.type || ""));
-      ui.toast(soImagens ? `${arquivos.length} imagens copiadas; somente a primeira será anexada. Repita a colagem para enviar as demais.`
-        : `${arquivos.length} arquivos copiados; somente o primeiro será anexado. Repita a colagem para enviar os demais.`, { tipo: "info" });
+      // plano 1500c · CC-048: várias imagens coladas vão pelo fluxo de várias fotos (antes só a 1ª entrava)
+      if (soImagens) {
+        const fs = arquivos.map((i, n) => { const f = i.getAsFile(); return f ? new File([f], f.name && f.name !== "image.png" ? f.name : `imagem-colada-${Date.now()}-${n + 1}.png`, { type: f.type || i.type }) : null; }).filter(Boolean);
+        if (fs.length) { anexarVarios(fs); return; }
+      }
+      ui.toast(`${arquivos.length} arquivos copiados; somente o primeiro será anexado. Repita a colagem para enviar os demais.`, { tipo: "info" });
     }
     const f = arquivos[0].getAsFile();
     if (!f) return;
@@ -955,6 +996,10 @@ export function criarComposer(A) {
       ui.toast(v.erro === "midia_grande"
         ? `Arquivo grande demais: ${L.tamanhoLegivel(escolhidoInicial.size)} (limite ${v.tipo === "imagem" ? "5 MB para fotos" : "16 MB"}).${v.tipo === "video" ? " Grave mais curto ou mande um link (Drive, Google Fotos)." : ""}`   // plano 1000b · CB-110
         : v.wav ? "Este número não aceita WAV: use MP3, OGG, AAC ou M4A."
+        // plano 1500c · CX-005: arquivo vazio (0 byte: download que não terminou, atalho da nuvem) tem o próprio motivo
+        : v.erro === "midia_vazia" ? `«${escolhidoInicial.name || "Arquivo"}» está vazio (0 byte). Se ele está na nuvem (Drive, iCloud), baixe para o aparelho antes de anexar.`
+        // plano 1500c · CC-028: o .mov do iPhone ganha o caminho para resolver
+        : L.ehVideoIphone(escolhidoInicial) ? L.TEXTO_MOV_IPHONE
         // plano 1000b · CB-108: diz QUAL arquivo foi recusado («.zip não é aceito…»)
         : `${extensaoDe(escolhidoInicial) ? `.${extensaoDe(escolhidoInicial)}` : "Este tipo de arquivo"} não é aceito pelo WhatsApp. Use foto (JPG, PNG, WEBP), vídeo MP4, áudio (MP3, OGG, AAC), PDF ou Office.`, { tipo: "erro" });
       return;
@@ -1036,7 +1081,7 @@ export function criarComposer(A) {
         catch { if (/^image\/hei[cf]$/.test(L.mimeDe(f))) { ui.toast(`«${f.name}» é HEIC, que este navegador não abre: ficou de fora.`, { tipo: "erro" }); continue; } }
         const arq = otim ? otim.arquivo : f;
         const v = L.validarArquivo(arq, { provedor: provedorCanal() });
-        if (!v.ok) { ui.toast(`«${f.name}» ficou de fora: ${v.erro === "midia_grande" ? `${L.tamanhoLegivel(arq.size)} passa do limite de 5 MB para fotos` : "tipo não aceito pelo WhatsApp"}.`, { tipo: "erro" }); continue; }
+        if (!v.ok) { ui.toast(`«${f.name}» ficou de fora: ${v.erro === "midia_grande" ? `${L.tamanhoLegivel(arq.size)} passa do limite de 5 MB para fotos` : v.erro === "midia_vazia" ? "o arquivo está vazio (0 byte)" : "tipo não aceito pelo WhatsApp"}.`, { tipo: "erro" }); continue; }
         prontas.push({ arq, v, nome: f.name, original: f });
       }
     } finally { otimStatus.hidden = true; }
@@ -1052,7 +1097,8 @@ export function criarComposer(A) {
     const pintarContagem = () => {
       const vivas = prontas.filter(p => !p.tirada), n = vivas.length;
       ordem.textContent = `Saem uma depois da outra, na ordem acima (${n} ${n === 1 ? "foto" : "fotos"}).`;
-      vivas.forEach((p, i) => { p.leg.setAttribute("aria-label", `Legenda da foto ${i + 1} de ${n}`); if (p.img) p.img.setAttribute("alt", `Foto ${i + 1} de ${n}`); p.btTirar.setAttribute("aria-label", `Tirar a foto ${i + 1} de ${n}`); });
+      vivas.forEach((p, i) => { if (p.li) { const s = p.li.querySelector(".cvx-multi-sobe"), d = p.li.querySelector(".cvx-multi-desce"); if (s) s.disabled = i === 0; if (d) d.disabled = i === n - 1; }
+        p.leg.setAttribute("aria-label", `Legenda da foto ${i + 1} de ${n}`); if (p.img) p.img.setAttribute("alt", `Foto ${i + 1} de ${n}`); p.btTirar.setAttribute("aria-label", `Tirar a foto ${i + 1} de ${n}`); });
       if (apiModal && apiModal.el) {
         const t = apiModal.el.querySelector("h2"); if (t) t.textContent = titulo(n);
         const b = apiModal.el.querySelector('[data-tipo="primario"]'); if (b) b.textContent = `Enviar ${n}`;
@@ -1065,7 +1111,13 @@ export function criarComposer(A) {
       p.leg = h("input", { type: "text", maxlength: 1024, class: "cvx-multi-leg", placeholder: "Legenda (opcional)", "aria-label": `Legenda da foto ${i + 1} de ${prontas.length}`, autocomplete: "off" });
       p.img = url ? h("img", { src: url, alt: `Foto ${i + 1} de ${prontas.length}` }) : null;
       p.btTirar = h("button", { type: "button", class: "bt bt-fant bt-p cvx-multi-tirar", "aria-label": `Tirar a foto ${i + 1} de ${prontas.length}` }, ui.icone("fechar"), "Tirar");
-      const li = h("li", { class: "cvx-multi-item" }, p.img || h("span", { class: "cvx-multi-sem" }, p.nome), p.leg, p.btTirar);
+      // plano 1500c · CC-085: subir/descer a foto (a ordem do envio é a da lista)
+      const btSobe = h("button", { type: "button", class: "bt-icone cvx-multi-sobe", "aria-label": "Mover a foto para antes" }, ui.icone("seta-esq"));
+      const btDesce = h("button", { type: "button", class: "bt-icone cvx-multi-desce", "aria-label": "Mover a foto para depois" }, ui.icone("seta-dir"));
+      const li = h("li", { class: "cvx-multi-item" }, p.img || h("span", { class: "cvx-multi-sem" }, p.nome), p.leg, h("div", { class: "linha cvx-multi-ordem-bts" }, btSobe, btDesce), p.btTirar);
+      p.li = li;
+      btSobe.addEventListener("click", () => moverFoto(p, -1, btSobe));
+      btDesce.addEventListener("click", () => moverFoto(p, 1, btDesce));
       p.btTirar.addEventListener("click", () => {
         p.tirada = true;
         const prox = li.nextSibling || null;
@@ -1079,6 +1131,18 @@ export function criarComposer(A) {
       return li;
     });
     const ul = h("ul", { class: "cvx-multi", "aria-label": "Fotos escolhidas" }, itens);
+    function moverFoto(p, d, bt) {
+      const vivas = prontas.filter(x => !x.tirada);
+      const i = vivas.indexOf(p), j = i + d;
+      if (i < 0 || j < 0 || j >= vivas.length) return;
+      const outro = vivas[j];
+      const a = prontas.indexOf(p), b = prontas.indexOf(outro);
+      prontas[a] = outro; prontas[b] = p;
+      if (d < 0) ul.insertBefore(p.li, outro.li); else ul.insertBefore(outro.li, p.li);
+      pintarContagem();
+      ui.anunciar(`Foto agora na posição ${j + 1} de ${vivas.length}.`);
+      try { bt.focus(); } catch { /* ok */ }
+    }
     const corpo = h("div", { class: "pilha" }, ul, ordem);
     pintarContagem();
     let ok;
@@ -1152,7 +1216,10 @@ export function criarComposer(A) {
         corrigir.addEventListener("click", () => { inp.value = L.corrigirParametroModelo(inp.value); conferir(); atualizarPrevia(); inp.focus(); });
         campos.push(inp);
         const chip = vars.primeiro_nome ? h("button", { type: "button", class: "cvx-chip cvx-par-nome", on: { click: () => { inp.value = vars.primeiro_nome; conferir(); atualizarPrevia(); inp.focus(); } } }, `Usar nome: ${vars.primeiro_nome}`) : null;
-        params.appendChild(h("div", { class: "campo" }, h("label", { for: id }, `Parâmetro {{${i}}}`), ajuda, inp, erro, h("div", { class: "linha cvx-par-acoes" }, chip, corrigir)));
+        // plano 1500c · CC-084: data, hora e serviço da próxima consulta do contato (quando o nx_cv_ver manda contato.consultas)
+        const sug = L.sugestoesParametroConsulta(contato().consultas).map(s => h("button", { type: "button", class: "cvx-chip cvx-par-consulta",
+          on: { click: () => { inp.value = s.valor; conferir(); atualizarPrevia(); inp.focus(); } } }, `${s.rotulo}: ${s.valor}`));
+        params.appendChild(h("div", { class: "campo" }, h("label", { for: id }, `Parâmetro {{${i}}}`), ajuda, inp, erro, h("div", { class: "linha cvx-par-acoes" }, chip, ...sug, corrigir)));
       }
       atualizarPrevia();
       if (campos[0]) setTimeout(() => campos[0].focus(), 30);
@@ -1332,7 +1399,12 @@ export function criarComposer(A) {
     const previaTxt = h("p", { class: "cvx-rr-salvar-previa" }, corpoFinal());
     if (chkVars) chkVars.addEventListener("change", () => { previaTxt.textContent = corpoFinal(); });
     const inTitulo = h("input", { id: "cvx-rr-titulo", type: "text", maxlength: 60, value: corpoFinal().slice(0, 40), autocomplete: "off" });
+    // plano 1500c · CC-086: «Para» — todos os departamentos ou só o desta conversa (quem é do Financeiro não polui as respostas da Recepção)
+    const deps = (A.base && A.base.departamentos) || [];
+    const depConv = conv() && conv().departamento_id ? deps.find(d => d.id === conv().departamento_id) : null;
+    const selPara = depConv ? h("select", { id: "cvx-rr-para", class: "sel" }, h("option", { value: "" }, "Todos os departamentos"), h("option", { value: depConv.id }, `Só ${depConv.nome}`)) : null;
     const corpo = h("div", { class: "pilha" },
+      selPara ? h("div", { class: "campo" }, h("label", { for: "cvx-rr-para" }, "Para"), selPara) : null,
       h("div", { class: "campo" }, h("label", { for: "cvx-rr-atalho" }, "Atalho (depois da /)"), inAtalho,
         h("small", { class: "campo-ajuda", id: "cvx-rr-atalho-ajuda" }, "Letras minúsculas sem acento, números, - e _ (até 30).")),
       h("div", { class: "campo" }, h("label", { for: "cvx-rr-titulo" }, "Título"), inTitulo),
@@ -1346,7 +1418,7 @@ export function criarComposer(A) {
         if (!titulo) { api.erro("Dê um título."); inTitulo.focus(); return false; }
         try {
           const texto = corpoFinal();
-          const salva = await A.api.rpcC("nx_resposta_salvar", { p_resposta: { atalho, titulo, corpo: texto, departamento_id: null, ativo: true } });
+          const salva = await A.api.rpcC("nx_resposta_salvar", { p_resposta: { atalho, titulo, corpo: texto, departamento_id: (selPara && selPara.value) || null, ativo: true } });
           return salva || { atalho, titulo, corpo: texto };
         } catch (e) {
           if (e && e.codigo === "atalho_em_uso") { api.erro(`Já existe a resposta /${atalho}. Escolha outro atalho.`); inAtalho.focus(); return false; }
@@ -1412,6 +1484,12 @@ export function criarComposer(A) {
       ta.value = ta.value.trim() ? `${ta.value.replace(/\s+$/, "")}\n${t}` : t;
       atualizarContador();
       if (modoNota) alternarNota(false);
+      // plano 1500c · CC-096: a conversa foi resolvida (ou a janela fechou) nesse meio tempo — o texto vai para o rascunho e a pessoa sabe
+      if (!podeTexto()) {
+        if (idDoCampo) { A.rascunhos.set(idDoCampo, ta.value); A.acoes.rascunhoMudou(); }
+        ui.toast("O texto ficou guardado como rascunho: reabra a conversa para enviar.", { tipo: "info" });
+        return;
+      }
       autoAltura(); ta.focus();
       ta.dispatchEvent(new Event("input", { bubbles: true }));
     },

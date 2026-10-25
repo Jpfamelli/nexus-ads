@@ -856,6 +856,8 @@ fieldset { border: 0; min-width: 0; }
 /* o azul do Meta mais apagado no gráfico (é a maior massa de cor da página): o bronze domina */
 .chart .bm { fill: #5E86A8; fill-opacity: .88; }
 .chart .bg { fill: var(--c-google); }
+/* plano 1500c · AC-246: TikTok e outras plataformas empilhadas por cima */
+.chart .bo { fill: var(--creme, #EDE6D6); fill-opacity: .55; }
 .chart .bars rect { transform-box: fill-box; transform-origin: 50% 100%; transition: opacity var(--t-ui) var(--e-out); }
 .chart.foco .bars rect { opacity: .35; }
 .chart.foco .bars rect.ativo { opacity: 1; }
@@ -1639,3 +1641,44 @@ button.kmore { color: var(--bronze-luz); text-decoration: underline; text-underl
 }
 /* plano 1000 (AD-116): sem meta de custo (0) o ponto da campanha fica neutro */
 .dot-neutro { background: var(--fg-mute); }
+
+/* ============================================================
+   PLANO 1500c — frente classico
+   ============================================================ */
+/* plano 1500c · AC-250/AC-252/AC-253/AC-255: alvos de 44 px no toque (ordenar coluna, cliente no celular, filtros, chip da demo) */
+@media (pointer: coarse), (max-width: 480px) {
+  th button, .sel-cli-m select, .filtros-m, .ribbon-chip { min-height: 44px; }
+}
+/* plano 1500c · AC-242: o diálogo de confirmação do próprio painel (no lugar do confirm() nativo) */
+.dlg-confirmar {
+  max-width: min(92vw, 440px); padding: 1.2rem 1.25rem 1rem; border: 1px solid var(--hair-2); border-radius: var(--r-sm);
+  background: var(--ink-2); color: var(--fg); font-family: var(--fb); font-size: var(--fs-15); line-height: 1.5;
+}
+.dlg-confirmar::backdrop { background: rgba(7, 9, 12, .62); }
+.dlg-confirmar .dlg-t { margin: 0 0 1rem; }
+.dlg-confirmar .acoes { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .6rem; }
+.dlg-confirmar .pill { min-height: 44px; }
+.dlg-confirmar :focus-visible { outline: 2px solid var(--bronze-hi); outline-offset: 2px; }
+@media (prefers-reduced-motion: no-preference) {
+  .dlg-confirmar[open] { animation: dlg-entra var(--t-ui) var(--e-out) both; }
+}
+@keyframes dlg-entra { from { opacity: 0; transform: translateY(6px); } }
+/* plano 1500c · AC-230: a nota da taxa acima de 100% no funil */
+.fun-nota { display: block; margin-top: .15rem; color: var(--fg-mute); font-size: var(--fs-13); }
+/* plano 1500c · AC-272: a lista de marcos com «Remover» */
+.marcos-lista { margin-top: .8rem; font-size: var(--fs-14); }
+.marcos-lista summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--fg-soft); }
+.marcos-lista ul { list-style: none; margin: 0; padding: 0; }
+.marcos-lista li { display: flex; align-items: center; justify-content: space-between; gap: .8rem; padding: .3rem 0; border-bottom: 1px solid var(--hair); }
+.marcos-lista li span { min-width: 0; overflow-wrap: anywhere; }
+/* plano 1500c · AC-282: «Sair da demonstração» dentro da faixa (no celular, abre com o chip) */
+.ribbon-sair { color: inherit; text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; display: inline-flex; align-items: center; min-height: 44px; }
+/* plano 1500c · AC-248: o botão do CSV ao lado do título de Campanhas */
+#btn-csv-camp { align-self: flex-start; flex: none; }
+/* plano 1500c · AC-266: a folha impressa com número de página no rodapé */
+@page { @bottom-right { content: "página " counter(page) " de " counter(pages); font: 8pt system-ui, sans-serif; color: #6B6257; } }
+/* plano 1500c · AC-265: «Para o próximo mês» editável na folha — a dica some na impressão; o texto em edição ganha um contorno */
+.fl-dica { margin: 0 0 1.5mm; font-size: 8.5pt; color: var(--papel-soft, #3F4953); }
+.fl-passos[contenteditable="true"]:focus { outline: 2px dashed var(--bronze, #B0761F); outline-offset: 2px; }
+.fl-marcos { margin-top: 3mm; }
+@media print { .fl-dica { display: none !important; } .fl-passos[contenteditable] { outline: none !important; } }

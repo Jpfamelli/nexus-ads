@@ -14,8 +14,8 @@
 import { criarDb } from "./db.js";
 import {
   lerConfig, limparErro, ErroApi, respostaPainel, respostaErro, tratarPainel, lerCorpoPainel,
-  autenticarPainel, interna, novoDelimitador, traduzirErroIA, registrarUsoIA, logIA, cortarTexto, modeloIA, funcaoAusente,
-  primeiroNomeSemTratamento,
+  autenticarPainel, interna, novoDelimitador, traduzirErroIA, registrarUsoIA, logIA, cortarTexto, modeloIA, modeloPara, funcaoAusente,
+  primeiroNomeSemTratamento, mascararSensiveis,
 } from "./comum.js";
 import { montarAutomacao, decidirAutomacoes } from "./ia_automacoes.js";
 
@@ -25,6 +25,10 @@ export { novoDelimitador };
 /** Plano 1000 (SV-065/SV-203): colunas da nx_config que o sugerir/resumir usa e o prazo da chamada com o atendente esperando. */
 export const COLUNAS_IA = ["anthropic_api_key", "modelo_ia"];
 export const PRAZO_PAINEL_MS = 30_000;
+/** plano 1500c · SC-088: teto de tokens do sugerir/resumir. */
+export const MAX_TOKENS_SUGESTAO = 1000;
+/** plano 1500c · SC-099: IA desligada pelo cliente (coluna nova no nx_ia_contexto ou a chave do cfg.ia). */
+export const iaDesligada = cx => cx?.ia_desligada === true || cx?.ia?.desligada === true;
 
 /** Chave do cache do resumo: conversa + SHA-256 (16 hex) do histórico que a IA veria. */
 async function chaveResumo(conversa, mensagens) {
@@ -57,7 +61,8 @@ function horaSP(iso) {
 export function linhaDaMensagem(m, delim) {
   const semMarca = v => String(v ?? "").split(delim).join("");
   const quem = m?.dir === "in" ? "cliente" : primeiroNome(semMarca(m?.quem));
-  return `[${quem} ${horaSP(m?.em)}] ${JSON.stringify(semMarca(m?.texto))}`;
+  // plano 1500c · SC-098 (LGPD): CPF, CNPJ e cartão válidos não vão à IA
+  return `[${quem} ${horaSP(m?.em)}] ${JSON.stringify(mascararSensiveis(semMarca(m?.texto)))}`;
 }
 
 // plano 1000 (SV-070): teto da conversa no prompt — cada mensagem em 1.200 caracteres e o total em 20.000 (ficam as mais
@@ -143,6 +148,9 @@ export async function tratar(req, env, deps = {}) {
     if (!cfg?.anthropic_api_key) return respostaErro("ia_indisponivel", 200, "sem_chave");
 
     if (!(cx?.mensagens || []).length) return respostaErro("ia_indisponivel", 200, "conversa_vazia");
+    // plano 1500c · SC-099 (LGPD): o cliente que desligou a IA (nx_clientes.ia_desligada, ou cfg.ia.desligada) não manda conversa
+    // à Anthropic — recusa antes da cota e do SDK
+    if (iaDesligada(cx)) return respostaErro("ia_indisponivel", 200, "ia_desligada");
 
     // plano 1000 (SV-067): «Resumir» de novo sem mensagem nova (o mesmo histórico) devolve o resumo guardado (30 min) sem gastar cota
     const chaveCache = acao === "resumir" ? await chaveResumo(conversa, cx.mensagens) : null;
@@ -163,7 +171,9 @@ export async function tratar(req, env, deps = {}) {
 
     // 3. prompt
     const { sistema, blocos, usuario } = montarPrompt(acao, cx, novoDelimitador());
-    const modelo = modeloIA(cfg.modelo_ia);   // plano 1000 (SV-073): modelo desconhecido → o padrão
+    // plano 1000 (SV-073): modelo desconhecido → o padrão · plano 1500c · SC-085: o do cliente (cfg.ia.modelo), o da plataforma
+    // (nx_config.modelo_ia) e, sem nenhum, o Haiku
+    const modelo = modeloPara(acao, cx?.ia?.modelo, cfg.modelo_ia);
     const t0 = Date.now();
     // fecha a reserva (custo, stop_reason e latência — contrato 7) e deixa uma linha de log por chamada
     const registrar = async (ok, r, detalhe) => {
@@ -179,7 +189,8 @@ export async function tratar(req, env, deps = {}) {
     try {
       // plano 1000 (SV-203): o atendente está esperando — 30 s e nenhuma retentativa (ele clica de novo se quiser); antes 45 s + 1
       // retentativa (até ~90 s, o navegador já tinha desistido e a cota estava gasta)
-      r = await mod.perguntarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, blocos, usuario, maxTokens: 4000, esforco: "low",
+      // plano 1500c · SC-088: uma sugestão de até 600 caracteres (ou 6 linhas de resumo) cabe em 1000 tokens (antes 4000)
+      r = await mod.perguntarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, blocos, usuario, maxTokens: MAX_TOKENS_SUGESTAO, esforco: "low",
         timeoutMs: PRAZO_PAINEL_MS, retentativas: 0 });
     } catch (e) {
       // o texto do provedor fica só no log; o atendente recebe a tradução (sem status, categoria ou chave)

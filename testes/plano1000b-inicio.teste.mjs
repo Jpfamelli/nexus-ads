@@ -423,11 +423,12 @@ test("RB-261: a dica visível não é região viva; a leitura sai 250 ms depois 
     const caixa = alvo.querySelector(".g-calcaixa"), dica = caixa.querySelector(".g-dica"), viva = caixa.querySelector(".g-dica-viva");
     assert.equal(dica.getAttribute("aria-live"), null); assert.equal(dica.getAttribute("role"), null);
     assert.equal(viva.getAttribute("aria-live"), "polite"); assert.ok(viva.classList.contains("sr-only"));
-    for (let i = 0; i < 5; i++) dom.ev(caixa, "keydown", { key: i ? "ArrowRight" : "ArrowDown" });
-    assert.equal(dica.textContent, "seg 12h: 13 msgs", "a dica visível anda na hora");
+    // plano 1500c: RC-244 — a 1ª seta começa na célula de MAIOR valor (sáb 23h nesta matriz), não mais em seg 8h; daí ← anda para trás
+    for (let i = 0; i < 5; i++) dom.ev(caixa, "keydown", { key: i ? "ArrowLeft" : "ArrowDown" });
+    assert.equal(dica.textContent, "sáb 19h: 25 msgs", "a dica visível anda na hora");
     assert.equal(viva.textContent, "", "nada lido ainda");
     await esperar(G.ATRASO_DICA_VIVA + 60);
-    assert.equal(viva.textContent, "seg 12h: 13 msgs", "só o ponto onde parou");
+    assert.equal(viva.textContent, "sáb 19h: 25 msgs", "só o ponto onde parou");
   } finally { dom.fim(); }
 });
 

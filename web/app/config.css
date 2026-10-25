@@ -53,7 +53,7 @@
 .cfg-progresso-segs i.feito { background: var(--c-ok); }
 .cfg-progresso-txt { flex: none; font-family: var(--f-mono); font-size: var(--fs-12); color: var(--c-texto-2); }
 .cfg-hist { margin-top: .7rem; border-top: 1px solid var(--c-borda); padding-top: .5rem; }
-.cfg-hist summary { display: inline-flex; align-items: center; gap: .4rem; min-height: 32px; cursor: pointer; font-size: var(--fs-13); font-weight: 600; color: var(--c-texto-2); list-style: none; }
+.cfg-hist summary { display: inline-flex; align-items: center; gap: .4rem; min-height: 32px; /* plano 1500c · UCB-103: 44 px no toque (bloco no fim) */ cursor: pointer; font-size: var(--fs-13); font-weight: 600; color: var(--c-texto-2); list-style: none; }
 .cfg-hist summary::-webkit-details-marker { display: none; }
 .cfg-hist summary .ic { width: 15px; height: 15px; }
 .cfg-hist summary::after { content: "▾"; margin-left: .2rem; font-size: var(--fs-12); color: var(--c-texto-3); transition: transform var(--t-ui) var(--e-out); }
@@ -87,7 +87,8 @@
 .adm-anel-aten .adm-anel-arco { stroke: var(--c-aten); }
 .adm-anel-ruim .adm-anel-arco { stroke: var(--c-ruim); }
 .adm-anel-neutra .adm-anel-arco { stroke: var(--c-borda-2); }
-.adm-anel-num { font-family: var(--f-mono); font-weight: 500; font-size: 22px; fill: var(--c-texto); }
+/* plano 1500c · UCB-104: em rem (acompanha o zoom de texto) */
+.adm-anel-num { font-family: var(--f-mono); font-weight: 500; font-size: 1.375rem; fill: var(--c-texto); }
 /* plano 1000b · UB-182: «do limite» em rem (acompanha o zoom de texto), não 10 px fixos */
 .adm-anel-sub { font-family: var(--f-corpo); font-size: var(--fs-12); fill: var(--c-texto-3); }
 .adm-anel-txt { display: flex; flex-direction: column; gap: .2rem; min-width: 0; font-size: var(--fs-14); color: var(--c-texto-2); }
@@ -286,3 +287,119 @@
 /* UB-225: «Mostrar mais» da lista de clientes */
 .adm-mais-linha { justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--esp-2); margin-top: var(--esp-3); }
 .adm-mais { min-height: 44px; }
+
+/* ---------------------------------------------------------------- plano 1500c (frente config) */
+/* UCB-103 / UCB-106: alvos de 44 px no toque (histórico dos números e os «Revogar»/ações de convite e domínio) */
+@media (max-width: 760px), (pointer: coarse) {
+  .cfg-hist summary, .cfg-hist-item { min-height: 44px; }
+  .lista-convites .bt, .adm-convites .bt, .dom-item .bt, .cfg-conv-acoes .bt, .cfg-us-nunca, .cfg-papeis > summary, .cfg-link-entrada-copiar, .cfg-wa-testar { min-height: 44px; }
+}
+/* UCB-105: o ponto «online» continua visível no alto contraste */
+@media (forced-colors: active) {
+  .cfg-online i { forced-color-adjust: none; background: Highlight; border: 1px solid ButtonText; }
+}
+/* UCB-107: a prévia da tela de entrada não empurra «Salvar marca» para longe no celular */
+@media (max-width: 760px) { .pv-login { min-height: 320px; padding: 1rem .8rem; } }
+/* UCB-108: cores desligadas parecem desligadas */
+.cores-caixa:disabled { opacity: .6; }
+.cfg-cores-off { margin: 0; font-size: var(--fs-13); }
+/* UCB-063: «ou arraste/cole aqui» só com mouse */
+.logo-arraste { display: none; font-size: var(--fs-11); }
+@media (pointer: fine) { .logo-amostra .logo-arraste { display: block; } }
+/* UCB-058 / UC-033: «Testar» ao lado da prévia do WhatsApp; aviso sem suporte */
+.cfg-wa-linha { gap: var(--esp-2); align-items: center; flex-wrap: wrap; }
+.cfg-wa-linha .cfg-wa-previa { margin: 0; }
+.cfg-sem-wa { margin: 0; font-size: var(--fs-13); }
+/* UCB-057: link de entrada completo */
+.cfg-link-entrada { gap: var(--esp-2); align-items: center; flex-wrap: wrap; margin: 0 0 var(--esp-3); }
+.cfg-link-entrada-txt { min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-13); }
+/* UCB-060: mini aba do navegador */
+.pv-aba { display: flex; padding: .35rem .5rem 0; border-radius: var(--r-p) var(--r-p) 0 0; background: var(--c-sup-2); border: 1px solid var(--c-borda); border-bottom: 0; }
+.pv-aba-guia { display: inline-flex; align-items: center; gap: .4rem; max-width: 14rem; min-width: 0; padding: .35rem .7rem; border-radius: var(--r-pp) var(--r-pp) 0 0; background: var(--c-sup); font-size: var(--fs-12); }
+.pv-aba-ic { display: grid; place-items: center; width: 16px; height: 16px; flex: none; }
+.pv-aba-ic img, .pv-aba-ic svg { width: 16px; height: 16px; object-fit: contain; }
+.pv-aba-nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* UCB-059: prévia no celular (360 px reduzidos) */
+.pv-cel { display: grid; place-items: center; padding: var(--esp-3) 0; }
+.pv-cel[hidden] { display: none !important; }
+.pv-cel-tela { display: flex; flex-direction: column; width: min(100%, 15rem); aspect-ratio: 9 / 17; overflow: hidden; border-radius: 1.4rem; border: 6px solid var(--c-borda-2); background: var(--c-fundo); color: var(--c-texto); font-size: var(--fs-12); }
+.pv-cel-topo { display: flex; align-items: center; gap: .45rem; padding: .55rem .65rem; border-bottom: 1px solid var(--c-borda); background: var(--c-sup); }
+.pv-cel-logo { display: grid; place-items: center; width: 22px; height: 22px; }
+.pv-cel-logo img, .pv-cel-logo svg { width: 22px; height: 22px; object-fit: contain; }
+.pv-cel-prod { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-cel-corpo { flex: 1 1 auto; display: flex; flex-direction: column; gap: .45rem; padding: .6rem; }
+.pv-cel-corpo .bt { align-self: flex-start; pointer-events: none; }
+.pv-cel-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); justify-items: center; padding: .4rem 0; border-top: 1px solid var(--c-borda); background: var(--c-sup); }
+/* UCB-067 / UCB-068 / UCB-069: conferir DNS, Cloudflare, abrir */
+.dom-dns { gap: var(--esp-2); align-items: center; flex-wrap: wrap; margin-top: var(--esp-2); }
+.dom-dns-res { font-size: var(--fs-13); }
+.dom-dns-res[data-tom="ok"] { color: var(--c-ok); font-weight: 600; }
+.dom-dns-res[data-tom="aten"] { color: var(--c-aten); }
+.dom-cloudflare { margin-top: var(--esp-1); }
+/* Usuários: barra de uso (UCB-034), papéis (UCB-032), filtros (UCB-033), único admin (UCB-015), convites (UCB-027/028/029) */
+.cfg-us-barra { margin: 0 0 var(--esp-3); max-width: 28rem; }
+.cfg-papeis { margin: 0 0 var(--esp-3); }
+.cfg-papeis > summary { display: inline-flex; align-items: center; min-height: 36px; cursor: pointer; font-size: var(--fs-13); font-weight: 600; color: var(--c-prim-luz); }
+.cfg-papeis > summary:focus-visible, .cfg-us-nunca:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; border-radius: var(--r-pp); }
+.cfg-papeis-lista { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr); gap: var(--esp-1) var(--esp-3); margin: var(--esp-2) 0 0; font-size: var(--fs-13); }
+.cfg-papeis-lista dt { font-weight: 600; }
+.cfg-papeis-lista dd { margin: 0; color: var(--c-texto-2); }
+@media (max-width: 480px) { .cfg-papeis-lista { grid-template-columns: minmax(0, 1fr); } .cfg-papeis-lista dd { margin-bottom: var(--esp-2); } }
+.cfg-us-filtros { gap: var(--esp-2); align-items: center; flex-wrap: wrap; margin: 0 0 var(--esp-3); }
+.cfg-us-filtros .cfg-us-busca { margin: 0; flex: 1 1 14rem; }
+.cfg-us-nunca[aria-pressed="true"] { background: var(--c-prim-suave); border-color: var(--c-prim); color: var(--c-texto); }
+.cfg-ultimo-admin { display: block; font-size: var(--fs-11); }
+.cfg-us-tab:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.cfg-conv-acoes { gap: var(--esp-1); flex-wrap: wrap; justify-content: flex-end; }
+.cfg-conv-logo { border-color: color-mix(in srgb, var(--c-aten) 40%, var(--c-borda)); }
+.cfg-conv-vencidos { margin-top: var(--esp-3); }
+.cfg-conv-links .bloco-link .rotulo { overflow-wrap: anywhere; }
+/* UCB-050: aparelhos conectados */
+.cfg-sessoes-lista { list-style: none; margin: 0 0 var(--esp-3); padding: 0; display: flex; flex-direction: column; gap: var(--esp-2); }
+.cfg-sessao { gap: var(--esp-2); flex-wrap: wrap; align-items: center; font-size: var(--fs-13); }
+/* Visão geral: teste (UCB-081) e próximos passos (UCB-124) */
+.cfg-vg-teste { margin: 0 0 var(--esp-3); }
+.cfg-vg-teste a { color: var(--c-prim-luz); font-weight: 600; }
+/* Plano e uso: dias de teste (UCB-072), progresso (UC-040), estado (UCB-083), projeção da IA (UCB-078), resumo (UC-007), comparar (UCB-080) */
+.cfg-dias-teste { display: inline-flex; align-items: center; gap: .35rem; margin: var(--esp-1) 0 0; font-size: var(--fs-13); font-weight: 600; color: var(--c-texto-2); }
+.cfg-dias-teste .ic { width: 15px; height: 15px; }
+.cfg-dias-teste-aten { color: var(--c-aten); }
+.cfg-teste-prog { margin-top: var(--esp-2); max-width: 20rem; }
+.cfg-dados-guardados { margin: var(--esp-1) 0 0; font-size: var(--fs-13); }
+.cfg-plano-status { margin: 0; }
+.cfg-plano-status a { color: inherit; font-weight: 600; text-decoration: underline; }
+.cfg-plano-estado { gap: var(--esp-2); align-items: center; flex-wrap: wrap; margin: 0; font-size: var(--fs-13); }
+.cfg-plano-estado-it { display: inline-flex; align-items: center; min-height: 44px; font-weight: 600; }
+.cfg-plano-estado-it[data-tom="ok"] { color: var(--c-ok); }
+.cfg-plano-estado-it[data-tom="aten"] { color: var(--c-aten); }
+.cfg-plano-estado-it[data-tom="ruim"] { color: var(--c-ruim); }
+.cfg-uso-proj { display: block; margin-top: var(--esp-1); font-size: var(--fs-12); color: var(--c-texto-2); }
+.cfg-uso-proj-aten { color: var(--c-aten); font-weight: 600; }
+.cfg-resumo-grade, .cfg-comparar-grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: var(--esp-3); }
+.cfg-comparar-grade { grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); }
+.cfg-resumo-it { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.cfg-resumo-it b { font-size: var(--fs-25); font-weight: 500; line-height: 1.1; }
+.cfg-resumo-it small { color: var(--c-texto-2); font-size: var(--fs-12); }
+.cfg-comparar-it { display: flex; flex-direction: column; gap: var(--esp-2); min-width: 0; padding: var(--esp-3); border-radius: var(--r-p); border: 1px solid var(--c-borda); background: var(--c-sup); }
+.cfg-comparar-it.atual { border-color: var(--c-prim); background: var(--c-prim-suave); }
+.cfg-comparar-dif { margin: 0; padding-left: 1.1rem; font-size: var(--fs-13); }
+.cfg-comparar-it .bt { align-self: flex-start; min-height: 44px; }/* Admin (plano 1500c): «Novo …» só ícone no celular (UCB-117), lote (UCB-099), teste (UCB-087/088/126), passos da revenda (UC-032) */
+@media (max-width: 600px) { .adm-novo .adm-novo-rot { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; } .adm-novo { min-width: 44px; min-height: 44px; justify-content: center; } }
+.adm-lote { gap: var(--esp-2); align-items: center; flex-wrap: wrap; margin: 0 0 var(--esp-3); padding: var(--esp-2) var(--esp-3); border-radius: var(--r-p); background: var(--c-prim-suave); border: 1px solid var(--c-prim); }
+.adm-teste-atalhos { gap: var(--esp-1); flex-wrap: wrap; margin-top: var(--esp-1); }
+.adm-teste-faltam { margin: var(--esp-1) 0 0; }
+.adm-aviso-teste, .adm-proximo-passo { margin: 0; }
+.adm-ia-proj { margin: var(--esp-2) 0 0; font-size: var(--fs-13); }
+.adm-followup { margin-left: var(--esp-1); }
+.adm-passos { margin-bottom: var(--esp-4); }
+.adm-passos-lista { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: var(--esp-2); }
+.adm-passo { display: flex; align-items: center; gap: var(--esp-2); min-height: 44px; font-size: var(--fs-14); }
+.adm-passo .ic { width: 16px; height: 16px; flex: none; color: var(--c-texto-3); }
+.adm-passo.feito { color: var(--c-texto-2); }
+.adm-passo.feito .ic { color: var(--c-ok); }
+.adm-passo a { color: var(--c-prim-luz); font-weight: 600; }
+.dom-linha-link { display: flex; align-items: center; gap: var(--esp-2); min-height: 44px; color: inherit; text-decoration: none; border-radius: var(--r-pp); }
+.dom-linha-link:hover .mono { text-decoration: underline; }
+.dom-linha-link:focus-visible, .adm-passo a:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.dom-linha-link > .ic:last-child { margin-left: auto; width: 14px; height: 14px; }
+@media (max-width: 760px), (pointer: coarse) { .adm-teste-atalhos .bt, .adm-lote .bt, .adm-followup, .adm-plano-dup, .adm-orgs-recarregar, .dom-conferir, .dom-abrir { min-height: 44px; } }

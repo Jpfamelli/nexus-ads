@@ -894,7 +894,8 @@ await teste("apps independentes: atalhos CRM/Ads/Atendimento, query de produto e
   assert.match(jsWorkspace, /origem\.hash\.startsWith\("#\/"\) \? origem\.hash : `#\/\$\{atual\.rota\}`/, "entrada de produto preserva deep link interno validado pelo shell");
   const shell = ler("app.js");
   assert.match(shell, /rotaNoProduto\(E\.workspace, r\.modulo\)/, "shell identifica navegação fora do produto atual");
-  assert.match(shell, /produtoDaRota\(r\.modulo\)[\s\S]*?urlWorkspace\(destino, rotas\.montarHash\(r\.modulo, r\.partes, r\.query\)\)/, "rotas cruzadas preservam o destino e alternam para o produto correspondente");
+  // plano 1500c: UCC-036 passa o produto aberto (#/inicio fica no produto) — produtoDaRota(r.modulo, E.workspace)
+  assert.match(shell, /const destino = rotas\.produtoDaRota\(r\.modulo, E\.workspace\)[\s\S]*?urlWorkspace\(destino, rotas\.montarHash\(r\.modulo, r\.partes, r\.query\)\)/, "rotas cruzadas preservam o destino e alternam para o produto correspondente");
   assert.match(shell, /E\.workspace === null \|\| E\.workspace === "crm"/, "busca global só existe no Órbita completo ou no CRM");
   assert.match(shell, /document\.title = E\.workspace \? rotas\.PRODUTOS\[E\.workspace\]\.titulo/, "cada atalho tem título próprio");
   assert.match(shell, /const nomeApp = E\.workspace \? E\.M\?\.rotas\?\.PRODUTOS\?\.\[E\.workspace\]\?\.nome : "";/, "título mantém o produto mesmo quando muda a rota interna");
@@ -1712,7 +1713,9 @@ await teste("tema escuro (M01/M04): tudo que não é cor de estado sai IGUAL ao 
   // Golden gerado com o derivarTema anterior ao contrato. Fora do conjunto ficam só as cores de estado (ok, ruim, aten, info, meta, google, nota, sev-*, prod-*)
   // e o poço: o M04 gira essas cores quando a marca cai a menos de 30° delas e dá tom próprio a Meta e Google. O resto do escuro não pode mudar.
   const ESTADO = k => /^--c-(ok|ruim|aten|info|meta|google|nota|sev-|prod-|poco)/.test(k);
-  const ouro = { padrao: "ffrom8", vermelha: "kyq0od", azul: "y8mwxh", verde: "m6elem" };
+  // plano 1500c: o hover do primário (--c-prim-hi) agora se afasta da cor do texto (UCC-071: o texto branco sobre o hover clareado caía abaixo de 4,5:1)
+  // — vermelha e azul (texto branco) escurecem no hover; padrão e verde (texto escuro) já clareavam
+  const ouro = { padrao: "ffrom8", vermelha: "1fcjr34", azul: "t58snz", verde: "m6elem" };
   for (const [nome, m] of Object.entries(ESCURO_4)) {
     const { vars, escuro } = T.derivarTema(m);
     assert.equal(escuro, true, nome);

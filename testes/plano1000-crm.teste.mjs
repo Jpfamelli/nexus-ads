@@ -545,7 +545,9 @@ test("CR-118/123 planilha: a mesma pessoa duas vezes (com/sem 55 e 9, ou e-mail)
   assert.deepEqual(L.duplicadosPlanilha([{ nome: "x" }]), []);
   const est = [{ nome: "Nova conversa", tipo: "aberto" }, { nome: "Agendou", tipo: "aberto" }, { nome: "Fechado", tipo: "ganho" }];
   const cf = L.conferirPlanilha([{ estagio: "agendou" }, { estagio: "Fechado" }, { estagio: "Negociação" }, { etiquetas: "VIP; Retorno|Implante" }], { estagios: est, etiquetas: [{ nome: "vip" }] });
-  assert.deepEqual(cf.etapasDesconhecidas, ["Fechado", "Negociação"], "sem acento/maiúscula casa; etapa fechada não vale");
+  // plano 1500c: RC-011 — a etapa fechada continua sem valer, mas sai do aviso «não existe» para o aviso próprio (etapa_fechada)
+  assert.deepEqual(cf.etapasDesconhecidas, ["Negociação"], "sem acento/maiúscula casa");
+  assert.deepEqual(cf.etapasFechadas, ["Fechado"], "etapa fechada não vale (aviso próprio)");
   assert.deepEqual(cf.etiquetasNovas, ["Retorno", "Implante"]);
 });
 
@@ -558,7 +560,9 @@ test("CR-052/144 dataPassou e atalhos de prazo (São Paulo)", () => {
   assert.equal(L.dataPassou("", agora), false);
   assert.deepEqual(L.atalhosPrazo("2026-10-13").map(a => [a.rotulo, a.valor]), [["Hoje 18h", "2026-10-13T18:00"], ["Amanhã 9h", "2026-10-14T09:00"], ["Em 3 dias", "2026-10-16T09:00"], ["Próx. segunda", "2026-10-19T09:00"]]);
   assert.equal(L.atalhosPrazo("2026-10-12").at(-1).valor, "2026-10-19T09:00", "numa segunda, a próxima segunda é daqui a 7 dias");
-  assert.equal(L.atalhosPrazo("2026-10-31")[1].valor, "2026-11-01T09:00", "virada do mês");
+  // plano 1500c: RC-026 — 31/10 é sábado; o «amanhã» pula o domingo e vai para segunda 02/11 (a virada do mês continua certa)
+  assert.equal(L.atalhosPrazo("2026-10-31")[1].valor, "2026-11-02T09:00", "virada do mês");
+  assert.equal(L.atalhosPrazo("2026-10-31", { pularFimDeSemana: false })[1].valor, "2026-11-01T09:00", "virada do mês sem pular o fim de semana");
 });
 
 test("CR-103 dadosTitular: cadastro, consentimento, negócios, tarefas, notas, atendimentos e histórico — só do titular", () => {
@@ -1169,9 +1173,11 @@ test("CR-098/095/106/103/046 ficha (DOM): e-mail e UF conferidos sem ir ao servi
     email.value = "ana@"; email.dispara("blur"); await tique();
     assert.equal(t.cham("nx_contato_salvar").length, 0, "antes: ia ao servidor e voltava com erro genérico");
     assert.match(campoDe(el, "E-mail").querySelector(".ed-erro").textContent, /^E-mail inválido/);
-    const uf = campoDe(el, "UF").querySelector("input");
-    uf.value = "São"; uf.dispara("blur"); await tique();
-    assert.match(campoDe(el, "UF").querySelector(".ed-erro").textContent, /^UF deve ter 2 letras/);
+    // plano 1500c: RC-109 — a UF virou lista das 27 (não dá mais para digitar «São»); continua sem ir ao servidor à toa
+    const uf = campoDe(el, "UF").querySelector("select");
+    assert.ok(uf, "UF é um select");
+    assert.ok(uf.querySelectorAll("option").some(o => o.textContent === "SP"), "a lista tem SP");
+    assert.ok(!campoDe(el, "UF").querySelector("input"), "sem caixa de texto");
     assert.equal(t.cham("nx_contato_salvar").length, 0);
     // empresa
     const busca = el.querySelector(".fx-emp-busca");
@@ -1281,7 +1287,8 @@ test("CR-118/123/121 Importação (DOM): na prévia, a mesma pessoa repetida, et
     t.botao("Continuar").clique();
     // plano 1000b: RB-130 — o termo da vertical (odonto: «paciente»)
     assert.match(t.tela.querySelector(".imp-aviso-dup").textContent, /1 paciente aparece mais de uma vez.*telefone \(12\) 99830-3030 nas linhas 2, 3/);
-    assert.match(t.tela.querySelector(".imp-aviso-etapa").textContent, /«Fechado».*entra em «Nova»/);
+    // plano 1500c: RC-011 — «Fechado» (etapa de ganho) tem o aviso próprio: fechadas não entram pela planilha
+    assert.match(t.tela.querySelector(".imp-aviso-fechada").textContent, /«Fechado».*1ª etapa aberta/);
     assert.match(t.tela.querySelector(".imp-aviso-etq").textContent, /Etiqueta nova que será criada: «VIP»/);
     assert.equal(t.reg.linhas.length, 5, "a prévia mostra as 5 primeiras");
     t.botao("Ver só as linhas com problema (1)").clique();
@@ -1342,9 +1349,11 @@ test("CR-144/052 tarefa (DOM): atalhos de prazo preenchem o campo; prazo no pass
     await T.formTarefa(k, null, {});
     const vence = corpo.querySelector('[name="vence_em"]');
     const atalhos = corpo.querySelectorAll(".tf-atalho");
-    assert.deepEqual(atalhos.map(b => b.textContent), ["Hoje 18h", "Amanhã 9h", "Em 3 dias", "Próx. segunda"]);
-    atalhos[2].clique();
-    assert.equal(vence.value, L.atalhosPrazo(ui.hojeSP())[2].valor);
+    // plano 1500c: RC-025/026 — os rótulos dependem da hora (sem «Hoje» à noite) e do dia da semana; confere contra a própria lógica, pelo id
+    const esperados = L.atalhosPrazo(ui.hojeSP(), { agora: Date.now() });
+    assert.deepEqual(atalhos.map(b => b.textContent), esperados.map(a => a.rotulo));
+    atalhos.find(b => b.dataset.valor === L.atalhoPrazo(ui.hojeSP(), "tres", { agora: Date.now() }).valor).clique();
+    assert.equal(vence.value, L.atalhoPrazo(ui.hojeSP(), "tres").valor);
     vence.value = "2020-01-01T09:00"; vence.dispara("change");
     const av = corpo.querySelector(".tf-prazo .ed-aviso");
     assert.ok(!av.hidden && /^Essa data já passou/.test(av.textContent));
@@ -1415,9 +1424,10 @@ test("CR-171 Início (DOM): ações rápidas sob a manchete — «Nova oportunid
     const rap = t.raiz.querySelector(".ini-rapidas");
     assert.ok(rap, "a linha de ações rápidas existe para quem escreve");
     const bts = rap.querySelectorAll("button");
-    assert.deepEqual(bts.map(b => b.dataset.k), ["rap-negocio", "rap-tarefa", "rap-consulta"]);
-    assert.ok(bts[2].textContent.includes("Marcar consulta"), "a palavra da agenda na vertical");
-    for (const b of bts) { b.click(); await tick(); }
+    // plano 1500c: RC-296 — «Novo paciente» entrou entre «Nova tarefa» e «Marcar consulta» (testado no plano1500c-inicio)
+    assert.deepEqual(bts.map(b => b.dataset.k), ["rap-negocio", "rap-tarefa", "rap-contato", "rap-consulta"]);
+    assert.ok(bts[3].textContent.includes("Marcar consulta"), "a palavra da agenda na vertical");
+    for (const b of bts.filter(b => b.dataset.k !== "rap-contato")) { b.click(); await tick(); }
     assert.deepEqual(feitos.map(f => f[0]), ["negocio", "tarefa", "consulta"]);
     assert.ok(t.toasts.some(x => x.texto === "Tarefa criada."));
   } finally { dom.fim(); }
@@ -2408,7 +2418,9 @@ test("CR-203/268/211 Kanban (DOM): soltar em outra etapa acende as duas contagen
     const nDe = id => t.tela.querySelector(`.kb-col[data-estagio="${id}"] .kb-col-n`);
     assert.ok(destacados.includes(nDe("s1")) && destacados.includes(nDe("s2")), "CR-203: as duas colunas acendem");
     // plano 1000b: RB-008 — «movida» (oportunidade é feminino na vertical odonto do teste)
-    assert.match(t.reg.avisos.at(-1), /movida para Agendada\. Agora «Agendada» com 1 cartão e «Nova» com 1 cartão\.$/, "CR-268");
+    // plano 1500c: RC-293 — o movimento fala uma vez só, pelo aviso com «Desfazer» (os totais novos vão nele)
+    assert.match(t.reg.desfazer.at(-1).texto, /movida para Agendada\. Agora «Agendada» com 1 cartão e «Nova» com 1 cartão\.$/, "CR-268");
+    assert.ok(!t.reg.avisos.some(a => /movida para Agendada/.test(a)), "RC-293: sem o 2º anúncio");
     t.api.desmontar();
   } finally { D.desfazer(); }
 });
@@ -2505,7 +2517,8 @@ test("CR-225/226/228/263 ficha (DOM): aniversário no cabeçalho, idade ao lado 
     assert.ok(aniv, "CR-225");
     assert.equal(aniv.textContent, L.aniversario(nasc, hoje).texto);
     assert.ok(campoDe(el, `Nascimento (${idade} anos)`), "CR-226: a idade ao lado");
-    assert.ok(el.querySelectorAll(".fx-ac-sec").length === 2, "os botões continuam (o CSS esconde no celular)");
+    // plano 1500c: RC-331 — sem o módulo de conversas, «Novo negócio» vira o botão principal (.fx-ac-principal); continuam os dois
+    assert.ok(el.querySelectorAll(".fx-ac-sec").length + el.querySelectorAll(".fx-ac-principal").length === 2, "os botões continuam (o CSS esconde no celular)");
     el.querySelector(".fx-acoes .bt-icone").clique();
     const rotulos = menu.filter(x => x && x.rotulo).map(x => x.rotulo);
     assert.ok(rotulos.includes("Nova oportunidade") && rotulos.includes("Nova tarefa"), "CR-228: no celular moram no ⋮");
@@ -2670,9 +2683,12 @@ test("CR-239/240/279/232 Importação (DOM): link do modelo; texto do telefone s
     const t2 = await montarImp(D, { uix: { campo: o => { if (o.nome === "atualizar") ajudas.push(o.ajuda); return uiDeMentira(D.h).campo(o); } } });
     await irParaColunas(t2);
     t2.botao("Continuar").clique();
-    assert.match(ajudas.at(-1), /etiquetas são somadas/, "CR-240");
-    assert.match(ajudas.at(-1), /célula vazia não apaga nada/);
-    assert.match(ajudas.at(-1), /o telefone fica o mesmo/);
+    // plano 1500c: RC-177 — a ajuda do interruptor é uma frase curta; a regra completa (CR-240) continua na tela, no «Detalhes» recolhível
+    assert.match(ajudas.at(-1), /^Ligado: telefone ou e-mail já cadastrado atualiza o cadastro\. Desligado: a linha é pulada\.$/);
+    const det = t2.tela.querySelector(".imp-det-regra").textContent;
+    assert.match(det, /etiquetas são somadas/, "CR-240");
+    assert.match(det, /célula vazia não apaga nada/);
+    assert.match(det, /o telefone fica o mesmo/);
   } finally { U.desfazer(); D.desfazer(); }
 });
 
@@ -2727,7 +2743,8 @@ test("CR-299/206/285/286/253/257 Início (DOM): KPIs levam ao recorte; «previs�
     const t = await montarTela(ANTIGO(), { dom, agenda: ag });
     const kpi = id => t.raiz.querySelectorAll(".ini-kpi").find(k => k.dataset.kpi === id);
     assert.equal(kpi("aberto").getAttribute("href"), "#/crm?resumo=1", "CR-299: «Em aberto» abre o quadro com o resumo");
-    assert.equal(kpi("leads").getAttribute("href"), "#/contatos?criado_de=2026-09-27", "CR-299: leads da semana na lista");
+    // plano 1500c: RC-182 — 7 dias com hoje incluso = hoje − 6 (o −7 abria um dia a mais que o número do cartão)
+    assert.equal(kpi("leads").getAttribute("href"), "#/contatos?criado_de=2026-09-28", "CR-299: leads da semana na lista");
     assert.ok(texto(t.raiz).includes("previsão pela chance de cada etapa") && !texto(t.raiz).includes("previsão ponderada"), "CR-206");
     const ver = t.raiz.querySelectorAll("a").find(a => a.getAttribute("href") === "#/agenda?dia=2026-10-04");
     assert.ok(ver && /Ver na agenda/.test(ver.textContent), "CR-253");
@@ -2822,7 +2839,8 @@ test("crm.css/inicio.css (lote crm-3): só tokens; fieldset sem moldura; etiquet
   assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(b) && !/\brgba?\(/.test(b), "sem cor fixa");
   assert.ok(!/animation:|@keyframes/.test(b), "nada animado novo");
   assert.match(b, /fieldset\.crm-filtros-grupo \{ border: 0; margin: 0; padding: 0; min-width: 0; \}/, "CR-210");
-  assert.match(b, /@media \(max-width: 760px\) \{ \.kc-etq1 \{ display: none; \} \.kc-ponto-1 \{ display: inline-block; \} \}/, "CR-212");
+  // plano 1500c: RC-076 — no celular a 1ª etiqueta mantém o nome (mais curta), em vez de virar um ponto sem nome
+  assert.match(b, /@media \(max-width: 760px\) \{ \.kc-etq1 \{ max-width: 5rem; \} \}/, "CR-212 / RC-076");
   assert.match(b, /\.crm-fab\.crm-fab-some \{ transform: translateY\(calc\(100% \+ 32px\)\); opacity: 0; pointer-events: none; \}/, "CR-009");
   assert.match(b, /@media \(prefers-reduced-motion: no-preference\) \{\s*\.crm-fab \{ transition:/, "a transição só sem movimento reduzido");
   assert.match(b, /\.tfp-semana \{ display: grid; grid-template-columns: repeat\(7, minmax\(0, 1fr\)\);/, "CR-244");
@@ -2976,12 +2994,13 @@ test("CR-133 «Duplicar» no ⋮ do funil: editor com as mesmas etapas, nome «(
     menuBt.clique();
     const itens = t.reg.menus["Mais ações para Pacientes"];
     assert.deepEqual(itens.filter(x => x && x.rotulo).map(x => x.rotulo), ["Duplicar"], "no padrão só «Duplicar» (sem excluir/desativar)");
+    const nAntes = t.reg.chamadas.length;      // plano 1500c: RC-152 — a LISTA de funis conta os abertos de cada um; o editor da cópia continua sem contar
     await itens.find(x => x.rotulo === "Duplicar").fn(); await varias();
     assert.equal(t.alvo.querySelector("h2").textContent, "Cópia de «Pacientes»");
     assert.equal(t.alvo.querySelector('[name="nome"]').value, "Pacientes (cópia)");
     assert.deepEqual(t.alvo.querySelectorAll(".fe-etapa").map(l => l.querySelector(".fe-nome").value), ["Novo", "Avaliação", "Fechou", "Não fechou"]);
     assert.equal(t.alvo.querySelector('[name="conta_no_ads"]').checked, false, "a cópia nasce fora dos anúncios");
-    assert.equal(t.reg.chamadas.some(c => c.n === "nx_negocios_kanban"), false, "funil novo: nada a contar");
+    assert.equal(t.reg.chamadas.slice(nAntes).some(c => c.n === "nx_negocios_kanban"), false, "funil novo: nada a contar");
     botaoTxt(t.alvo, /Salvar funil/).clique(); await varias();
     const p = t.salvos().at(-1);
     assert.equal(p.nome, "Pacientes (cópia)");
@@ -3102,8 +3121,9 @@ test("CR-217 Início (DOM, contrato 20261013d): «Agendados sem data» no Agora,
     t.ctx.abrirNegocio = id => abertos.push(id);
     const sd = t.raiz.querySelector(".ini-agora .ini-semdata");
     assert.ok(sd, "o «Agora» abre por causa dos agendados sem data");
-    assert.match(texto(sd), /^3 agendadas sem data/);
-    assert.match(texto(sd), /a agenda e o lembrete não sabem delas/);
+    // plano 1500c: RC-215 — o termo explícito e a etapa («3 oportunidades em Avaliação agendada sem data»), sem «delas» ambíguo
+    assert.match(texto(sd), /^3 oportunidades em Avaliação agendada sem data/);
+    assert.match(texto(sd), /não aparecem na agenda e o lembrete não sai/);
     assert.match(texto(sd), /\+1 no quadro/);
     const bt = sd.querySelector('[data-k="sd-11"]');
     assert.equal(bt.getAttribute("aria-label"), "Abrir Rafael Mendes para marcar a data");

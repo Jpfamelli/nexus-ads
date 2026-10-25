@@ -235,7 +235,8 @@ test("modelosDaVertical: lembrete em destaque para odonto/oficina, acompanhament
   assert.equal(L.modelosDaVertical("oficina")[0].id, "lembrete_consulta_texto");
   assert.deepEqual(L.modelosDaVertical("loja").slice(0, 3).map(m => m.id), ["followup_orcamento", "lead_anuncio", "pos_venda"]);
   assert.equal(L.modelosDaVertical("generico").length, L.MODELOS.length);
-  assert.equal(L.modelosDaVertical("loja").length, L.MODELOS.length - 1, "«faltou» não existe na loja");
+  // plano 1500c: «Pediu para desmarcar» (UCA-063) também não existe na loja (loja não tem horário marcado)
+  assert.equal(L.modelosDaVertical("loja").length, L.MODELOS.length - 2, "«faltou» e «pediu para desmarcar» não existem na loja");
   assert.ok(!L.modelosDaVertical("loja").some(m => m.id === "faltou_remarcar"));
 });
 
@@ -632,7 +633,8 @@ test("sequência: linhaDoTempo soma as esperas, marca o que vem depois de «para
   assert.equal(L.temSequencia({ acoes: [tarefa()] }), false);
   const av = L.avisosEstrutura({ gatilho: "tarefa_vencida", acoes });
   assert.ok(av.some(t => /depois de «Parar por aqui» nunca rodam/.test(t)), av.join("|"));
-  assert.ok(L.avisosEstrutura({ acoes: [tarefa(), { tipo: "esperar", minutos: 60 }, { tipo: "esperar", minutos: 60 }, tarefa()] }).some(t => /duas esperas/.test(t)));
+  // plano 1500c: UCA-111 — o aviso diz QUAIS passos e quanto somam («Os passos 2 e 3 são esperas seguidas (somam 2 h)»)
+  assert.ok(L.avisosEstrutura({ acoes: [tarefa(), { tipo: "esperar", minutos: 60 }, { tipo: "esperar", minutos: 60 }, tarefa()] }).some(t => /passos 2 e 3 são esperas seguidas \(somam 2 h\)/.test(t)));
   assert.ok(L.avisosEstrutura({ gatilho: "tarefa_vencida", acoes: [{ tipo: "esperar", minutos: 60, cancelar_se_cliente_responder: true }, tarefa()] }).some(t => /existe uma conversa/.test(t)));
   assert.ok(L.avisosEstrutura({ acoes: [{ tipo: "ia_decidir", tarefa: "pontuar_lead" }] }).some(t => /cota de IA/.test(t)));
   assert.deepEqual(L.avisosEstrutura({ gatilho: "negocio_criado", acoes: [tarefa(), { tipo: "esperar", minutos: 60 }, tarefa()] }), []);
@@ -668,7 +670,7 @@ test("frasePeriodo: dias da semana em português", () => {
   assert.equal(L.frasePeriodo([1]), "toda segunda");
   assert.equal(L.frasePeriodo([6]), "todo sábado");
   assert.equal(L.frasePeriodo([1, 3, 5]), "às segundas, quartas e sextas");
-  assert.equal(L.frasePeriodo([0, 6]), "aos domingos e sábados");
+  assert.equal(L.frasePeriodo([0, 6]), "aos sábados e domingos");   // plano 1500c: UCA-024 — fim de semana na ordem natural
   assert.equal(L.frasePeriodo([2, 6]), "às terças e aos sábados");
   assert.equal(L.frasePeriodo([]), "(escolha os dias)");
   assert.deepEqual(L.normalizarDias(["3", 1, 3, 8, "x", -1]), [1, 3]);
@@ -677,7 +679,8 @@ test("frasePeriodo: dias da semana em português", () => {
 test("descrever: gatilhos novos, passos novos e sequência com «e depois»", () => {
   const f = (a, v = VOCAB_ODONTO) => L.descrever(a, BASE, v);
   assert.equal(f({ gatilho: "agendado", config: { horario: "09:00", dias_semana: [1, 2, 3, 4, 5], estagio_id: U(13) }, acoes: [{ tipo: "criar_tarefa", titulo: "Retomar", dono: "responsavel", vence_em_horas: 4 }] }),
-    "De segunda a sexta, às 09:00, para cada oportunidade aberta na etapa «Avaliou / orçamento», criar tarefa «Retomar» para o responsável com prazo de 4 h.");
+    // plano 1500c: UCA-121 — com mais de um funil e sem funil escolhido, a frase diz de qual funil é a etapa
+    "De segunda a sexta, às 09:00, para cada oportunidade aberta na etapa «Avaliou / orçamento» (funil «Pacientes»), criar tarefa «Retomar» para o responsável com prazo de 4 h.");
   assert.equal(f({ gatilho: "apos_data", config: { campo: "consulta", horas: 2 }, acoes: [{ tipo: "resolver_conversa" }] }), "2 h depois da consulta, resolver a conversa.");
   assert.equal(f({ gatilho: "apos_data", config: { campo: "consulta", horas: 48 }, acoes: [{ tipo: "resolver_conversa" }] }, VOCAB_OFICINA), "2 dias depois da visita, resolver a conversa.");
   assert.equal(f({ gatilho: "conversa_resolvida", config: { departamento_id: U(51) }, acoes: [{ tipo: "ia_decidir", tarefa: "resumir_nota" }] }),
@@ -930,11 +933,13 @@ test("IA desligada (sem chave): iaDesligada lê as duas formas do servidor e os 
 test("erroAutomacao: o timeout do banco (57014) em Testar/salvar não fala de «período» nem «itens»", () => {
   assert.equal(L.erroAutomacao({ codigo: "tempo_esgotado" }, "Operação grande demais; tente um período menor ou menos itens de uma vez."),
     "O servidor demorou a responder. Tente de novo em instantes.");
-  assert.equal(L.erroAutomacao({ codigo: "sem_permissao" }, "padrão"), "padrão");
+  // plano 1500c: UCA-071 — sem permissão agora diz o que fazer (pedir a um administrador) em vez do texto genérico
+  assert.match(L.erroAutomacao({ codigo: "sem_permissao" }, "padrão"), /Peça a um administrador/);
   assert.equal(L.erroAutomacao(null, "padrão"), "padrão");
-  assert.match(lerApp("auto-editor.js"), /L\.erroAutomacao\(erro, ctx\.api\.mensagemErro\(erro\)\)/, "Testar");
+  // plano 1500c: UCA-071 — o editor passa também os usuários (para «Peça a <administrador>»)
+  assert.match(lerApp("auto-editor.js"), /L\.erroAutomacao\(erro, ctx\.api\.mensagemErro\(erro\), base\.usuarios\)/, "Testar");
   // (revisão 1000b · UB-211: o salvar trata antes o edicao_desatualizada; o resto continua no erroAutomacao)
-  assert.match(lerApp("auto-editor.js"), /: L\.erroAutomacao\(e, ctx\.api\.mensagemErro\(e\)\);/, "salvar");
+  assert.match(lerApp("auto-editor.js"), /: L\.erroAutomacao\(e, ctx\.api\.mensagemErro\(e\), base\.usuarios\);/, "salvar");   // plano 1500c: UCA-071
   assert.match(lerApp("auto-editor.js"), /p_atualizado_em: versao/, "UB-211: manda a versão que estava na tela");
 });
 
@@ -1107,7 +1112,8 @@ test("editor: edição pendente segura a atualização automática, o link do to
   assert.doesNotMatch(ed, /h\("a", \{ class: "au-voltar", href: "#\/automacoes" \}, ui\.icone\("seta-esq"\), "Automações"\),\s*h\("div", \{ class: "au-ed-linha" \}/, "o link puro, sem guarda, saiu");
   // rascunho: grava em toda mudança, some ao salvar e ao descartar, e é oferecido ao abrir
   // plano 1000b: UB-021 — mudou() analisa uma vez e repassa (pintarValidacao(an.ps)); o rascunho continua no fim
-  assert.match(ed, /pintarValidacao\(an\.ps\);\s*pintarTesteCom\(\);\s*guardarRascunho\(\);\s*\}/, "mudou() guarda o rascunho");
+  // plano 1500c: UCA-086 — o rascunho é guardado com espera curta (agendarRascunho) e sai na hora ao fechar/ocultar a aba
+  assert.match(ed, /pintarValidacao\(an\.ps\);\s*pintarTesteCom\(\);\s*agendarRascunho\(\);/, "mudou() guarda o rascunho");
   assert.match(ed, /if \(temPendencia\(\)\) \{ rasc\.guardar\(idRasc, auto\); gravouRascunho = true; \}/);
   assert.match(ed, /salvoJson = JSON\.stringify\(L\.limpar\(salvo\)\);\s*if \(rasc\) rasc\.apagar\(idRasc\);/, "salvou: o rascunho some");
   // plano 1000 · AS-267: a chave do rascunho novo depende da origem (branco/receita/IA) — L.idRascunho, testado em plano1000-automacoes
@@ -1142,7 +1148,8 @@ test("editor: trocar o funil no gatilho refaz a lista de etapas; «criar etiquet
 
 test("execuções: «Cancelar» na linha em espera e «Cancelar todas as esperas» chamam nx_automacao_cancelar_espera depois de confirmar", () => {
   const ed = lerApp("auto-editor.js");
-  assert.match(ed, /podeEditar && contagem\.espera > 0 \? h\("button", \{ type: "button", class: "bt bt-sec bt-p" \}, ui\.icone\("parar"\), "Cancelar todas as esperas"\)/, "só quem edita e só com espera");
+  // plano 1500c: UCA-056 — conta também as esperas que o servidor sabe (item.em_espera), não só as carregadas na tela
+  assert.match(ed, /podeEditar && Math\.max\(Number\(item\.em_espera\) \|\| 0, contagem\.espera\) > 0 \? h\("button", \{ type: "button", class: "bt bt-sec bt-p" \}, ui\.icone\("parar"\), "Cancelar todas as esperas"\)/, "só quem edita e só com espera");
   assert.match(ed, /podeEditar && sit === "espera" && x\.chave \? h\("button"/, "o botão da linha só nas que estão em espera");
   assert.match(ed, /async function cancelarEspera\(x, botao\) \{\s*const ok = await ui\.confirmar\([\s\S]*?if \(!ok\) return;[\s\S]*?ctx\.api\.rpcC\("nx_automacao_cancelar_espera", \{ p_id: item\.id, p_chave: x \? x\.chave : null \}\)/, "confirma antes; p_chave nulo = todas");
   // a RPC existe no banco com esses parâmetros e devolve quantas cancelou

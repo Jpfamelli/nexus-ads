@@ -14,7 +14,7 @@
 // publicada e uma mudança de versão maior quebrava sugerir/resumir/automações sem nenhuma linha do repositório mudar.
 // Trocar a versão = rodar a suíte e o deno check com a nova antes da tag.
 import Anthropic from "npm:@anthropic-ai/sdk@0.131.0";
-import { MODELO_PADRAO, COM_RESERVA, SEM_EFFORT } from "./comum.js";
+import { MODELO_PADRAO, MODELOS_TAREFA, COM_RESERVA, SEM_EFFORT } from "./comum.js";
 
 const BETA_RESERVA = "server-side-fallback-2026-07-01";
 
@@ -65,6 +65,31 @@ async function chamar(client, model, pedido) {
   } catch (e) { throw erroDaApi(e); }
 }
 
+/** plano 1500c · SC-089: teto padrão de quem não informa (antes 4000); acima disso, só pedindo explicitamente. */
+export const MAX_TOKENS_PADRAO = 1000;
+/** plano 1500c · SC-204: teto da 2ª tentativa quando a 1ª gastou tudo pensando e não devolveu texto. */
+export const MAX_TOKENS_REPETIR = 4000;
+
+/** plano 1500c · SC-204: os modelos 5.5 pensam por padrão — com teto baixo a resposta pode vir SÓ com pensamento (stop_reason
+    max_tokens, nenhum bloco de texto). Uma 2ª tentativa, com effort low e o dobro do teto (até MAX_TOKENS_REPETIR); os tokens
+    somam as duas (as duas são cobradas) e o ms também. */
+export function precisaRepetir(resp, pedido) {
+  return resp?.stop_reason === "max_tokens" && !textoDe(resp) && Number(pedido?.max_tokens) < MAX_TOKENS_REPETIR;
+}
+async function chamarComTexto(client, model, pedido) {
+  const r1 = await chamar(client, model, pedido);
+  if (!precisaRepetir(r1.resp, pedido)) return r1;
+  const novo = { ...pedido, max_tokens: Math.min(Math.max(pedido.max_tokens * 2, 1000), MAX_TOKENS_REPETIR) };
+  if (!SEM_EFFORT.test(model)) novo.output_config = { ...(pedido.output_config || {}), effort: "low" };
+  const r2 = await chamar(client, model, novo);
+  const usage = { ...(r2.resp.usage || {}) };
+  for (const k of ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]) {
+    const a = r1.resp.usage?.[k], b = r2.resp.usage?.[k];
+    if (Number.isFinite(a) || Number.isFinite(b)) usage[k] = (Number(a) || 0) + (Number(b) || 0);
+  }
+  return { resp: { ...r2.resp, usage }, ms: r1.ms + r2.ms };
+}
+
 const textoDe = resp => (resp.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
 const tokens = (resp, k) => (Number.isFinite(resp.usage?.[k]) ? resp.usage[k] : null);
 function erroRecusa(resp) {
@@ -93,7 +118,7 @@ export const MAX_TOKENS_LEITURA = 1500;
 /** Como leituraIA, mas devolve também o uso — plano 1000 (SV-063): o relatório fecha a reserva de IA com os tokens
     ({texto, modelo, tokens_in, tokens_out, tokens_cache_escrita, tokens_cache_leitura, stop_reason, ms}). */
 export async function leituraIACompleta({ chave, modelo, tipo = "diario", contexto, prazoMs = 60_000, esforco }) {
-  const model = modelo || MODELO_PADRAO;
+  const model = modelo || MODELOS_TAREFA[tipo] || MODELO_PADRAO;   // plano 1500c · SC-087: diário no Haiku, mensal no Sonnet
   // A Edge Function tem teto de tempo de parede: 1 retentativa de 60 s no máximo. Com prazo menor (o relatório dá ~25 s por
   // cliente) a chamada é CORTADA no prazo e sem retentativa: antes o relatório desistia da leitura e o SDK seguia pagando.
   const curto = Number.isFinite(prazoMs) && prazoMs > 0 && prazoMs < 60_000;
@@ -105,7 +130,7 @@ export async function leituraIACompleta({ chave, modelo, tipo = "diario", contex
     messages: [{ role: "user", content: JSON.stringify(contexto) }],
   };
   if (!SEM_EFFORT.test(model)) pedido.output_config = { effort: esforco || (tipo === "mensal" ? "medium" : "low") };
-  const { resp, ms } = await chamar(client, model, pedido);
+  const { resp, ms } = await chamarComTexto(client, model, pedido);   // plano 1500c · SC-204
   if (resp.stop_reason === "refusal") throw erroRecusa(resp);
   const texto = textoDe(resp);
   if (!texto) throw new Error(`a IA não devolveu texto (stop_reason: ${resp.stop_reason})`);
@@ -135,7 +160,7 @@ export async function leituraIACompleta({ chave, modelo, tipo = "diario", contex
  * @returns {Promise<{texto: string, modelo: string, tokens_in: number|null, tokens_out: number|null, stop_reason: string|null, ms: number}>}
  *          lança erro (com .status/.conexao/.recusa/.incompleta) em falha da API ou recusa — quem chama traduz (traduzirErroIA)
  */
-export async function perguntarClaude({ chave, modelo, sistema, blocos, usuario, maxTokens = 4000, esforco = "low", timeoutMs = 45_000, retentativas = 1 }) {
+export async function perguntarClaude({ chave, modelo, sistema, blocos, usuario, maxTokens = MAX_TOKENS_PADRAO, esforco = "low", timeoutMs = 45_000, retentativas = 1 }) {
   const model = modelo || MODELO_PADRAO;
   // o atendente está esperando: uma retentativa curta no máximo
   const client = new Anthropic({ apiKey: chave, timeout: timeoutMs, maxRetries: retentativas });
@@ -146,7 +171,7 @@ export async function perguntarClaude({ chave, modelo, sistema, blocos, usuario,
     messages: [{ role: "user", content: usuario }],
   };
   if (!SEM_EFFORT.test(model)) pedido.output_config = { effort: esforco };
-  const { resp, ms } = await chamar(client, model, pedido);
+  const { resp, ms } = await chamarComTexto(client, model, pedido);   // plano 1500c · SC-204
   if (resp.stop_reason === "refusal") throw erroRecusa(resp);
   const texto = textoDe(resp);
   if (!texto) {
@@ -186,7 +211,7 @@ export async function perguntarClaude({ chave, modelo, sistema, blocos, usuario,
  * @param {number} [o.retentativas] retentativas do SDK em 408/429/5xx/rede (padrão 1)
  * @returns {Promise<{json: object, texto: string, modelo: string, tokens_in: number|null, tokens_out: number|null, stop_reason: string|null, ms: number}>}
  */
-export async function estruturarClaude({ chave, modelo, sistema, blocos, usuario, schema, maxTokens = 4000, esforco = "low", timeoutMs = 45_000, retentativas = 1 }) {
+export async function estruturarClaude({ chave, modelo, sistema, blocos, usuario, schema, maxTokens = MAX_TOKENS_PADRAO, esforco = "low", timeoutMs = 45_000, retentativas = 1 }) {
   const model = modelo || MODELO_PADRAO;
   // timeout × (retentativas + 1) tem de caber no teto de tempo da Edge Function (~150 s)
   const client = new Anthropic({ apiKey: chave, timeout: timeoutMs, maxRetries: retentativas });

@@ -246,12 +246,16 @@ export async function montarContatos(k, el, rota) {
       S.total = r.total;
       S.ultima = Date.now();
       const n = r.total != null ? r.total : r.total_aprox;
-      sub.textContent = n != null ? `${ui.num(n)}${r.total == null ? "+" : ""} ${n === 1 ? k.v.min("contato") : k.v.min("contatos")}` : "";
+      // plano 1500c · RC-113: com filtro, o total diz que é do filtro («32 pacientes com o filtro») — dá para ver se o filtro pegou
+      const comFiltro = !L.filtroVazio(S.filtro);
+      sub.textContent = n != null ? `${ui.num(n)}${r.total == null ? "+" : ""} ${n === 1 ? k.v.min("contato") : k.v.min("contatos")}${comFiltro ? " com o filtro" : ""}` : "";
       ui.limpar(corpo);
       if (!r.itens.length && L.filtroVazio(S.filtro) && S.pagina === 1) {
         const fem = k.v.art("contato") === "a";
+        // plano 1500c · RC-102: sem o módulo Conversas não promete «entram sozinhos pelo WhatsApp»
+        const temConv = !!(ctx && typeof ctx.temModulo === "function" && ctx.temModulo("conversas"));
         corpo.appendChild(ui.vazio({ titulo: `${k.v.nenhum("contato")} ainda.`, tema: "crm",
-          texto: `${fem ? "Elas entram sozinhas" : "Eles entram sozinhos"} pelo WhatsApp ou pela importação de planilha.`,
+          texto: temConv ? `${fem ? "Elas entram sozinhas" : "Eles entram sozinhos"} pelo WhatsApp ou pela importação de planilha.` : `Cadastre ${fem ? "a primeira" : "o primeiro"} ou importe uma planilha.`,
           acao: k.pode("atendente") ? { rotulo: k.v.novo("contato"), fn: novoContato } : null,
           acoes: k.pode("supervisor") ? [{ rotulo: "Importar planilha", fn: () => ctx.navegar("#/contatos/importar") }] : [] }));
         ui.limpar(pag);
@@ -377,6 +381,7 @@ export async function montarContatos(k, el, rota) {
       aoMudar: id => { f.dono = id || undefined; if (segDono) for (const b of segDono.children) b.setAttribute("aria-pressed", String(!id && b.textContent === "Todos")); } });
     const de = h("input", { type: "date", "aria-label": "Cadastrados de", value: f.criado_de || "" });
     const ate = h("input", { type: "date", "aria-label": "Cadastrados até", value: f.criado_ate || "" });
+    const erroData = h("small", { class: "ed-erro crm-filtros-erro", role: "alert", id: `crm-fd-${Math.random().toString(36).slice(2, 8)}`, hidden: true });     // plano 1500c · RC-323
     // empresa (busca no servidor; escolhe uma)
     let empresa = f.empresa_id ? { id: f.empresa_id, nome: f.empresa_nome } : null;
     const empBusca = h("input", { type: "search", placeholder: "Buscar empresa", "aria-label": "Buscar empresa", autocomplete: "off" });
@@ -429,7 +434,7 @@ export async function montarContatos(k, el, rota) {
       // plano 1000b · RB-098: «Não querem marketing» também se liga aqui (antes só chegava por filtro salvo antigo; o servidor já filtra)
       h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Marketing"),
         seg([["", "Tanto faz"], ["nao", "Não querem"]], f.optin_marketing === false ? "nao" : "", v => { f.optin_marketing = v === "nao" ? false : undefined; }, "Marketing")),
-      h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Cadastrados entre"), h("div", { class: "crm-filtros-linha" }, de, ate)),
+      h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Cadastrados entre"), h("div", { class: "crm-filtros-linha" }, de, ate), erroData),
       h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Empresa"), empEsc, empBusca, empRes),
       grupoCampo ? grupoCampo.el : null,
       h("div", { class: "crm-filtros-rod" }, pendTxt, limpar, aplicar));
@@ -442,7 +447,7 @@ export async function montarContatos(k, el, rota) {
       if (typeof f.tem_negocio_aberto === "boolean") nf.tem_negocio_aberto = f.tem_negocio_aberto;
       if (de.value) nf.criado_de = de.value;
       if (ate.value) nf.criado_ate = ate.value;
-      if (de.value && ate.value && de.value > ate.value) return { erro: "A data inicial precisa ser anterior ou igual à final.", foco: de };
+      if (de.value && ate.value && de.value > ate.value) return { erro: "A data inicial precisa ser anterior ou igual à final.", foco: de, data: true };     // plano 1500c · RC-323
       if (empresa) { nf.empresa_id = empresa.id; nf.empresa_nome = empresa.nome; }
       if (f.optin_marketing === false) nf.optin_marketing = false;      // plano 1000b · RB-098: vem do segmento «Marketing»
       if (grupoCampo) { const c = grupoCampo.ler(); if (c.erro) return { erro: c.erro }; if (c.campo) nf.campo = c.campo; }
@@ -470,7 +475,14 @@ export async function montarContatos(k, el, rota) {
     limpar.addEventListener("click", () => { resolvido = true; const b = S.filtro.busca; S.filtro = b ? { busca: b } : {}; S.pagina = 1; gravar(); pop.fechar(); carregar(); });
     aplicar.addEventListener("click", () => {
       const r = lerNovo();
-      if (!r.nf) { ui.toast(r.erro, { tipo: "erro" }); if (r.foco) r.foco.focus(); return; }
+      // plano 1500c · RC-323: período invertido mostra o erro junto das datas
+      for (const x of [de, ate]) x.removeAttribute("aria-invalid");
+      erroData.hidden = true; erroData.textContent = "";
+      if (!r.nf) {
+        if (r.data) { erroData.textContent = r.erro; erroData.hidden = false; for (const x of [de, ate]) { x.setAttribute("aria-invalid", "true"); x.setAttribute("aria-describedby", erroData.id); } }
+        else ui.toast(r.erro, { tipo: "erro" });
+        if (r.foco) r.foco.focus(); return;
+      }
       resolvido = true;
       S.filtro = r.nf; S.pagina = 1; gravar(); pop.fechar(); carregar();
     });
@@ -591,7 +603,7 @@ export function listaCompacta(k, { aoMudar, aoAbrir, textoVazio = null }) {
     try {
       if (id === "tarefa") {
         const T = await k.mod("tarefas");
-        const t = await T.formTarefa(k, null, { contato_id: c.id });
+        const t = await T.formTarefa(k, null, { contato_id: c.id, ...(c.dono_id != null ? { dono_id: c.dono_id } : {}) /* plano 1500c · RC-240 */ });
         if (t) ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 });
       } else if (id === "negocio") {
         const N = await k.mod("negocio");
@@ -603,7 +615,8 @@ export function listaCompacta(k, { aoMudar, aoAbrir, textoVazio = null }) {
   function linha(c) {
     const nome = L.nomeContato(c);
     // plano 1000b · RB-096: o subtítulo é sempre telefone · cidade · último contato; «Não quer marketing» é uma pílula à parte (não troca de lugar com a origem)
-    const sub = [c.telefone ? ui.telBR(c.telefone) : null, c.cidade, c.ultimo_contato_em ? `último contato ${ui.relativo(c.ultimo_contato_em)}` : null].filter(Boolean).join(" · ");      // plano 1000b · RB-215: diz do quê
+    // plano 1500c · RC-105: sem telefone, o e-mail no 1º lugar (o contato não fica sem nenhum meio de contato na linha)
+    const sub = [c.telefone ? ui.telBR(c.telefone) : c.email || null, c.cidade, c.ultimo_contato_em ? `último contato ${ui.relativo(c.ultimo_contato_em)}` : null].filter(Boolean).join(" · ");      // plano 1000b · RB-215: diz do quê
     const pilOptin = c.optin_marketing === false ? ui.pilula("Não quer marketing", "aten", { class: "ct-optin", tamanho: "p" }) : null;
     const etq = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean)[0];
     // C4: anúncio (com a plataforma) vence; depois a 1ª etiqueta; senão a origem — sempre a pílula padrão de origem
@@ -618,7 +631,9 @@ export function listaCompacta(k, { aoMudar, aoAbrir, textoVazio = null }) {
         h("span", { class: "ct-txt" }, h("b", { class: "ct-nome" }, nome), sub ? h("small", { class: "ct-sub" }, sub) : null, pil, pilOptin)),
       h("div", { class: "ct-bts" },
         A.botoes.includes("ligar") ? h("a", { class: "bt-icone ct-bt", href: L.hrefTel(c.telefone), "aria-label": `Ligar para ${nome}`, title: "Ligar" }, ui.icone("telefone")) : null,
-        A.botoes.includes("conversa") ? h("a", { class: "bt-icone ct-bt", href: `#/conversas?contato=${c.id}`, "aria-label": `Abrir conversa com ${nome}`, title: "Abrir conversa" }, ui.icone("whatsapp")) : null,
+        A.botoes.includes("conversa") ? h("a", { class: "bt-icone ct-bt", href: `#/conversas?contato=${c.id}`, "aria-label": `Abrir conversa com ${nome}`, title: "Abrir conversa" }, ui.icone("whatsapp"))
+          // plano 1500c · RC-106: só com o CRM (sem o módulo Conversas) o WhatsApp do contato abre direto no wa.me
+          : !comConversas && L.hrefWhatsApp(c.telefone) ? h("a", { class: "bt-icone ct-bt ct-wa", href: L.hrefWhatsApp(c.telefone), target: "_blank", rel: "noopener", "aria-label": `Abrir ${nome} no WhatsApp`, title: "Abrir no WhatsApp" }, ui.icone("whatsapp")) : null,
         mais));
     const fundo = (lado, id) => id ? h("div", { class: `ct-fundo ct-fundo-${lado}`, "aria-hidden": "true" }, ui.icone(ROT[id][1]), h("span", null, FUNDO[id])) : null;
     const li = h("li", { class: "ct-li", dataset: { id: c.id } }, fundo("d", A.direita), fundo("e", A.esquerda), frente);
@@ -631,6 +646,16 @@ export function listaCompacta(k, { aoMudar, aoAbrir, textoVazio = null }) {
     atualizar(itens) {
       ui.limpar(raiz);
       if (!itens.length) { raiz.appendChild(ui.vazio({ tipo: "sem_resultado", titulo: textoVazio ? textoVazio() : "Nada encontrado com esses filtros." })); return; }   // plano 1000b · RB-213
+      // plano 1500c · RC-116: dica única do gesto (como a do quadro, CR-270) — some no «Entendi» e não volta neste aparelho
+      const CHAVE_DICA = "nx-app-ct-dica-deslizar";
+      let mostrarDica = false;
+      try { mostrarDica = pode && !!(globalThis.matchMedia && globalThis.matchMedia("(pointer: coarse)").matches) && localStorage.getItem(CHAVE_DICA) !== "1"; } catch { /* ok */ }
+      if (mostrarDica) {
+        const dica = h("p", { class: "aviso ct-dica-deslizar", role: "note" }, ui.icone("info"),
+          h("span", null, `Deslize ${k.v.art("contato") === "a" ? "a" : "o"} ${k.v.min("contato")} para a direita para criar uma tarefa, ou para a esquerda para ${k.v.novo("negocio").toLowerCase()}.`),
+          h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { dica.remove(); try { localStorage.setItem(CHAVE_DICA, "1"); } catch { /* ok */ } } } }, "Entendi"));
+        raiz.appendChild(dica);
+      }
       raiz.appendChild(h("ul", { class: "ct-lista", role: "list", "aria-label": k.v.contatos }, itens.map(linha)));
     },
   };
@@ -674,7 +699,7 @@ export async function formContato(k, { nome = "", telefone = "" } = {}) {
         ui.marcarErro(form, null);
         const d = ui.lerForm(form);
         if (!d.nome && !d.telefone && !d.email) { ui.marcarErro(form, "nome", "Informe o nome, o telefone ou o e-mail."); return false; }
-        if (d.telefone && !L.normalizarTelefone(d.telefone)) { ui.marcarErro(form, "telefone", "Telefone inválido. Use DDD + número."); return false; }
+        if (d.telefone && !L.normalizarTelefone(d.telefone)) { ui.marcarErro(form, "telefone", L.textoTelefoneInvalido(d.telefone)); return false; }      // plano 1500c · RC-098
         // plano 1000b · RB-054: a mesma conferência da ficha antes de ir ao servidor
         if (d.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(d.email).trim())) { ui.marcarErro(form, "email", "E-mail inválido. Confira, por exemplo: ana@exemplo.com.br."); return false; }
         const { valores, erros } = N.lerCamposPersonalizados(k, form, campos);
@@ -692,8 +717,14 @@ export async function formContato(k, { nome = "", telefone = "" } = {}) {
           status.hidden = true;
           if (e && e.ambigua) { api.erro("Não foi possível confirmar se foi salvo. Toque em «Cadastrar» de novo: é seguro, não duplica."); return false; }
           if (e && e.codigo === "telefone_em_uso" && /^\d+$/.test(String(e.hint || ""))) {
-            api.erro(`${k.erro(e)} Abrindo o cadastro existente…`);
-            setTimeout(() => { api.fechar(null); k.ctx.navegar(`#/contatos/${e.hint}`); }, 900);
+            // plano 1500c · RC-107: não navega sozinho (o que foi digitado se perdia) — a pessoa escolhe: abrir o existente ou corrigir o telefone
+            api.erro(k.erro(e));
+            const velho = form.querySelector(".ct-em-uso");
+            if (velho) velho.remove();
+            const campoTel = form.querySelector("[name=telefone]");
+            form.appendChild(h("div", { class: "linha ct-em-uso", role: "group", "aria-label": "Telefone já cadastrado" },
+              h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { api.fechar(null); k.ctx.navegar(`#/contatos/${e.hint}`); } } }, "Abrir cadastro existente"),
+              h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { if (campoTel) { campoTel.focus(); if (campoTel.select) campoTel.select(); } } } }, "Corrigir telefone")));
             return false;
           }
           api.erro(k.erro(e)); return false;
@@ -803,13 +834,17 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
     const nomeH = h(gaveta ? "h2" : "h1", { class: "fx-nome" }, L.nomeContato(c));      // plano 1000b · RB-208: na gaveta é h2 (ela já tem título)
     const menuBt = h("button", { type: "button", class: "bt-icone", "aria-label": "Mais ações" }, ui.icone("opcoes"));
     const novoNeg = () => N.novoNegocio(k, { contato_id: c.id }, { aoCriar: () => carregar({ silencioso: true }) });
-    const novaTar = async () => { const t = await T.formTarefa(k, null, { contato_id: c.id }); if (t) { ui.toast("Tarefa criada.", { tipo: "ok" }); carregar({ silencioso: true }); } };
+    const novaTar = async () => { const t = await T.formTarefa(k, null, { contato_id: c.id, ...(c.dono_id != null ? { dono_id: c.dono_id } : {}) /* plano 1500c · RC-240 */ }); if (t) { ui.toast("Tarefa criada.", { tipo: "ok" }); carregar({ silencioso: true }); } };
     menuBt.addEventListener("click", () => ui.menu(menuBt, [
       // plano 1000 (CR-228): no celular a ação principal fica à vista e «+ Oportunidade» / «+ Tarefa» moram aqui (os botões quebravam em 3 linhas a 360 px)
       pode && pequena() ? { rotulo: k.v.novo("negocio"), icone: "funil", fn: novoNeg } : null,
       pode && pequena() ? { rotulo: "Nova tarefa", icone: "tarefa", fn: novaTar } : null,
       pode && pequena() ? "-" : null,
       c.telefone ? { rotulo: "Copiar telefone", icone: "copiar", fn: () => ui.copiar(ui.telBR(c.telefone)) } : null,
+      // plano 1500c · RC-111: o formato internacional (+5512998303030) para colar em outro sistema ou no WhatsApp Web
+      c.telefone && L.telInternacional(c.telefone) ? { rotulo: "Copiar no formato internacional", icone: "copiar", fn: () => ui.copiar(L.telInternacional(c.telefone)) } : null,
+      // plano 1500c · RC-106: só com o CRM (sem Conversas), o WhatsApp do contato abre no wa.me
+      c.telefone && !(ctx.temModulo && ctx.temModulo("conversas")) && L.hrefWhatsApp(c.telefone) ? { rotulo: "Abrir no WhatsApp", icone: "whatsapp", fn: () => { try { window.open(L.hrefWhatsApp(c.telefone), "_blank", "noopener"); } catch { /* ok */ } } } : null,
       // plano 1000 (CR-263): o e-mail também se copia daqui
       c.email ? { rotulo: "Copiar e-mail", icone: "copiar", fn: () => ui.copiar(c.email) } : null,
       // plano 1000b · RB-045: sem linkPublico, o endereço DA FICHA (aberta na gaveta, location.href era o da tela de trás)
@@ -823,20 +858,25 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
     const cab = h("section", { class: "fx-cab", "aria-label": "Identificação" },
       ui.avatar(c.nome || c.telefone, c.id),
       h("div", { class: "fx-id" }, nomeH,
+        // plano 1500c · RC-103/104/118: telefone liga (tel:) e e-mail escreve (mailto:) com um toque; ícones decorativos e rótulo para o leitor
         h("p", null,
-          c.telefone ? h("span", null, ui.icone("telefone"), h("span", { class: "mono" }, ui.telBR(c.telefone))) : null,
-          c.email ? h("span", null, ui.icone("enviar"), c.email) : null,
-          c.cidade ? h("span", null, ui.icone("globo"), `${c.cidade}${c.uf ? `/${c.uf}` : ""}`) : null),
+          c.telefone ? h("span", null, h("span", { "aria-hidden": "true" }, ui.icone("telefone")), h("span", { class: "sr-only" }, "Telefone: "),
+            L.hrefTel(c.telefone) ? h("a", { class: "mono fx-tel", href: L.hrefTel(c.telefone), "aria-label": `Ligar para ${ui.telBR(c.telefone)}` }, ui.telBR(c.telefone)) : h("span", { class: "mono" }, ui.telBR(c.telefone))) : null,
+          c.email ? h("span", null, h("span", { "aria-hidden": "true" }, ui.icone("enviar")), h("span", { class: "sr-only" }, "E-mail: "),
+            h("a", { class: "fx-email", href: `mailto:${c.email}`, "aria-label": `Escrever para ${c.email}` }, c.email)) : null,
+          c.cidade ? h("span", null, h("span", { "aria-hidden": "true" }, ui.icone("globo")), h("span", { class: "sr-only" }, "Cidade: "), `${c.cidade}${c.uf ? `/${c.uf}` : ""}`) : null),
         h("div", { class: "linha", style: { gap: ".35rem" } },
           // plano 1000 (CR-101): a mesma pílula de origem da lista e do quadro («Anúncio · Google», «WhatsApp»…)
           (() => { const o = L.origemPilula(c); return o ? ui.pilula(null, o.chave, { variante: "origem", plataforma: o.plataforma, class: "fx-origem" }) : null; })(),
           c.optin_marketing === false ? ui.pilula("Não quer marketing", "aten", { icone: "alerta" }) : null,
           // plano 1000 (CR-225): aniversário nos próximos 7 dias (ou hoje) no cabeçalho — a data era guardada e não aparecia
           aniv ? ui.pilula(aniv.texto, aniv.dias === 0 ? "ok" : "info", { icone: "calendario", class: "fx-aniv" }) : null,
+          // plano 1500c · RC-117: o que o cliente já fechou (LTV) — dos negócios ganhos que a ficha já traz
+          (() => { const tg = L.totalGanho(d.negocios); return tg.n ? ui.pilula(`Total ganho ${ui.brl(tg.valor, { centavos: false })} em ${tg.n} ${tg.n === 1 ? k.v.min("negocio") : k.v.min("negocios")}`, "ok", { class: "fx-ltv" }) : null; })(),
           c.bloqueado ? ui.pilula("Bloqueado", "ruim", { title: "Não recebe mensagens" }) : null),
         // plano 1000 (CR-261): o que «Bloqueado» quer dizer e onde desfazer
         c.bloqueado ? h("p", { class: "aviso aviso-ruim fx-bloqueado", role: "note" }, ui.icone("alerta"),
-          h("span", null, `Bloquead${k.v.art("contato")}: não recebe mensagens nem automações e as mensagens que mandar não abrem atendimento. `,
+          h("span", null, `Bloquead${k.v.art("contato")}${L.textoBloqueio(c, { usuario: k.usuario, data: x => (ui.dataCurtaBR ? ui.dataCurtaBR(x) : ui.dataBR(x)) })}: não recebe mensagens nem automações e as mensagens que mandar não abrem atendimento. `,      // plano 1500c · RC-315
             k.pode("supervisor") && ctx.temModulo && ctx.temModulo("conversas")
               ? h("a", { class: "link", href: conv ? `#/conversas/${conv.id}` : `#/conversas?contato=${c.id}` }, "Desbloquear na conversa")
               : "Para desbloquear, peça a um supervisor (na conversa, botão «Desbloquear»).")) : null),
@@ -845,7 +885,8 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
           if (gaveta) gaveta.fechar();
           ctx.navegar(conv ? `#/conversas/${conv.id}` : `#/conversas?contato=${c.id}`);
         } } }, ui.icone("whatsapp"), "Abrir conversa") : null,
-        pode ? h("button", { type: "button", class: "bt bt-sec fx-ac-sec", on: { click: novoNeg } }, ui.icone("mais"), k.v.novo("negocio")) : null,
+        // plano 1500c · RC-331: sem o módulo Conversas o topo não fica sem ação à vista — «Nova oportunidade» vira a principal (não desce ao ⋮ no celular)
+        pode ? h("button", { type: "button", class: ["bt", ctx.temModulo && ctx.temModulo("conversas") ? "bt-sec fx-ac-sec" : "bt-prim fx-ac-principal"], on: { click: novoNeg } }, ui.icone("mais"), k.v.novo("negocio")) : null,
         pode ? h("button", { type: "button", class: "bt bt-sec fx-ac-sec", on: { click: novaTar } }, ui.icone("tarefa"), "Tarefa") : null,
         menuBt));
 
@@ -883,12 +924,18 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
         validar: x => (x.value && x.value > (ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10)) ? "A data de nascimento não pode ser no futuro." : null),
         salvar: v => salvar({ nascimento: v }) }),
       ...N.linhaEd(k, { rotulo: "Cidade", desabilitado: !pode, controle: inp("text", c.cidade, { maxlength: 80 }), ler: x => x.value.trim() || null, salvar: v => salvar({ cidade: v }) }),
-      ...N.linhaEd(k, { rotulo: "UF", desabilitado: !pode, controle: inp("text", c.uf, { maxlength: 2, style: { "text-transform": "uppercase", "max-width": "6rem" } }), ler: x => x.value.trim().toUpperCase() || null, salvar: v => salvar({ uf: v }),
-        validar: x => (x.value.trim() && !L.ufValida(x.value) ? "UF deve ter 2 letras de um estado (ex.: SP)." : null) }),     // plano 1000b · RB-074: «XX» não passa
+      // plano 1500c · RC-109: UF num select das 27 siglas (no celular digitar errava); a validação continua (valor antigo fora da lista aparece)
+      ...N.linhaEd(k, { rotulo: "UF", desabilitado: !pode, controle: h("select", { class: "fx-uf" }, h("option", { value: "" }, "—"),
+          c.uf && !L.UFS.includes(String(c.uf).toUpperCase()) ? h("option", { value: c.uf, selected: true }, c.uf) : null,
+          L.UFS.map(u => h("option", { value: u, selected: String(c.uf || "").toUpperCase() === u }, u))),
+        ler: x => String(x.value || "").trim().toUpperCase() || null, salvar: v => salvar({ uf: v }),
+        validar: x => (String(x.value || "").trim() && !L.ufValida(x.value) ? "UF deve ter 2 letras de um estado (ex.: SP)." : null) }),     // plano 1000b · RB-074: «XX» não passa
       // plano 1000 (CR-095): ligar o contato a uma empresa pela ficha (nx_contato_salvar já aceita empresa_id) — busca, link e «Tirar da empresa»
       campoEmpresa(),
       ...N.linhaEd(k, { rotulo: "Responsável", desabilitado: !pode,
-        controle: h("select", null, h("option", { value: "" }, "Sem responsável"), k.base.usuarios.map(u => h("option", { value: u.id, selected: u.id === c.dono_id }, u.nome))),
+        // plano 1500c · RC-108: responsável desativado aparece marcado («Ana (desativado)»), não «Sem responsável»
+        controle: h("select", null, h("option", { value: "", selected: !c.dono_id }, "Sem responsável"),
+          L.opcoesResponsavel(k.base.usuarios, c.dono_id, c.dono_nome).map(o => h("option", { value: o.valor, selected: String(o.valor) === String(c.dono_id) }, o.rotulo))),
         ler: x => x.value || null, salvar: v => salvar({ dono_id: v }) }),
       // plano 1000 (CR-046): sem origem gravada, a ficha diz isso (antes mostrava «Anúncio», a 1ª opção) e nada é gravado até escolherem
       ...N.linhaEd(k, { rotulo: "Origem", desabilitado: !pode || !!c.plataforma,
@@ -907,7 +954,7 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
       const antes = (c.etiquetas || []).slice();
       const nomeDe = id => (k.etiqueta(id) || {}).nome || "etiqueta";
       const mais = ids.filter(i => !antes.includes(i)), menos = antes.filter(i => !ids.includes(i));
-      const texto = mais.length ? `Etiqueta «${nomeDe(mais[0])}» adicionada` : menos.length ? `Etiqueta «${nomeDe(menos[0])}» removida` : "Etiquetas atualizadas";
+      const texto = (L.textoEtiquetasMudaram && L.textoEtiquetasMudaram(mais.map(nomeDe), menos.map(nomeDe))) || "Etiquetas atualizadas";      // plano 1500c · RC-093
       try { await salvar({ etiquetas: ids }); }
       catch (e) { k.toastErro(e); montarEtq(antes); return; }
       ui.acaoComDesfazer({ texto, reverter: async () => {
@@ -1026,7 +1073,7 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
           h("div", { class: "fx-col" }, blocoOrigem, blocoRfm, blocoNeg, blocoConv, blocoTar, blocoNotas, blocoTempo)))].filter(Boolean));
 
     async function registrarOptin() {
-      const nome = `opt-${Date.now()}`;
+      const nome = L.idUnico ? L.idUnico("opt") : `opt-${Date.now()}`;      // plano 1500c · RC-090
       const form = h("form", { class: "crm-form", novalidate: true },
         h("div", { class: "crm-motivos", role: "radiogroup", "aria-label": "Autorização" },
           // plano 1000b · RB-110 (LGPD): sem registro (optin null) nenhuma opção nasce marcada — a escolha tem de ser ativa
@@ -1097,7 +1144,7 @@ export function baixarDadosTitular(k, d) {
   // plano 1000b · RB-111: o histórico sai em frases (sem ids da equipe) — com o vocabulário e os motivos da conta
   const dados = L.dadosTitular(d, { geradoEm: new Date().toISOString(), vocab: k.v, brl: v => ui.brl(v), motivos: k.motivosPorId ? k.motivosPorId() : {} });
   if (!dados) { ui.toast("Não há dados deste cadastro para baixar.", { tipo: "info" }); return null; }
-  const nome = `dados-titular-${String(dados.cadastro.id)}-${ui.hojeSP()}.json`;
+  const nome = L.nomeArquivoTitular ? L.nomeArquivoTitular(dados.cadastro, ui.hojeSP()) : `dados-titular-${String(dados.cadastro.id)}-${ui.hojeSP()}.json`;      // plano 1500c · RC-320
   const baixar = (arq, conteudo, tipo) => {
     const url = URL.createObjectURL(new Blob([conteudo], { type: tipo }));
     const a = h("a", { href: url, download: arq, hidden: true });
@@ -1107,7 +1154,8 @@ export function baixarDadosTitular(k, d) {
   baixar(nome, JSON.stringify(dados, null, 2), "application/json;charset=utf-8");
   // plano 1000b · RB-263: junto do JSON (técnico, completo) vai um .txt legível para a própria pessoa (seções com título)
   const nomeTxt = nome.replace(/\.json$/, ".txt");
-  baixar(nomeTxt, String.fromCharCode(0xFEFF) + `${L.textoTitular(dados, { data: v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? ui.dataBR(v) : ui.dataHoraBR(v)), brl: v => ui.brl(v), vocab: k.v })}`, "text/plain;charset=utf-8");
+  baixar(nomeTxt, String.fromCharCode(0xFEFF) + `${L.textoTitular(dados, { data: v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? ui.dataBR(v) : ui.dataHoraBR(v)), brl: v => ui.brl(v), vocab: k.v,
+    campos: (k.base && k.base.campos) || [], empresaConta: (k.ctx && k.ctx.cliente && (k.ctx.cliente.nome || k.ctx.cliente.nome_fantasia)) || null })}`, "text/plain;charset=utf-8");      // plano 1500c · RC-024/319
   ui.toast("Arquivos com os dados do titular baixados (um legível .txt e o completo .json). Envie só para a própria pessoa.", { tipo: "ok" });
   return nome;
 }
@@ -1126,14 +1174,16 @@ export function cartaoEmpresa(k, e) {
       h("span", { class: "emp-txt" }, h("b", { class: "emp-nome" }, e.nome || "Empresa"), h("small", null, sub || "Sem documento nem cidade"))),
     h("div", { class: "emp-nums" },
       h("span", { class: "emp-num" }, h("b", { class: "dado" }, ui.num(nCt)), h("small", null, nCt === 1 ? k.v.min("contato") : k.v.min("contatos"))),
-      h("span", { class: ["emp-num", abertos > 0 && "tem"] }, h("b", { class: "dado" }, ui.num(abertos)), h("small", null, `${abertos === 1 ? k.v.min("negocio") : k.v.min("negocios")} abert${k.v.art("negocio")}${abertos === 1 ? "" : "s"}`))),
+      h("span", { class: ["emp-num", abertos > 0 && "tem"] }, h("b", { class: "dado" }, ui.num(abertos)), h("small", null, `${abertos === 1 ? k.v.min("negocio") : k.v.min("negocios")} abert${k.v.art("negocio")}${abertos === 1 ? "" : "s"}`)),
+      // plano 1500c · RC-311: «R$ X em aberto» quando o servidor mandar valor_aberto (sem o dado, nada muda)
+      Number(e.valor_aberto) > 0 ? h("span", { class: "emp-num emp-valor" }, h("b", { class: "dado" }, ui.brl(Number(e.valor_aberto), { centavos: false })), h("small", null, "em aberto")) : null),
     h("div", { class: "emp-acoes" },
       h("a", { class: "bt bt-sec bt-p emp-ver-neg", href: `#/empresas/${e.id}?sec=negocios` }, ui.icone("funil"), `Ver ${k.v.min("negocios")}`),
       h("a", { class: "bt bt-fant bt-p emp-ver-ct", href: `#/contatos?empresa=${encodeURIComponent(e.id)}&empresa_nome=${encodeURIComponent(e.nome || "")}` }, ui.icone("contato"), `Ver ${k.v.min("contatos")}`)));
 }
 
 export async function montarEmpresas(k, el) {
-  const { ui, h, ctx } = k;
+  const { ui, h, ctx, L } = k;
   ctx.titulo("Empresas");
   const S = { busca: "", pagina: 1, seq: 0 };
   const busca = h("input", { type: "search", placeholder: "Buscar empresa", "aria-label": "Buscar empresa" });
@@ -1171,7 +1221,10 @@ export async function montarEmpresas(k, el) {
       if (!r.itens.length) corpo.appendChild(ui.vazio({ tipo: "sem_resultado", titulo: "Nenhuma empresa com esse nome.", acao: { rotulo: "Limpar busca", fn: () => { busca.value = ""; S.busca = ""; S.pagina = 1; carregar(); } } }));
       for (const e of r.itens) grade.appendChild(cartaoEmpresa(k, e));
       corpo.appendChild(grade);
-      pag.append(h("span", null, `${ui.num(r.total)} empresa${r.total === 1 ? "" : "s"}`), h("div", { class: "linha" },
+      // plano 1500c · RC-124: «Página 2 de 7» (o tamanho da página vem do servidor ou da 1ª página cheia)
+      if (r.por_pagina) S.porPagina = Number(r.por_pagina); else if (S.pagina === 1 && r.tem_mais && r.itens.length) S.porPagina = r.itens.length;
+      const nPag = L.paginasDe(r.total, S.porPagina);
+      pag.append(h("span", null, `${ui.num(r.total)} empresa${r.total === 1 ? "" : "s"}${nPag > 1 ? ` · página ${ui.num(S.pagina)} de ${ui.num(nPag)}` : ""}`), h("div", { class: "linha" },
         h("button", { type: "button", class: "bt bt-sec bt-p", disabled: S.pagina <= 1, on: { click: () => { S.pagina--; carregar(); } } }, ui.icone("seta-esq"), "Anterior"),
         h("button", { type: "button", class: "bt bt-sec bt-p", disabled: !r.tem_mais, on: { click: () => { S.pagina++; carregar(); } } }, "Próxima", ui.icone("seta-dir"))));
     } catch (e) { if (minha === S.seq) { ui.limpar(corpo); corpo.appendChild(ui.erroCartao(e, carregar)); } }
@@ -1245,7 +1298,18 @@ export async function montarEmpresa(k, el, id, rota = {}) {
         const r = await k.api.rpcC("nx_contatos_listar", { p_filtro: { busca: q }, p_por_pagina: 8 });
         if (minha !== seq) return;
         const itens = (r && r.itens) || [];
-        if (!itens.length) { res.appendChild(h("p", { class: "flut-vazio" }, "Nada encontrado.")); return; }
+        if (!itens.length) {
+          res.appendChild(h("p", { class: "flut-vazio" }, "Nada encontrado."));
+          // plano 1500c · RC-122: cadastrar quem não existe já ligado à empresa (sem fechar, cadastrar e voltar)
+          if (k.pode("atendente")) res.appendChild(h("button", { type: "button", class: "bt bt-sec bt-p emp-cadastrar-novo", on: { click: async () => {
+            const tel = /^[0-9\s().+-]+$/.test(q);
+            const novo = await formContato(k, tel ? { telefone: q } : { nome: q });
+            if (!novo || novo.id == null) return;
+            try { await k.api.rpcC("nx_contato_salvar", { p_contato: { id: novo.id, empresa_id: emp.id } }); if (apiM) apiM.fechar({ ...novo, nome: novo.nome || q }); }
+            catch (err) { if (apiM) apiM.erro(k.erro(err)); }
+          } } }, ui.icone("mais"), `Cadastrar «${q}» nesta empresa`));
+          return;
+        }
         // plano 1000b · RB-252: quem já está na empresa continua focável (aria-disabled) — o teclado ouve «já está nesta empresa»
         for (const c of itens) res.appendChild(h("button", { type: "button", "aria-disabled": c.empresa && c.empresa.id === emp.id ? "true" : null,
           on: { click: async () => {
@@ -1290,11 +1354,20 @@ export async function montarEmpresa(k, el, id, rota = {}) {
       if (!(d.contatos || []).length) contatos.appendChild(h("p", { class: "fraco" }, `Nenhum ${k.v.min("contato")} ligado. Use «Ligar ${k.v.min("contato")}» ou escolha esta empresa na ficha de alguém.`));
       // plano 1000 (CR-096): ligar contatos daqui mesmo (busca → nx_contato_salvar com empresa_id)
       const btLigar = k.pode("atendente") ? h("button", { type: "button", class: "bt bt-sec bt-p emp-ligar", on: { click: () => ligarContato(e) } }, ui.icone("mais"), `Ligar ${k.v.min("contato")}`) : null;
-      const negs = h("div", { class: "ng-outros" }, (d.negocios || []).map(n => {
+      // plano 1500c · RC-121: abertos primeiro, depois os fechados (mais recentes antes), com um subtítulo entre eles
+      const ordenados = L.ordenarNegociosEmpresa(d.negocios);
+      const negs = h("div", { class: "ng-outros" });
+      ordenados.forEach((n, i) => {
         const est = k.estagio(n.estagio_id);
-        return h("button", { type: "button", class: "ng-mini", style: est && k.cor(est.cor) ? { "--cor": k.cor(est.cor) } : null, on: { click: () => N.abrirNegocio(k, n.id, { aoMudar: carregar }) } },
-          h("i", { "aria-hidden": "true" }), h("span", null, `${L.tituloCard(n)} · ${est ? est.nome : ""}`), h("b", null, ui.brl(n.status === "ganho" ? n.valor : n.valor_previsto, { centavos: false })));   // plano 1000b · RB-103
-      }));
+        const fechado = n.status && n.status !== "aberto";
+        if (fechado && (i === 0 || !(ordenados[i - 1].status && ordenados[i - 1].status !== "aberto"))) negs.appendChild(h("p", { class: "rotulo emp-neg-grupo" }, "Fechados"));
+        const v = n.status === "ganho" ? (n.valor ?? n.valor_previsto) : n.valor_previsto;
+        // plano 1500c · RC-119: mexer no negócio recarrega QUIETO (o aoMudar recebia o cartão como opções e a tela piscava com esqueleto)
+        negs.appendChild(h("button", { type: "button", class: "ng-mini", style: est && k.cor(est.cor) ? { "--cor": k.cor(est.cor) } : null, on: { click: () => N.abrirNegocio(k, n.id, { aoMudar: () => carregar({ quieto: true }) }) } },
+          h("i", { "aria-hidden": "true" }), h("span", null, `${L.tituloCard(n)} · ${est ? est.nome : ""}`),
+          // plano 1500c · RC-120: sem valor → «Sem valor» (antes «R$ 0»)
+          v != null ? h("b", null, ui.brl(v, { centavos: false })) : h("span", { class: "sem" }, "Sem valor")));   // plano 1000b · RB-103
+      });
       if (!(d.negocios || []).length) {
         negs.appendChild(h("p", { class: "fraco" }, `${k.v.nenhum("negocio")} por aqui.`));
         // plano 1000 (CR-235): a frase vira ação — uma oportunidade para alguém desta empresa (um contato: direto; vários: escolhe; nenhum: o formulário busca)
@@ -1336,8 +1409,11 @@ export async function montarEmpresa(k, el, id, rota = {}) {
         h("div", { class: "fx" },
           h("section", { class: "fx-cab" }, ui.avatar(e.nome, e.id),
             h("div", { class: "fx-id" }, h("h1", null, e.nome), h("p", null,
-              e.documento ? h("span", null, L.formatarDoc(e.documento)) : null,     /* plano 1000b · RB-101 */ e.telefone ? h("span", null, ui.icone("telefone"), ui.telBR(e.telefone)) : null,
-              e.email ? h("span", null, e.email) : null, e.cidade ? h("span", null, ui.icone("globo"), `${e.cidade}${e.uf ? `/${e.uf}` : ""}`) : null,
+              e.documento ? h("span", null, L.formatarDoc(e.documento)) : null,     /* plano 1000b · RB-101 */
+              // plano 1500c · RC-103/104: telefone liga e e-mail escreve com um toque
+              e.telefone ? h("span", null, h("span", { "aria-hidden": "true" }, ui.icone("telefone")),
+                L.hrefTel(e.telefone) ? h("a", { class: "fx-tel", href: L.hrefTel(e.telefone), "aria-label": `Ligar para ${ui.telBR(e.telefone)}` }, ui.telBR(e.telefone)) : ui.telBR(e.telefone)) : null,
+              e.email ? h("span", null, h("a", { class: "fx-email", href: `mailto:${e.email}`, "aria-label": `Escrever para ${e.email}` }, e.email)) : null, e.cidade ? h("span", null, ui.icone("globo"), `${e.cidade}${e.uf ? `/${e.uf}` : ""}`) : null,
               // plano 1000 (CR-112): «www.empresa.com» vira link de verdade (https://)
               // plano 1000b · RB-105: site que não vira endereço válido aparece como texto (antes: <a> sem href, fora do Tab)
               e.site ? (L.linkDeSite(e.site) ? h("a", { href: L.linkDeSite(e.site), target: "_blank", rel: "noopener noreferrer", class: "link" }, e.site) : h("span", { class: "emp-site-txt" }, e.site)) : null)),
@@ -1349,10 +1425,19 @@ export async function montarEmpresa(k, el, id, rota = {}) {
                 const txtCt = nCt ? `${ui.num(nCt)} ${nCt === 1 ? k.v.min("contato") : k.v.min("contatos")} deixa${nCt === 1 ? "" : "m"} de estar ligad${k.v.art("contato")}${nCt === 1 ? "" : "s"} a ela (os cadastros continuam).`
                   : `Nenhum ${k.v.min("contato")} está ligado a ela.`;
                 if (!(await ui.confirmar({ titulo: `Excluir a empresa «${e.nome}»?`, texto: txtCt, perigo: true }))) return;
-                try { await k.api.rpcC("nx_empresa_excluir", { p_id: e.id }); ui.toast("Empresa excluída.", { tipo: "ok" }); ctx.navegar("#/empresas", { substituir: true }); } catch (err) { k.toastErro(err); }
+                // plano 1500c · RC-125: 7 s de «Desfazer» antes de excluir de verdade (padrão do CRM); sair da tela grava na hora
+                let gravando = null;
+                const gravar = () => (gravando = gravando || k.api.rpcC("nx_empresa_excluir", { p_id: e.id }));
+                try {
+                  const r = typeof ui.acaoComDesfazer === "function" ? await ui.acaoComDesfazer({ texto: `Empresa «${e.nome}» excluída.`, reverter: () => {}, firmar: () => gravar() }) : { estado: "mantida" };
+                  if (r && r.estado === "desfeita") { ui.anunciar && ui.anunciar("Exclusão desfeita."); return; }
+                  await gravar();
+                  ctx.navegar("#/empresas", { substituir: true });
+                } catch (err) { k.toastErro(err); }
               } } }, ui.icone("lixeira"), "Excluir") : null)),
           resumo,
-          e.obs ? h("p", { class: "aviso" }, ui.icone("nota"), h("span", null, e.obs)) : null,
+          // plano 1500c · RC-312: observação é texto comum — bloco neutro com título, não o amarelo de alerta
+          e.obs ? h("div", { class: "emp-obs" }, h("span", { class: "rotulo" }, "Observação"), h("p", { class: "emp-obs-txt" }, e.obs)) : null,
           blocoCampos,
           h("div", { class: "fx-grade" },
             h("section", { class: "ng-bloco", "aria-label": k.v.contatos }, h("div", { class: "ng-bloco-cab" }, h("h3", null, k.v.contatos),

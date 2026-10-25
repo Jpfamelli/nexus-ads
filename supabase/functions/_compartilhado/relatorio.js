@@ -14,7 +14,7 @@ import {
   ErroHttp, json, agoraDe, somaDias, limparErro, lerCorpo, exigirCorpoValido, autenticarCron, listarClientes,
   carregarModelo, emLotes, erroDeEnvio, registrarExecucao, listaDestinos, comPrazo, PRAZO_REDE_MS,
   tituloRelatorio, comTravaDoCliente, todosPulados, EM_EXECUCAO, soltandoCorpo, anonimizarEnvio,
-  traduzirErroIA, registrarUsoIA, funcaoAusente, comPainelUrl, modeloIA,
+  traduzirErroIA, registrarUsoIA, funcaoAusente, comPainelUrl, modeloPara,
 } from "./comum.js";
 
 const JANELA = 130;         // a mesma do painel (nx_dados p_dias padrão): os números batem
@@ -34,6 +34,11 @@ function noPrazo(p, ms) {
   return Promise.race([p, limite]).finally(() => clearTimeout(t));
 }
 const p2 = n => String(n).padStart(2, "0");
+/** plano 1500c · AC-055: a segunda-feira da semana ANTERIOR à de `hoje` (AAAA-MM-DD) — a referência do resumo semanal. */
+export function segundaDaSemanaAnterior(hoje) {
+  const dow = new Date(`${hoje}T12:00:00Z`).getUTCDay();   // 0 = domingo
+  return somaDias(hoje, -((dow + 6) % 7) - 7);
+}
 const r2 = v => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
 
 /** IA padrão: o SDK só é carregado aqui, e só quando há chave. Plano 1000 (SV-063): a versão que devolve o uso (tokens). */
@@ -89,6 +94,14 @@ async function gerar(db, cfg, cliente, ctx) {
     ref = somaDias(ctx.hoje, -1);
     destinos = listaDestinos(M.CFG.waGestor);
     periodo = M.consolidar(M.linhasDe(M.R - 6, M.R));
+  } else if (ctx.tipo === "semanal") {
+    // plano 1500c · AC-055: resumo da semana (M.relSemanal do núcleo) — só para quem ligou cfg.relSemanal; referência = a
+    // segunda-feira da semana que acabou (uma linha por semana em nx_relatorios)
+    if (typeof M.relSemanal !== "function") return { ...base, ok: true, pulado: "núcleo sem o resumo semanal" };
+    if (!(cliente.cfg && cliente.cfg.relSemanal === true)) return { ...base, ok: true, pulado: "resumo semanal desligado" };
+    ref = segundaDaSemanaAnterior(ctx.hoje);
+    destinos = listaDestinos(M.CFG.waGestor);
+    periodo = M.consolidar(M.linhasDe(M.R - 6, M.R));
   } else {
     mes = M.mesesDados().filter(m => m.completo).pop();
     if (!mes) return { ...base, ok: true, pulado: "nenhum mês completo na janela" };
@@ -111,18 +124,23 @@ async function gerar(db, cfg, cliente, ctx) {
   if (existente?.enviado_em && !ctx.forcar) return { ...base, ok: true, pulado: "já enviado" };
   // plano 1000 (SV-091): reservado (enviando_em) e sem envio confirmado = a execução anterior pode ter mandado e não conseguiu
   // registrar; nunca reenvia sozinho (só o botão com forcar)
-  if (existente?.enviando_em && !ctx.forcar) return { ...base, ok: true, pulado: "envio sem confirmação (use forçar para mandar de novo)" };
+  // plano 1500c · SC-056: nunca reenvia sozinho (pode ter saído), mas deixa de ser «ok»: a execução fica vermelha em nx_execucoes
+  // (e na saúde) até alguém conferir e usar «forçar» — antes o relatório sumia em silêncio para sempre
+  if (existente?.enviando_em && !ctx.forcar) return { ...base, ok: false, pulado: "envio sem confirmação (use forçar para mandar de novo)", erro: "relatorio_sem_confirmacao" };
   // cliente sem anúncio rodando no período: relatório zerado no WhatsApp é só ruído
   if (!ctx.forcar && !(periodo.gasto > 0)) return { ...base, ok: true, pulado: "sem investimento no período" };
   // sem número cadastrado não é erro de todo dia (decisão 4): pula, e o admin do cliente é avisado uma vez por semana
   if (!destinos.length) return { ...base, ok: true, pulado: "sem destino cadastrado", aviso_admin: await avisarSemDestino(db, cliente, ctx.tipo) };
+  // plano 1500c · AC-306: o diário de um dia sem gasto, sem conversa e sem agendamento (o núcleo decide: M.diaSemNada) não sai
+  if (ctx.tipo === "diario" && !ctx.forcar && typeof M.diaSemNada === "function" && M.diaSemNada(M.R)) return { ...base, ok: true, pulado: "dia sem movimento" };
 
   let leitura = null, iaErro = null, iaMotivo = null;
   if (ctx.ia) {
     // plano 1000 (SV-063): a leitura passa pela cota do cliente e fica em nx_ia_uso (acao 'relatorio', sem conta). Sem reserva
     // (cota do mês acabou) o relatório sai sem a leitura; banco sem a ação nova (20261013c não aplicada) segue como antes.
     const reserva = await reservarIA(db, cliente.id);
-    const modelo = modeloIA(cfg.modelo_ia);   // plano 1000 (SV-073): modelo desconhecido → o padrão
+    // plano 1000 (SV-073): modelo desconhecido → o padrão · plano 1500c · SC-087: sem config, diário no Haiku e mensal no Sonnet
+    const modelo = modeloPara(ctx.tipo, cfg.modelo_ia);
     const t0 = Date.now();
     let uso = null;
     try {
@@ -146,7 +164,7 @@ async function gerar(db, cfg, cliente, ctx) {
     }
   }
 
-  const texto = ctx.tipo === "diario" ? M.relDiario(M.R, leitura) : M.relMensal(mes, leitura);
+  const texto = ctx.tipo === "diario" ? M.relDiario(M.R, leitura) : ctx.tipo === "semanal" ? M.relSemanal(M.R) : M.relMensal(mes, leitura);
   const titulo = tituloRelatorio(ctx.tipo, M.NOME, ref);
   // plano 1000 (SV-091): RESERVA a linha antes de mandar (enviando_em, coluna da 20261013a). Se o registro final falhar (banco
   // piscou), a próxima execução acha a reserva e não manda de novo. Sem a coluna (migração não aplicada) segue como antes.
@@ -160,7 +178,16 @@ async function gerar(db, cfg, cliente, ctx) {
     if (!(e?.status === 400 && /enviando_em/.test(String(e?.message)))) throw e;
     console.error("nx-relatorio reserva:", limparErro(e?.message || e));
   }
-  const envio = await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo });
+  let envio;
+  try { envio = await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo }); }
+  catch (e) {
+    // plano 1500c · SC-056: o envio nem começou/quebrou no meio sem resultado — solta a reserva (senão o dia ficava preso)
+    if (reservou) {
+      try { await db.update("nx_relatorios", { cliente_id: `eq.${cliente.id}`, tipo: `eq.${ctx.tipo}`, referencia: `eq.${ref}` }, { enviando_em: null }); }
+      catch (e2) { console.error("nx-relatorio soltar reserva:", limparErro(e2?.message || e2)); }
+    }
+    throw e;
+  }
   // só o envio decide `erro` e `ok`: a leitura da IA é opcional, e a falha dela não é falha de um relatório entregue
   const erro = erroDeEnvio(destinos, envio);
   const enviado = envio.some(e => e.ok);
@@ -202,7 +229,7 @@ async function tratarRelatorio(req, env, deps) {
     const cfg = await autenticarCron(req, db);
     exigirCorpoValido(corpo);   // plano 1000 (SV-100): corpo ilegível nunca vira «todos os clientes»
     const tipo = corpo.tipo ?? "diario";
-    if (tipo !== "diario" && tipo !== "mensal") throw new ErroHttp(400, "tipo deve ser diario ou mensal");
+    if (tipo !== "diario" && tipo !== "mensal" && tipo !== "semanal") throw new ErroHttp(400, "tipo deve ser diario, semanal ou mensal");   // plano 1500c · AC-055
     const clientes = await listarClientes(db, corpo.cliente, hojeSP(agora));   // o mesmo «hoje» do relógio injetado (teste vencido)
 
     const ctx = {

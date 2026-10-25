@@ -31,7 +31,9 @@ export function escala([d0, d1], [r0, r1]) {
 export function topoBonito(v, n = 4) {
   if (!(v > 0)) return n;
   const bruto = v * 1.08 / n, p = Math.pow(10, Math.floor(Math.log10(bruto))), r = bruto / p;
-  const degraus = p >= 10 ? [1, 1.2, 1.5, 1.6, 1.8, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 10] : [1, 2, 3, 4, 5, 6, 7, 8, 10];
+  // plano 1500c · RC-247: abaixo de 1 (taxas em fração) entra o degrau 2,5 — 0,9 vira eixo 0 · 0,25 · 0,5 · 0,75 · 1 (antes 0,3 · 0,6 · 0,9 · 1,2);
+  // contagens (p ≥ 1) seguem só com degraus inteiros
+  const degraus = p >= 10 ? [1, 1.2, 1.5, 1.6, 1.8, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 10] : p < 1 ? [1, 2, 2.5, 3, 4, 5, 6, 7, 8, 10] : [1, 2, 3, 4, 5, 6, 7, 8, 10];
   const d = degraus.find(x => x >= r - 1e-9) * p;
   return Math.round(d * n * 1e6) / 1e6;
 }
@@ -163,6 +165,10 @@ function h(tag, attrs = {}, ...filhos) {
   return el;
 }
 const titulo = t => s("title", {}, t);
+/** plano 1500c · RC-241/RC-242: número com milhar e até 2 casas no padrão brasileiro («15.200», «2,5»). */
+const FMT_NUM = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 });
+export const fmtInteiro = v => (fin(Number(v)) ? FMT_NUM.format(Math.round(Number(v))) : "0");
+export const fmtNumero = v => (fin(Number(v)) ? FMT_NUM.format(Number(v)) : "—");
 const limpar = el => { while (el.firstChild) el.firstChild.remove(); };
 const reduzido = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const corValida = c => (/^#[0-9a-f]{6}$/i.test(String(c || "")) ? c : null);
@@ -521,13 +527,25 @@ export function funil(alvo, o) {
     // plano 1000 (pedido de Relatórios): `etapa.dica` explica a conversão (ex.: taxa acima de 100% porque entraram negócios direto na etapa) —
     // vira a dica do valor (title + data-dica do ui.ligarDicas) e uma descrição para o leitor de tela
     const dica = typeof e.dica === "string" && e.dica.trim() ? e.dica.trim().slice(0, 240) : null;
-    const li = h("li", { class: `g-fetapa g-f-${e.tipo || "aberto"}`, style: { "--i": n } },
-      h("span", { class: "g-fnome" }, h("i", { class: "g-fcor", style: cor ? { "--cor": cor } : {} }), h("span", { texto: e.nome })),
+    // plano 1500c · RC-341: `etapa.href` (só «#/…», nada externo) faz o nome da etapa virar link — tocar em «Ganhas» abre quem ganhou
+    const href = typeof e.href === "string" && /^#\//.test(e.href) ? e.href : null;
+    const nomeEl = h("span", { texto: e.nome });
+    // plano 1500c · RC-243: a dica da taxa (acima de 100%) ganha um «i» que abre no toque — antes só title (mouse) e sr-only
+    const btDica = dica ? h("button", { type: "button", class: "g-fdica-bt", "aria-label": `Por que «${convTxt}»?`, "aria-expanded": "false", texto: "i" }) : null;
+    const textoDica = dica ? h("span", { class: "g-fdica-txt", role: "note", texto: dica }) : null;
+    if (btDica) {
+      textoDica.hidden = true;
+      btDica.addEventListener("click", ev => { if (ev && ev.preventDefault) ev.preventDefault(); const abrir = textoDica.hidden; textoDica.hidden = !abrir; btDica.setAttribute("aria-expanded", String(abrir)); });
+    }
+    const li = h("li", { class: `g-fetapa g-f-${e.tipo || "aberto"}${href ? " g-fetapa-link" : ""}`, style: { "--i": n } },
+      h("span", { class: "g-fnome" }, h("i", { class: "g-fcor", style: cor ? { "--cor": cor } : {} }), href ? h("a", { class: "g-flink", href }, nomeEl) : nomeEl),
       h("span", { class: "g-ftrilho" }, h("span", { class: "g-fbarra", style: { "--w": `${pct.toFixed(2)}%`, ...(cor ? { "--cor": cor } : {}) } }),
-        h("span", { class: "g-fqtd", texto: String(e.qtd || 0) })),
+        // plano 1500c · RC-241: «1.500», não «1500» (o.fmtQtd quando a tela quiser outro formato)
+        h("span", { class: "g-fqtd", texto: typeof o.fmtQtd === "function" ? o.fmtQtd(e.qtd || 0) : fmtInteiro(e.qtd || 0) })),
       h("span", { class: "g-fvalor", texto: e.valorTxt || "" }),
       h("span", { class: `g-fconv${taxa ? " g-fconv-taxa" : ""}${dica ? " g-fconv-dica" : ""}`, texto: convTxt, ...(taxa ? { "data-taxa": String(Math.round(taxa.pct)) } : {}),
         ...(dica ? { title: dica, "data-dica": dica } : {}) }),
+      btDica, textoDica,
       dica ? h("span", { class: "sr-only", texto: `(${dica})` }) : null);
     lista.append(li);
   });
@@ -577,6 +595,11 @@ export function calor(alvo, o) {
     aoMostrar: k => { if (atual >= 0) celulas[Math.floor(atual / 24)][atual % 24].classList.remove("g-ativa"); atual = k; celulas[Math.floor(k / 24)][k % 24].classList.add("g-ativa"); },
     aoEsconder: () => { if (atual >= 0) celulas[Math.floor(atual / 24)][atual % 24].classList.remove("g-ativa"); atual = -1; },
   });
+  const celulaMaior = () => {
+    let melhor = { lin: 0, hr: 8, v: 0 };
+    ordem.forEach((d, lin) => { for (let hr = 0; hr < 24; hr++) { const v = valorCalor(d, hr); if (v > melhor.v) melhor = { lin, hr, v }; } });
+    return melhor;
+  };
   const mostrarCelula = (lin, hr) => {
     lin = Math.max(0, Math.min(6, lin)); hr = Math.max(0, Math.min(23, hr));
     const c = celulas[lin][hr], p = posNaCaixa(caixa, c);
@@ -588,7 +611,9 @@ export function calor(alvo, o) {
   caixa.addEventListener("blur", () => tr.esconder());
   caixa.addEventListener("keydown", e => {
     if (e.key === "Escape") return tr.esconder();
-    const lin = atual < 0 ? 0 : Math.floor(atual / 24), hr = atual < 0 ? 8 : atual % 24;   // começa na segunda às 8h (horário comercial)
+    // plano 1500c · RC-244: a 1ª seta começa na célula de MAIOR valor (antes segunda 8h fixo — fora do horário de quem abre às 7h ou no sábado)
+    const inicio = celulaMaior();
+    const lin = atual < 0 ? inicio.lin : Math.floor(atual / 24), hr = atual < 0 ? inicio.hr : atual % 24;
     const mapa = { ArrowRight: [lin, hr + 1], ArrowLeft: [lin, hr - 1], ArrowDown: [lin + 1, hr], ArrowUp: [lin - 1, hr], Home: [lin, 0], End: [lin, 23] };
     if (!(e.key in mapa)) return;
     e.preventDefault();
@@ -596,7 +621,21 @@ export function calor(alvo, o) {
     mostrarCelula(...mapa[e.key]);
   });
   alvo.append(caixa);
-  return { destruir() { tr.esconder(); }, mostrar: mostrarCelula, esconder: () => tr.esconder() };
+  // plano 1500c · RC-304: girar o celular/redimensionar troca o passo das horas (1 ↔ 3) sem redesenhar a grade; só quando a tela não fixou o passo
+  let ro = null;
+  const rotulosH = [...grade.querySelectorAll(".g-cal-h")];
+  const aplicarPasso = p => { grade.setAttribute("data-passo-horas", p); rotulosH.forEach((el, hr) => { el.textContent = hr % p === 0 ? String(hr).padStart(2, "0") : ""; }); };
+  if (!(o.passoHoras === 1 || o.passoHoras === 3) && typeof ResizeObserver === "function") {
+    ro = new ResizeObserver(() => {
+      if (alvo.isConnected === false) { if (ro) ro.disconnect(); ro = null; return; }
+      const w = Number(alvo.clientWidth) || 0;
+      if (!w) return;
+      const p = passoHorasCalor(w, false);
+      if (String(p) !== grade.getAttribute("data-passo-horas")) aplicarPasso(p);
+    });
+    ro.observe(alvo);
+  }
+  return { destruir() { tr.esconder(); if (ro) ro.disconnect(); ro = null; }, mostrar: mostrarCelula, esconder: () => tr.esconder(), passo: p => aplicarPasso(p === 1 ? 1 : 3) };
 }
 
 /* ---------- 2.7 "Ver como tabela" (alternativa acessível de todo gráfico) ---------- */
@@ -614,16 +653,39 @@ export function alternarTabela(rodape, alvoGrafico, o) {
   // plano 1000b · RB-181: o texto troca («Ver como gráfico») e por isso NÃO há aria-pressed — os dois juntos davam «Ver como gráfico,
   // pressionado» (estado incoerente). O nome diz a ação seguinte; data-modo guarda o que está à vista para quem precisar ler.
   const btn = h("button", { type: "button", class: "g-ver-tabela", "data-modo": "grafico" }, "Ver como tabela");
+  // plano 1500c · RC-245: a tabela recebe o foco quando aparece (o leitor anuncia a tabela, não fica no botão sem saber do que mudou)
+  t.setAttribute("tabindex", "-1");
+  // plano 1500c · RC-246: «Copiar tabela» (colunas separadas por tabulação: cola certo no Excel/Planilhas) — só com a tabela à vista
+  const btCopiar = h("button", { type: "button", class: "g-copiar-tabela", "aria-label": `Copiar a tabela${o.legenda ? `: ${o.legenda}` : ""}` }, "Copiar tabela");
+  btCopiar.hidden = true;
+  btCopiar.addEventListener("click", () => copiarTexto(tabelaTsv(o.colunas, o.linhas), btCopiar));
   btn.addEventListener("click", () => {
     const ligado = tabela.hidden;
     tabela.hidden = !ligado;
     alvoGrafico.hidden = ligado;
+    btCopiar.hidden = !ligado;
     btn.setAttribute("data-modo", ligado ? "tabela" : "grafico");
     btn.textContent = ligado ? "Ver como gráfico" : "Ver como tabela";
+    if (ligado && typeof t.focus === "function") { try { t.focus({ preventScroll: true }); } catch { t.focus(); } }
   });
   alvoGrafico.after(tabela);
-  rodape.append(btn);
+  rodape.append(btn, btCopiar);
   return btn;
+}
+/** plano 1500c · RC-246: a tabela em texto TSV (tabulação entre colunas, quebra entre linhas; tabulação/quebra dentro da célula vira espaço). */
+export function tabelaTsv(colunas = [], linhas = []) {
+  const cel = v => String(v ?? "").replace(/[\t\r\n]+/g, " ");
+  return [colunas, ...linhas].map(l => (Array.isArray(l) ? l : []).map(cel).join("\t")).join("\n");
+}
+/** Copia para a área de transferência (navigator.clipboard) e diz no próprio botão «Copiada» por 2 s; sem clipboard, «Não deu para copiar». */
+function copiarTexto(texto, bt) {
+  const rotulo = bt.textContent;
+  const dizer = t => { bt.textContent = t; setTimeout(() => { bt.textContent = rotulo; }, 2000); };
+  try {
+    const cb = typeof navigator !== "undefined" && navigator && navigator.clipboard;
+    if (!cb || typeof cb.writeText !== "function") { dizer("Não deu para copiar"); return Promise.resolve(false); }
+    return cb.writeText(texto).then(() => { dizer("Copiada"); return true; }, () => { dizer("Não deu para copiar"); return false; });
+  } catch { dizer("Não deu para copiar"); return Promise.resolve(false); }
 }
 
 /* ---------- 2.8 Números que contam (odômetro simples) ---------- */
@@ -761,7 +823,7 @@ export function sparkline(alvo, o = {}) {
   const valores = (o.valores || []).map(v => (fin(Number(v)) ? Number(v) : null));
   const uteis = valores.filter(fin);
   const rotulo = o.rotulo || "Série";
-  const fmt = o.fmt || (v => String(Math.round(v * 100) / 100).replace(".", ","));
+  const fmt = o.fmt || fmtNumero;     // plano 1500c · RC-242: «15.200» no resumo acessível (antes «15200»)
   const H = Math.max(28, Math.min(40, Number(o.altura) || 32));
   alvo.classList.add("g-spark-alvo");
   if (uteis.length < 2) {

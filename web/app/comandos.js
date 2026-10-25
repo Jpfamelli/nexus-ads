@@ -18,6 +18,47 @@ export function normalizar(s) {
  * Quanto `alvo` (e as palavras extras) casa com `termo`: 0 = não casa. Cada palavra do termo precisa aparecer; o começo do rótulo e o
  * começo de palavra valem mais que o meio; rótulo igual ao termo vence tudo.
  */
+/** plano 1500c · UCC-089/UCC-040: distância de edição com troca de vizinhas (Damerau, «cmr» → «crm» = 1). Para cedo quando passa de `teto`. */
+export function distancia(a, b, teto = 3) {
+  const s = String(a ?? ""), t = String(b ?? "");
+  if (Math.abs(s.length - t.length) > teto) return teto + 1;
+  const d = Array.from({ length: s.length + 1 }, (_, i) => [i, ...Array(t.length).fill(0)]);
+  for (let j = 1; j <= t.length; j++) d[0][j] = j;
+  for (let i = 1; i <= s.length; i++) {
+    let menor = Infinity;
+    for (let j = 1; j <= t.length; j++) {
+      const c = s[i - 1] === t[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + c);
+      if (i > 1 && j > 1 && s[i - 1] === t[j - 2] && s[i - 2] === t[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+      if (d[i][j] < menor) menor = d[i][j];
+    }
+    if (menor > teto) return teto + 1;
+  }
+  return d[s.length][t.length];
+}
+/** Um erro de digitação (1 letra trocada, faltando, sobrando ou duas vizinhas invertidas) numa palavra curta: «cmr» acha «crm». Só palavras de
+    3+ letras com a mesma inicial, para não virar ruído. */
+function quaseIgual(tok, todo) {
+  if (tok.length < 3) return false;
+  return todo.split(" ").some(p => p && p[0] === tok[0] && Math.abs(p.length - tok.length) <= 1 && distancia(tok, p, 1) <= 1);
+}
+/** plano 1500c · UCC-040: «Você quis dizer…?» — a rota existente mais parecida com o que foi digitado no endereço (distância ≤ 2), ou null. */
+export function sugerirRota(digitado, opcoes = []) {
+  const t = normalizar(digitado).replace(/[^a-z0-9]/g, "");
+  if (t.length < 2) return null;
+  let melhor = null, menor = 3;
+  for (const op of opcoes) {
+    const id = typeof op === "string" ? op : op && op.id;
+    if (!id) continue;
+    const alvos = [id, ...(typeof op === "object" && op.rotulo ? [normalizar(op.rotulo)] : [])];
+    for (const a of alvos) {
+      const d = a.startsWith(t) && t.length >= 3 ? 1 : distancia(t, a, 2);
+      if (d < menor) { menor = d; melhor = id; }
+    }
+  }
+  return melhor;
+}
+
 export function pontuar(termo, alvo, extras = "") {
   const t = normalizar(termo);
   if (!t) return 1;
@@ -25,7 +66,10 @@ export function pontuar(termo, alvo, extras = "") {
   const todo = e ? `${a} ${e}` : a;
   let pontos = 0;
   for (const tok of t.split(" ")) {
-    if (!todo.includes(tok)) return 0;
+    if (!todo.includes(tok)) {
+      if (quaseIgual(tok, todo)) { pontos += 1; continue; }   // plano 1500c · UCC-089: tolera 1 erro de digitação (vale menos que o acerto)
+      return 0;
+    }
     const i = a.indexOf(tok);
     pontos += i === 0 ? 4 : i > 0 && a[i - 1] === " " ? 3 : i > 0 ? 2 : 1;
   }
@@ -159,7 +203,53 @@ export const CATALOGO = Object.freeze([
   { id: "primeiros-passos", grupo: "Ir e ver", rotulo: () => "Primeiros passos", palavras: "primeiros passos comecar configurar checklist ajuda deixe pronto", icone: "check", quando: a => a.rotaOk("inicio") && a.pode("admin") },
   { id: "suporte", grupo: "Ajuda", rotulo: () => "Falar com o suporte", palavras: "suporte ajuda whatsapp falar contato", icone: "whatsapp", quando: a => !!a.suporte },
   { id: "sair", grupo: "Conta", rotulo: () => "Sair", palavras: "sair logout encerrar desconectar", icone: "sair", quando: () => true },
+  // plano 1500c · UCC-082…085: ajuda, plano, tour, recarregar e notificações também pela paleta
+  { id: "central-ajuda", grupo: "Ajuda", rotulo: () => "Central de ajuda", palavras: "ajuda duvida duvidas suporte central artigos como faco tutorial", icone: "ajuda", quando: () => true },
+  { id: "ver-plano", grupo: "Ir e ver", rotulo: () => "Ver plano e assinar", palavras: "plano assinar assinatura upgrade contratar pagar preco teste gratis limite uso", icone: "cartao", quando: a => !!a.temCliente && a.pode("admin") },
+  { id: "tour", grupo: "Ajuda", rotulo: () => "Fazer o tour", palavras: "tour guia passo a passo apresentacao conhecer o sistema", icone: "info", quando: () => true },
+  { id: "recarregar", grupo: "Aparência e app", rotulo: () => "Recarregar o app", palavras: "recarregar atualizar reload f5 reiniciar travou", icone: "reabrir", quando: () => true },
+  { id: "notificacoes", grupo: "Ir e ver", rotulo: () => "Ver notificações", palavras: "notificacoes avisos sino alertas novidades", icone: "sino", quando: () => true },
+  // plano 1500c · UC-028: os três primeiros passos de quem acabou de chegar, direto pela paleta
+  { id: "convidar-pessoa", grupo: "Criar", rotulo: () => "Convidar pessoa para a equipe", palavras: "convidar pessoa equipe usuario funcionario colaborador atendente acesso login adicionar", icone: "usuario", quando: a => !!a.temCliente && a.pode("admin") },
+  { id: "conectar-whatsapp", grupo: "Criar", rotulo: () => "Conectar WhatsApp", palavras: "conectar whatsapp numero celular qr code ligar canal zap", icone: "whatsapp", quando: a => !!a.temCliente && a.pode("admin") && a.rotaOk("conversas") },
+  { id: "importar-contatos", grupo: "Criar", rotulo: a => `Importar ${(a && a.vocab && a.vocab.contatos ? a.vocab.contatos : "contatos").toLowerCase()}`, palavras: "importar contatos planilha excel csv lista clientes pacientes trazer subir", icone: "baixar", quando: a => a.rotaOk("crm") && a.pode("atendente") },
+  // plano 1500c · UC-012/UC-037/UC-038: «Comece aqui», novidades da versão e a situação dos serviços
+  { id: "comece-aqui", grupo: "Ajuda", rotulo: () => "Comece aqui", palavras: "comece aqui primeiros passos comecar checklist perfil instalar avisos", icone: "check", quando: a => !!a.passosEquipe },
+  { id: "novidades", grupo: "Ajuda", rotulo: () => "Novidades desta versão", palavras: "novidades novo mudou atualizacao versao changelog", icone: "info", quando: a => !!a.novidades },
+  { id: "situacao-servicos", grupo: "Ajuda", rotulo: () => "Situação dos serviços", palavras: "situacao servicos status conexao numero whatsapp caiu ia funcionando", icone: "info", quando: a => !!a.temCliente },
 ]);
+
+/** plano 1500c · UCC-098: o tour de primeira vez — 4 paradas no topo do app (o que cada uma faz, em uma frase). `seletor` = onde o balão aponta;
+    parada sem o elemento na tela (produto único, celular) é pulada. */
+export const PASSOS_TOUR = Object.freeze([
+  Object.freeze({ id: "paleta", seletor: ".topo-busca", titulo: "Busca e comandos", texto: "Ache um contato, uma conversa ou faça uma ação sem procurar no menu. Atalho: Ctrl/⌘ + K." }),
+  Object.freeze({ id: "produtos", seletor: ".topo-produtos", titulo: "Seus produtos", texto: "Troque entre CRM, Anúncios e Atendimento por aqui. A conta é a mesma." }),
+  Object.freeze({ id: "sino", seletor: "#bt-sino", titulo: "Notificações", texto: "Mensagens novas, números que caíram e avisos do sistema chegam no sino." }),
+  Object.freeze({ id: "ajuda", seletor: "#bt-conta-topo, .lat-conta", titulo: "Ajuda", texto: "No menu da sua conta: Central de ajuda, atalhos e o suporte. Dá para rever este tour por lá." }),
+]);
+export const chaveTour = conta => `nx-tour-visto:${conta || "-"}`;
+/** As paradas que existem nesta tela (doc.querySelector acha o elemento), na ordem. */
+export function paradasDoTour(doc, passos = PASSOS_TOUR) {
+  const out = [];
+  for (const p of passos) { let el = null; try { el = doc.querySelector(p.seletor); } catch { el = null; } if (el && !el.hidden && !(el.closest && el.closest("[hidden]"))) out.push({ ...p, el }); }
+  return out;
+}
+
+/** plano 1500c · UCC-086: navegação em sequência — «g» e depois a letra (em até 1,2 s, fora de campo de texto). */
+export const SEQUENCIAS_G = Object.freeze({ i: "#/inicio", c: "#/conversas", r: "#/crm", a: "#/agenda", t: "#/tarefas", n: "#/anuncios", u: "#/automacoes", s: "#/config" });
+export function criarSequenciaG({ agora = () => Date.now(), janelaMs = 1200, mapa = SEQUENCIAS_G } = {}) {
+  let gEm = -Infinity;
+  return {
+    /** tecla(letra) → o hash a abrir, true (esperando a 2ª letra) ou null (nada). */
+    tecla(k) {
+      const t = String(k || "").toLowerCase();
+      if (agora() - gEm <= janelaMs) { gEm = -Infinity; return Object.hasOwn(mapa, t) ? mapa[t] : null; }
+      if (t === "g") { gEm = agora(); return true; }
+      return null;
+    },
+    get esperando() { return agora() - gEm <= janelaMs; },
+  };
+}
 
 /** As ações do shell que valem agora para esta pessoa, neste produto. `fazer` = { [id]: () => void }. */
 export function acoesPadrao(a, fazer = {}) {
@@ -308,4 +398,40 @@ export const ATALHOS_GERAIS = Object.freeze([
   Object.freeze({ teclas: ["Esc"], rotulo: "Fechar janela, painel, menu ou paleta" }),
   Object.freeze({ teclas: ["{mod}", "Z"], rotulo: "Desfazer a última ação que mostrou «Desfazer»" }),
   Object.freeze({ teclas: ["Tab"], rotulo: "No começo da página: «Ir para…» o conteúdo, a lista, o campo de mensagem" }),
+  // plano 1500c · UCC-086
+  Object.freeze({ teclas: ["G", "C"], rotulo: "Ir para Conversas (G e depois I Início, R CRM, A Agenda, T Tarefas, N Anúncios, U Automações, S Configurações)" }),
 ]);
+
+/** plano 1500c · UCC-138: trocar de empresa direto pela paleta — digitando parte do nome, as empresas da conta (menos a atual) aparecem
+    no grupo «Empresas». Só com 2+ empresas e 2+ letras; todas as palavras do termo precisam aparecer no nome. → [{id, nome}] (até max). */
+export function empresasDaPaleta(clientes, termo, { atualId = null, max = 4 } = {}) {
+  const lista = Array.isArray(clientes) ? clientes : [];
+  const t = normalizar(String(termo || "").replace(/^[>#]\s*/, "")).trim();
+  if (lista.length < 2 || t.length < 2) return [];
+  const palavras = t.split(/\s+/).filter(Boolean);
+  return lista.filter(c => c && c.id !== atualId && palavras.every(p => normalizar(c.nome || "").includes(p))).slice(0, max).map(c => ({ id: c.id, nome: c.nome }));
+}
+
+/** plano 1500c · UC-012: o «Comece aqui» de quem é da equipe (não admin) — 4 passos pessoais guardados no aparelho por conta.
+    estado = {feitos: [ids], avisos: "default"|"granted"|"denied"|"sem", instalado, podeInstalar, temConversas}.
+    Passo que o aparelho não permite (avisos negados/sem suporte, nada para instalar, empresa sem Conversas) sai da lista. */
+export const PASSOS_EQUIPE = Object.freeze([
+  Object.freeze({ id: "perfil", rotulo: "Completar o seu perfil (nome e foto)", hash: "#/config/perfil" }),
+  Object.freeze({ id: "avisos", rotulo: "Permitir avisos de mensagem nova" }),
+  Object.freeze({ id: "instalar", rotulo: "Instalar o app neste aparelho" }),
+  Object.freeze({ id: "responder", rotulo: "Responder a primeira conversa", hash: "#/conversas" }),
+]);
+export const chavePassosEquipe = conta => `nx-passos-equipe:${conta || "-"}`;
+export function passosDaEquipe(estado = {}) {
+  const feitos = new Set(Array.isArray(estado.feitos) ? estado.feitos : []);
+  const itens = [];
+  for (const p of PASSOS_EQUIPE) {
+    if (p.id === "avisos" && (estado.avisos === "denied" || estado.avisos === "sem")) continue;
+    if (p.id === "instalar" && !estado.instalado && !estado.podeInstalar) continue;
+    if (p.id === "responder" && !estado.temConversas) continue;
+    const feito = p.id === "avisos" ? estado.avisos === "granted" || feitos.has("avisos") : p.id === "instalar" ? !!estado.instalado || feitos.has("instalar") : feitos.has(p.id);
+    itens.push({ ...p, feito });
+  }
+  const n = itens.filter(i => i.feito).length;
+  return { itens, feitos: n, total: itens.length, completo: itens.length > 0 && n === itens.length };
+}

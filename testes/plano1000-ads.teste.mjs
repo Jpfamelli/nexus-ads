@@ -695,7 +695,8 @@ test("AD-110/AD-116 · nivelCpa: neutro sem base (gasto < R$ 20) ou sem meta; KP
   assert.equal(k.extra, "sem meta definida"); assert.equal(k.medidor, false);
   assert.match(ADS2, /dif = Number\.isFinite\(t\.cpa\) && meta > 0 \?/);
   assert.match(PJS2, /const dif = fin\(t\.cpa\) && meta > 0 \?/); assert.match(PJS2, /medidor: !temG && meta > 0/);
-  assert.match(PJS2, /!\(M\.CFG\.cpaAlvo > 0\) \? "dot-neutro"/); assert.match(PCSS2, /\.dot-neutro \{/); assert.match(CSS2, /\.rel-ponto-neutro \{/);
+  // plano 1500c: AC-224 — o clássico pinta pela meta da campanha/plataforma (nivelCpa: sem meta → «dot-neutro»)
+  assert.match(PJS2, /if \(!\(meta > 0\)\) return "dot-neutro";/); assert.match(PCSS2, /\.dot-neutro \{/); assert.match(CSS2, /\.rel-ponto-neutro \{/);
 });
 
 test("AD-112 · ranking sem receita no período abre em «Menor custo por conversa» (sem escolha guardada) e avisa", () => {
@@ -807,7 +808,8 @@ test("AD-257 · rosca de motivos com 10+ motivos: os 5 maiores + «Outros (N)»"
 
 test("AD-261 · CSV protege fórmula com espaço antes (« =HIPERLINK(…)»)", () => {
   const out = L.csv(["n"], [[" =HIPERLINK(\"x\")"], ["  +1"], ["\t@a"], ["ok"]]).replace(/^﻿/, "").split("\r\n");
-  assert.equal(out[1], `"' =HIPERLINK(""x"")"`); assert.equal(out[2], "'  +1"); assert.equal(out[3], "'\t@a"); assert.equal(out[4], "ok");
+  // plano 1500c: «+» seguido só de número é número (telefone, AC-164) e fica sem apóstrofo
+  assert.equal(out[1], `"' =HIPERLINK(""x"")"`); assert.equal(out[2], "  +1"); assert.equal(out[3], "'\t@a"); assert.equal(out[4], "ok");
 });
 
 test("AD-151 · janelaComparacao em ano bissexto e na virada de ano", () => {
@@ -888,7 +890,8 @@ test("AD-141 · período guardado por cliente (o legado global vale só até o c
   assert.deepEqual(RL.periodoDoCliente(pref, "c2"), { preset: 7, de: null, ate: null }, "sem período próprio: o global de antes");
   assert.deepEqual(RL.periodoDoCliente({}, "c3"), { preset: 30, de: null, ate: null });
   assert.deepEqual(RL.limparFiltrosRelatorios(pref, "c1").periodo, { c1: { preset: 30, de: null, ate: null } });
-  assert.match(REL2, /periodo: \{ \.\.\.\(p\.periodo \|\| \{\}\), \[ctx\.cliente\.id\]: \{ preset: P\.preset, de: P\.de, ate: P\.ate \} \}/);
+  // plano 1500c: o período do cliente guarda também «incluir hoje» (AC-156)
+  assert.match(REL2, /periodo: \{ \.\.\.\(p\.periodo \|\| \{\}\), \[ctx\.cliente\.id\]: \{ preset: P\.preset, de: P\.de, ate: P\.ate, hoje: !!P\.hoje \} \}/);
 });
 
 test("AD-146 · «Limpe os filtros» só com filtro de verdade (7/90 dias não são filtro)", () => {
@@ -1078,7 +1081,8 @@ test("AD-046 · «Silenciar 7 dias»: a chave some do radar (e do WhatsApp do ci
   const m = A.mapaSilenciados({ a: { ate: "2026-10-01" }, b: "2026-10-20", c: { desde: "2026-10-10", ate: "2026-10-30" } }, "d", { desde: "2026-10-12", ate: "2026-10-19" }, "2026-10-12");
   assert.deepEqual(m, { b: { ate: "2026-10-20" }, c: { desde: "2026-10-10", ate: "2026-10-30" }, d: { desde: "2026-10-12", ate: "2026-10-19" } });
   assert.deepEqual(A.mapaSilenciados(m, "c", null, "2026-10-12"), { b: { ate: "2026-10-20" }, d: { desde: "2026-10-12", ate: "2026-10-19" } });
-  assert.match(ADS3, /"Silenciar 7 dias"/); assert.match(ADS3, /"Reativar avisos"/); assert.match(ADS3, /cfg: \{ silenciados: mapa \}/);
+  // plano 1500c: «Silenciar…» virou menu (AC-091) — os 7 dias continuam como opção
+  assert.match(ADS3, /\[7, "Por 7 dias"\]/); assert.match(ADS3, /"Reativar avisos"/); assert.match(ADS3, /cfg: \{ silenciados: mapa \}/);
 });
 
 test("AD-054 · limites do radar por cliente (cfg.radar): frequência 4 não acusa 3,5; fora da faixa vale o padrão", () => {
