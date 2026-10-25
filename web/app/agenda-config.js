@@ -158,6 +158,38 @@ export function consultasForaDoHorario(consultas, horario, duracao = 30) {
 /** Plano 1500c · CC-233: feriados do estado de São Paulo (Revolução Constitucionalista, 9 de julho) — a Consciência Negra já é nacional. */
 export function feriadosEstaduaisSP(ano) { return [{ data: `${ano}-07-09`, nome: "Revolução Constitucionalista (SP)" }]; }
 
+/** Plano 1500c · GX-060: as pausas que não cruzam NENHUM horário de atendimento (19:00–20:00 numa agenda que fecha às 18h) — salvas, não mudam nada. */
+export function pausasSemEfeito(horario, pausas) {
+  const min = s => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || "")); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+  const faixas = Object.values(horario && typeof horario === "object" ? horario : {}).flatMap(l => (Array.isArray(l) ? l : [])).map(f => [min(f && f[0]), min(f && f[1])]).filter(([a, b]) => a !== null && b !== null && b > a);
+  if (!faixas.length) return [];
+  return (Array.isArray(pausas) ? pausas : []).filter(p => { const a = min(p && p[0]), b = min(p && p[1]); return a !== null && b !== null && b > a && !faixas.some(([x, y]) => a < y && b > x); });
+}
+/** Plano 1500c · GX-071: o erro de um número da configuração em português claro — «2,5» ou «2.5» pede número inteiro (antes: «deve ficar entre…»). */
+export function erroNumeroInteiro(bruto, rotulo, min, max) {
+  const t = String(bruto ?? "").trim();
+  if (!t) return `${rotulo}: preencha um número de ${min} a ${max}.`;
+  if (/^\d+[.,]\d+$/.test(t)) return `${rotulo}: use um número inteiro (sem vírgula), de ${min} a ${max}.`;
+  return null;
+}
+/** Plano 1500c · GX-066: «Manhã» e «Tarde» do dia escolhido pelo horário configurado (sem horário: 08–12 e 12–18). → {manha:[das, ate], tarde:[das, ate]} */
+export function meiosDoDia(horario, data, intervalos = []) {
+  const dds = /^\d{4}-\d{2}-\d{2}$/.test(String(data || "")) ? new Date(`${data}T12:00:00Z`).getUTCDay() : null;
+  const faixas = (dds !== null && horario && Array.isArray(horario[String(dds)]) ? horario[String(dds)] : []).filter(f => f && f[0] && f[1] && f[0] < f[1]).slice().sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  const ini = faixas.length ? faixas[0][0] : "08:00", fim = faixas.length ? faixas[faixas.length - 1][1] : "18:00";
+  const almoco = (Array.isArray(intervalos) ? intervalos : []).find(p => p && p[0] && p[1] && p[0] >= "11:00" && p[0] <= "14:00");
+  const corte = almoco ? almoco[0] : "12:00", volta = almoco ? almoco[1] : "12:00";
+  return { manha: [ini < corte ? ini : "08:00", corte], tarde: [volta < fim ? volta : "12:00", fim > volta ? fim : "18:00"] };
+}
+/** Plano 1500c · GX-067/GX-068: o dia (São Paulo) de um instante, para o link #/agenda?dia=…; "" se não vale. */
+export function diaSP(iso) { const t = Date.parse(iso); return Number.isFinite(t) ? _diaSP.format(new Date(t)) : ""; }
+/** GX-067/GX-068: o início mais cedo de uma lista de consultas. */
+export function primeiraDe(consultas) {
+  return (Array.isArray(consultas) ? consultas : []).map(c => c && c.inicio).filter(x => Number.isFinite(Date.parse(x))).sort((a, b) => Date.parse(a) - Date.parse(b))[0] || null;
+}
+/** Plano 1500c · GX-056: os motivos de bloqueio mais comuns (chips na janela de bloqueio das Configurações; os mesmos da grade). */
+export const MOTIVOS_BLOQUEIO_CFG = Object.freeze(["Feriado", "Folga", "Férias", "Reunião", "Manutenção"]);
+
 /** Plano 1000b · CB-154: tira a linha e leva o foco para o «remover» da linha anterior (ou da seguinte); lista vazia → `reserva()` (o «Adicionar…»). */
 export function removerComFoco(linha, reserva = null) {
   const pai = linha && linha.parentNode;
@@ -169,13 +201,17 @@ export function removerComFoco(linha, reserva = null) {
   if (alvo) try { alvo.focus(); } catch { /* ok */ }
   return alvo;
 }
-function listaFaixas(h, ui, dia, faixas, habilitado) {
+function listaFaixas(h, ui, dia, faixas, habilitado, aoEsvaziar = null) {
   const caixa = h("div", { class: "agc-faixas", hidden: !habilitado });
   const linhas = h("div", { class: "agc-faixas-linhas" });   // as faixas ficam antes dos botões (adicionar não cai depois de «Adicionar horário»)
   function adicionar([de = "08:00", ate = "18:00"] = []) {
     const inicio = h("input", { type: "time", value: de, step: 300, "aria-label": `${dia}: início do horário` });
     const fim = h("input", { type: "time", value: ate, step: 300, "aria-label": `${dia}: fim do horário` });
-    const remover = h("button", { type: "button", class: "bt-icone agc-remover", "aria-label": `Remover faixa de ${dia}`, on: { click: () => removerComFoco(linha, () => add) } }, ui.icone("fechar"));   // CB-154
+    // plano 1500c · GX-070: tirar a ÚLTIMA faixa fecha o dia (antes o dia ficava «ligado» sem horário e o Salvar reclamava)
+    const remover = h("button", { type: "button", class: "bt-icone agc-remover", "aria-label": `Remover faixa de ${dia}`, on: { click: () => {
+      removerComFoco(linha, () => add);
+      if (!linhas.querySelector(".agc-faixa") && typeof aoEsvaziar === "function") aoEsvaziar();
+    } } }, ui.icone("fechar"));   // CB-154
     const linha = h("div", { class: "agc-faixa" }, inicio, h("span", null, "até"), fim, remover);
     linhas.appendChild(linha);
   }
@@ -251,6 +287,15 @@ function linhaIntervalo(h, ui, de = "12:00", ate = "13:00", rotulo = "Intervalo"
   return linha;
 }
 
+/** Plano 1500c · GX-057: um ouvinte de «beforeunload» por vez (o da seção montada agora). */
+let saidaAtual = null;
+let secaoViva = null;     // plano 1500c · GX-072: a montagem da seção que está na tela (o «Descartar» remonta)
+function trocarAvisoSaida(fn) {
+  if (saidaAtual && typeof removeEventListener === "function") removeEventListener("beforeunload", saidaAtual);
+  saidaAtual = fn || null;
+  if (saidaAtual && typeof addEventListener === "function") addEventListener("beforeunload", saidaAtual);
+}
+
 async function secaoAgenda(ctx, alvo) {
   const { ui, api } = ctx;
   const h = ui.h;
@@ -270,6 +315,10 @@ async function secaoAgenda(ctx, alvo) {
   // CA-213: mudou algo e ainda não salvou? Trocar de seção ou de tela pergunta antes (config.js lê pendente/podeSair)
   let sujo = false, barraSujo = null;
   const marcarSujo = () => { sujo = true; if (barraSujo) barraSujo.hidden = false; };   // CB-202: a barra fixa aparece
+  // plano 1500c · GX-057: fechar a aba (ou recarregar) com horários não salvos pergunta — a guarda de rota só valia dentro do app
+  const avisoSaida = ev => { if (!sujo) return; ev.preventDefault(); ev.returnValue = ""; return ""; };
+  const tirarAvisoSaida = () => { if (saidaAtual === avisoSaida) trocarAvisoSaida(null); };
+  trocarAvisoSaida(avisoSaida);     // remontar a seção troca o ouvinte (nunca dois)
 
   const usarAgenda = ui.campo({ tipo: "interruptor", nome: "usar_horario", rotulo: "Definir horários nesta agenda", valor: cfg.horario_fonte === "agenda" });
   // plano 1000b · CB-180: a ajuda acompanha o interruptor (antes ficava «os horários vêm do departamento» mesmo depois de ligar)
@@ -282,17 +331,25 @@ async function secaoAgenda(ctx, alvo) {
     const atual = cfg.horario && cfg.horario[id];
     const faixas = Array.isArray(atual) ? atual : [];
     const ligada = ui.campo({ tipo: "interruptor", nome: `dia_${id}`, rotulo: nome, valor: faixas.length > 0 });
-    const linhas = listaFaixas(h, ui, nome, faixas, faixas.length > 0);
-    ligada.querySelector("input").addEventListener("change", ev => {
+    // plano 1500c · GX-069: o dia desligado diz «Fechado» (o interruptor sozinho não dizia o que significa)
+    const fechadoTxt = h("small", { class: "agc-dia-fechado", hidden: faixas.length > 0 }, "Fechado");
+    const inLigada = ligada.querySelector("input");
+    const linhas = listaFaixas(h, ui, nome, faixas, faixas.length > 0, () => {   // GX-070
+      inLigada.checked = false; linhas.caixa.hidden = true; fechadoTxt.hidden = false;
+      try { inLigada.focus(); } catch { /* ok */ }
+      ui.toast(`${nome} ficou fechado (sem nenhum horário).`, { tipo: "info" });
+    });
+    inLigada.addEventListener("change", ev => {
       linhas.caixa.hidden = !ev.target.checked;
+      fechadoTxt.hidden = !!ev.target.checked;
       if (ev.target.checked && !linhas.caixa.querySelector(".agc-faixa")) linhas.adicionar();
     });
     // CA-208: o horário de um dia vai para segunda a sexta num toque (configurar a semana não exige repetir as faixas 5 vezes)
     // plano 1500c · CC-231: «Copiar para…» escolhe os dias (quem atende de terça a sábado também copia num toque)
     linhas.botoes.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p agc-copiar", "aria-haspopup": "dialog", on: { click: () => escolherDiasCopia(id) } }, "Copiar para…"));
     const erroDia = h("p", { class: "agc-erro-dia", role: "alert", hidden: true });   // CA-207/CA-279: o erro aparece no próprio dia
-    gradeDias.appendChild(h("div", { class: "agc-dia", dataset: { dia: id } }, ligada, erroDia, linhas.caixa));
-    controlesDia.push({ id, nome, ligada: ligada.querySelector("input"), linhas, erroDia });
+    gradeDias.appendChild(h("div", { class: "agc-dia", dataset: { dia: id } }, ligada, fechadoTxt, erroDia, linhas.caixa));
+    controlesDia.push({ id, nome, ligada: inLigada, linhas, erroDia, fechadoTxt });
   }
   /** Plano 1500c · CC-231: janela curta com os 7 dias (os úteis já marcados) para escolher o destino da cópia. */
   async function escolherDiasCopia(deId) {
@@ -316,7 +373,7 @@ async function secaoAgenda(ctx, alvo) {
     for (const d of controlesDia) {
       if (d.id === deId || !alvos.includes(d.id)) continue;
       d.ligada.checked = faixas.length > 0;
-      d.linhas.caixa.hidden = !faixas.length;
+      d.linhas.caixa.hidden = !faixas.length; d.fechadoTxt.hidden = faixas.length > 0;   // GX-069
       d.linhas.definir(faixas);
       d.erroDia.hidden = true;
     }
@@ -327,7 +384,7 @@ async function secaoAgenda(ctx, alvo) {
     const texto = `Horário de ${origem.nome} copiado para ${uteis ? "os dias úteis" : alvos.map(x => DIAS_CURTOS[Number(x)]).join(", ")}.`;
     if (typeof ui.acaoComDesfazer !== "function") { ui.toast(texto, { tipo: "ok" }); return; }
     ui.acaoComDesfazer({ texto, reverter: () => {
-      for (const x of antes) { x.d.ligada.checked = x.ligada; x.d.linhas.caixa.hidden = !x.ligada; x.d.linhas.definir(x.faixas); x.d.erroDia.hidden = true; }
+      for (const x of antes) { x.d.ligada.checked = x.ligada; x.d.linhas.caixa.hidden = !x.ligada; x.d.fechadoTxt.hidden = x.ligada; x.d.linhas.definir(x.faixas); x.d.erroDia.hidden = true; }
       marcarSujo();
       pintarPrevia();
     } });
@@ -336,6 +393,15 @@ async function secaoAgenda(ctx, alvo) {
   const intervalos = h("div", { class: "agc-intervalos" });
   // plano 1000b · CB-201: com o horário do departamento a grade some, mas as pausas continuam valendo (e são salvas) — o aviso diz isso
   const avisoPausas = h("p", { class: "campo-ajuda agc-aviso-pausas", hidden: true }, "As pausas valem também com o horário do departamento.");
+  // plano 1500c · GX-060: pausa que não cruza nenhum horário (19:00–20:00 com a agenda fechando às 18h) é avisada na hora — salva, não muda nada
+  const avisoPausaFora = h("p", { class: "campo-ajuda agc-pausa-fora", role: "status", hidden: true });
+  function conferirPausas() {
+    const hor = fonteAgenda && fonteAgenda.checked ? Object.fromEntries(controlesDia.map(d => [d.id, d.ligada.checked ? d.linhas.ler() : []])) : horarioHerdado;
+    const ps = [...intervalos.querySelectorAll(".agc-faixa")].map(l => [...l.querySelectorAll("input")].map(x => x.value));
+    const fora = pausasSemEfeito(hor, ps);
+    avisoPausaFora.textContent = fora.length ? `${fora.length === 1 ? "A pausa" : "As pausas"} ${fora.map(p => `${p[0]}–${p[1]}`).join(", ")} ${fora.length === 1 ? "fica" : "ficam"} fora de todos os horários de atendimento: não ${fora.length === 1 ? "muda" : "mudam"} nada.` : "";
+    avisoPausaFora.hidden = !fora.length;
+  }
   const pausas = Array.isArray(cfg.intervalos) ? cfg.intervalos : [];
   const reservaPausa = () => addIntervalo;   // CB-154: sem pausa nenhuma, o foco vai para «Adicionar intervalo»
   for (const faixa of pausas) intervalos.appendChild(linhaIntervalo(h, ui, faixa[0], faixa[1], "Intervalo", reservaPausa));
@@ -356,11 +422,40 @@ async function secaoAgenda(ctx, alvo) {
       tempo.setAttribute("aria-label", `Duração em minutos para ${n || "o serviço"}`);
       remover.setAttribute("aria-label", `Remover duração de ${n || "serviço"}`);
     });
+    // plano 1500c · GX-059: Enter no nome do serviço abre a próxima linha (antes o Enter salvava a agenda inteira no meio da digitação)
+    servico.addEventListener("keydown", ev => {
+      if (ev.key !== "Enter") return;
+      ev.preventDefault();
+      if (!servico.value.trim()) return;
+      const n = duracoes.querySelectorAll(".agc-duracao").length;
+      if (n >= 30) return;
+      adicionarDuracao();
+      const novo = duracoes.querySelectorAll(".agc-duracao")[n];
+      const campo = novo && novo.querySelector("input");
+      if (campo) try { campo.focus(); } catch { /* ok */ }
+    });
+    // plano 1500c · GX-062: nome repetido avisa ao sair do campo (antes só no Salvar, depois de rolar tudo)
+    servico.addEventListener("blur", () => conferirRepetidos());
     duracoes.appendChild(linha);
     contarServicos();
   }
   // plano 1500c · CC-298: «12 de 30 serviços» à vista; no 30 o «Adicionar serviço» desliga (antes o limite só aparecia ao salvar)
   const contadorServ = h("span", { class: "campo-ajuda agc-serv-contador dado", "aria-live": "polite" });
+  const avisoDupServ = h("p", { class: "agc-erro-dia agc-serv-dup", role: "alert", hidden: true });   // plano 1500c · GX-062
+  function conferirRepetidos() {
+    const vistos = new Map(), reps = new Set();
+    for (const inp of duracoes.querySelectorAll(".agc-duracao input[type=\"text\"]")) {
+      const k = chaveServico(inp.value);
+      inp.removeAttribute("aria-invalid");
+      if (!k) continue;
+      if (vistos.has(k)) { reps.add(inp); reps.add(vistos.get(k)); } else vistos.set(k, inp);
+    }
+    for (const inp of reps) inp.setAttribute("aria-invalid", "true");
+    const nome = reps.size ? [...reps][0].value.trim() : "";
+    avisoDupServ.textContent = nome ? `«${nome}» aparece mais de uma vez. Deixe um só (a duração vale por serviço).` : "";
+    avisoDupServ.hidden = !nome;
+    return !!nome;
+  }
   let addDuracao = null;
   function contarServicos() {
     const n = duracoes.querySelectorAll(".agc-duracao").length;
@@ -384,6 +479,7 @@ async function secaoAgenda(ctx, alvo) {
     }).catch(() => { herdadoP = null; });
   }
   function pintarPrevia() {
+    conferirPausas();
     ui.limpar(previaCaixa);
     if (!fonteAgenda.checked) {
       const pausasH = [...intervalos.querySelectorAll(".agc-faixa")].map(l => [...l.querySelectorAll("input")].map(x => x.value));
@@ -413,13 +509,21 @@ async function secaoAgenda(ctx, alvo) {
   const avisoFora = h("p", { class: "aviso aviso-aten agc-aviso-fora", role: "alert", tabindex: "-1", hidden: true });
   // plano 1000b · CB-202: o «Salvar agenda» fica no fim de um formulário longo — com mudança não salva, uma barra fixa embaixo leva o salvar junto
   barraSujo = h("div", { class: "agc-barra-sujo", hidden: true },
-    h("span", { class: "agc-barra-sujo-txt" }, "Alterações não salvas"), h("button", { type: "submit", class: "bt bt-prim bt-p agc-barra-salvar" }, "Salvar"));
+    h("span", { class: "agc-barra-sujo-txt" }, "Alterações não salvas"),
+    h("button", { type: "submit", class: "bt bt-prim bt-p agc-barra-salvar" }, "Salvar"),
+    // plano 1500c · GX-072: «Descartar» volta ao que está salvo (antes era sair da tela e responder «sair sem salvar»)
+    h("button", { type: "button", class: "bt bt-fant bt-p agc-barra-descartar", on: { click: async () => {
+      const ok = typeof ui.confirmar === "function" ? await ui.confirmar({ titulo: "Descartar as alterações?", texto: "Os horários e durações voltam ao que está salvo.", rotulo: "Descartar", perigo: true }) : true;
+      if (!ok) return;
+      sujo = false; tirarAvisoSaida();
+      secaoAgenda(ctx, alvo);
+    } } }, "Descartar"));
   const form = h("form", { class: "pilha agc-form", novalidate: true },
     h("section", { class: "cartao pilha" },
       // plano 1500c · CC-049: «horário de Brasília», o mesmo nome dos Departamentos (cv-config)
       h("div", { class: "cartao-cab" }, h("div", null, h("h3", { class: "titulo-sec" }, "Disponibilidade"), h("p", { class: "sub" }, "Os horários livres são calculados no horário de Brasília."))),
       usarAgenda, ajudaFonte, gradeDias, previaCaixa,
-      h("div", { class: "pilha-p" }, h("div", null, h("h4", null, "Pausas e almoço"), h("p", { class: "sub" }, "Intervalos aplicados a todos os dias de atendimento.")), avisoPausas, intervalos, addIntervalo)),
+      h("div", { class: "pilha-p" }, h("div", null, h("h4", null, "Pausas e almoço"), h("p", { class: "sub" }, "Intervalos aplicados a todos os dias de atendimento.")), avisoPausas, intervalos, avisoPausaFora, addIntervalo)),   // GX-060
     h("section", { class: "cartao pilha" },
       h("div", { class: "cartao-cab" }, h("div", null, h("h3", { class: "titulo-sec" }, "Duração e capacidade"), h("p", { class: "sub" }, "Ajuste o tempo por serviço. O padrão é usado quando um serviço não tem duração própria."))),
       h("div", { class: "form-grade" },
@@ -432,7 +536,7 @@ async function secaoAgenda(ctx, alvo) {
           ajuda: "Ex.: 30 = ninguém (nem a IA) marca para depois de 30 dias." }),   // plano 1000b · CB-187
         campoPasso),
       avisoPasso,
-      h("div", { class: "pilha-p" }, h("div", null, h("h4", null, "Duração por serviço"), h("p", { class: "sub" }, "Ex.: avaliação 30 min, limpeza 45 min. Até 30 serviços.")), duracoes, h("div", { class: "linha agc-serv-rod" }, addDuracao, contadorServ)),
+      h("div", { class: "pilha-p" }, h("div", null, h("h4", null, "Duração por serviço"), h("p", { class: "sub" }, "Ex.: avaliação 30 min, limpeza 45 min. Até 30 serviços.")), duracoes, avisoDupServ, h("div", { class: "linha agc-serv-rod" }, addDuracao, contadorServ)),   // GX-062
       avisoFora, h("div", { class: "linha linha-fim" }, btSalvar)),
     barraSujo);
 
@@ -459,8 +563,15 @@ async function secaoAgenda(ctx, alvo) {
   });
   const limparInvalidos = () => { for (const el of form.querySelectorAll("[aria-invalid]")) el.removeAttribute("aria-invalid"); };
   let horarioConferido = "";     // plano 1500c · CC-230
-  form.addEventListener("submit", async ev => {
+  form.addEventListener("submit", ev => salvarAgenda(ev));
+  // plano 1500c · GX-058: Ctrl/⌘+S salva a agenda (sem o navegador abrir «Salvar página como…»)
+  form.addEventListener("keydown", ev => {
+    if (!(ev.ctrlKey || ev.metaKey) || ev.altKey || String(ev.key).toLowerCase() !== "s") return;
     ev.preventDefault();
+    salvarAgenda(null);
+  });
+  async function salvarAgenda(ev) {
+    if (ev && typeof ev.preventDefault === "function") ev.preventDefault();
     ui.marcarErro(form, null);
     limparInvalidos();
     const dados = ui.lerForm(form);
@@ -471,12 +582,14 @@ async function secaoAgenda(ctx, alvo) {
     const dias = numero("dias_a_frente");
     const passoTxt = dados.passo_min == null || dados.passo_min === "" ? null : Number(dados.passo_min);
     // plano 1000b · CB-156: o erro dos números marca o campo (ui.marcarErro: aria-invalid e texto junto dele) e leva o foco até ele
+    // plano 1500c · GX-071: «2,5» (ou vazio) diz o que fazer — número inteiro / preencha — em vez de «deve ficar entre…»
+    const qual = (nome, rot, a, b, padrao) => (passoTxt === null && nome === "passo_min" ? padrao : erroNumeroInteiro(dados[nome], rot, a, b) || padrao);
     const errosNum = [
-      !Number.isInteger(duracao) || duracao < 5 || duracao > 480 ? ["duracao_min", "A duração padrão deve ficar entre 5 e 480 minutos."] : null,
-      !Number.isInteger(capacidade) || capacidade < 1 || capacidade > 50 ? ["capacidade", "A capacidade deve ficar entre 1 e 50 atendimentos."] : null,
-      !Number.isInteger(antecedencia) || antecedencia < 0 || antecedencia > 720 ? ["antecedencia_horas", "A antecedência deve ficar entre 0 e 720 horas."] : null,
-      !Number.isInteger(dias) || dias < 1 || dias > 180 ? ["dias_a_frente", "O limite de dias deve ficar entre 1 e 180."] : null,
-      passoTxt !== null && (!Number.isInteger(passoTxt) || passoTxt < 5 || passoTxt > 480) ? ["passo_min", "O intervalo entre horários deve ficar entre 5 e 480 minutos."] : null,
+      !Number.isInteger(duracao) || duracao < 5 || duracao > 480 ? ["duracao_min", qual("duracao_min", "Duração padrão", 5, 480, "A duração padrão deve ficar entre 5 e 480 minutos.")] : null,
+      !Number.isInteger(capacidade) || capacidade < 1 || capacidade > 50 ? ["capacidade", qual("capacidade", "Atendimentos no mesmo horário", 1, 50, "A capacidade deve ficar entre 1 e 50 atendimentos.")] : null,
+      !Number.isInteger(antecedencia) || antecedencia < 0 || antecedencia > 720 ? ["antecedencia_horas", qual("antecedencia_horas", "Antecedência", 0, 720, "A antecedência deve ficar entre 0 e 720 horas.")] : null,
+      !Number.isInteger(dias) || dias < 1 || dias > 180 ? ["dias_a_frente", qual("dias_a_frente", "Dias à frente", 1, 180, "O limite de dias deve ficar entre 1 e 180.")] : null,
+      passoTxt !== null && (!Number.isInteger(passoTxt) || passoTxt < 5 || passoTxt > 480) ? ["passo_min", qual("passo_min", "Intervalo entre horários", 5, 480, "O intervalo entre horários deve ficar entre 5 e 480 minutos.")] : null,
     ].filter(Boolean);
     if (errosNum.length) {
       for (const [nome, texto] of errosNum) {
@@ -523,6 +636,14 @@ async function secaoAgenda(ctx, alvo) {
       if (campo) { campo.setAttribute("aria-invalid", "true"); try { campo.focus(); } catch { /* ok */ } }
       return ui.toast(`Pausa ${iPausa + 1}: ${!a ? "preencha o início." : !b ? "preencha o fim." : "o fim precisa ser depois do início."}`, { tipo: "erro" });
     }
+    // plano 1500c · GX-061: duas pausas que se sobrepõem (12:00–13:00 e 12:30–14:00) — a regra dos dias vale para as pausas também
+    const parPausa = faixasSobrepostas(pausasSalvas);
+    if (parPausa) {
+      const i2 = pausasSalvas.findIndex(p => p[0] === parPausa[1][0] && p[1] === parPausa[1][1]);
+      const campo = i2 >= 0 ? linhasPausa[i2].querySelector("input") : null;
+      if (campo) { campo.setAttribute("aria-invalid", "true"); try { campo.focus(); } catch { /* ok */ } }
+      return ui.toast(`As pausas ${parPausa[0][0]}–${parPausa[0][1]} e ${parPausa[1][0]}–${parPausa[1][1]} se sobrepõem. Junte-as numa só.`, { tipo: "erro" });
+    }
     const duracoesSalvas = {};
     const vazias = [];
     for (const linha of duracoes.querySelectorAll(".agc-duracao")) {
@@ -560,6 +681,9 @@ async function secaoAgenda(ctx, alvo) {
         horarioConferido = chaveHor;
         if (fora.length) {
           avisoFora.textContent = `${fora.length === 1 ? "1 consulta marcada fica" : `${fora.length} consultas marcadas ficam`} fora do novo horário: ${fora.slice(0, 3).map(c => `${c.nome || c.titulo || "consulta"} (${ui.dataHoraBR(c.inicio)})`).join(", ")}${fora.length > 3 ? "…" : ""}. Elas continuam marcadas — remarque pela Agenda. Toque em «Salvar agenda» de novo para salvar mesmo assim.`;
+          // plano 1500c · GX-068: um toque leva à Agenda no dia da primeira consulta que ficou de fora (para remarcar)
+          const diaFora = diaSP(primeiraDe(fora));
+          if (diaFora) avisoFora.append(" ", h("a", { href: `#/agenda?dia=${diaFora}`, class: "agc-fora-ver", on: { click: ev2 => { ev2.preventDefault(); if (typeof ctx.navegar === "function") ctx.navegar(`#/agenda?dia=${diaFora}`); } } }, "Ver na Agenda"));
           avisoFora.hidden = false;
           try { avisoFora.focus(); } catch { /* ok */ }
           return ui.toast(`${fora.length === 1 ? "Uma consulta fica" : `${fora.length} consultas ficam`} fora do novo horário.`, { tipo: "info" });
@@ -581,16 +705,18 @@ async function secaoAgenda(ctx, alvo) {
       try { btSalvar.focus({ preventScroll: true }); } catch { btSalvar.focus(); }
       if (typeof ui.checkSucesso === "function") ui.checkSucesso(btSalvar, { texto: "Agenda salva" });
     } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
-  });
+  }
 
   /* ---------- bloqueios (CA-278: um nome só — «Bloqueio»: «Bloquear horário», «Bloqueios futuros») ---------- */
   const listaBloqueios = h("div", { class: "agc-bloqueios", role: "list" });
+  const contBloq = h("span", { class: "agc-cont-bloq dado" });   // plano 1500c · GX-063
   const POR_PAGINA = 30;
   let mostrar = POR_PAGINA;                 // CA-273: «Ver mais» pagina no cliente (estado.bloqueios já vem inteiro)
   const ocultos = new Set();                // CA-272: removidos com «Desfazer» ainda no prazo (a exclusão real sai quando o aviso fecha)
   function desenharBloqueios() {
     ui.limpar(listaBloqueios);
     const todos = (estado.bloqueios || []).filter(b => b.fim && new Date(b.fim) > new Date() && !ocultos.has(b.id));
+    contBloq.textContent = todos.length ? ` (${todos.length})` : "";   // plano 1500c · GX-063: quantos bloqueios futuros há (a lista pagina de 30 em 30)
     const futuros = todos.slice(0, mostrar);
     if (!futuros.length) listaBloqueios.appendChild(h("p", { class: "sub" }, "Nenhum bloqueio futuro."));
     for (const b of futuros) {
@@ -599,7 +725,9 @@ async function secaoAgenda(ctx, alvo) {
       const editar = h("button", { type: "button", class: "bt bt-fant bt-p agc-editar-bloqueio", "aria-label": `Editar bloqueio de ${ui.dataHoraBR(b.inicio)}`, on: { click: () => criarBloqueio(b) } }, "Editar");
       listaBloqueios.appendChild(h("article", { class: "agc-bloqueio", role: "listitem", dataset: { id: b.id } },
         // plano 1500c · CC-279: quem fechou o horário (quando o servidor mandar criado_por_nome)
-        h("div", null, h("b", null, b.motivo || "Bloqueio"), h("small", null, ui.periodoBR(b.inicio, b.fim, " — "), typeof b.criado_por_nome === "string" && b.criado_por_nome.trim() ? ` · por ${b.criado_por_nome.trim()}` : "")),
+        h("div", null, h("b", null, b.motivo || "Bloqueio"), h("small", null, ui.periodoBR(b.inicio, b.fim, " — "), typeof b.criado_por_nome === "string" && b.criado_por_nome.trim() ? ` · por ${b.criado_por_nome.trim()}` : ""),
+          // plano 1500c · GX-064: o bloqueio que já começou (férias em curso) diz «em andamento»
+          Date.parse(b.inicio) <= Date.now() ? h("span", { class: "pilula pilula-aten agc-bloq-agora" }, "em andamento") : null),
         h("div", { class: "linha agc-bloqueio-acoes" }, editar, excluir)));
     }
     if (todos.length > futuros.length) {
@@ -641,7 +769,7 @@ async function secaoAgenda(ctx, alvo) {
   const btBloqueio = h("button", { type: "button", class: "bt bt-sec", on: { click: criarBloqueio } }, ui.icone("mais"), "Bloquear horário");
   const btFeriados = h("button", { type: "button", class: "bt bt-fant agc-feriados", on: { click: bloquearFeriados } }, ui.icone("calendario"), "Bloquear feriados nacionais");
   raiz.append(form, h("section", { class: "cartao pilha" },
-    h("div", { class: "cartao-cab" }, h("div", null, h("h3", { class: "titulo-sec" }, "Bloqueios futuros"), h("p", { class: "sub" }, "Feche um dia inteiro ou só algumas horas: feriado, folga, manutenção.")),
+    h("div", { class: "cartao-cab" }, h("div", null, h("h3", { class: "titulo-sec" }, "Bloqueios futuros", contBloq), h("p", { class: "sub" }, "Feche um dia inteiro ou só algumas horas: feriado, folga, manutenção.")),
       h("div", { class: "linha agc-bloq-acoes" }, btFeriados, btBloqueio)),
     listaBloqueios));
 
@@ -678,6 +806,10 @@ async function secaoAgenda(ctx, alvo) {
         h("p", null, `Os feriados até ${ate} que ainda não têm bloqueio ficam fechados o dia inteiro — para a equipe e para a IA. Desmarque os dias em que vai abrir.`),
         h("label", { class: "agc-copiar-dia" }, chkSP, h("span", null, "Incluir o feriado do estado de São Paulo (9 de julho)")),
         h("div", { class: "form-grade" }, cidadeData, cidadeNome),
+        // plano 1500c · GX-065: marcar ou desmarcar os ~20 feriados de uma vez (quem só fecha 2 ou 3 não desmarca um a um)
+        h("div", { class: "agc-feriados-todos", role: "group", "aria-label": "Seleção dos feriados" },
+          h("button", { type: "button", class: "bt bt-fant bt-p agc-feriados-marcar", on: { click: () => { for (const c of caixas) c.checked = true; } } }, "Marcar todos"),
+          h("button", { type: "button", class: "bt bt-fant bt-p agc-feriados-desmarcar", on: { click: () => { for (const c of caixas) c.checked = false; } } }, "Desmarcar todos")),
         listaEl,
         h("p", { class: "campo-ajuda" }, "Carnaval e Corpus Christi são ponto facultativo e ficam de fora.")),
       acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: false }, { rotulo: "Bloquear os marcados", tipo: "primario", valor: true }] });
@@ -730,11 +862,28 @@ async function secaoAgenda(ctx, alvo) {
       h("div", { class: "form-grade" },
         ui.campo({ rotulo: "Das", nome: "das", tipo: "hora", valor: ed ? ed.das : undefined }),
         ui.campo({ rotulo: "Até", nome: "ate", tipo: "hora", valor: ed ? ed.ate : undefined })),
-      ui.campo({ rotulo: "Motivo (opcional)", nome: "motivo", max: 120, placeholder: "Ex.: feriado, manutenção", valor: ed ? ed.motivo : undefined }));
+      // plano 1500c · GX-066: «Manhã» / «Tarde» preenchem os horários pelo expediente do dia escolhido (meia folga em um toque)
+      h("div", { class: "agc-meio-dia", role: "group", "aria-label": "Preencher os horários" },
+        h("button", { type: "button", class: "bt bt-fant bt-p agc-manha", on: { click: () => preencherMeio("manha") } }, "Manhã"),
+        h("button", { type: "button", class: "bt bt-fant bt-p agc-tarde", on: { click: () => preencherMeio("tarde") } }, "Tarde"),
+        h("button", { type: "button", class: "bt bt-fant bt-p agc-dia-inteiro", on: { click: () => preencherMeio(null) } }, "Dia inteiro")),
+      ui.campo({ rotulo: "Motivo (opcional)", nome: "motivo", max: 120, placeholder: "Ex.: feriado, manutenção", valor: ed ? ed.motivo : undefined }),
+      // plano 1500c · GX-056: os motivos comuns num toque (o mesmo da janela da grade)
+      h("div", { class: "agc-motivos", role: "group", "aria-label": "Motivos comuns" },
+        MOTIVOS_BLOQUEIO_CFG.map(mv => h("button", { type: "button", class: "ag-serv-chip agc-motivo", dataset: { motivo: mv }, on: { click: () => { const i = corpo.querySelector('input[name="motivo"]'); if (i) i.value = mv; } } }, mv))));
+    function preencherMeio(qual) {
+      const das = corpo.querySelector('input[name="das"]'), ate = corpo.querySelector('input[name="ate"]');
+      if (!das || !ate) return;
+      if (!qual) { das.value = ""; ate.value = ""; return; }
+      const meios = meiosDoDia(cfg.horario || horarioHerdado || null, corpo.querySelector('input[name="data"]').value, cfg.intervalos || []);
+      [das.value, ate.value] = meios[qual];
+    }
     // CA-210: consultas já marcadas no período — avisa antes de salvar (os pacientes continuariam marcados num horário fechado)
+    let linkAgenda = null;
     const avisoTxt = h("span");
     const aviso = h("div", { class: "aviso aviso-aten agc-aviso-consultas", role: "alert", hidden: true }, ui.icone("info"),
-      h("div", null, avisoTxt, " ", h("a", { href: "#/agenda", class: "agc-ver-agenda", on: { click: ev => { ev.preventDefault(); if (fecharModal) fecharModal(null); if (typeof ctx.navegar === "function") ctx.navegar("#/agenda"); } } }, "Abrir a Agenda")));
+      // plano 1500c · GX-067: «Abrir a Agenda» vai ao DIA da primeira consulta afetada (#/agenda?dia=…), não à semana de hoje
+      h("div", null, avisoTxt, " ", linkAgenda = h("a", { href: "#/agenda", class: "agc-ver-agenda", on: { click: ev => { ev.preventDefault(); if (fecharModal) fecharModal(null); if (typeof ctx.navegar === "function") ctx.navegar(linkAgenda.getAttribute("href") || "#/agenda"); } } }, "Abrir a Agenda")));
     corpo.appendChild(aviso);
     let conferido = "", fecharModal = null;
     const r = await ui.modal({ titulo: ed ? "Editar bloqueio" : "Bloquear horário", corpo, largura: "p", aoAbrir: a => { fecharModal = v => a.fechar(v); }, acoes: [
@@ -760,6 +909,7 @@ async function secaoAgenda(ctx, alvo) {
             const caem = consultasNoBloqueio(lidas, { data: d.data, data_fim: d.data_fim || null, das: d.das || null, ate: d.ate || null, duracao: Number(cfg.duracao_min) || 30 });
             conferido = periodo;
             if (caem.length) {
+              if (linkAgenda && diaSP(primeiraDe(caem))) linkAgenda.setAttribute("href", `#/agenda?dia=${diaSP(primeiraDe(caem))}`);   // GX-067
               const nomes = caem.slice(0, 3).map(c => `${c.nome || c.titulo || "consulta"} (${ui.dataHoraBR(c.inicio)})`).join(", ");
               avisoTxt.textContent = `${caem.length === 1 ? "1 consulta cai" : `${caem.length} consultas caem`} neste bloqueio: ${nomes}${caem.length > 3 ? "…" : ""}. Os pacientes continuam marcados — remarque ou desmarque pela Agenda. Para bloquear mesmo assim, toque em «Salvar bloqueio» de novo.`;
               aviso.hidden = false;
@@ -808,10 +958,14 @@ async function secaoAgenda(ctx, alvo) {
       } else ui.toast(texto, { tipo: "ok" });
     }
   }
+  // plano 1500c · GX-072: o «Descartar» remonta a seção — quem guardou o retorno da 1ª montagem (config.js) passa a ler a montagem viva
+  const minha = { sujo: () => sujo };
+  secaoViva = minha;
+  const sujaAgora = () => (secaoViva ? secaoViva.sujo() : sujo);
   return {
-    limpar: () => {},
-    pendente: () => sujo,
-    podeSair: async () => !sujo || ui.confirmar({ titulo: "Sair sem salvar a agenda?", rotulo: "Sair sem salvar", perigo: true,
+    limpar: () => { trocarAvisoSaida(null); secaoViva = null; },   // plano 1500c · GX-057 (a montagem viva, mesmo depois do «Descartar»)
+    pendente: () => sujaAgora(),
+    podeSair: async () => !sujaAgora() || ui.confirmar({ titulo: "Sair sem salvar a agenda?", rotulo: "Sair sem salvar", perigo: true,
       texto: "As mudanças de horários e durações ainda não foram salvas e serão perdidas." }),
   };
 }

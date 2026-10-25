@@ -1,6 +1,6 @@
 # Backup lógico diário do banco do Órbita / Nexus Ads (plano «1000+ melhorias», SV-186), FORA do Supabase.
 # pg_dump SÓ das tabelas public.nx_* com um papel SOMENTE LEITURA (segredo BACKUP_DB_URL), criptografado com gpg simétrico
-# (segredo BACKUP_SENHA) e guardado como artefato do Actions por 14 dias. Nada é escrito no banco.
+# (segredo BACKUP_SENHA) e guardado como artefato do Actions por 90 dias (plano 1500c · SC-153: o máximo do Actions; antes 14). Nada é escrito no banco.
 # O papel somente leitura e os dois segredos são criados pelo João (passo a passo e ensaio de restauração em
 # docs/orbita/DEPLOY-FUNCOES.md, «Backup do banco»). Sem os segredos o run falha no 1º passo, com a explicação.
 name: Backup do banco
@@ -83,5 +83,5 @@ jobs:
         with:
           name: backup-nexus-ads
           path: ${{ runner.temp }}/backup/
-          retention-days: 14
+          retention-days: 90   # plano 1500c · SC-153
           if-no-files-found: error

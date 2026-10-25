@@ -134,6 +134,11 @@ begin
                  and (select nome from public.nx_convites where id = (j ->> 'id')::uuid) = 'Convidada 34', 'SC-005: link novo, antigo revogado, mesmos dados');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_convite_regerar(%L, %L, %L)', t_at, cA, (j ->> 'id')::uuid)) like 'sem_permissao|%', 'SC-005: só admin');
 
+  update public.nx_convites set expira_em = now() - interval '1 day' where id = (j ->> 'id')::uuid;
+  j := public.nx_usuarios_listar(t_adm, cA);
+  perform pg_temp.ok(exists (select 1 from json_array_elements(j -> 'convites') x where (x ->> 'vencido')::boolean and x ->> 'nome' = 'Convidada 34')
+                 and exists (select 1 from json_array_elements(j -> 'usuarios') x where x::jsonb ? 'suspenso'), 'UCB-029: convite vencido vem com vencido:true; SC-004 suspenso por usuário');
+
   -- ---------------------------------------------------------- SC-018 cadastro
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_criar_conta(%L, %L, %L)', 't34-novo-' || sfx || '@teste.local', '        ', 'Novo')) like 'senha_curta|%', 'SC-010: cadastro com só espaços');
   insert into public.nx_login_falhas (chave, em) select 'cadastro:global', now() from generate_series(1, 50);
@@ -164,7 +169,7 @@ begin
   perform pg_temp.ok((j ->> 'ultima_msg_em')::timestamptz <= now() and j -> 'cliente' ->> 'status' = 'ativo', 'UCC-018/019: pulso');
   j := public.nx_inicio(t_adm, cA);
   perform pg_temp.ok(exists (select 1 from json_array_elements(j -> 'conversas' -> 'aguardando_lista') x
-                              where (x ->> 'id')::bigint = cv and (x ->> 'atribuida_id')::uuid = k_at and x ->> 'atribuida_nome' = 'Atendente Trinta'), 'SC-008: quem atende');
+                              where (x ->> 'id')::bigint = cv and (x ->> 'atribuida_id')::uuid = k_at and x ->> 'atribuida_nome' = 'Atendente Trinta' and (x ->> 'contato_id')::bigint = ct), 'SC-008/RC-228: quem atende e o contato');
 
   -- ---------------------------------------------------------- AC-063 / AC-262 / AC-055 cfg
   perform pg_temp.ok(pg_temp.erro($$select public.nx_cfg_validar('{"diasFechados":[0,6],"agenciaNome":"Nexus","relSemanal":true}'::jsonb)$$) = 'ok', 'AC-063/262/055: válidos');
@@ -178,6 +183,7 @@ begin
   perform pg_temp.ok(exists (select 1 from pg_constraint where conname = 'nx_relatorios_tipo_check' and pg_get_constraintdef(oid) like '%semanal%'), 'AC-055: CHECK aceita semanal');
   j := public.nx_saude_dados();
   perform pg_temp.ok(j ->> 'eventos_atrasados' is not null and j ->> 'integracoes_erro' is not null, 'SC-143/145: saúde');
+  perform pg_temp.ok(json_array_length(j -> 'tarefas') = 2 and (j -> 'tarefas' -> 0)::jsonb ? 'atrasada' and j::jsonb ? 'crons_atrasados', 'SC-141/147: tarefas numa leitura e crons atrasados');
   insert into public.nx_erros_front (hash, mensagem, ultimo_em) values ('velho-' || sfx, 'x', now() - interval '31 days');
   j := public.nx_saas_faxina();
   perform pg_temp.ok((j ->> 'erros_front')::int >= 1 and j ->> 'notificacoes_nao_lidas' is not null, 'SC-190/116: faxina');
@@ -191,6 +197,43 @@ begin
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_evento_registrar(%L, %L)', t_adm, 'Tipo Ruim!')) like 'dados_invalidos|tipo|%', 'UCC-104: tipo inválido');
 
   -- ---------------------------------------------------------- SC-104 / SC-105 titular · SC-100 / SC-101 exclusão
+  insert into public.nx_leads (cliente_id, nome, contato_id, titulo, status) values (cA, 'Busca 34', ct, 'Clareamento Titular', 'aberto');
+  j := public.nx_buscar(t_adm, cA, 'Clareamento');
+  perform pg_temp.ok(j -> 'negocios' -> 0 ->> 'contato_telefone' = '5512990034001' and (j -> 'negocios' -> 0)::jsonb ? 'consulta_em', 'CC-197/267: telefone e consulta_em no negócio');
+  perform pg_temp.ok((public.nx_empresas_listar(t_adm, cA)::jsonb -> 'itens') is not null, 'RC-311: empresas lista');
+  -- SC-131 / UC-024 aviso do fim do teste
+  update public.nx_clientes set status = 'teste', teste_ate = (now() at time zone 'America/Sao_Paulo')::date + 3 where id = cA;
+  n := public.nx_teste_avisar();
+  perform pg_temp.ok(exists (select 1 from public.nx_notificacoes where cliente_id = cA and conta_id = k_adm and titulo = 'O teste termina em 3 dias')
+                 and public.nx_teste_avisar() = 0, 'SC-131: aviso a 3 dias, uma vez');
+  update public.nx_clientes set status = 'ativo', teste_ate = null where id = cA;
+  -- UCA-093 descrição da automação
+  j := public.nx_automacao_salvar(t_adm, cA, '{"nome":"Auto 34","gatilho":"negocio_criado","acoes":[{"tipo":"nota","texto":"oi"}],"descricao":" Avisa a recepção "}'::jsonb);
+  perform pg_temp.ok(j ->> 'descricao' = 'Avisa a recepção'
+                 and exists (select 1 from json_array_elements(public.nx_automacoes_listar(t_adm, cA) -> 'itens') x where x ->> 'descricao' = 'Avisa a recepção'), 'UCA-093: salva e lista a descrição');
+  -- CC-027 SLA por departamento
+  j := public.nx_departamento_salvar(t_adm, cA, '{"nome":"Recepção 34","sla_aten":10,"sla_atraso":20,"sla_critico":45}'::jsonb);
+  perform pg_temp.ok((j ->> 'sla_critico')::int = 45, 'CC-027: salva os limites');
+  perform pg_temp.ok(pg_temp.erro(format('select public.nx_departamento_salvar(%L, %L, %L::jsonb)', t_adm, cA,
+           jsonb_build_object('id', j ->> 'id', 'nome', 'Recepção 34', 'sla_atraso', 5))) like 'dados_invalidos|sla|%', 'CC-027: fora de ordem recusa');
+  perform pg_temp.ok(exists (select 1 from json_array_elements(public.nx_cv_base(t_at, cA) -> 'departamentos') x where (x ->> 'sla_aten')::int = 10), 'CC-027: nx_cv_base devolve para o atendente');
+  -- CC-245 / CC-324 / RC-065
+  insert into public.nx_leads (cliente_id, nome, contato_id, titulo, status, previsao_fechamento) values (cA, 'Agenda 34', ct, 'Avaliação 34', 'aberto', current_date + 30) returning id into l1;
+  jb := public.nx_agenda_marcar_core(cA, l1, date_trunc('hour', now()) + interval '2 days', null, false, true, 'painel', 'trazer exames', k_adm);
+  perform pg_temp.ok((jb ->> 'ok')::boolean, 'agenda: marcou (encaixe)');
+  j := public.nx_agenda_dia(t_adm, cA, ((now() + interval '2 days') at time zone 'America/Sao_Paulo')::date, 1);
+  perform pg_temp.ok(exists (select 1 from json_array_elements(j -> 'consultas') x
+                              where (x ->> 'negocio_id')::bigint = l1 and x ->> 'obs' = 'trazer exames' and x ->> 'marcado_por' = k_adm::text), 'CC-245/324: obs e marcado_por');
+  v_txt := (select x ->> 'inicio' from json_array_elements(j -> 'consultas') x where (x ->> 'negocio_id')::bigint = l1);
+  perform pg_temp.ok(pg_temp.erro(format('select public.nx_agenda_confirmar(%L, %L, %L, %L)', t_adm, cA, l1, '2020-01-01T10:00:00-03:00')) like 'dados_invalidos|consulta_mudou|%', 'CC-240: outro horário recusa');
+  j := public.nx_agenda_confirmar(t_adm, cA, l1, v_txt);
+  perform pg_temp.ok((j ->> 'ok')::boolean and exists (select 1 from json_array_elements(public.nx_agenda_dia(t_adm, cA, ((now() + interval '2 days') at time zone 'America/Sao_Paulo')::date, 1) -> 'consultas') x
+                                                        where (x ->> 'negocio_id')::bigint = l1 and x ->> 'confirmada_em' is not null and x ->> 'confirmacao' = 'confirmada'), 'CC-240/239/RC-202: confirmada e devolvida');
+  j := public.nx_suporte_entrar(t_sup, cA, 'conferir número');
+  perform pg_temp.ok(j ->> 'ok' = 'true', 'UCB-091: gestor/super registra');
+  perform pg_temp.ok(exists (select 1 from public.nx_auditoria where cliente_id = cA and acao = 'suporte_motivo' and dados ->> 'motivo' = 'conferir número'), 'UCB-091: motivo auditado');
+  perform pg_temp.ok(pg_temp.erro(format('select public.nx_suporte_entrar(%L, %L, %L)', t_adm, cA, 'x')) like 'sem_permissao|%', 'UCB-091: só gestor/super');
+  perform pg_temp.ok(public.nx_crm_cards(cA, array[l1], public.nx_ctx(t_adm, cA, 'leitura')) -> 0 ->> 'previsao_fechamento' = (current_date + 30)::text, 'RC-065: previsão no cartão');
   j := public.nx_titular_localizar(t_adm, cA, '(12) 99003-4001');
   perform pg_temp.ok(json_array_length(j) = 1 and (j -> 0 ->> 'id')::bigint = ct, 'SC-105: acha pelo telefone');
   perform pg_temp.ok(json_array_length(public.nx_titular_localizar(t_adm, cA, 'T34-TIT-' || sfx || '@x.test')) = 1, 'SC-105: acha pelo e-mail');
@@ -199,7 +242,7 @@ begin
   insert into public.nx_leads (cliente_id, nome, contato_id, titulo, campos) values (cA, 'Lead 34', ct, 'Implante da Titular', '{"cpf":"123"}'::jsonb) returning id into l1;
   insert into public.nx_rastreio (cliente_id, codigo, telefone, negocio_id) values (cA, 'K7M2P', '5512990034001', l1);
   j := public.nx_titular_exportar(t_adm, cA, ct);
-  perform pg_temp.ok(j -> 'contato' ->> 'nome' = 'Titular Trinta' and json_array_length(j -> 'negocios') = 1 and json_array_length(j -> 'mensagens') = 1, 'SC-104: exporta');
+  perform pg_temp.ok(j -> 'contato' ->> 'nome' = 'Titular Trinta' and json_array_length(j -> 'negocios') = 3 and json_array_length(j -> 'mensagens') = 1, 'SC-104: exporta');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_titular_exportar(%L, %L, %L)', t_at, cA, ct)) like 'sem_permissao|%', 'SC-104: só admin');
   j := public.nx_contato_excluir(t_adm, cA, ct, 'excluir');
   perform pg_temp.ok((select l.campos = '{}'::jsonb and l.titulo is null and l.nome = 'Removido' from public.nx_leads l where l.id = l1), 'SC-100: negócio sem dado pessoal');

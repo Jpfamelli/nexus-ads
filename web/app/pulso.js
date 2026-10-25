@@ -264,7 +264,17 @@ export function criarPulso(o) {
  * Dentro de Conversas a própria tela avisa (conversas.js); fora dela o shell toca o som (preferência `som`, ligada por padrão) e,
  * com a aba escondida e permissão dada, o aviso de área de trabalho (preferência `tela`). Devolve {som, tela, novas}.
  */
-export function avisoDeNaoLidas({ antes, depois, emConversas = false, escondida = false, pref = {}, ultimaAntes = null, ultimaDepois = null } = {}) {
+/** plano 2000d · DU-268: horário silencioso ({de:"20:00", ate:"08:00"}, pode virar a meia-noite) — `agora` é um Date (hora local do aparelho).
+    Sem horário válido: nunca silencioso. */
+export function emHorarioSilencioso(silencio, agora = new Date()) {
+  const min = s => { const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(s || "")); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+  if (!silencio || typeof silencio !== "object") return false;
+  const de = min(silencio.de), ate = min(silencio.ate);
+  if (de === null || ate === null || de === ate || !(agora instanceof Date) || !Number.isFinite(agora.getTime())) return false;
+  const t = agora.getHours() * 60 + agora.getMinutes();
+  return de < ate ? t >= de && t < ate : t >= de || t < ate;
+}
+export function avisoDeNaoLidas({ antes, depois, emConversas = false, escondida = false, pref = {}, ultimaAntes = null, ultimaDepois = null, agora = null } = {}) {
   const a = Number(antes), d = Number(depois);
   if (antes === null || antes === undefined || !Number.isFinite(a) || !Number.isFinite(d)) return { som: false, tela: false, novas: 0 };
   let novas = Math.max(0, Math.round(d - a));
@@ -273,6 +283,8 @@ export function avisoDeNaoLidas({ antes, depois, emConversas = false, escondida 
   if (!novas && d > 0 && Number.isFinite(ua) && Number.isFinite(ud) && ud > ua) novas = 1;
   if (!novas || emConversas) return { som: false, tela: false, novas };
   const p = pref && typeof pref === "object" ? pref : {};
+  // plano 2000d · DU-268: no horário silencioso o número do menu sobe, mas sem som e sem aviso de tela
+  if (agora && emHorarioSilencioso(p.silencio, agora)) return { som: false, tela: false, novas, silencio: true };
   return { som: p.som !== false, tela: p.tela === true && !!escondida, novas };
 }
 

@@ -225,7 +225,9 @@ test("aplicarModelo: resolve etapa pelo marco, etiqueta e modelo da WABA pelo no
   assert.equal(l.acoes[0].template_id, U(71));
   assert.deepEqual(l.acoes[0].parametros, ["{primeiro_nome}", "{data_consulta}", "{hora_consulta}"]);
   assert.equal(L.validar(Object.assign({}, l, { ativo: true }), { base: BASE }).ok, true, "lembrete pronto para ligar");
-  for (const m of L.MODELOS) assert.equal(L.validar(L.aplicarModelo(m.id, BASE), { base: BASE }).ok, true, m.id);
+  // plano 2000d: receitas que pedem a etapa pelo nome (Pronto, Enviado…), uma etiqueta ou um recurso novo do servidor ficam pendentes
+  // nesta base de teste de propósito (DU-008: «aplicarModelo sem marco deixa estagio_id vazio e validar aponta «quando»»)
+  for (const m of L.MODELOS.filter(x => !x.pedeEtapa && !x.pedeEscolha && !x.requer)) assert.equal(L.validar(L.aplicarModelo(m.id, BASE), { base: BASE }).ok, true, m.id);
   // o original não é alterado
   assert.equal(L.MODELOS.find(m => m.id === "orcamento").auto.config.estagio_marco, "orcamento");
 });
@@ -234,15 +236,19 @@ test("modelosDaVertical: lembrete em destaque para odonto/oficina, acompanhament
   assert.equal(L.modelosDaVertical("odonto")[0].id, "lembrete_consulta_texto");
   assert.equal(L.modelosDaVertical("oficina")[0].id, "lembrete_consulta_texto");
   assert.deepEqual(L.modelosDaVertical("loja").slice(0, 3).map(m => m.id), ["followup_orcamento", "lead_anuncio", "pos_venda"]);
-  assert.equal(L.modelosDaVertical("generico").length, L.MODELOS.length);
+  // plano 2000d: as receitas por vertical (DU-001..DU-020) escondem-se nas outras verticais e as que dependem do servidor só aparecem com o recurso
+  const vis = v => L.MODELOS.filter(m => !(m.ocultar || []).includes(v) && !m.requer).length;
+  assert.equal(L.modelosDaVertical("generico").length, vis("generico"));
   // plano 1500c: «Pediu para desmarcar» (UCA-063) também não existe na loja (loja não tem horário marcado)
-  assert.equal(L.modelosDaVertical("loja").length, L.MODELOS.length - 2, "«faltou» e «pediu para desmarcar» não existem na loja");
+  assert.equal(L.modelosDaVertical("loja").length, vis("loja"), "«faltou» e «pediu para desmarcar» não existem na loja");
+  assert.ok(!L.modelosDaVertical("loja").some(m => m.id === "pediu_desmarcar"));
   assert.ok(!L.modelosDaVertical("loja").some(m => m.id === "faltou_remarcar"));
 });
 
 test("modelos de texto do CodeWords: lembrete 24 h e confirmação ao agendar — desligados, texto livre, sem modelo da Meta nem janela", () => {
   const v = L.modelosDaVertical("odonto").map(m => m.id);
-  assert.deepEqual(v.slice(0, 3), ["lembrete_consulta_texto", "confirmacao_agendamento", "followup_orcamento"]);
+  // plano 2000d · DU-001: na clínica, «Respondeu SIM» entra no lugar do acompanhamento de orçamento entre os destaques
+  assert.deepEqual(v.slice(0, 3), ["lembrete_consulta_texto", "confirmacao_agendamento", "confirmou_sim"]);
   const lem = L.aplicarModelo("lembrete_consulta_texto", BASE);
   assert.equal(lem.ativo, false, "nasce desligado");
   assert.equal(lem.gatilho, "antes_da_data");
@@ -265,7 +271,7 @@ test("modelos de texto do CodeWords: lembrete 24 h e confirmação ao agendar �
   assert.equal(L.validar(Object.assign({}, conf, { ativo: true }), { base: BASE }).ok, true, "pronta para ligar");
   // vocabulário da vertical: oficina fala em visita
   const of = L.aplicarModelo("lembrete_consulta_texto", BASE, VOCAB_OFICINA);
-  assert.match(of.acoes[0].texto, /sua visita amanhã/);
+  assert.match(of.acoes[0].texto, /sua visita no dia/);   // plano 2000d · DU-005: «no dia 29/09» em vez de «amanhã»
   assert.equal(of.nome, "Lembrete 24 h antes da visita (texto)");
   const confOf = L.aplicarModelo("confirmacao_agendamento", BASE, VOCAB_OFICINA).acoes[0].texto;
   assert.doesNotMatch(confOf.replace(/{[a-z_]+}/g, ""), /consulta/, "a palavra muda por vertical");
@@ -636,7 +642,7 @@ test("sequência: linhaDoTempo soma as esperas, marca o que vem depois de «para
   // plano 1500c: UCA-111 — o aviso diz QUAIS passos e quanto somam («Os passos 2 e 3 são esperas seguidas (somam 2 h)»)
   assert.ok(L.avisosEstrutura({ acoes: [tarefa(), { tipo: "esperar", minutos: 60 }, { tipo: "esperar", minutos: 60 }, tarefa()] }).some(t => /passos 2 e 3 são esperas seguidas \(somam 2 h\)/.test(t)));
   assert.ok(L.avisosEstrutura({ gatilho: "tarefa_vencida", acoes: [{ tipo: "esperar", minutos: 60, cancelar_se_cliente_responder: true }, tarefa()] }).some(t => /existe uma conversa/.test(t)));
-  assert.ok(L.avisosEstrutura({ acoes: [{ tipo: "ia_decidir", tarefa: "pontuar_lead" }] }).some(t => /cota de IA/.test(t)));
+  assert.ok(L.avisosEstrutura({ acoes: [{ tipo: "ia_decidir", tarefa: "pontuar_lead" }] }).some(t => /uso da IA/.test(t)));   // plano 2000d · DU-069: «uso da IA» em todo lugar
   assert.deepEqual(L.avisosEstrutura({ gatilho: "negocio_criado", acoes: [tarefa(), { tipo: "esperar", minutos: 60 }, tarefa()] }), []);
   // reordenar mantém a conta
   assert.deepEqual(L.linhaDoTempo(L.mover(acoes, 1, 0)).slice(0, 2).map(x => x.quando), ["Na hora", "Depois de 1 dia"]);
@@ -744,7 +750,8 @@ test("receitas: as 9 do PLANO existem, são válidas no catálogo e nascem desli
   assert.equal(new Set(L.MODELOS.map(m => m.id)).size, L.MODELOS.length, "ids únicos");
   for (const vertical of ["odonto", "oficina", "loja", "generico"]) {
     const voc = { ...VOCAB_ODONTO, vertical };
-    for (const m of L.modelosDaVertical(vertical)) {
+    // plano 2000d: as que pedem etapa/etiqueta por nome são conferidas com a base de cada vertical em plano2000d-auto (DU-052)
+    for (const m of L.modelosDaVertical(vertical).filter(x => !x.pedeEtapa && !x.pedeEscolha)) {
       const a = L.aplicarModelo(m.id, BASE, voc);
       assert.equal(a.ativo, false, `${vertical}/${m.id} nasce desligada`);
       const r = L.validar(a, { base: BASE, ligar: false });
@@ -787,7 +794,8 @@ test("receitas: sequência do follow-up (24 h e 72 h, para se responder), faltou
   assert.equal(pos.gatilho, "apos_data");
   assert.equal(pos.config.horas, 24);
   assert.deepEqual(pos.condicoes, [{ campo: "estagio_id", op: "diferente", valor: U(15) }]);
-  assert.deepEqual(L.aplicarModelo("pos_atendimento", { funis: [{ id: U(1), padrao: true, estagios: [] }] }).condicoes, [], "condição opcional some se a etapa não existe");
+  // plano 2000d · DU-007: sem a etapa «Faltou», a condição fica pendente (escolher ou tirar) — antes sumia e todos recebiam
+  assert.deepEqual(L.aplicarModelo("pos_atendimento", { funis: [{ id: U(1), padrao: true, estagios: [] }] }).condicoes, [{ campo: "estagio_id", op: "diferente", valor: "" }]);
   const lead = L.aplicarModelo("lead_anuncio", BASE, VOCAB_ODONTO);
   assert.deepEqual(lead.condicoes, [{ campo: "origem", op: "igual", valor: "anuncio" }]);
   assert.deepEqual(lead.acoes.map(a => a.tipo), ["notificar", "esperar", "criar_tarefa"]);

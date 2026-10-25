@@ -391,9 +391,10 @@ await teste("mensagemErro: erros da IA e das automações novas têm texto com o
     "etapa_invalida", "etiqueta_invalida", "pessoa_invalida", "departamento_invalido", "gatilho_invalido", "acao_invalida", "condicao_invalida", "tempo_invalido", "passo_invalido",
     "simulacao_indisponivel", "automacao_nao_encontrada", "muitos_pedidos", "ia_indisponivel"]) assert.ok(A.MENSAGENS[c] && A.MENSAGENS[c].length > 15, `texto para ${c}`);
   assert.match(A.mensagemErro({ codigo: "ia_cota" }), /próximo mês/);
-  assert.match(A.mensagemErro({ codigo: "sem_chave" }), /chave da Anthropic/);
+  // plano 2000d: DU-155 — a frase diz o que fazer sem citar o fornecedor da IA nem a plataforma (white-label)
+  assert.match(A.mensagemErro({ codigo: "sem_chave" }), /IA ainda não foi ligada.*quem fornece o sistema/);
   // o nx-ia manda {ok:false, erro:"ia_indisponivel", detalhe:"sem_chave"}: o texto diz o que falta, e não só "indisponível"
-  assert.match(A.mensagemErro({ codigo: "ia_indisponivel", detalhe_texto: "sem_chave", detalhe: "sem_chave" }), /chave da Anthropic/);
+  assert.match(A.mensagemErro({ codigo: "ia_indisponivel", detalhe_texto: "sem_chave", detalhe: "sem_chave" }), /IA ainda não foi ligada/);
   assert.match(A.mensagemErro({ codigo: "ia_indisponivel", detalhe_texto: "conversa_vazia" }), /não há mensagens|Ainda não há mensagens/i);
   assert.equal(A.mensagemErro({ codigo: "ia_indisponivel" }), "A IA não está disponível agora.");
   assert.equal(A.mensagemErro({ codigo: "automacao_invalida", hint: "ação 2: escolha a etapa" }), "A automação tem um problema: ação 2: escolha a etapa.");
@@ -417,10 +418,11 @@ await teste("mensagemErro: TODO código de erro do painel devolvido por nx-envia
   for (const c of ["codewords_sem_aparelho", "aparelho_nao_encontrado", "numero_diferente", "aparelho_desconectado", "metodo_invalido", "erro_interno"]) {
     assert.doesNotMatch(A.mensagemErro({ codigo: c }), /Não deu certo agora/, c);
   }
-  assert.match(A.mensagemErro({ codigo: "codewords_sem_aparelho" }), /pareado no CodeWords/);
-  // codewords_falhou mostra o motivo que o servidor já escreveu em português, sem o código técnico
-  assert.equal(A.mensagemErro({ codigo: "codewords_falhou", detalhe_texto: "O CodeWords recusou a chave (cwk-) deste número." }), "O CodeWords recusou a chave (cwk-) deste número.");
-  assert.equal(A.mensagemErro({ codigo: "codewords_falhou" }), "O CodeWords não concluiu o pedido. Tente de novo em instantes.");
+  // plano 2000d: DU-156 — o cliente da revenda não lê o nome do fornecedor (CodeWords); o código do erro é o mesmo
+  assert.match(A.mensagemErro({ codigo: "codewords_sem_aparelho" }), /pareado com o celular/);
+  // codewords_falhou mostra o motivo que o servidor já escreveu em português, sem o código técnico (e sem o nome do fornecedor)
+  assert.equal(A.mensagemErro({ codigo: "codewords_falhou", detalhe_texto: "O CodeWords recusou a chave (cwk-) deste número." }), "A conexão do aparelho recusou a chave (cwk-) deste número.");
+  assert.equal(A.mensagemErro({ codigo: "codewords_falhou" }), "A conexão do aparelho não concluiu o pedido. Tente de novo em instantes.");
 });
 await teste("sessao_invalida chama o callback do shell", async () => {
   let chamou = 0;
@@ -885,7 +887,8 @@ await teste("apps independentes: atalhos CRM/Ads/Atendimento, query de produto e
     const m = JSON.parse(readFileSync(join(APP, manifesto), "utf8"));
     assert.equal(m.start_url, `/app/?produto=${id}#/${rota}`);
     assert.equal(m.scope, "/app/");
-    assert.equal(m.icons.length, 1);
+    // plano 2000d: UCC-057 (plano 1500c) — os manifestos de produto ganham os PNG 192/512 e o 512 maskable (o SVG sozinho não instala em todo Android)
+    assert.ok(m.icons.some(i => i.sizes === "512x512" && i.purpose === "maskable") && m.icons.some(i => i.sizes === "192x192"));
     assert.equal(new URL(m.icons[0].src, `https://orbita.local/app/${manifesto}`).pathname, "/app/orbita-icon.svg");
   }
   const jsWorkspace = readFileSync(join(RAIZ, "web", "workspace.js"), "utf8");

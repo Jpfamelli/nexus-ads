@@ -47,7 +47,8 @@ export function criarLista(A) {
   const BUSCA_MAX = 100;
   // plano 1500c · CC-031: o placeholder diz que a busca também procura dentro das mensagens
   const busca = h("input", { type: "search", placeholder: "Buscar nome, telefone ou palavra da conversa","aria-label": "Buscar conversas", autocomplete: "off", maxlength: BUSCA_MAX,
-    enterkeyhint: "search", spellcheck: "false", autocapitalize: "off",   // plano 1500c · CX-024: teclado do celular com «Buscar», sem sublinhado vermelho nem maiúscula automática value: String(A.busca || "").slice(0, BUSCA_MAX) });
+    // plano 1500c · CX-024: teclado do celular com «Buscar», sem sublinhado vermelho nem maiúscula automática
+    enterkeyhint: "search", spellcheck: "false", autocapitalize: "off", value: String(A.busca || "").slice(0, BUSCA_MAX) });
   const buscaAjuda = h("p", { class: "cvl-busca-ajuda", role: "status", "aria-live": "polite", "aria-atomic": "true", hidden: true });
   let timerBusca = null, compondoBusca = false;
   function cancelarBuscaPendente() { clearTimeout(timerBusca); timerBusca = null; }
@@ -74,6 +75,12 @@ export function criarLista(A) {
   busca.addEventListener("compositionend", () => { compondoBusca = false; programarBusca(true); });
   busca.addEventListener("keydown", ev => {
     if (ev.key === "Escape" && busca.value) { ev.preventDefault(); busca.value = ""; cancelarBuscaPendente(); buscaAjuda.hidden = true; aplicarBusca(); return; }
+    // plano 1500c · CX-061: Esc com a busca já vazia sai dela para a lista (a conversa aberta ou a primeira) — o teclado não fica preso no campo
+    if (ev.key === "Escape" && !busca.value && !ev.isComposing) {
+      const alvo = lista.querySelector('.cvl-item[aria-current="true"]') || lista.querySelector(".cvl-item");
+      if (alvo) { ev.preventDefault(); alvo.focus(); }
+      return;
+    }
     if (ev.key === "Enter" && !ev.isComposing && !compondoBusca && ev.keyCode !== 229) { ev.preventDefault(); programarBusca(true); }
     // plano 1500c · CX-025: ↓ na busca desce para a primeira conversa achada (sem precisar de Tab por filtros e abas)
     if (ev.key === "ArrowDown" && !ev.altKey && !ev.isComposing) {
@@ -298,6 +305,13 @@ export function criarLista(A) {
   });
   // plano 1000b · CB-017: no modo seleção a linha é role=checkbox — Espaço (e Enter) marcam, como o leitor de tela promete (antes o
   // Espaço rolava a lista e o Enter abria a conversa)
+  // plano 1500c · CX-023: Home/End numa conversa da lista vão à primeira/última carregada
+  lista.addEventListener("keydown", ev => {
+    if ((ev.key !== "Home" && ev.key !== "End") || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+    if (!(ev.target && ev.target.closest && ev.target.closest(".cvl-item"))) return;
+    ev.preventDefault();
+    api.moverFoco(ev.key === "Home" ? "inicio" : "fim");
+  });
   lista.addEventListener("keydown", ev => {
     if (!selecionando || (ev.key !== " " && ev.key !== "Spacebar" && ev.key !== "Enter")) return;
     const a = ev.target && ev.target.closest ? ev.target.closest(".cvl-item") : null;
@@ -535,7 +549,8 @@ export function criarLista(A) {
       dataset: { id: c.id, naoLida: nl ? "1" : "0", sla: sla ? sla.nivel : null, sel: selecionando ? (marcada ? "1" : "0") : null } },
       selecionando ? h("span", { class: "cvl-check", "aria-hidden": "true" }, marcada ? ui.icone("check") : null) : avatarComCanal(c, nome),
       h("span", { class: "cvl-nome dado-pessoal" }, nome),   // plano 1500c · CX-001: o modo apresentação borra nome e telefone do cliente
-      h("span", { class: "cvl-hora" }, L.horaLista(c.ultima_msg_em)),
+      // plano 1500c · CX-072: «Ontem»/«seg.» com a data e a hora completas ao passar o mouse (e <time> com datetime para leitores)
+      h("time", { class: "cvl-hora", datetime: c.ultima_msg_em || null, title: L.dataLonga(c.ultima_msg_em) || null }, L.horaLista(c.ultima_msg_em)),
       rascunhoNaLinha ? h("span", { class: "cvl-resumo cvl-rascunho" }, h("em", null, "Rascunho: "), rascunho)
         : h("span", { class: "cvl-resumo", dataset: { tipo: tipoUlt || "texto" } }, prefixo && resumo ? h("b", null, prefixo) : null,
           tipoUlt ? h("span", { class: "cvl-tipo", title: ROTULO_TIPO[tipoUlt] || "" }, A.icone(ICONE_TIPO[tipoUlt] || "clipe", "cvl-tipo-ic")) : null, resumo),
@@ -624,6 +639,9 @@ export function criarLista(A) {
       if (A.busca) {
         const temMsgs = renderBlocoMsgs();
         if (temMsgs) lista.appendChild(h("p", { class: "sub cvl-msgs-info", role: "status" }, "Nenhum contato ou protocolo com esse termo."));
+        // plano 1500c · CX-056: com filtro ligado, a busca procura só dentro dele — o vazio diz isso e oferece limpar os filtros
+        else if (filtrosAtivos()) lista.appendChild(ui.vazio({ titulo: "Nada encontrado com os filtros ligados.", texto: "A busca procura só dentro dos filtros aplicados. Limpe os filtros para buscar em tudo.", icone: "busca", tema: "busca",
+          acao: { rotulo: "Limpar filtros e buscar de novo", fn: () => A.acoes.mudarLista({ filtro: {} }) } }));
         else lista.appendChild(ui.vazio({ titulo: "Nada encontrado.", texto: "Confira o nome, o telefone, o protocolo ou um trecho da mensagem.", icone: "busca", tema: "busca" }));   // `tema`: ilustração da frente A (ignorado onde não existe)
         // plano 1000 · CA-091: a busca é um telefone válido e ninguém tem esse número — o próximo passo é falar com ele
         const q = String(A.busca || "").trim();
@@ -808,19 +826,12 @@ export function criarLista(A) {
   }
 
   function render(o = {}) {
-    // plano 1500c · CX-021: conversa que saiu da lista (resolvida por um colega, outra aba, busca nova) sai da seleção — o lote não age no que não se vê
-    if (selecionando && selecao.size && !A.carregandoLista) {
-      const ids = new Set((A.itens || []).map(c => c.id));
-      let mudou = false;
-      for (const id of [...selecao]) if (!ids.has(id)) { selecao.delete(id); mudou = true; }
-      if (mudou) pintarLote();
-    }
     renderCabecalho();
     lista.setAttribute("aria-busy", String(!!A.carregandoLista));
     renderItens(o);
   }
 
-  return {
+  const api = {
     el,
     render,
     /** plano 1000b · CB-072: solta o observador da rolagem infinita (a central chama no desmontar). */
@@ -855,4 +866,5 @@ export function criarLista(A) {
       return true;
     },
   };
+  return api;
 }

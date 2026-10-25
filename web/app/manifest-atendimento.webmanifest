@@ -8,6 +8,49 @@
   "scope": "/app/",
   "display": "standalone",
   "background_color": "#07090C",
-  "theme_color": "#07090C",
-  "icons": [{ "src": "orbita-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+  "theme_color": "#FAFAF8",
+  "icons": [
+    {
+      "src": "icones/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icones/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icones/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "orbita-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "categories": [
+    "business",
+    "productivity"
+  ],
+  "shortcuts": [
+    {
+      "name": "Conversas",
+      "url": "/app/?produto=atendimento#/conversas"
+    },
+    {
+      "name": "CRM",
+      "url": "/app/?produto=atendimento#/crm"
+    },
+    {
+      "name": "Agenda",
+      "url": "/app/?produto=atendimento#/agenda"
+    }
+  ]
 }

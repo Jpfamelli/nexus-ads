@@ -24,7 +24,10 @@ export function criarComposer(A) {
   let rrAberto = false, rrItens = [], rrSel = 0;
 
   // plano 1500c · CC-123: «Mensagem» só (a dica do / fica na linha de dicas do computador; o leitor de tela lia «barra»)
-  const ta = h("textarea", { rows: 1, placeholder: "Mensagem", "aria-label": "Mensagem", maxlength: 4096 });
+  // plano 1500c · CX-031: o teclado do celular abre com maiúscula no começo da frase e corretor; a tecla Enter diz o que faz
+  // (no toque ela quebra a linha; com teclado físico, envia)
+  const ta = h("textarea", { rows: 1, placeholder: "Mensagem", "aria-label": "Mensagem", maxlength: 4096, autocapitalize: "sentences", spellcheck: "true",
+    enterkeyhint: (() => { try { return matchMedia("(pointer: coarse)").matches ? "enter" : "send"; } catch { return "send"; } })() });
   const contador = h("span", { class: "cvx-contador", hidden: true, "aria-live": "off" });
   const contadorAnuncio = h("span", { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true" });
   const rotNota = h("div", { class: "cvx-rot-nota" }, ui.icone("nota"), "Nota interna — só a equipe vê");
@@ -246,7 +249,8 @@ export function criarComposer(A) {
     // plano 1000b · CB-139: desligado com a trava à vista, o leitor de tela ouve o motivo (aria-describedby → texto da trava)
     if (!ok && !trava.hidden) btEnviar.setAttribute("aria-describedby", "cvx-trava"); else btEnviar.removeAttribute("aria-describedby");
     btEnviar.setAttribute("aria-label", modoNota ? "Salvar nota" : "Enviar");
-    btEnviar.title = modoNota ? "Salvar nota (só a equipe vê)" : "Enviar";
+    // plano 1500c · CX-067: a dica do «Enviar e resolver» (CC-067) não some no primeiro redesenho do campo
+    btEnviar.title = modoNota ? "Salvar nota (só a equipe vê)" : "Enviar (botão direito ou toque longo: Enviar e resolver)";
     // CA-154: no modo nota o botão diz «Salvar nota» (no computador, com o rótulo à vista) — Enter não manda nota achando que é mensagem
     ui.limpar(btEnviar); btEnviar.appendChild(ui.icone(modoNota ? "check" : "enviar"));
     if (modoNota) btEnviar.appendChild(h("span", { class: "cvx-enviar-rot", "aria-hidden": "true" }, "Salvar nota"));
@@ -595,6 +599,14 @@ export function criarComposer(A) {
       if (ev.key === "ArrowUp") { ev.preventDefault(); if (rrItens.length) { rrSel = (rrSel - 1 + rrItens.length) % rrItens.length; marcarRR(true); } return; }
       if (ev.key === "Enter" || ev.key === "Tab") { if (rrItens.length) { ev.preventDefault(); escolherRR(rrSel); } else if (ev.key === "Enter") ev.preventDefault(); return; }
       if (ev.key === "Escape") { ev.preventDefault(); fecharRR(); return; }
+      // plano 1500c · CX-032: PageUp/PageDown pulam 5 respostas; Ctrl+Home/Ctrl+End vão à primeira/última (Home/End puros continuam no texto)
+      if (rrItens.length && (ev.key === "PageDown" || ev.key === "PageUp" || ((ev.ctrlKey || ev.metaKey) && (ev.key === "Home" || ev.key === "End")))) {
+        ev.preventDefault();
+        const ult = rrItens.length - 1;
+        rrSel = ev.key === "PageDown" ? Math.min(ult, rrSel + 5) : ev.key === "PageUp" ? Math.max(0, rrSel - 5) : ev.key === "Home" ? 0 : ult;
+        marcarRR(true);
+        return;
+      }
     }
     if (ev.key === "Tab" && !ev.isComposing && pularCampo(ev)) return;       // {campo} selecionado: Tab vai para o próximo campo da resposta rápida
     if (ev.key === "Escape" && respondendo) { ev.preventDefault(); respondendo = null; desenharResposta(); return; }
@@ -1247,10 +1259,10 @@ export function criarComposer(A) {
       const cat = String(t.categoria || "").toUpperCase();
       const idMot = `cvx-mod-mot-${k}`;
       const b = h("button", { type: "button", class: "cv-modelo", role: "radio", "aria-checked": "false", tabindex: disp.ok && primeiro ? "0" : "-1",
-        "aria-disabled": disp.ok ? null : "true", "aria-describedby": disp.ok ? null : idMot, dataset: { categoria: cat, busca: L.semAcento(`${t.nome} ${t.corpo || ""}`) } },
+        "aria-disabled": disp.ok ? null : "true", "aria-describedby": disp.ok ? null : idMot, dataset: { categoria: cat, busca: L.semAcento(`${String(t.nome).replace(/_/g, " ")} ${t.nome} ${t.corpo || ""}`) } },
         h("span", { class: "cv-modelo-l1" }, h("span", { class: "mono" }, t.nome), ui.pilula(cat === "MARKETING" ? "Marketing" : cat === "UTILITY" ? "Utilidade" : cat === "AUTHENTICATION" ? "Autenticação" : (cat || "Modelo"), cat === "MARKETING" ? "aten" : "neutra",
             cat === "MARKETING" ? { title: L.dicaModeloMarketing(ct.optin_marketing) } : {}),
-          h("span", { class: "fraco mono" }, t.idioma || "")),
+          h("span", { class: "fraco", title: t.idioma || null }, L.rotuloIdioma(t.idioma))),   // plano 1500c · CX-069
         h("p", null, t.corpo || "(sem texto)"),
         disp.ok ? null : h("small", { id: idMot }, disp.motivo));
       if (disp.ok) primeiro = false;
@@ -1268,7 +1280,9 @@ export function criarComposer(A) {
       const filtrar = () => {
         const q = L.semAcento(inpBusca.value.trim());
         let n = 0;
-        for (const b of lista.querySelectorAll(".cv-modelo")) { const ok = (!q || b.dataset.busca.includes(q)) && (!cat || b.dataset.categoria === cat); b.hidden = !ok; if (ok) n++; }
+        // plano 1500c · CX-068: várias palavras em qualquer ordem («lembrete consulta» acha «consulta_lembrete_v2»)
+        const ps = q.split(/[\s_]+/).filter(Boolean);
+        for (const b of lista.querySelectorAll(".cv-modelo")) { const ok = (!ps.length || ps.every(p => b.dataset.busca.includes(p))) && (!cat || b.dataset.categoria === cat); b.hidden = !ok; if (ok) n++; }
         nada.hidden = n > 0;
       };
       inpBusca.addEventListener("input", filtrar);
@@ -1431,13 +1445,16 @@ export function criarComposer(A) {
   }
 
   /* ---------------- emoji (CA-067): só no computador; insere no cursor */
+  const EMOJI_REC = "nx-cv-emoji-rec";
   function ehMac() { try { const n = globalThis.navigator; return /Mac|iPhone|iPad/i.test(String((n && (n.userAgentData && n.userAgentData.platform)) || (n && n.platform) || "")); } catch { return false; } }
   function dicaEmojiSistema() { return ehMac() ? "Emoji (Ctrl + ⌘ + Espaço abre todos)" : "Emoji (Win + . abre todos)"; }
   btEmoji.addEventListener("click", () => {
     if (btEmoji.disabled) return;
     const ini = ta.selectionStart ?? ta.value.length, fim = ta.selectionEnd ?? ini;
     // plano 1000b · CB-084: um só ponto de Tab na grade (roving tabindex); setas andam (8 por linha), Home e End
-    const grade = h("div", { class: "cvx-emojis", role: "group", "aria-label": "Emojis" }, L.EMOJIS_RAPIDOS.map((e, i) => h("button", { type: "button", class: "cvx-emoji", "aria-label": `Inserir ${e}`, tabindex: i === 0 ? "0" : "-1" }, e)));
+    // plano 1500c · CX-077: os emojis usados por último aparecem primeiro (a recepção usa sempre os mesmos 🙏 👍 😊)
+    const recentes = (() => { try { return JSON.parse(localStorage.getItem(EMOJI_REC) || "[]"); } catch { return []; } })();
+    const grade = h("div", { class: "cvx-emojis", role: "group", "aria-label": "Emojis" }, L.ordenarEmojis(recentes, L.EMOJIS_RAPIDOS).map((e, i) => h("button", { type: "button", class: "cvx-emoji", "aria-label": `Inserir ${e}`, tabindex: i === 0 ? "0" : "-1" }, e)));
     grade.addEventListener("keydown", ev => {
       const bts = [...grade.querySelectorAll(".cvx-emoji")];
       const i = bts.indexOf(document.activeElement);
@@ -1461,6 +1478,7 @@ export function criarComposer(A) {
       const e = b.textContent;
       if (ta.value.length + e.length > teto()) { ui.toast("O emoji não cabe: a mensagem está no limite.", { tipo: "info" }); return; }
       ta.value = `${ta.value.slice(0, ini)}${e}${ta.value.slice(fim)}`;
+      try { localStorage.setItem(EMOJI_REC, JSON.stringify(L.lembrarEmoji(recentes, e))); } catch { /* sem storage */ }   // CX-077
       try { pop.fechar(); } catch { /* ok */ }
       ta.focus();
       ta.setSelectionRange(ini + e.length, ini + e.length);
@@ -1470,6 +1488,7 @@ export function criarComposer(A) {
 
   return {
     el, atualizar, definirConversa, responder, anexar, aceitaAnexo, motivoSemAnexo, abrirModelos,
+    anexarVarios,   // plano 1500c · CX-055: o chat solta várias fotos arrastadas pelo mesmo fluxo da colagem
     /** Alt+Shift+N: liga/desliga a nota interna (true/false força; sem argumento alterna). Devolve se o campo está em nota. */
     alternarNota(forcar) { if (el.hidden || !A.podeEscrever) return false; alternarNota(forcar); return modoNota; },
     get emNota() { return modoNota; },

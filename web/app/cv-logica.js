@@ -101,7 +101,8 @@ export function abaDe(c, euId) {
 function soDigitos(s) { return String(s ?? "").replace(/\D/g, ""); }
 
 /** Pronomes de tratamento que não são o nome da pessoa (plano 1000 · CA-002): «Dra. Helena» atende como «Helena». */
-const TRATAMENTOS = new Set(["dr", "dra", "sr", "sra", "srta", "prof", "profa", "pe"]);
+// plano 1500c · CX-074: «Dona Maria», «Seu Zé», «Doutora Ana» — o jeito como o cliente se salva no WhatsApp; o nome é o que vem depois
+const TRATAMENTOS = new Set(["dr", "dra", "sr", "sra", "srta", "prof", "profa", "pe", "dona", "seu", "doutor", "doutora", "professor", "professora"]);
 /** "maria souza" → "Maria"; "Dra. Helena Souza" → "Helena" (só o título: o nome inteiro); telefone/vazio → "". */
 export function primeiroNome(nome) {
   const t = String(nome ?? "").trim();
@@ -137,7 +138,12 @@ export function aplicarVariaveis(texto, vars = {}) {
     empresa: vars.empresa ?? "",
     protocolo: vars.protocolo ?? "",
   };
-  let s = String(texto ?? "");
+  // plano 1500c · CX-047: «{Nome}», «{ primeiro nome }» e «{PROTOCOLO}» (resposta escrita à mão) valem como a variável — antes iam
+  // literalmente para o cliente
+  let s = String(texto ?? "").replace(/\{\s*([A-Za-zÀ-ÿ_ ]{3,20}?)\s*\}/g, (m, nome) => {
+    const k = semAcento(nome).replace(/\s+/g, "_");
+    return VARIAVEIS.includes(k) ? `{${k}}` : m;
+  });
   let marcou = false;
   for (const k of VARIAVEIS) {
     const val = String(v[k] ?? "").trim();
@@ -221,9 +227,11 @@ const ROTULO_TIPO = Object.freeze({
   desconhecido: "Mensagem não suportada",
 });
 
+// plano 1500c · CX-063: o corte nunca parte um emoji ao meio (aparecia «�» no fim da prévia da lista e do rascunho)
+function cortarSeguro(t, n) { let s = t.slice(0, n); const k = s.charCodeAt(s.length - 1); if (k >= 0xd800 && k <= 0xdbff) s = s.slice(0, -1); return s; }
 function umaLinha(s, max = 140) {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
-  return t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t;
+  return t.length > max ? cortarSeguro(t, max - 1).trimEnd() + "…" : t;
 }
 
 /** resumoMensagem(msg) → texto curto (lista, citação, notificação). */
@@ -240,6 +248,15 @@ export function resumoMensagem(m, max = 140) {
     case "documento": {
       const nome = m.midia && m.midia.nome;
       return umaLinha([nome ? `Documento: ${nome}` : "Documento", m.corpo].filter(Boolean).join(" · "), max);
+    }
+    // plano 1500c · CX-059: localização na lista/notificação sem as coordenadas («Localização: Oficina do Zé»)
+    case "localizacao": { const loc = localizacaoDe(m.corpo); return loc ? (loc.nome ? umaLinha(`Localização: ${loc.nome}`, max) : "Localização") : corpo || "Localização"; }
+    // plano 1500c · CX-060: contato compartilhado mostra os nomes, não a fileira de telefones («Contato: Ana e Bia»)
+    case "contato": {
+      const cs = contatosDe(m.corpo);
+      if (!cs.length) return corpo || "Contato";
+      const nomes = cs.map(c => c.nome || telefoneInternacional(c.telefone));
+      return umaLinha(`${cs.length > 1 ? "Contatos" : "Contato"}: ${nomes.length > 2 ? `${nomes.slice(0, 2).join(", ")} e mais ${nomes.length - 2}` : nomes.join(" e ")}`, max);
     }
     case "imagem": case "video": case "audio": case "sticker":
       return corpo ? umaLinha(`${ROTULO_TIPO[m.tipo]}: ${m.corpo}`, max) : ROTULO_TIPO[m.tipo];
@@ -261,7 +278,7 @@ export function iconeStatus(status) {
 
 /* ------------------------------------------------------------ respostas rápidas */
 export function semAcento(s) {
-  return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  return String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
 /** Termo depois da "/" no campo (só quando o texto começa com "/" e ainda não tem espaço). */
@@ -672,6 +689,11 @@ export function dicaErroEnvio(codigo) {
     132012: "Um campo do modelo foi preenchido no formato errado. Confira os campos (data, valor, link).",
     132015: "Este modelo foi pausado pela Meta por avaliações ruins. Use outro modelo.",
     132016: "Este modelo foi desativado pela Meta. Use outro modelo.",
+    // plano 1500c · CX-080: erro passageiro da Meta e parâmetro do modelo faltando/errado
+    131000: "A Meta teve um erro passageiro. A mensagem é enviada de novo em instantes.",
+    131016: "O WhatsApp da Meta está instável agora. A mensagem é enviada de novo em instantes.",
+    131008: "Falta preencher um campo obrigatório do modelo. Preencha todos e tente de novo.",
+    131009: "Um campo do modelo foi preenchido com um valor que a Meta não aceita. Confira os campos.",
     // plano 1500c · CX-010: problemas da conta/número na Meta
     131021: "O destinatário é o próprio número da empresa. Confira o telefone do contato.",
     131031: "A conta do WhatsApp Business está bloqueada pela Meta. O administrador precisa ver o aviso no Gerenciador do WhatsApp.",
@@ -684,6 +706,9 @@ export function dicaErroEnvio(codigo) {
     codewords_desconectado: "O número está desconectado do aparelho. Reconecte em Configurações › Números e tente de novo.",
     numero_sem_whatsapp: "Esse número não tem WhatsApp. Confira o número com o cliente.",
     midia_grande: "Arquivo grande demais para o WhatsApp. Diminua o arquivo ou envie um link.",
+    // plano 1500c · CX-082: o servidor também recusa arquivo vazio e tipo não aceito — a bolha diz o que fazer
+    midia_vazia: "O arquivo chegou vazio (0 byte). Se ele está na nuvem, baixe para o aparelho e anexe de novo.",
+    midia_tipo: "O WhatsApp não aceita este tipo de arquivo. Envie como PDF, foto (JPG/PNG), vídeo MP4 ou áudio.",
     fora_da_janela: "Mais de 24 h desde a última mensagem do cliente. Envie um modelo aprovado.",
     conversa_resolvida: "Atendimento resolvido. Reabra para responder.",
     canal_sem_token: "Este número ainda não tem o token da Meta.",
@@ -941,7 +966,8 @@ export function classificarFalhaEnvio(e) {
     return { tipo: "rede", subtipo: "servidor", codigo: cod || "http_429", motivo: "Muitos envios em pouco tempo: tentando de novo." };
   // plano 1500c · CX-011: o limite de velocidade DA META (130429) e o de mensagens seguidas ao mesmo cliente (131056) passam sozinhos —
   // a mensagem espera com backoff em vez de virar «Não enviada»
-  if (/(^|_)(130429|131056)$/.test(cod) && !salva) return { tipo: "rede", subtipo: "servidor", codigo: cod, motivo: dicaErroEnvio(cod) };
+  // plano 1500c · CX-081: 131000 (erro passageiro) e 131016 (serviço instável) da Meta também esperam e tentam de novo
+  if (/(^|_)(130429|131056|131000|131016)$/.test(cod) && !salva) return { tipo: "rede", subtipo: "servidor", codigo: cod, motivo: dicaErroEnvio(cod) };
   if (REDE_SERVIDOR.test(cod) || (status >= 500 && !salva)) return { tipo: "rede", subtipo: "servidor", codigo: cod || `http_${status}`, motivo: "O servidor está ocupado: tentando de novo." };
   return { tipo: "definitiva", codigo: cod || "envio_falhou", motivo: dicaErroEnvio(cod) || "", salva };
 }
@@ -1033,7 +1059,7 @@ export function textoFila({ estado, motivo, proxima } = {}, agora = Date.now()) 
 export function textoRascunhoLista(texto, max = 80) {
   const t = String(texto ?? "").replace(/\s+/g, " ").trim();
   if (!t) return "";
-  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+  return t.length > max ? `${cortarSeguro(t, max - 1).trimEnd()}…` : t;   // CX-063
 }
 
 /* ------------------------------------------------------------ assistente do número CodeWords (M33): passo atual a partir do estado do servidor */
@@ -1121,9 +1147,13 @@ export const ACORDES = Object.freeze([
   // plano 1000 · CA-157/CA-158: abrir o negócio ligado à conversa e as etiquetas sem o mouse
   { id: "abrir_negocio", teclas: "Alt+Shift+O", rotulo: "Abrir o negócio ligado à conversa", grupo: "Atender", dentroDeCampo: true },
   { id: "etiquetas", teclas: "Alt+Shift+E", rotulo: "Etiquetas da conversa", grupo: "Atender", dentroDeCampo: true },
+  // plano 1500c · CX-050: fixar/desafixar no topo sem abrir o ⋮
+  { id: "fixar", teclas: "Alt+Shift+F", rotulo: "Fixar ou desafixar a conversa no topo da lista", grupo: "Atender", dentroDeCampo: true },
   { id: "foco_lista", teclas: "Esc", rotulo: "No campo de mensagem: voltar o foco à lista", grupo: "Na lista", dentroDeCampo: true },
   { id: "mover_baixo", teclas: "J", rotulo: "Descer na lista (Enter abre)", grupo: "Na lista", dentroDeCampo: false },
   { id: "mover_cima", teclas: "K", rotulo: "Subir na lista", grupo: "Na lista", dentroDeCampo: false },
+  // plano 1500c · CX-049: Home/End da lista (CX-023) aparecem na folha de atalhos — a lista trata a tecla, aqui é só a descrição
+  { id: "lista_extremos", teclas: "Home / End", rotulo: "Primeira ou última conversa carregada", grupo: "Na lista", dentroDeCampo: false },
   { id: "buscar", teclas: "/", rotulo: "Buscar conversas", grupo: "Na lista", dentroDeCampo: false },
   { id: "ajuda", teclas: "?", rotulo: "Mostrar esta folha", grupo: "Na lista", dentroDeCampo: false },
 ]);
@@ -1141,7 +1171,7 @@ export function acordeDoEvento(ev, { emCampo = false } = {}) {
   if (ev.altKey) {
     if (!ev.shiftKey) return k === "ArrowDown" ? "proxima" : k === "ArrowUp" ? "anterior" : null;
     const letra = /^Key[A-Z]$/.test(cod) ? cod.slice(3).toLowerCase() : k.toLowerCase();     // no Mac Alt+letra muda o caractere: o código físico vale mais
-    return { a: "assumir", r: "resolver", n: "nota", t: "transferir", p: "atender", o: "abrir_negocio", e: "etiquetas" }[letra] || null;
+    return { a: "assumir", r: "resolver", n: "nota", t: "transferir", p: "atender", o: "abrir_negocio", e: "etiquetas", f: "fixar" }[letra] || null;   // CX-050: F
   }
   if (emCampo) return null;
   // plano 1000b · CB-028: com Caps Lock o key vem «J»/«K» (sem Shift) — compara em minúscula; Shift+J continua sem atalho
@@ -1583,6 +1613,12 @@ export const DDD_VALIDO = /^(1[1-9]|2[12478]|3[1-578]|4[1-9]|5[13-5]|6[1-9]|7[13
     mais de 11 dígitos (já com o 55) fica como foi digitado — a máscara nunca muda o número. */
 export function mascaraTelefone(txt) {
   const s = String(txt ?? "");
+  // plano 1500c · CX-048: «+55 12999990000» colado do WhatsApp também ganha a máscara («+55 (12) 99999-0000»); outro país fica como está
+  const br = /^\s*\+\s*55(?=[\s(]*[1-9])/.exec(s);
+  if (br) {
+    const resto = soDigitos(s.slice(br[0].length));
+    return resto.length >= 3 && resto.length <= 11 && resto[0] !== "0" ? `+55 ${mascaraTelefone(resto)}` : s;
+  }
   if (/^\s*(\+|00)/.test(s)) return s;
   const d = soDigitos(s);
   if (!d || d.length > 11 || d[0] === "0") return s;
@@ -1598,6 +1634,8 @@ export function erroTelefone(txt) {
   if (!s) return "Digite o telefone com DDD.";
   // plano 1500c · CX-012: só letras («maria») — é um nome, não um telefone; antes dizia «você digitou 0»
   if (!/\d/.test(s)) return "Digite só os números do telefone, com DDD (ex.: 12 99999-0000).";
+  // plano 1500c · CX-073: letra no meio dos números («12 9999-ABCD», «ramal 3») — antes contava só os dígitos e dizia «faltam números»
+  if (/\p{L}/u.test(s)) return "O telefone tem letras. Deixe só os números, com DDD (ex.: 12 99999-0000).";
   if (/^(\+|00)/.test(s)) {
     const d = soDigitos(s.replace(/^(\+|00)/, ""));
     return d.length >= 8 && d.length <= 15 ? "" : "Número de outro país: código do país e o número, de 8 a 15 dígitos (ex.: +1 415 555 1234).";
@@ -1724,6 +1762,8 @@ export function nivelEsperaUtil(desde, agora = new Date(), horario = null) {
 export function textoMinutos(min) {
   const m = Math.max(0, Math.floor(Number(min) || 0));
   if (m < 60) return `${m} min`;
+  // plano 1500c · CX-062: espera de mais de um dia vira «2 d 3 h» (antes «51 h 00 min», difícil de ler no selo da lista)
+  if (m >= 1440) { const d = Math.floor(m / 1440), hh = Math.floor((m % 1440) / 60); return hh ? `${d} d ${hh} h` : `${d} d`; }
   const h = Math.floor(m / 60), r = m % 60;
   return r ? `${h} h ${String(r).padStart(2, "0")} min` : `${h} h`;
 }
@@ -2373,8 +2413,10 @@ export function linhasServicosIA(duracoes, atual = "") {
 /** plano 1500c · CC-311: o aviso ao cliente na transferência («Vou te passar para o Financeiro, já te respondem por aqui.»). */
 export function textoAvisoTransferencia({ pessoa = null, departamento = null } = {}) {
   const p = pessoa ? primeiroNome(pessoa) : "", d = departamento ? String(departamento).trim() : "";
-  if (p) return `Vou te passar para ${p}${d ? `, do ${d}` : ""}, que continua o seu atendimento por aqui.`;
-  if (d) return `Vou te passar para o ${d}, já te respondem por aqui.`;
+  // plano 1500c · CX-075: «da Recepção», «para a Recepção» (antes «do Recepção», «para o Recepção»)
+  const art = d ? artigoDepartamento(d) : "o";
+  if (p) return `Vou te passar para ${p}${d ? `, d${art} ${d}` : ""}, que continua o seu atendimento por aqui.`;
+  if (d) return `Vou te passar para ${art} ${d}, já te respondem por aqui.`;
   return "Vou te passar para a nossa equipe, já te respondem por aqui.";
 }
 
@@ -2391,6 +2433,7 @@ export function htmlImpressao({ titulo = "Conversa", empresa = "", texto = "" } 
 
 /** plano 1500c · CC-140: o link do WhatsApp do aparelho para o telefone (só os dígitos, com o 55). */
 export function linkWhatsApp(telefone) {
+  if (!String(telefone || "").replace(/[^0-9]/g, "")) return "";   // plano 1500c · CX-079: sem número não há link (antes «https://wa.me/», que abre a tela de erro do WhatsApp)
   const n = String(normalizarTelefone(String(telefone || "")) || String(telefone || "").replace(/[^0-9]/g, ""));
   return `https://wa.me/${n}`;
 }
@@ -2400,4 +2443,46 @@ export function finalNumero(canal) {
   const c = canal || {};
   const d = String(c.numero_exibicao || c.numero || c.telefone || "").replace(/[^0-9]/g, "");
   return d.length >= 4 ? d.slice(-4) : "";
+}
+
+/* ------------------------------------------------------------ plano 1500c · complemento conv-x */
+
+/** plano 1500c · CX-030: o texto é só emoji (1 a 3, sem letra nem número)? — a bolha mostra grande, como no WhatsApp. */
+const RE_SO_EMOJI = /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}|[\u200d\ufe0f\u20e3]|\s)+$/u;
+export function soEmoji(texto) {
+  const s = String(texto ?? "").trim();
+  if (!s || !RE_SO_EMOJI.test(s) || !/\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(s)) return false;
+  let n = 0;
+  try {
+    for (const g of new Intl.Segmenter("pt-BR", { granularity: "grapheme" }).segment(s.replace(/\s+/g, ""))) { void g; n++; }
+  } catch { n = [...s.replace(/\s+/g, "")].filter(c => /\p{Extended_Pictographic}/u.test(c)).length; }
+  return n >= 1 && n <= 3;
+}
+
+/** plano 1500c · CX-069: o idioma do modelo como a pessoa lê («pt_BR» → «Português»); desconhecido fica o código. */
+const IDIOMAS = Object.freeze({ pt: "Português", en: "Inglês", es: "Espanhol", fr: "Francês", it: "Italiano", de: "Alemão" });
+export function rotuloIdioma(cod) {
+  const c = String(cod || "").trim();
+  if (!c) return "";
+  const base = c.toLowerCase().split(/[_-]/)[0];
+  const nome = IDIOMAS[base];
+  if (!nome) return c;
+  return /^pt[_-]pt$/i.test(c) ? "Português (Portugal)" : nome;
+}
+
+/** plano 1500c · CX-077: emojis recentes primeiro (até 8), sem repetir; o resto na ordem de sempre. */
+export function ordenarEmojis(recentes, todos) {
+  const rec = (Array.isArray(recentes) ? recentes : []).filter(e => typeof e === "string" && e && e.length <= 16).slice(0, 8);
+  return [...new Set([...rec, ...(todos || [])])];
+}
+export function lembrarEmoji(recentes, e) {
+  return [e, ...(Array.isArray(recentes) ? recentes : []).filter(x => x !== e)].slice(0, 8);
+}
+
+/** plano 1500c · CX-075: «o Financeiro» · «a Recepção» — o artigo do nome do departamento (feminino pelas terminações comuns). */
+export function artigoDepartamento(nome) {
+  const n = semAcento(String(nome || "").trim().split(/\s+/)[0] || "");
+  if (/(as|coes)$/.test(n)) return "as";
+  if (/os$/.test(n)) return "os";
+  return /(a|cao|dade|agem|ie)$/.test(n) && !/^(dia|mapa|sistema|programa|problema|tema)$/.test(n) ? "a" : "o";
 }

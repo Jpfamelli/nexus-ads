@@ -1640,3 +1640,499 @@ test("CX-002 · mensagem que saiu dispara nx:mensagem-enviada (o «Comece aqui»
   }
   assert.match(SRC_CONV, /if \(r && r\.mensagem && r\.mensagem\.id && r\.ambigua !== true\) avisarEnviada\(convId/);
 });
+
+test("CX-019/CX-020 · rótulo da linha: dono pela equipe, silenciada, bloqueado, situação na busca e o número pela base", async () => {
+  const d = comDom();
+  try {
+    const { lista } = await montarLista(d, {
+      itens: [conv(1, { atribuida_a: "u2", atribuida_nome: null, oculta: true, status: "resolvida", canal_id: "k2" })],
+      base: { canais: [{ id: "k1", nome: "Recepção" }, { id: "k2", nome: "Financeiro" }], usuarios: [{ id: "u2", nome: "Ana Paula" }] },
+      acoes: { silenciada: () => true } });
+    const rot = achar(lista.el, ".cvl-item").getAttribute("aria-label");
+    assert.match(rot, /com Ana Paula/); assert.doesNotMatch(rot, /sem dono/);
+    assert.match(rot, /silenciada/); assert.match(rot, /contato bloqueado/); assert.match(rot, /via Financeiro/);
+  } finally { d.fim(); }
+});
+
+test("CX-022/CX-023/CX-024/CX-025 · teclado da lista: j no fim carrega mais, Home/End, ↓ da busca, teclado de busca", async () => {
+  const d = comDom();
+  try {
+    const { A, lista, chamadas } = await montarLista(d, { itens: [conv(1), conv(2), conv(3)] });
+    A.temMais = true;
+    const itens = lista.el.querySelectorAll(".cvl-item");
+    for (const x of itens) x.getClientRects = () => [1];
+    itens[2].focus();
+    lista.moverFoco(1);
+    assert.ok(chamadas.some(c => c[0] === "carregarLista" && c[1] && c[1].mais), "pediu a próxima página");
+    d.ev(itens[2], "keydown", { key: "Home" });
+    assert.equal(d.doc.activeElement, itens[0]);
+    d.ev(itens[0], "keydown", { key: "End" });
+    assert.equal(d.doc.activeElement, itens[2]);
+    const busca = achar(lista.el, 'input[type="search"]');
+    assert.equal(busca.getAttribute("enterkeyhint"), "search");
+    assert.equal(busca.getAttribute("spellcheck"), "false");
+    d.ev(busca, "keydown", { key: "ArrowDown" });
+    assert.equal(d.doc.activeElement, itens[0]);
+  } finally { d.fim(); }
+});
+
+const fotoX = (id, min) => txt(id, "in", min, { tipo: "imagem", corpo: null, midia: { path: `cli/in/${id}.jpg`, nome: `foto-${id}.jpg` } });
+test("CX-026/CX-027 · visualizador: R gira, Z amplia e a foto vizinha já vem baixando", async () => {
+  const d = comDom();
+  const carregadas = [];
+  const im0 = Object.getOwnPropertyDescriptor(globalThis, "Image");
+  Object.defineProperty(globalThis, "Image", { value: class { set src(v) { carregadas.push(v); } }, configurable: true, writable: true });
+  try {
+    const { chat } = await montarChat(d, { msgs: [fotoX(1, 30), txt(2, "out", 25), fotoX(3, 20), fotoX(4, 10)] });
+    achar(chat.el, '.cv-grade-bt[data-id="3"], .cv-msg[data-id="3"] .cv-img-bt').click();
+    const dlg = achar(d.doc.body, "dialog.cv-lb");
+    d.ev(dlg, "keydown", { key: "r" });
+    assert.equal(dlg.dataset.giro, "90");
+    d.ev(dlg, "keydown", { key: "z" });
+    assert.equal(dlg.dataset.zoom, "1");
+    assert.ok(carregadas.includes("https://cdn.test/cli/in/4.jpg"), "a próxima");
+    assert.ok(carregadas.includes("https://cdn.test/cli/in/1.jpg"), "a anterior");
+    assert.match(dlg.querySelector(".cv-lb-dica").textContent, /gira/);
+  } finally {
+    d.fim();
+    if (im0) Object.defineProperty(globalThis, "Image", im0); else delete globalThis.Image;
+  }
+});
+
+test("CX-028 · áudios seguidos tocam um depois do outro", async () => {
+  const d = comDom();
+  try {
+    const au = (id, min) => txt(id, "in", min, { tipo: "audio", corpo: null, midia: { path: `cli/in/${id}.ogg`, mime: "audio/ogg", duracao: 5 } });
+    const { chat } = await montarChat(d, { msgs: [au(1, 30), au(2, 29), txt(3, "out", 20)] });
+    const a1 = achar(chat.el, '.cv-msg[data-id="1"] audio'), a2 = achar(chat.el, '.cv-msg[data-id="2"] audio');
+    let tocou = 0;
+    a2.paused = true; a2.play = () => { tocou++; return Promise.resolve(); };
+    d.ev(a1, "ended");
+    assert.equal(tocou, 1);
+  } finally { d.fim(); }
+});
+
+test("CX-029 · contato com mais de 3 telefones diz quantos ficaram de fora", async () => {
+  const d = comDom();
+  try {
+    const corpo = "Contato: Ana 5512999990001; Bia 5512999990002; Caio 5512999990003; Duda 5512999990004; Eva 5512999990005";
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 10, { tipo: "contato", corpo })] });
+    assert.equal(chat.el.querySelectorAll(".cv-contato-rec").length, 3);
+    assert.equal(achar(chat.el, ".cv-contato-mais").textContent, "+2 contatos no texto da mensagem");
+  } finally { d.fim(); }
+});
+
+test("CX-030 · mensagem só com emoji fica grande", async () => {
+  assert.equal(L.soEmoji("😀"), true); assert.equal(L.soEmoji("👍🏽👍"), true); assert.equal(L.soEmoji("❤️"), true);
+  assert.equal(L.soEmoji("😀😀😀😀"), false); assert.equal(L.soEmoji("oi 😀"), false); assert.equal(L.soEmoji("10"), false);
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 10, { corpo: "🎉" }), txt(2, "in", 9, { corpo: "oi 🎉" })] });
+    assert.match(achar(chat.el, '.cv-msg[data-id="1"] .cv-texto').getAttribute("class"), /cv-texto-emoji/);
+    assert.doesNotMatch(achar(chat.el, '.cv-msg[data-id="2"] .cv-texto').getAttribute("class"), /cv-texto-emoji/);
+  } finally { d.fim(); }
+  assert.match(ler("conversas.css"), /\.cv-texto\.cv-texto-emoji \{ font-size: 2\.25rem;/);
+});
+
+test("CX-031/CX-032 · campo: maiúscula automática e corretor; respostas rápidas com PageDown/PageUp e Ctrl+End/Home", async () => {
+  const respostas = Array.from({ length: 12 }, (_, i) => ({ id: i + 1, atalho: `r${String(i + 1).padStart(2, "0")}`, titulo: `Resposta ${i + 1}`, corpo: `texto ${i + 1}`, ativo: true }));
+  await comComposer({ base: { respostas } }, async ({ comp, ta, digitar }, d) => {
+    assert.equal(ta.getAttribute("autocapitalize"), "sentences");
+    assert.equal(ta.getAttribute("spellcheck"), "true");
+    assert.equal(ta.getAttribute("enterkeyhint"), "send", "com mouse, Enter envia");
+    digitar("/r");
+    await esperar(5);
+    const sel = () => comp.el.querySelector('.cvx-rr-op[aria-selected="true"]').id;
+    assert.equal(sel(), "cvx-rr-0");
+    d.ev(ta, "keydown", { key: "PageDown" }); assert.equal(sel(), "cvx-rr-5");
+    d.ev(ta, "keydown", { key: "End", ctrlKey: true }); assert.equal(sel(), "cvx-rr-11");
+    d.ev(ta, "keydown", { key: "PageUp" }); assert.equal(sel(), "cvx-rr-6");
+    d.ev(ta, "keydown", { key: "Home", ctrlKey: true }); assert.equal(sel(), "cvx-rr-0");
+  });
+});
+
+test("CX-033/CX-034 · nome colado com espaços sobrando e e-mail em maiúsculas são arrumados antes de gravar", async () => {
+  const d = comDom();
+  try {
+    const t = await montarLateral(d, { ver: { contato: { id: 5, nome: "Mariana Costa", telefone: "5512999990000", email: "m@x.com" } } });
+    achar(t.alvo, '[data-foco="editar-email"]').click();
+    let inp = achar(t.alvo, ".cvt-campo-caixa input");
+    inp.value = " Mariana@Novo.COM "; d.ev(inp, "input"); d.ev(inp, "keydown", { key: "Enter" });
+    await esperar(5);
+    assert.deepEqual(t.chamadas.find(c => c[0] === "nx_contato_salvar")[1], { p_contato: { id: 5, email: "mariana@novo.com" } });
+    achar(t.alvo, '[data-foco="editar-nome"]').click();
+    inp = achar(t.alvo, '[data-foco="nome-campo"]');
+    inp.value = "Mariana \t  Costa   Lima"; d.ev(inp, "input"); d.ev(inp, "keydown", { key: "Enter" });
+    await esperar(5);
+    assert.deepEqual(t.chamadas.filter(c => c[0] === "nx_contato_salvar").at(-1)[1], { p_contato: { id: 5, nome: "Mariana Costa Lima" } });
+  } finally { d.fim(); }
+});
+
+test("CX-036 · encaminhar: a busca escolhe a 1ª conversa que sobrou e não manda para uma escondida", async () => {
+  const d = comDom();
+  const srv = criarServidor();
+  let modal = null;
+  d.aoModal(o => { modal = o; return null; });
+  const c = await montarCentral(d, srv);
+  try {
+    await c.abrir(901);
+    achar(c.alvo, '.cv-msg[data-id="9010"] .cv-msg-mais').click();
+    d.menus.at(-1).itens.find(i => i.rotulo === "Encaminhar para outra conversa").fn();
+    await esperar(10);
+    assert.ok(modal, "abriu a escolha");
+    const busca = achar(modal.corpo, "#cv-enc-busca"), sel = achar(modal.corpo, "#cv-enc-sel");
+    sel.value = "902";
+    busca.value = "cliente 3"; d.ev(busca, "input");
+    assert.equal(String(sel.value), "903");
+    const fn = modal.acoes.find(a => a.tipo === "primario").fn;
+    assert.equal(fn(), 903);
+    busca.value = "zzz"; d.ev(busca, "input");
+    assert.equal(modal.corpo.querySelector("p[role=status]").hidden, false);
+    assert.equal(fn(), null, "a escolhida está escondida: nada vai");
+  } finally { c.fim(); d.fim(); }
+});
+
+test("CX-035 · notificação de várias conversas leva à aba Aguardando", () => {
+  assert.match(SRC_CONV, /if \(t\.id && A\) abrir\(t\.id\); else if \(A\) mudarLista\(\{ aba: "aguardando", busca: "" \}\);/);
+  assert.equal(L.textoNotificacao([{ id: 1, contato: { nome: "A" } }, { id: 2, contato: { nome: "B" } }]).id, null);
+});
+
+test("CX-037/CX-038/CX-039 · entrada /atendimento: tema escuro sem clarão, sem referência e aviso falado", () => {
+  const html = readFileSync(join(AQUI, "..", "web", "atendimento", "index.html"), "utf8");
+  assert.match(html, /<meta name="color-scheme" content="light dark">/);
+  assert.match(html, /<meta name="theme-color" content="#07090C" media="\(prefers-color-scheme: dark\)">/);
+  assert.match(html, /<meta name="referrer" content="no-referrer">/);
+  assert.match(html, /<p role="status" aria-live="polite">Abrindo o Atendimento…<\/p>/);
+  assert.match(html, /<noscript><p>O Órbita precisa do JavaScript/);
+  assert.ok(html.indexOf("Content-Security-Policy") < html.indexOf("color-scheme"), "a CSP continua a primeira");
+});
+
+test("CX-040/CX-041/CX-042 · rascunho: diz de quando é, botões com nome e o mesmo texto não renova o prazo de 24 h", async () => {
+  const d = comDom();
+  try {
+    let t = Date.now();
+    const mk = () => R.criarRascunhos({ storage: globalThis.localStorage, conta: () => "u1", cliente: () => "c1", agora: () => t, agendar: (fn, ms) => setTimeout(fn, ms), cancelar: x => clearTimeout(x),
+      doc: { createElement: n => d.doc.createElement(n), createTextNode: s => d.doc.createTextNode(s), addEventListener() {} }, janela: { addEventListener() {} }, debounceMs: 0 });
+    const r1 = mk();
+    const wrap = d.h("div"); const campo = d.h("textarea"); wrap.appendChild(campo); d.doc.body.appendChild(wrap);
+    const c1 = r1.ligar(campo, "conversa:9");
+    campo.value = "Olá, Maria"; d.ev(campo, "input"); await esperar(5);
+    const em0 = JSON.parse(globalThis.localStorage.getItem("nx-rasc:u1:c1:conversa:9")).em;
+    t += 5 * 3600000;
+    c1.salvarAgora();
+    assert.equal(JSON.parse(globalThis.localStorage.getItem("nx-rasc:u1:c1:conversa:9")).em, em0, "o mesmo texto não renova o «em»");
+    t += 20 * 3600000;
+    assert.equal(r1.texto("conversa:9"), null, "venceu nas 24 h mesmo com a aba indo e voltando");
+    // de quando é
+    t = Date.now();
+    const r2 = mk();
+    const campo2 = d.h("textarea"); const w2 = d.h("div"); w2.appendChild(campo2); d.doc.body.appendChild(w2);
+    const c2 = r2.ligar(campo2, "negocio:1:nota"); campo2.value = "nota"; d.ev(campo2, "input"); await esperar(5); c2.desligar();
+    t += 3 * 3600000 + 60000;
+    const campo3 = d.h("textarea"); const w3 = d.h("div"); w3.appendChild(campo3); d.doc.body.appendChild(w3);
+    mk().ligar(campo3, "negocio:1:nota");
+    const selo = achar(w3, ".rascunho-selo");
+    assert.match(selo.textContent, /^Rascunho de 3 h atrás restaurado · descartar$/);
+    const b = achar(selo, "button");
+    assert.equal(b.getAttribute("aria-label"), "Descartar o rascunho restaurado");
+    b.click();
+    assert.equal(b.getAttribute("aria-label"), "Desfazer: devolver o rascunho ao campo");
+  } finally { d.fim(); }
+});
+
+test("CX-043/CX-044 · importar respostas: arquivo com BOM e atalho com acento/espaço", () => {
+  const arq = String.fromCharCode(0xFEFF) + JSON.stringify({ respostas: [{ atalho: "Olá Maria", titulo: "Oi", corpo: "Olá!" }, { atalho: "preço", titulo: "Preço", corpo: "R$ 100" }] });
+  const r = CV.lerImportacaoRespostas(arq, []);
+  assert.equal(r.erro, undefined);
+  assert.deepEqual(r.novas.map(x => x.atalho), ["ola-maria", "preco"]);
+  assert.equal(r.invalidas, 0);
+});
+
+test("CX-045 · número do canal com «00» internacional ou zero de tronco", () => {
+  assert.deepEqual(CV.normalizarNumeroCanal("00 55 12 99999-1234"), { ok: true, numero: "+55 12 99999-1234", erro: null });
+  assert.deepEqual(CV.normalizarNumeroCanal("012 99999-1234"), { ok: true, numero: "+55 12 99999-1234", erro: null });
+  assert.deepEqual(CV.normalizarNumeroCanal("(12) 3456-7890"), { ok: true, numero: "+55 12 3456-7890", erro: null });
+  assert.equal(CV.normalizarNumeroCanal("0800 123 4567").ok, false, "0800 não é número de WhatsApp com DDD");
+});
+
+test("CX-046 · qualidade da Meta «UNKNOWN» em português", () => {
+  assert.equal(CV.qualidadeMeta("UNKNOWN").rotulo, "Sem avaliação ainda");
+  assert.equal(CV.qualidadeMeta("GREEN").rotulo, "Boa");
+});
+
+test("CX-047 · variável escrita à mão com maiúscula ou espaço também é trocada", () => {
+  assert.equal(L.aplicarVariaveis("Olá {Nome}, protocolo {PROTOCOLO}", { nome: "Maria Souza", protocolo: "ORB-1" }), "Olá Maria Souza, protocolo ORB-1");
+  assert.equal(L.aplicarVariaveis("Oi { primeiro nome }!", { nome: "ana lima" }), "Oi Ana!");
+  assert.equal(L.aplicarVariaveis("Código {abc} fica", {}), "Código {abc} fica", "o que não é variável fica");
+});
+
+test("CX-048 · máscara do telefone com +55 colado", () => {
+  assert.equal(L.mascaraTelefone("+55 12999990000"), "+55 (12) 99999-0000");
+  assert.equal(L.mascaraTelefone("+55 129"), "+55 (12) 9", "enquanto digita");
+  assert.equal(L.mascaraTelefone("+1 415 555 1234"), "+1 415 555 1234");
+  assert.equal(L.erroTelefone(L.mascaraTelefone("+55 12999990000")), "");
+  assert.equal(L.normalizarTelefone(L.mascaraTelefone("+55 12999990000")), "5512999990000");
+});
+
+test("CX-049/CX-050 · Alt+Shift+F fixa a conversa aberta; a folha de atalhos mostra Home/End e o F", async () => {
+  assert.equal(L.acordeDoEvento({ key: "F", code: "KeyF", altKey: true, shiftKey: true }), "fixar");
+  assert.equal(L.atalhoDe("fixar"), "Alt+Shift+F");
+  assert.ok(L.ACORDES.some(a => a.teclas === "Home / End" && a.grupo === "Na lista"));
+  const d = comDom();
+  const srv = criarServidor();
+  const c = await montarCentral(d, srv);
+  try {
+    await c.abrir(902);
+    d.ev(d.doc, "keydown", { key: "F", code: "KeyF", altKey: true, shiftKey: true });
+    await esperar(5);
+    assert.ok(d.toasts.includes("Conversa fixada no topo da lista."));
+  } finally { c.fim(); d.fim(); }
+});
+
+test("CX-051/CX-052/CX-053 · nova conversa: teclado certo nos campos e o número da busca entra com máscara", async () => {
+  const d = comDom();
+  const srv = criarServidor();
+  let modal = null;
+  d.aoModal(o => { modal = o; return new Promise(() => {}); });
+  const c = await montarCentral(d, srv);
+  try {
+    achar(c.alvo, 'button[aria-label="Nova conversa"]').click();
+    await esperar(20);
+    assert.ok(modal, "abriu a nova conversa");
+    const busca = achar(modal.corpo, "#cv-nv-busca");
+    assert.equal(busca.getAttribute("enterkeyhint"), "search"); assert.equal(busca.getAttribute("spellcheck"), "false");
+    assert.equal(achar(modal.corpo, "#cv-nv-nome").getAttribute("autocapitalize"), "words");
+    busca.value = "12999990000"; d.ev(busca, "input");
+    await esperar(20);
+    botaoTexto(modal.corpo, /Digitar o telefone/).click();
+    assert.equal(achar(modal.corpo, "#cv-nv-tel").value, "(12) 99999-0000");
+  } finally { c.fim(); d.fim(); }
+});
+
+test("CX-054 · conversa exportada abre certa no Bloco de Notas (BOM e CRLF)", () => {
+  assert.ok(SRC_CONV.includes('new Blob(["\\uFEFF", texto.replace(/\\r?\\n/g, "\\r\\n")], { type: "text/plain;charset=utf-8" })'));
+});
+
+test("CX-055 · várias fotos arrastadas vão juntas pelo fluxo de várias fotos", async () => {
+  const d = comDom();
+  try {
+    const lotes = [], unicos = [];
+    const { A, chat } = await montarChat(d);
+    A.composer.anexarVarios = l => lotes.push(l.map(f => f.name));
+    A.composer.anexar = f => unicos.push(f.name);
+    const corpo = achar(chat.el, ".cvc-corpo");
+    const fotos = [{ name: "a.jpg", type: "image/jpeg", size: 10 }, { name: "b.png", type: "image/png", size: 10 }];
+    d.ev(corpo, "drop", { dataTransfer: { types: ["Files"], files: fotos } });
+    assert.deepEqual(lotes, [["a.jpg", "b.png"]]);
+    d.ev(corpo, "drop", { dataTransfer: { types: ["Files"], files: [{ name: "a.pdf", type: "application/pdf", size: 10 }, fotos[0]] } });
+    assert.deepEqual(unicos, ["a.pdf"], "misturado continua um por vez");
+  } finally { d.fim(); }
+});
+
+test("CX-056 · busca sem resultado com filtro ligado oferece limpar os filtros", async () => {
+  const d = comDom();
+  try {
+    const { A, lista, chamadas } = await montarLista(d, { itens: [] });
+    A.busca = "maria"; A.filtro = { nao_lidas: true }; lista.render();
+    assert.match(lista.el.textContent, /Nada encontrado com os filtros ligados/);
+    const v = achar(lista.el, ".vazio");
+    assert.ok(v);
+    A.filtro = {}; A.busca = "joana"; lista.render();
+    assert.match(lista.el.textContent, /Nada encontrado\./);
+    void chamadas;
+  } finally { d.fim(); }
+});
+
+test("CX-057 · localização recebida tem «Copiar» (nome e link do mapa)", async () => {
+  const d = comDom();
+  const copiados = [];
+  d.ui.copiar = (t, o) => { copiados.push([t, o && o.aviso]); return Promise.resolve(true); };
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 5, { tipo: "localizacao", corpo: "Localização: Oficina do Zé (-23.02, -45.55)" })] });
+    achar(chat.el, ".cv-loc-copiar").click();
+    assert.deepEqual(copiados, [["Oficina do Zé — https://maps.google.com/?q=-23.02%2C-45.55", "Localização copiada."]]);
+  } finally { d.fim(); }
+});
+
+test("CX-058 · «Copiar» o telefone na lateral tem nome para o leitor de tela", async () => {
+  const d = comDom();
+  try {
+    const { alvo } = await montarLateral(d);
+    assert.equal(achar(alvo, '[data-foco="copiar-tel"]').getAttribute("aria-label"), "Copiar o telefone");
+  } finally { d.fim(); }
+});
+
+test("CX-059/CX-060 · resumo de localização e de contato sem coordenadas nem fileira de números", () => {
+  assert.equal(L.resumoMensagem({ tipo: "localizacao", corpo: "Localização: Oficina do Zé (-23.02, -45.55)" }), "Localização: Oficina do Zé");
+  assert.equal(L.resumoMensagem({ tipo: "localizacao", corpo: "Localização: sem nome (-23.02, -45.55)" }), "Localização");
+  assert.equal(L.resumoMensagem({ tipo: "contato", corpo: "Contato: Ana 5512999990001" }), "Contato: Ana");
+  assert.equal(L.resumoMensagem({ tipo: "contato", corpo: "Contato: Ana 5512999990001; Bia 5512999990002; Caio 5512999990003" }), "Contatos: Ana, Bia e mais 1");
+});
+
+test("CX-061 · Esc na busca vazia leva o foco à lista", async () => {
+  const d = comDom();
+  try {
+    const { lista } = await montarLista(d, { itens: [conv(1), conv(2)] });
+    const busca = achar(lista.el, 'input[type="search"]');
+    busca.focus();
+    d.ev(busca, "keydown", { key: "Escape" });
+    assert.equal(d.doc.activeElement, achar(lista.el, '.cvl-item[data-id="1"]'));
+  } finally { d.fim(); }
+});
+
+test("CX-062 · espera de mais de um dia em «d h»", () => {
+  assert.equal(L.textoMinutos(51 * 60), "2 d 3 h");
+  assert.equal(L.textoMinutos(1440), "1 d");
+  assert.equal(L.textoMinutos(75), "1 h 15 min");
+});
+
+test("CX-063 · o corte da prévia não parte emoji ao meio", () => {
+  const t = "a".repeat(78) + "😀😀";
+  const r = L.textoRascunhoLista(t, 80);
+  assert.equal(r, "a".repeat(78) + "…");
+  assert.ok(![...L.resumoMensagem({ tipo: "texto", corpo: "b".repeat(138) + "😀 fim" })].some(c => { const k = c.charCodeAt(0); return k >= 0xd800 && k <= 0xdfff; }), "sem metade de emoji");
+});
+
+test("CX-064/CX-065/CX-066 · CSS: lista leve com milhares de linhas, alto contraste e 16 px no toque", () => {
+  const css = ler("conversas.css");
+  assert.match(css, /\.cvl-item \{ content-visibility: auto; contain-intrinsic-size: auto 76px; \}/);
+  assert.match(css, /@media \(forced-colors: active\) \{\s*\.cvl-item\[aria-current="true"\], \.cvl-item\[data-sel="1"\] \{ outline: 2px solid Highlight;/);
+  assert.match(css, /\.cvx textarea, #cv-nv-busca, #cv-nv-tel, #cv-nv-nome, #cv-enc-busca, \.cv-teclas-filtro, \.cvt-nome-ed input, \.cvt-campo-caixa input \{ font-size: 16px; \}/);
+});
+
+test("CX-067/CX-068/CX-069 · Enviar mantém a dica; modelos: busca por várias palavras e idioma por extenso", async () => {
+  const mods = Array.from({ length: 9 }, (_, i) => ({ id: `t${i}`, canal_id: "k1", nome: i === 4 ? "consulta_lembrete_v2" : `aviso_${i}`, status: "APPROVED", categoria: "UTILITY", corpo: `Texto ${i}`, num_parametros: 0, idioma: i === 4 ? "pt_BR" : "en_US" }));
+  await comComposer({ base: { templates: mods } }, async ({ comp }, d) => {
+    assert.match(achar(comp.el, ".cvx-enviar").title, /Enviar e resolver/);
+    let corpo = null;
+    d.aoModal(o => { corpo = o.corpo; return null; });
+    await comp.abrirModelos();
+    const busca = achar(corpo, ".cvx-mod-busca");
+    busca.value = "lembrete consulta"; d.ev(busca, "input");
+    const vis = corpo.querySelectorAll(".cv-modelo").filter(b => !b.hidden);
+    assert.equal(vis.length, 1);
+    assert.match(vis[0].textContent, /consulta_lembrete_v2/);
+    assert.match(vis[0].textContent, /Português/);
+  });
+  assert.equal(L.rotuloIdioma("en_US"), "Inglês"); assert.equal(L.rotuloIdioma("pt_PT"), "Português (Portugal)"); assert.equal(L.rotuloIdioma("xx"), "xx");
+});
+
+test("CX-070 · a conversa exportada diz quem exportou", async () => {
+  const d = comDom();
+  const srv = criarServidor();
+  const u0 = URL.createObjectURL, r0 = URL.revokeObjectURL;
+  const blobs = [];
+  URL.createObjectURL = b => { blobs.push(b); return "blob:exp"; }; URL.revokeObjectURL = () => {};
+  const c = await montarCentral(d, srv);
+  try {
+    await c.abrir(901);
+    achar(c.alvo, ".cvc-mais").click();
+    await d.menus.at(-1).itens.find(x => x && /Exportar/.test(x.rotulo || "") && !/PDF|Imprimir/i.test(x.rotulo || "")).fn();
+    await esperar(20);
+    const txt = await blobs.at(-1).text();
+    assert.match(txt, /Exportada por: Helena Souza/);
+    assert.deepEqual([...new Uint8Array(await blobs.at(-1).arrayBuffer())].slice(0, 3), [0xEF, 0xBB, 0xBF], "CX-054: começa com a marca BOM");
+    assert.match(txt, /\r\n/, "CX-054: quebras CRLF");
+  } finally { URL.createObjectURL = u0; URL.revokeObjectURL = r0; c.fim(); d.fim(); }
+});
+
+test("CX-071 · ir para a mensagem citada leva o foco junto", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 30, { corpo: "Qual o preço?" }), txt(2, "out", 20, { responde_a: { id: 1, direcao: "in", resumo: "Qual o preço?" } })] });
+    const bolha = achar(chat.el, '.cv-msg[data-id="1"]');
+    bolha.scrollIntoView = () => {};
+    achar(chat.el, '.cv-msg[data-id="2"] .cv-cita').click();
+    assert.equal(d.doc.activeElement, bolha);
+    assert.equal(bolha.getAttribute("tabindex"), "-1");
+  } finally { d.fim(); }
+});
+
+test("CX-072 · hora da lista é <time> com a data completa no title", async () => {
+  const d = comDom();
+  try {
+    const { lista } = await montarLista(d, { itens: [conv(1)] });
+    const t = achar(lista.el, ".cvl-item time.cvl-hora");
+    assert.match(t.getAttribute("datetime"), /^\d{4}-\d\d-\d\dT/);
+    assert.match(t.getAttribute("title"), / às \d\d:\d\d$/);
+  } finally { d.fim(); }
+});
+
+test("CX-073/CX-074 · telefone com letra avisa; «Dona»/«Seu»/«Doutora» não viram o primeiro nome", () => {
+  assert.match(L.erroTelefone("12 9999-ABCD"), /tem letras/);
+  assert.equal(L.erroTelefone("(12) 99999-0000"), "");
+  assert.equal(L.primeiroNome("Dona Maria Souza"), "Maria");
+  assert.equal(L.primeiroNome("Seu Zé da Oficina"), "Zé");
+  assert.equal(L.primeiroNome("Doutora Ana"), "Ana");
+  assert.equal(L.primeiroNome("Dona"), "Dona", "sozinho fica");
+});
+
+test("CX-075 · aviso de transferência com o artigo do departamento", () => {
+  assert.equal(L.textoAvisoTransferencia({ departamento: "Recepção" }), "Vou te passar para a Recepção, já te respondem por aqui.");
+  assert.equal(L.textoAvisoTransferencia({ pessoa: "Ana", departamento: "Ortodontia" }), "Vou te passar para Ana, da Ortodontia, que continua o seu atendimento por aqui.");
+  assert.equal(L.textoAvisoTransferencia({ departamento: "Vendas" }), "Vou te passar para as Vendas, já te respondem por aqui.");
+  assert.equal(L.textoAvisoTransferencia({ departamento: "Financeiro" }), "Vou te passar para o Financeiro, já te respondem por aqui.");
+});
+
+test("CX-076 · modo apresentação: o nome do paciente não vai para o título da aba", async () => {
+  const d = comDom();
+  const srv = criarServidor();
+  const titulos = [];
+  d.doc.documentElement.classList.add("apresentacao");
+  const c = await montarCentral(d, srv, { extraCtx: { titulo: t => titulos.push(t) } });
+  try {
+    await c.abrir(901);
+    assert.ok(titulos.length && titulos.every(t => !/Cliente 1/.test(t)), titulos.join(" | "));
+  } finally { c.fim(); d.fim(); }
+  const d2 = comDom();
+  const t2 = [];
+  const c2 = await montarCentral(d2, criarServidor(), { extraCtx: { titulo: t => t2.push(t) } });
+  try { await c2.abrir(901); assert.ok(t2.some(t => /Cliente 1 · Conversas/.test(t)), "fora do modo, o nome continua"); } finally { c2.fim(); d2.fim(); }
+});
+
+test("CX-077 · emojis usados por último aparecem primeiro", async () => {
+  assert.deepEqual(L.ordenarEmojis(["🙏", "👍"], ["😊", "👍", "🙏"]), ["🙏", "👍", "😊"]);
+  assert.deepEqual(L.lembrarEmoji(["👍", "🙏"], "🙏"), ["🙏", "👍"]);
+  const d = comDom();
+  let pop = null;
+  d.ui.flutuante = (anc, corpo) => { pop = corpo; return { fechar() {} }; };
+  try {
+    globalThis.localStorage.setItem("nx-cv-emoji-rec", JSON.stringify(["🎉"]));
+    const { comp } = await montarComposer(d);
+    achar(comp.el, ".cvx-emoji-bt").click();
+    assert.equal(achar(pop, ".cvx-emoji").textContent, "🎉");
+    pop.querySelectorAll(".cvx-emoji")[2].click();
+    assert.equal(JSON.parse(globalThis.localStorage.getItem("nx-cv-emoji-rec"))[1], "🎉");
+  } finally { d.fim(); }
+});
+
+test("CX-078 · e-mail e cidade da lateral com o teclado certo", async () => {
+  const d = comDom();
+  try {
+    const t = await montarLateral(d, { ver: { contato: { id: 5, nome: "Mariana Costa", telefone: "5512999990000", email: "m@x.com" } } });
+    achar(t.alvo, '[data-foco="editar-email"]').click();
+    const inp = achar(t.alvo, ".cvt-campo-caixa input");
+    assert.equal(inp.getAttribute("autocapitalize"), "off");
+    assert.equal(inp.getAttribute("spellcheck"), "false");
+  } finally { d.fim(); }
+});
+
+test("CX-079 · link do WhatsApp sem número é vazio", () => {
+  assert.equal(L.linkWhatsApp(""), "");
+  assert.equal(L.linkWhatsApp(null), "");
+  assert.equal(L.linkWhatsApp("12 99999-0000"), "https://wa.me/5512999990000");
+});
+
+test("CX-080/CX-081 · erros passageiros da Meta: dica e nova tentativa sozinha", () => {
+  assert.match(L.dicaErroEnvio("131000"), /passageiro/);
+  assert.match(L.dicaErroEnvio("meta_131008"), /campo obrigatório/);
+  assert.match(L.dicaErroEnvio("131009"), /não aceita/);
+  for (const cod of ["meta_131000", "131016"]) { const c = L.classificarFalhaEnvio({ codigo: cod }); assert.equal(c.tipo, "rede", cod); assert.equal(c.subtipo, "servidor"); }
+  assert.equal(L.classificarFalhaEnvio({ codigo: "meta_131008" }).tipo, "definitiva");
+});
+
+test("CX-082 · recusa de arquivo pelo servidor tem dica na bolha", () => {
+  assert.match(L.dicaErroEnvio("midia_vazia"), /vazio/);
+  assert.match(L.dicaErroEnvio("midia_tipo"), /não aceita este tipo/);
+  assert.match(L.classificarFalhaEnvio({ codigo: "midia_tipo", status: 400 }).motivo, /não aceita/);
+});

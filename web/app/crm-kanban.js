@@ -156,7 +156,7 @@ export async function montarKanban(k, el, rota) {
 
   // plano 1000b · RB-037: a visão corta a busca em 120 (crm-logica) — o campo também
   // plano 1500c · RC-309: no computador o atalho «/» aparece na própria caixa (e o leitor recebe aria-keyshortcuts)
-  const busca = h("input", { type: "search", maxlength: "120", placeholder: `Buscar ${k.v.min("negocios")}, nome ou telefone${(() => { try { return matchMedia("(max-width: 760px)").matches; } catch { return false; } })() ? "" : " (/)"}`, "aria-label": `Buscar ${k.v.min("negocios")}`, "aria-keyshortcuts": "/", value: S.filtro.busca || "" });
+  const busca = h("input", { type: "search", enterkeyhint: "search", maxlength: "120", placeholder: `Buscar ${k.v.min("negocios")}, nome ou telefone${(() => { try { return matchMedia("(max-width: 760px)").matches; } catch { return false; } })() ? "" : " (/)"}`, "aria-label": `Buscar ${k.v.min("negocios")}`, "aria-keyshortcuts": "/", value: S.filtro.busca || "" });      // plano 1500c · RX-030: enterkeyhint="search" em todas as buscas do CRM (o teclado do celular mostra «Buscar» em vez de «Enter»)
   // plano 1000 (CR-031): depois de buscar, o leitor de tela ouve quantos cartões sobraram (o quadro muda em silêncio)
   const aoBuscar = ui.debounce(async () => {
     const q = busca.value.trim(); if (q) S.filtro.busca = q; else delete S.filtro.busca; gravarLocal();
@@ -352,6 +352,8 @@ export async function montarKanban(k, el, rota) {
     h("button", { type: "button", class: "bt bt-prim bt-p crm-sel-mover", on: { click: () => moverSelecionados() } }, "Mover para…"),
     // plano 1500c · RC-083: etiquetar e trocar o responsável dos selecionados (em fila, um nx_negocio_salvar por cartão)
     h("button", { type: "button", class: "bt bt-sec bt-p crm-sel-etq", on: { click: () => loteEtiquetar() } }, "Etiquetar…"),
+    // plano 1500c · RX-043: o caminho de volta do «Etiquetar…» — tira uma etiqueta de todos os selecionados
+    h("button", { type: "button", class: "bt bt-sec bt-p crm-sel-tirar-etq", on: { click: () => loteTirarEtiqueta() } }, "Tirar etiqueta…"),
     h("button", { type: "button", class: "bt bt-sec bt-p crm-sel-dono", on: { click: () => loteResponsavel() } }, "Responsável…"),
     h("button", { type: "button", class: "bt bt-fant bt-p crm-sel-limpar", on: { click: () => limparSel() } }, "Limpar seleção"));
   el.insertBefore(barraSel, corpoQuadro);
@@ -397,8 +399,12 @@ export async function montarKanban(k, el, rota) {
   function limparSel() { S.sel.clear(); S.modoSel = false; pintarSel(); }
   /** plano 1500c · RC-083: grava um patch em cada selecionado (fila), recarrega e diz quantos deram certo. */
   async function aplicarEmLote(patchDe, textoOk) {
-    const cards = [...S.sel].map(cardDe).filter(c => c && !S.pend.has(c.id));
-    if (!cards.length) return;
+    const todos = [...S.sel].map(cardDe).filter(Boolean);
+    const cards = todos.filter(c => !S.pend.has(c.id));
+    // plano 1500c · RX-042: cartão que ainda está salvando fica de fora — e a pessoa fica sabendo (antes sumia calado da conta)
+    const pulados = todos.length - cards.length;
+    if (!cards.length) { if (pulados) ui.toast(`${pulados === 1 ? "O cartão ainda está" : "Os cartões ainda estão"} salvando. Tente de novo em instantes.`, { tipo: "info" }); return; }
+    if (cards.length > 5) ui.anunciar(`Alterando ${cards.length} cartões…`);
     let ok = 0, primeiroErro = null;
     for (const c of cards) {
       try { await k.api.rpcC("nx_negocio_salvar", { p_negocio: { id: c.id, ...patchDe(c) } }); ok++; S.meus.add(c.id); }
@@ -406,13 +412,32 @@ export async function montarKanban(k, el, rota) {
     }
     limparSel();
     if (S.vivo) await carregar({ silencioso: true });
-    if (ok) ui.toast(textoOk(ok), { tipo: "ok" });
+    if (ok) ui.toast(`${textoOk(ok)}${pulados ? ` ${pulados} ${pulados === 1 ? "ficou" : "ficaram"} de fora (ainda salvando).` : ""}`, { tipo: "ok" });
     if (primeiroErro) ui.toast(`${cards.length - ok} não ${cards.length - ok === 1 ? "foi alterado" : "foram alterados"}: ${k.erro(primeiroErro)}`, { tipo: "erro" });
   }
   async function escolherNaLista(titulo, opcoes) {
     let modalApi = null;
-    const corpo = h("ul", { class: "kb-mover" }, opcoes.map(o => h("li", null, h("button", { type: "button", class: "kb-mover-op", on: { click: () => modalApi && modalApi.fechar(o.valor) } },
+    const lista = h("ul", { class: "kb-mover" }, opcoes.map(o => h("li", { dataset: { busca: L.semAcento(o.rotulo) } }, h("button", { type: "button", class: "kb-mover-op", on: { click: () => modalApi && modalApi.fechar(o.valor) } },
       h("span", { class: "kb-mover-nome" }, o.rotulo)))));
+    // plano 1500c · RX-044: mais de 8 opções (etiquetas, equipe grande) → uma busca no topo filtra a lista
+    let corpo = lista;
+    if (opcoes.length > 8) {
+      const campo = h("input", { type: "search", enterkeyhint: "search", class: "kb-mover-busca", placeholder: "Buscar", "aria-label": "Buscar na lista", autocomplete: "off" });
+      const nada = h("p", { class: "fraco", hidden: true }, "Nada encontrado.");
+      campo.addEventListener("input", () => {
+        const q = L.semAcento(campo.value.trim());
+        let n = 0;
+        for (const li of lista.querySelectorAll("li")) { const mostra = !q || String(li.dataset.busca || "").includes(q); li.hidden = !mostra; if (mostra) n++; }
+        nada.hidden = n > 0;
+      });
+      // plano 1500c · RX-074: Enter com uma opção só sobrando escolhe ela
+      campo.addEventListener("keydown", ev => {
+        if (ev.key !== "Enter") return;
+        const sobra = [...lista.querySelectorAll("li")].filter(li => !li.hidden);
+        if (sobra.length === 1) { if (ev.preventDefault) ev.preventDefault(); const b = sobra[0].querySelector("button"); if (b) b.click(); }
+      });
+      corpo = h("div", { class: "pilha-p" }, campo, lista, nada);
+    }
     return ui.modal({ titulo, corpo, largura: "p", protegerTexto: false, acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: null }], aoAbrir: a => { modalApi = a; } });
   }
   async function loteEtiquetar() {
@@ -422,6 +447,15 @@ export async function montarKanban(k, el, rota) {
     if (id == null || !S.vivo) return;
     const nome = (k.etiqueta(id) || {}).nome || "etiqueta";
     await aplicarEmLote(c => ({ etiquetas: [...new Set([...(c.etiquetas || []), id])] }), n => `Etiqueta «${nome}» posta em ${n} ${n === 1 ? "cartão" : "cartões"}.`);
+  }
+  async function loteTirarEtiqueta() {
+    const usadas = new Set([...S.sel].map(cardDe).filter(Boolean).flatMap(c => (c.etiquetas || []).map(String)));
+    const etqs = (k.base.etiquetas || []).filter(e => usadas.has(String(e.id)));
+    if (!etqs.length) { ui.toast("Nenhum dos selecionados tem etiqueta.", { tipo: "info" }); return; }
+    const id = await escolherNaLista(`Tirar etiqueta de ${S.sel.size} ${S.sel.size === 1 ? "cartão" : "cartões"}`, etqs.map(e => ({ valor: e.id, rotulo: e.nome })));
+    if (id == null || !S.vivo) return;
+    const nome = (k.etiqueta(id) || {}).nome || "etiqueta";
+    await aplicarEmLote(c => ({ etiquetas: (c.etiquetas || []).filter(x => String(x) !== String(id)) }), n => `Etiqueta «${nome}» tirada de ${n} ${n === 1 ? "cartão" : "cartões"}.`);
   }
   async function loteResponsavel() {
     const SEM = "__sem__";
@@ -1008,17 +1042,18 @@ export async function montarKanban(k, el, rota) {
       tarefaTxt.toLowerCase(), origemTxt ? `origem ${origemTxt}` : "", etqs.length ? `etiquetas ${etqs.map(x => x.nome).join(", ")}` : "",
       pont ? `pontuação ${pont.score} de 100` : "", dono ? `responsável ${dono.nome}` : "",
       c.nao_lidas ? `${c.nao_lidas} ${c.nao_lidas === 1 ? "mensagem não lida" : "mensagens não lidas"}` : ""].filter(Boolean).join(", ");      // plano 1500c · RC-052: singular
+    const naoLidasTxt = c.nao_lidas === 1 ? "1 não lida" : `${c.nao_lidas} não lidas`;      // plano 1500c · RX-028: «1 não lida» no selo (não «1 não lidas»)
     const idDet = `kc-d-${cli}-${c.id}`;
     const art = h("article", { class: ["kc", S.sel.has(c.id) && "kc-sel", S.pend.has(c.id) && "confirmando salvando", faixa && `kc-prazo-${faixa.nivel}`], role: "listitem", tabindex: "0", dataset: { id: c.id }, "aria-roledescription": "cartão",
       "aria-label": rotulo, "aria-describedby": detalhes ? idDet : null, "aria-busy": S.pend.has(c.id) ? "true" : null, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null },
       detalhes ? h("span", { class: "sr-only", id: idDet }, detalhes) : null,
       h("div", { class: "kc-l1" }, nomeAvatar ? ui.avatar(nomeAvatar, idAvatar) : h("span", { class: "kc-avatar-vazio kc-sem-contato", title: "Sem contato" }, ui.icone("usuario")),
-        h("span", { class: "kc-t", title: titulo.length > 48 ? titulo : null }, titulo)),
+        h("span", { class: "kc-t dado-pessoal", title: Array.from(titulo).length > 48 ? titulo : null }, titulo)),      // plano 1500c · RX-080: a mesma régua do corte (caracteres, não unidades UTF-16 — emoji contava 2)
       h("div", { class: "kc-l2" },
         // plano 1500c · RC-074: no ganho, o valor FINAL em destaque (com a dica «valor final»)
         valor != null ? h("b", { class: ["kc-valor", e.tipo === "ganho" && c.valor != null && "kc-valor-final"], title: e.tipo === "ganho" && c.valor != null ? "Valor final" : null }, ui.brl(valor, { centavos: L.temCentavos(valor) }))      // plano 1500c · RC-287: centavos só quando há
           : h("span", { class: ["kc-valor", "sem"] }, "Sem valor"),      // plano 1000b · RB-236: mesma caixa da gaveta
-        sub ? h("span", { class: "kc-s", title: sub }, sub) : null),
+        sub ? h("span", { class: "kc-s dado-pessoal", title: sub }, sub) : null),      // plano 1500c · UC-030: nome/telefone somem no modo apresentação
       motivoTxt ? h("span", { class: "kc-motivo", title: `Motivo: ${motivoTxt}` }, motivoTxt) : null,
       // plano 1500c · RC-085: a barra é só visual (o tempo já está no rótulo do cartão) — sem role=img repetindo. RC-280: a dica diz quanto falta para o prazo
       faixa ? h("span", { class: ["kc-tempo", faixa.nivel], "aria-hidden": "true", title: `${L.textoDiasEtapa(c.estagio_em)} · ${faixa.texto}${L.textoFaltaPrazo(c.estagio_em, e.sla_horas) ? ` · ${L.textoFaltaPrazo(c.estagio_em, e.sla_horas)}` : ""}` },
@@ -1048,16 +1083,17 @@ export async function montarKanban(k, el, rota) {
           etqs.length > 3 ? h("small", null, `+${etqs.length - 3}`) : null) : null,
         h("span", { class: "kc-fim" },
           // plano 1000 (CR-213): tocar no avatar filtra o quadro por esse responsável (chip «Responsável: Ana», removível)
-          dono ? h("button", { type: "button", class: "kc-dono", title: `Responsável: ${dono.nome} — toque para ver só os cartões de ${dono.nome}`,      // plano 1500c · RC-053 "aria-label": `Ver só os cartões de ${dono.nome}`,
+          dono ? h("button", { type: "button", class: "kc-dono", title: `Responsável: ${dono.nome} — toque para ver só os cartões de ${dono.nome}`,
+            "aria-label": `Ver só os cartões de ${dono.nome}`,      // plano 1500c · RX-027: o rótulo do botão tinha virado comentário (o leitor de tela lia só «botão»)
             on: { click: ev => { ev.stopPropagation(); filtrarDono(dono); } } }, ui.avatar(dono.nome, dono.id)) : h("span", { class: "kc-avatar-vazio", title: "Sem responsável" }, ui.icone("usuario")),
           // alternativa ao arrastar (toque, leitor de tela): a mesma folha «Mover para…» do toque longo
           podeMover ? h("button", { type: "button", class: "bt-icone kc-mover", "aria-label": `Mover «${titulo}» para outra etapa`, title: "Mover para…",
             on: { click: ev => { ev.stopPropagation(); abrirMoverPara(c.id); } } }, ui.icone("opcoes")) : null)),
       // plano 1000 (CR-029): o selo de não lidas leva direto à conversa do contato (antes era só informativo)
       c.nao_lidas ? (idContato != null && comConversas
-        ? h("button", { type: "button", class: "kc-naolidas", title: `Abrir conversa (${c.nao_lidas} não lidas)`, "aria-label": `Abrir conversa de «${tituloCurto}» (${c.nao_lidas} não lidas)`,
+        ? h("button", { type: "button", class: "kc-naolidas", title: `Abrir conversa (${naoLidasTxt})`, "aria-label": `Abrir conversa de «${tituloCurto}» (${naoLidasTxt})`,
           on: { click: ev => { ev.stopPropagation(); ctx.navegar(`#/conversas?contato=${encodeURIComponent(idContato)}`); } } }, String(c.nao_lidas > 99 ? "99+" : c.nao_lidas))
-        : h("span", { class: "kc-naolidas", title: `${c.nao_lidas} não lidas` }, String(c.nao_lidas > 99 ? "99+" : c.nao_lidas))) : null,
+        : h("span", { class: "kc-naolidas", title: naoLidasTxt }, String(c.nao_lidas > 99 ? "99+" : c.nao_lidas))) : null,
       // plano 1000 (CR-030): no desktop, ao passar o mouse (ou com o foco no cartão), «Conversa» e «Tarefa» sem abrir a gaveta
       podeMover ? h("span", { class: "kc-rapidas" },
         idContato != null && comConversas ? h("button", { type: "button", class: "bt-icone kc-rapida", dataset: { acao: "conversa" }, "aria-label": `Abrir conversa de «${tituloCurto}»`, title: "Abrir conversa",
@@ -1619,7 +1655,7 @@ export async function montarKanban(k, el, rota) {
     if (S.funil.estagios.length <= 8) return lista;
     const norm = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
     const nada = h("p", { class: "fraco kb-mover-nada", hidden: true }, "Nenhuma etapa com esse nome.");
-    const busca = h("input", { type: "search", class: "kb-mover-busca", placeholder: "Buscar etapa", "aria-label": "Buscar etapa", autocomplete: "off" });
+    const busca = h("input", { type: "search", enterkeyhint: "search", class: "kb-mover-busca", placeholder: "Buscar etapa", "aria-label": "Buscar etapa", autocomplete: "off" });
     busca.addEventListener("input", () => {
       const q = norm(busca.value.trim());
       let vistos = 0;
@@ -1630,6 +1666,12 @@ export async function montarKanban(k, el, rota) {
         if (ok) vistos++;
       }
       nada.hidden = vistos > 0;
+    });
+    // plano 1500c · RX-074: Enter com UMA etapa sobrando escolhe ela (teclado: digitar «fech» + Enter)
+    busca.addEventListener("keydown", ev => {
+      if (ev.key !== "Enter") return;
+      const sobra = [...lista.children].filter(li => li.dataset && li.dataset.etapa && !li.hidden).map(li => li.querySelector("button")).filter(b => b && !b.disabled);
+      if (sobra.length === 1) { if (ev.preventDefault) ev.preventDefault(); sobra[0].click(); }
     });
     return h("div", { class: "kb-mover-com-busca" }, busca, nada, lista);
   }
@@ -1980,6 +2022,9 @@ export async function montarKanban(k, el, rota) {
   const aoTeclaGlobal = ev => {
     if (ev.key === "Escape" && S.arrasto && S.arrasto.moveu) { ev.preventDefault(); cancelarPonteiro(); ui.anunciar("Movimento cancelado."); return; }
     if (ev.key === "Escape" && S.sel.size && !(ev.target && ev.target.closest && ev.target.closest("[role=dialog],dialog"))) { limparSel(); ui.anunciar("Seleção limpa."); return; }
+    // plano 1500c · RX-041: sem a API de tela cheia (iPhone, navegador da TV) o Esc também sai do modo apresentação
+    if (ev.key === "Escape" && el.classList.contains("kb-apresentacao") && !(typeof document !== "undefined" && document.fullscreenElement)
+      && !(ev.target && ev.target.closest && ev.target.closest("[role=dialog],dialog"))) { alternarApresentacao(false); ui.anunciar("Saiu da tela cheia."); return; }
     // plano 1000 (CR-037): Alt+1…5 troca de funil (a ordem do seletor). Pelo código da tecla: no Mac Alt+1 escreve «¡»
     const dig = /^Digit([1-9])$/.exec(ev.code || "") || (/^[1-9]$/.test(ev.key || "") ? [null, ev.key] : null);
     if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && dig && !S.arrasto && !S.teclado) {
@@ -2023,8 +2068,14 @@ export async function montarKanban(k, el, rota) {
   function desenharChips() {
     ui.limpar(chips);
     const f = S.filtro;
-    const add = (txt, tirar, dica) => chips.appendChild(h("span", { class: "crm-chip" }, h("span", null, txt, dica ? h("small", null, ` ${dica}`) : null),
-      h("button", { type: "button", "aria-label": `Tirar o filtro ${txt}`, on: { click: () => { tirar(); gravarLocal(); carregar({ silencioso: true }); } } }, ui.icone("fechar"))));
+    // plano 1500c · RX-045: tirar um chip devolve o foco ao chip seguinte (ou ao «Filtros») e diz o que saiu — antes o foco caía no começo da página
+    const focarDepois = i => Promise.resolve(carregar({ silencioso: true })).catch(() => {}).finally(() => {
+      const bts = chips.querySelectorAll(".crm-chip button");
+      const alvo = bts.length ? bts[Math.min(i, bts.length - 1)] : btFiltros;
+      try { if (alvo && alvo.focus) alvo.focus(); } catch { /* ok */ }
+    });
+    const add = (txt, tirar, dica) => { const i = chips.querySelectorAll(".crm-chip").length; chips.appendChild(h("span", { class: "crm-chip" }, h("span", null, txt, dica ? h("small", null, ` ${dica}`) : null),
+      h("button", { type: "button", "aria-label": `Tirar o filtro ${txt}`, on: { click: () => { tirar(); gravarLocal(); ui.anunciar(`Filtro tirado: ${txt}.`); focarDepois(i); } } }, ui.icone("fechar")))); };
     if (f.dono) add(L.textoChipDono(f.dono, k.usuario(f.dono)), () => delete f.dono);     // plano 1000b · RB-029: «pessoa removida» em vez de «—»
     if (f.etiquetas && f.etiquetas.ids && f.etiquetas.ids.length) {
       // plano 1000b · RB-018: frase («Tem todas: VIP, Retorno»), sem o código do operador; etiqueta apagada vira «etiqueta removida»
@@ -2037,7 +2088,9 @@ export async function montarKanban(k, el, rota) {
     if (f.campo) add(L.textoFiltroCampo(f.campo, k.base.campos), () => delete f.campo);
     const n = contarFiltros();
     if (n > 0) chips.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p crm-chips-limpar", on: { click: () => {
-      const b = S.filtro.busca; S.filtro = b ? { busca: b } : {}; gravarLocal(); carregar({ silencioso: true });
+      const b = S.filtro.busca; S.filtro = b ? { busca: b } : {}; gravarLocal();
+      ui.anunciar("Filtros limpos.");      // plano 1500c · RX-046: avisa e o foco vai para «Filtros» (o botão clicado some)
+      Promise.resolve(carregar({ silencioso: true })).catch(() => {}).finally(() => { try { btFiltros.focus(); } catch { /* ok */ } });
     } } }, "Limpar filtros"));
     nFiltros.textContent = String(n); nFiltros.hidden = !n;
     btFiltros.classList.toggle("ativo", n > 0);
@@ -2078,8 +2131,10 @@ export async function montarKanban(k, el, rota) {
       return h("label", { class: "crm-op" }, inp, h("span", null, t));
     }));
     // plano 1000b · RB-020: texto com teclado decimal, lido como a gaveta (L.lerNumero) — «1.500,00» funciona e 75 não fica «inválido» pelo passo de 50
-    const vMin = h("input", { type: "text", inputmode: "decimal", autocomplete: "off", placeholder: "Mínimo", "aria-label": "Valor mínimo", value: f.valor_min ?? "" });
-    const vMax = h("input", { type: "text", inputmode: "decimal", autocomplete: "off", placeholder: "Máximo", "aria-label": "Valor máximo", value: f.valor_max ?? "" });
+    // plano 1500c · RX-048: o valor já aplicado volta escrito como a pessoa digita («1.500», não «1500»)
+    const fmtV = v => (v == null || v === "" || !Number.isFinite(Number(v)) ? (v ?? "") : Number(v).toLocaleString("pt-BR", { maximumFractionDigits: 2 }));
+    const vMin = h("input", { type: "text", inputmode: "decimal", enterkeyhint: "done", autocomplete: "off", placeholder: "Mínimo", "aria-label": "Valor mínimo", value: fmtV(f.valor_min) });
+    const vMax = h("input", { type: "text", inputmode: "decimal", enterkeyhint: "done", autocomplete: "off", placeholder: "Máximo", "aria-label": "Valor máximo", value: fmtV(f.valor_max) });
     // plano 1000 (CR-010): erro de valor aparece junto do campo (e o popover continua aberto)
     const erroValor = h("small", { class: "ed-erro crm-filtros-erro", role: "alert", id: `crm-fv-${cli}`, hidden: true });
     const parado = h("select", { "aria-label": "Parados há" }, [["", "Qualquer tempo"], ["3", "3 dias ou mais"], ["7", "7 dias ou mais"], ["15", "15 dias ou mais"], ["30", "30 dias ou mais"], ["60", "60 dias ou mais"], ["90", "90 dias ou mais"]]     // plano 1500c · RC-324
@@ -2165,6 +2220,8 @@ export async function montarKanban(k, el, rota) {
       S.filtro = r.nf; gravarLocal(); carregar({ silencioso: true });
       ui.anunciar("Filtros aplicados.");
     } });
+    // plano 1500c · RX-047: Enter num campo de texto/data do popover aplica (antes não fazia nada)
+    for (const x of [vMin, vMax, de, ate]) x.addEventListener("keydown", ev => { if (ev.key === "Enter" && !ev.isComposing) { if (ev.preventDefault) ev.preventDefault(); aplicar.click(); } });
     limpar.addEventListener("click", () => { resolvido = true; const b = S.filtro.busca; S.filtro = b ? { busca: b } : {}; gravarLocal(); pop.fechar(); carregar({ silencioso: true }); });
     aplicar.addEventListener("click", () => {
       const r = lerNovo();
@@ -2232,6 +2289,8 @@ export async function montarKanban(k, el, rota) {
       efetivarPendentes();
       document.removeEventListener("visibilitychange", aoEsconder);
       document.removeEventListener("fullscreenchange", aoSairTelaCheia);      // plano 1500c · RC-087
+      // plano 1500c · RX-040: trocar de tela com o quadro em tela cheia não deixa a próxima tela presa em tela cheia
+      try { if (document.fullscreenElement && (document.fullscreenElement === el || (el.contains && el.contains(document.fullscreenElement))) && document.exitFullscreen) document.exitFullscreen().catch(() => {}); } catch { /* ok */ }
       try { removeEventListener("online", aoMudarRede); removeEventListener("offline", aoMudarRede); } catch { /* ok */ }      // plano 1500c · RC-264
       removeEventListener("pagehide", aoSairDaPagina);
       document.removeEventListener("keydown", aoTeclaGlobal);

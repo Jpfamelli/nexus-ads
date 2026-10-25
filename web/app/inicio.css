@@ -520,3 +520,20 @@ details.ini-canal-erro .bt { margin-top: var(--esp-1); min-height: 32px; }
   .ini-numero-env > .ini-numero { padding-right: 2.75rem; }
   .ini .g-fdica-bt { width: 44px; height: 44px; }
 }
+
+/* plano 1500c · IC-007/IC-008/IC-006: a nota honesta do retorno e o custo por lead */
+.ini-roi-alerta { margin: 0; color: var(--c-aten); font-weight: 500; }
+.ini-roi-cpl { margin: 0; font-family: var(--f-mono); }
+/* plano 1500c · IC-010/IC-011: a barra dos primeiros passos */
+.ini-guia-barra { height: 6px; border-radius: 3px; background: var(--c-sup-2); overflow: hidden; margin: var(--esp-2) 0 var(--esp-1); }
+.ini-guia-barra-f { display: block; height: 100%; width: var(--guia-pct, 0%); background: var(--c-ok); border-radius: inherit; transition: width var(--t-ui) var(--e-out); }
+.ini-guia-pronto .ini-guia-barra-f { background: var(--c-ok); }
+.ini-guia-pronto [data-k="guia-prog"] { color: var(--c-ok); font-weight: 500; }
+@media (prefers-reduced-motion: reduce) { .ini-guia-barra-f { transition: none; } }
+/* plano 1500c · IC-012: a linha de quem está olhando */
+.ini-equipe-eu th, .ini-equipe-eu td { background: var(--c-sup-2); }
+.ini-equipe-voce { color: var(--c-texto-2); font-weight: 400; }
+/* plano 1500c · IC-013: o dinheiro parado */
+.ini-esfr-valor { color: var(--c-aten); font-weight: 600; }
+/* plano 1500c · IC-005 */
+.ini-resumo-gerado { margin: 0; font-family: var(--f-mono); }

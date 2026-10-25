@@ -466,7 +466,8 @@ test("CA-210 · bloqueio por cima de consultas marcadas avisa antes de salvar (2
     const aviso = o.corpo.querySelector(".agc-aviso-consultas");
     assert.equal(aviso.hidden, false);
     assert.match(aviso.textContent, /^2 consultas caem neste bloqueio: Mariana Costa .*Rafael/);
-    assert.ok(aviso.querySelector('a[href="#/agenda"]'), "com o caminho para a Agenda");
+    // plano 1500c: GX-067 — o link vai ao dia da primeira consulta afetada (#/agenda?dia=…)
+    assert.ok(aviso.querySelector(".agc-ver-agenda").getAttribute("href").startsWith("#/agenda"), "com o caminho para a Agenda");
     resultado = await fn(erroModal(erros));
     return resultado;
   } });

@@ -32,7 +32,8 @@ export function avisoProporcaoLogo(largura, altura) {
 
 /** Valida o contrato da RPC antes de a tela tratar uma resposta inválida como lista vazia. */
 export function validarListaDominios(valor) {
-  if (!Array.isArray(valor) || valor.some(d => !d || typeof d !== "object" || typeof d.host !== "string" || !["pendente", "ativo"].includes(d.status))) {
+  // plano 2000d · DU-160: «quebrado» = o domínio ativo parou de apontar (a verificação diária do servidor marca)
+  if (!Array.isArray(valor) || valor.some(d => !d || typeof d !== "object" || typeof d.host !== "string" || !["pendente", "ativo", "quebrado"].includes(d.status))) {
     const erro = new Error("O servidor devolveu uma lista de domínios inválida. Tente atualizar a tela.");
     erro.codigo = "resposta_invalida";
     throw erro;
@@ -75,12 +76,16 @@ export const PEND_CACHE_MS = 60_000;
 
 /** plano 1000 · AS-083: palavras extras de busca por seção (o título e a descrição já entram). */
 export const PALAVRAS_SECAO = Object.freeze({
-  perfil: "nome celular senha aparelhos sair avisos som notificação conta", usuarios: "equipe convite convidar papel administrador atendente acesso pessoas",
+  // plano 2000d · DU-172: palavras dos ajustes DENTRO das seções (rodízio, assinatura, 2 etapas, foto…)
+  perfil: "nome celular senha aparelhos sair avisos som notificação conta foto assinatura verificação duas etapas 2fa ausente sessões",
+  usuarios: "equipe convite convidar papel administrador atendente acesso pessoas rodízio rodizio vê colegas permissões exportar pausar férias 2 etapas lista csv",
+  empresa: "endereço telefone instagram fuso horário guarda retenção lgpd variáveis",
   departamentos: "horário horario funcionamento expediente fora do horário setor rodízio", numeros: "whatsapp codewords meta api oficial número conectar modelos templates",
   respostas: "atalho frases prontas barra mensagens", atendimento: "assinatura fila avisos preferências", ia: "inteligência artificial assistente robô bot memória tom",
   funis: "etapas pipeline kanban vendas", campos: "campos extras cadastro personalizados", etiquetas: "tags marcadores cores", motivos: "perda não fechou",
   agenda: "horários consultas dias fechados duração", anuncios: "meta google facebook instagram contas campanhas", formulario: "site formulário lead",
-  rastreio: "script utm origem campanha site", marca: "logo cores tema tela de entrada favicon", dominio: "endereço cname dns subdomínio", plano: "limites uso cobrança assinatura",
+  rastreio: "script utm origem campanha site", marca: "logo cores tema tela de entrada favicon termos privacidade site e-mail remetente ícone app teste grátis",
+  dominio: "endereço cname dns subdomínio registro.br hostinger cloudflare godaddy", plano: "limites uso cobrança assinatura fatura pagamento cancelar pacote ia renovação",
 });
 const semAcento = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 /** AS-083: ids das seções que casam com a busca (título + descrição + palavras-chave, sem acento; todas as palavras digitadas). */
@@ -275,7 +280,8 @@ export function rotuloDiasTeste(status, testeAte, hoje) {
   return { texto: n === 0 ? "O teste termina hoje" : n === 1 ? "Falta 1 dia de teste" : `Faltam ${n} dias de teste`, tom: n <= 3 ? "aten" : "info" };
 }
 /** plano 1500c · UCB-075: o que a situação da conta significa (suspensa, cancelada, teste encerrado) → {texto, tom} ou null. */
-export function avisoStatusPlano(status, testeAte, hoje) {
+export function avisoStatusPlano(status, testeAte, hoje, { regularizarAte = null } = {}) {
+  if (status === "pendente") return avisoPagamentoPendente(regularizarAte);      // plano 2000d · DU-164
   if (status === "suspenso") return { texto: "A conta está suspensa: a equipe não consegue usar o sistema. Os dados continuam guardados; fale com o suporte para reativar.", tom: "ruim" };
   if (status === "cancelado") return { texto: "A conta foi cancelada: a equipe não entra mais. Os dados continuam guardados por um tempo; fale com o suporte para voltar.", tom: "ruim" };
   const n = status === "teste" ? diasRestantesTeste(testeAte, hoje) : null;
@@ -341,18 +347,401 @@ export function progressoTeste(inicio, fim, hoje) {
   return { dia: Math.min(total, Math.max(1, passados + 1)), total };
 }
 
+/* ---------------------------------------------------------------- plano 2000d · lógica nova (frente config) */
+/** plano 2000d · DU-131: baixa um texto como arquivo (CSV da equipe). */
+function baixarTexto(texto, nome, tipo) {
+  try {
+    const url = URL.createObjectURL(new Blob([texto], { type: `${tipo};charset=utf-8` }));
+    const a = document.createElement("a"); a.href = url; a.download = nome; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    return true;
+  } catch { return false; }
+}
+/** Servidor sem a função (ou rota inexistente): o recurso degrada sem barulho. */
+export const semFuncaoRpc = e => /pgrst202|could not find the function|http_404|funcao_invalida/i.test(String((e && (e.codigo || e.message)) || ""));
+const dataCurta = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || "")); return m ? `${m[3]}/${m[2]}` : ""; };
+
+/** plano 2000d · DU-109: o que cada papel pode além do básico (a matriz que o admin edita; o servidor é quem barra). */
+export const PERMISSOES = Object.freeze([
+  Object.freeze({ id: "exportar", rotulo: "Exportar contatos e listas" }),
+  Object.freeze({ id: "excluir", rotulo: "Excluir registros" }),
+  Object.freeze({ id: "ver_valores", rotulo: "Ver valores (negócios e orçamentos)" }),
+  Object.freeze({ id: "automacoes", rotulo: "Criar e mudar automações" }),
+  Object.freeze({ id: "anuncios", rotulo: "Ver anúncios e investimento" }),
+]);
+/** DU-109: os padrões repetem o que cada papel faz hoje (administrador tudo; somente leitura nada que altere). */
+export const PERMISSOES_PADRAO = Object.freeze({
+  admin: Object.freeze({ exportar: true, excluir: true, ver_valores: true, automacoes: true, anuncios: true }),
+  supervisor: Object.freeze({ exportar: true, excluir: true, ver_valores: true, automacoes: true, anuncios: true }),
+  atendente: Object.freeze({ exportar: true, excluir: true, ver_valores: true, automacoes: false, anuncios: false }),
+  leitura: Object.freeze({ exportar: false, excluir: false, ver_valores: true, automacoes: false, anuncios: false }),
+});
+/** DU-109: a matriz efetiva (o salvo por cima do padrão); o administrador é sempre tudo e «somente leitura» nunca exclui. */
+export function matrizPermissoes(salvas) {
+  const s = salvas && typeof salvas === "object" ? salvas : {};
+  const out = {};
+  for (const papel of Object.keys(PERMISSOES_PADRAO)) {
+    out[papel] = {};
+    for (const p of PERMISSOES) {
+      const v = s[papel] && typeof s[papel][p.id] === "boolean" ? s[papel][p.id] : PERMISSOES_PADRAO[papel][p.id];
+      out[papel][p.id] = papel === "admin" ? true : papel === "leitura" && (p.id === "excluir" || p.id === "automacoes") ? false : v;
+    }
+  }
+  return out;
+}
+
+/** plano 2000d · DU-111: o acesso está pausado agora? → a data ISO de volta (futura) ou null. */
+export function acessoPausado(u, agora = Date.now()) {
+  const t = Date.parse((u && u.pausado_ate) || "");
+  const a = agora instanceof Date ? agora.getTime() : Number(agora);
+  return Number.isFinite(t) && t > a ? u.pausado_ate : null;
+}
+/** plano 2000d · DU-128: a pessoa marcou «ausente» (fora do rodízio) até uma hora futura? → ISO ou null. */
+export function ausenteAte(u, agora = Date.now()) {
+  const t = Date.parse((u && u.ausente_ate) || "");
+  const a = agora instanceof Date ? agora.getTime() : Number(agora);
+  return Number.isFinite(t) && t > a ? u.ausente_ate : null;
+}
+/** DU-128: «Ficar ausente por 1 h» / «até amanhã» (8 h do dia seguinte, horário local) → ISO. */
+export function fimAusencia(opcao, agora = new Date()) {
+  const a = agora instanceof Date ? agora : new Date(agora);
+  if (opcao === "1h") return new Date(a.getTime() + 3600e3).toISOString();
+  const d = new Date(a.getTime()); d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0);
+  return d.toISOString();
+}
+
+/** plano 2000d · DU-112: «3 negócios e 2 tarefas» que mudam de dono ao remover (null quando o servidor não manda as contagens). */
+export function resumoTransferencia(u) {
+  const n = Number(u && u.negocios_abertos), t = Number(u && u.tarefas_abertas);
+  const temN = u && u.negocios_abertos != null && Number.isFinite(n), temT = u && u.tarefas_abertas != null && Number.isFinite(t);
+  if (!temN && !temT) return null;
+  const partes = [temN ? `${n} ${n === 1 ? "negócio" : "negócios"}` : null, temT ? `${t} ${t === 1 ? "tarefa" : "tarefas"}` : null].filter(Boolean);
+  return partes.join(" e ");
+}
+
+/** plano 2000d · DU-113/DU-396: uma linha do registro de auditoria em português («Ana mudou o papel de Bia para Supervisor»). */
+export function textoEventoAuditoria(ev) {
+  const e = ev || {}, d = e.detalhe || {};
+  const quem = e.quem || "Alguém", alvo = e.alvo || "uma pessoa";
+  switch (e.acao) {
+    case "convite_criado": return `${quem} convidou ${alvo}${d.papel ? ` como ${rotuloPapel(d.papel, { minusculo: true })}` : ""}.`;
+    case "convite_revogado": return `${quem} revogou o convite de ${alvo}.`;
+    case "convite_aceito": return `${alvo} aceitou o convite e entrou na equipe.`;
+    case "papel_trocado": return `${quem} mudou o papel de ${alvo}${d.de ? ` de ${rotuloPapel(d.de)}` : ""}${d.para ? ` para ${rotuloPapel(d.para)}` : ""}.`;
+    case "acesso_removido": return `${quem} removeu o acesso de ${alvo}.`;
+    case "acesso_pausado": return `${quem} pausou o acesso de ${alvo}${d.ate ? ` até ${dataCurta(d.ate)}` : ""}.`;
+    case "dono_transferido": return `${quem} tornou ${alvo} o dono da empresa.`;
+    case "email_trocado": return `${quem} trocou o e-mail de ${alvo}.`;
+    case "config_alterada": return `${quem} alterou ${d.secao ? `«${d.secao}»` : "as configurações"}${d.resumo ? `: ${d.resumo}` : ""}.`;
+    default: return `${quem}: ${String(e.acao || "alteração").replace(/_/g, " ")}${e.alvo ? ` (${alvo})` : ""}.`;
+  }
+}
+
+/** plano 2000d · DU-114: «Pode entrar de… até…» — os dois vazios (sem limite) ou os dois em HH:MM, com início antes do fim. */
+export function horarioAcessoValido(de, ate) {
+  const a = String(de || "").trim(), b = String(ate || "").trim();
+  if (!a && !b) return true;
+  const re = /^([01]\d|2[0-3]):[0-5]\d$/;
+  return re.test(a) && re.test(b) && a < b;
+}
+export function rotuloHorarioAcesso(u) {
+  const h = u && u.horario_acesso;
+  return h && h.de && h.ate ? `Entra das ${h.de} às ${h.ate}` : "";
+}
+
+/** plano 2000d · DU-116: departamentos pelo nome (sem acento). */
+export function filtrarDepartamentos(deps, termo) {
+  const t = semAcento(termo).trim();
+  const l = Array.isArray(deps) ? deps : [];
+  return t ? l.filter(d => semAcento(d && d.nome).includes(t)) : l;
+}
+
+/** plano 2000d · DU-117: desligar o rodízio desta pessoa deixa a empresa sem ninguém recebendo conversas novas? */
+export function ultimoNoRodizio(usuarios, contaId) {
+  const l = (Array.isArray(usuarios) ? usuarios : []).filter(u => u && !u.gestor);
+  const eu = l.find(u => u.conta_id === contaId);
+  return !!eu && !!eu.recebe_conversas && !l.some(u => u.conta_id !== contaId && u.recebe_conversas && !acessoPausado(u));
+}
+
+/** plano 2000d · DU-118: o servidor diz quem tem 2 etapas? e quem está sem. */
+export const informa2Etapas = us => (Array.isArray(us) ? us : []).some(u => u && typeof u.dois_fatores === "boolean");
+export const sem2Etapas = us => (Array.isArray(us) ? us : []).filter(u => u && !u.gestor && u.dois_fatores === false);
+
+/** plano 2000d · DU-120: o texto do convite (WhatsApp) neutro — «Você recebeu um convite» (sem flexão de gênero). */
+export function textoConviteWhats({ nome = "", cliente = "", produto = "" } = {}) {
+  const saud = nome ? `Olá, ${String(nome).trim().split(/\s+/)[0]}!` : "Olá!";
+  return `${saud} Você recebeu um convite para acessar a ${cliente}${produto ? ` no ${produto}` : ""}. Crie seu acesso por este link:`;
+}
+
+/** plano 2000d · DU-122: «email: link» por linha (o «Copiar todos» dos vários convites). */
+export function textoTodosLinks(lista) {
+  return (Array.isArray(lista) ? lista : []).filter(x => x && x.link).map(x => `${x.email || "convite"}: ${x.link}`).join("\n");
+}
+
+/** plano 2000d · DU-123: convite sem nome nem e-mail diz o papel e quando foi criado («Atendente · criado há 1 dia»). */
+export function rotuloConvite(cv, agora = Date.now()) {
+  const c = cv || {};
+  if (c.nome || c.email) return c.nome || c.email;
+  const t = Date.parse(c.criado_em || "");
+  const a = agora instanceof Date ? agora.getTime() : Number(agora);
+  const n = Number.isFinite(t) ? Math.max(0, Math.floor((a - t) / 86400000)) : null;
+  const quando = n === null ? "sem nome" : n === 0 ? "criado há poucas horas" : n === 1 ? "criado há 1 dia" : `criado há ${n} dias`;
+  return `${rotuloPapel(c.papel || "atendente")} · ${quando}`;
+}
+
+/** plano 2000d · DU-125: o último papel escolhido no convite, por pessoa e empresa (só preferência deste aparelho). */
+export const chavePapelPreferido = (conta, cliente) => `nx-cfg-papel:${conta || "-"}:${cliente || "-"}`;
+export function lerPapelPreferido(armazenamento, conta, cliente) {
+  try { const v = armazenamento && armazenamento.getItem(chavePapelPreferido(conta, cliente)); return ["admin", "supervisor", "atendente", "leitura"].includes(v) ? v : "atendente"; }
+  catch { return "atendente"; }
+}
+export function gravarPapelPreferido(armazenamento, conta, cliente, papel) {
+  try { if (armazenamento && ["admin", "supervisor", "atendente", "leitura"].includes(papel)) { armazenamento.setItem(chavePapelPreferido(conta, cliente), papel); return true; } } catch { /* sem storage */ }
+  return false;
+}
+
+/** plano 2000d · DU-130: quantas pessoas por papel (sem o gestor da revenda) e o filtro. */
+export function contarPorPapel(us) {
+  const r = {};
+  for (const u of Array.isArray(us) ? us : []) if (u && !u.gestor && u.papel) r[u.papel] = (r[u.papel] || 0) + 1;
+  return r;
+}
+export const filtrarPorPapel = (us, papel) => (Array.isArray(us) ? us : []).filter(u => u && !u.gestor && (!papel || u.papel === papel));
+
+/** plano 2000d · DU-131: a lista da equipe em CSV (separador «;», BOM, sem fórmula) — nome, e-mail, papel, departamentos e último acesso. */
+export function csvEquipe(usuarios, departamentos = []) {
+  const esc = v => { let s = v === null || v === undefined ? "" : String(v); if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const nomeDep = id => ((departamentos || []).find(d => d && d.id === id) || {}).nome || "";
+  const linhas = (Array.isArray(usuarios) ? usuarios : []).filter(Boolean).map(u => [u.nome, u.email, u.gestor ? "Gestor" : rotuloPapel(u.papel),
+    Array.isArray(u.departamentos) && u.departamentos.length ? u.departamentos.map(nomeDep).filter(Boolean).join(", ") : "Todos",
+    u.ultimo_acesso ? String(u.ultimo_acesso).slice(0, 10) : "nunca entrou"]);
+  return "﻿" + [["Nome", "E-mail", "Papel", "Departamentos", "Último acesso"], ...linhas].map(l => l.map(esc).join(";")).join("\r\n");
+}
+
+/** plano 2000d · DU-132/DU-143: código de 6 dígitos (2 etapas, celular). */
+export const codigoValido = v => /^\d{6}$/.test(String(v ?? "").replace(/\s/g, ""));
+
+/** plano 2000d · DU-138: «Chrome · Windows · Taubaté» (sistema e cidade quando o servidor manda). */
+export function rotuloSessao(s) {
+  const x = s || {};
+  return [x.navegador || "Navegador", x.sistema || null, x.cidade || null].filter(Boolean).join(" · ");
+}
+
+/** plano 2000d · DU-142: os avisos de mensagem nova por PESSOA (computador compartilhado) — chave com a conta, migrando a antiga. */
+export const CHAVE_AVISOS_ANTIGA = "nx-cv-avisos";
+export const chaveAvisos = conta => (conta ? `${CHAVE_AVISOS_ANTIGA}:${conta}` : CHAVE_AVISOS_ANTIGA);
+export function lerAvisos(armazenamento, conta) {
+  const ler = k => { try { const p = JSON.parse((armazenamento && armazenamento.getItem(k)) || "null"); return p && typeof p === "object" ? p : null; } catch { return null; } };
+  return ler(chaveAvisos(conta)) || ler(CHAVE_AVISOS_ANTIGA) || {};
+}
+export function gravarAvisos(armazenamento, conta, mudanca) {
+  try {
+    const novo = { ...lerAvisos(armazenamento, conta), ...mudanca };
+    armazenamento.setItem(chaveAvisos(conta), JSON.stringify(novo));
+    // DU-142: enquanto Conversas lê a chave antiga (pendência da frente conv), o espelho mantém o som/aviso deste aparelho funcionando
+    armazenamento.setItem(CHAVE_AVISOS_ANTIGA, JSON.stringify(novo));
+    return true;
+  } catch { return false; }
+}
+
+/** plano 2000d · DU-144: a ajuda do e-mail no Perfil diz quem troca (outro administrador, quando existe e o servidor permite). */
+export function ajudaEmailPerfil({ trocarEmail = false, outrosAdmins = 0, gestor = false } = {}) {
+  if (gestor) return "O e-mail é o seu login. Para trocar, fale com a plataforma.";
+  if (trocarEmail && outrosAdmins > 0) return "O e-mail é o seu login. Para trocar, peça a outro administrador (Usuários e convites).";
+  return "O e-mail é o seu login. Para trocar o e-mail, fale com quem cuida do seu plano.";
+}
+
+/** plano 2000d · DU-145/DU-146/DU-147/DU-202: campos novos da marca da revenda (o servidor antigo recusa — a tela salva o resto e avisa). */
+export const CHAVES_MARCA_NOVAS = Object.freeze(["suporte_email", "site", "termos_url", "privacidade_url", "email_remetente", "email_rodape", "icone_app", "teste_aberto"]);
+const ROT_CHAVE_NOVA = { suporte_email: "e-mail de suporte", site: "site", termos_url: "link dos Termos", privacidade_url: "link da Política de Privacidade",
+  email_remetente: "nome do remetente", email_rodape: "rodapé dos e-mails", icone_app: "ícone do app", teste_aberto: "teste grátis pelo site" };
+export const rotuloChaveMarca = k => ROT_CHAVE_NOVA[k] || k;
+/** DU-145/DU-146: erros dos campos novos → [{campo, texto}] (links só https; e-mail válido; limites de tamanho). */
+export function validarLinksMarca(m) {
+  const x = m || {}, erros = [];
+  for (const k of ["site", "termos_url", "privacidade_url"]) {
+    const v = String(x[k] || "").trim();
+    if (!v) continue;
+    let ok = false;
+    try { const u = new URL(v); ok = u.protocol === "https:" && RE_HOST.test(u.hostname); } catch { ok = false; }
+    if (!ok) erros.push({ campo: k, texto: "Use um endereço completo com https://, ex.: https://suaagencia.com.br/termos" });
+  }
+  if (x.suporte_email && !RE_EMAIL.test(String(x.suporte_email).trim())) erros.push({ campo: "suporte_email", texto: "Esse e-mail não parece válido." });
+  if (x.email_remetente && String(x.email_remetente).trim().length > 60) erros.push({ campo: "email_remetente", texto: "Até 60 caracteres." });
+  if (x.email_rodape && String(x.email_rodape).trim().length > 200) erros.push({ campo: "email_rodape", texto: "Até 200 caracteres." });
+  return erros;
+}
+/** DU-147: a imagem que vira o ícone do app instalado — o ícone próprio vence o logo (logo largo fica ilegível no celular). */
+export function origemIconeApp(m) {
+  const x = m || {};
+  return x.icone_app || x.logo_cliente || x.favicon || x.logo || null;
+}
+/** DU-145: tira do pedido as chaves que o servidor recusou (marca_invalida com hint numa chave nova) → {resto, tiradas}. */
+export function semChavesNovas(p, recusada = null) {
+  const resto = { ...(p || {}) }, tiradas = [];
+  for (const k of CHAVES_MARCA_NOVAS) if (k in resto && (!recusada || CHAVES_MARCA_NOVAS.includes(recusada))) { delete resto[k]; tiradas.push(k); }
+  return { resto, tiradas };
+}
+
+/** plano 2000d · DU-149: link relativo (#/convite/…) com o domínio ativo da revenda — o cliente recebe o endereço da marca. */
+export function linkComDominio(link, dominio) {
+  const l = String(link || "");
+  if (!dominio || !l.startsWith("#")) return l;
+  return `https://${normalizarHost(dominio)}/app/${l}`;
+}
+
+/** plano 2000d · DU-159: o «Nome» do CNAME como os painéis pedem (só a parte antes do domínio: «crm» em crm.agencia.com.br). */
+export function rotuloCname(host) {
+  const p = normalizarHost(host).split(".").filter(Boolean);
+  for (const n of [3, 2]) {      // o sufixo duplo (agencia.com.br) primeiro: «com.br» sozinho também parece raiz
+    if (p.length > n && ehDominioRaiz(p.slice(-n).join("."))) return p.slice(0, -n).join(".");
+  }
+  return p.length > 2 ? p[0] : "@";
+}
+/** DU-159: os provedores mais comuns no Brasil, com o caminho até o CNAME. */
+export const PROVEDORES_DNS = Object.freeze([
+  Object.freeze({ id: "registrobr", nome: "Registro.br" }), Object.freeze({ id: "hostinger", nome: "Hostinger" }),
+  Object.freeze({ id: "cloudflare", nome: "Cloudflare" }), Object.freeze({ id: "godaddy", nome: "GoDaddy" }),
+]);
+export function passosProvedor(id, host, alvo) {
+  const nome = rotuloCname(host), valor = alvo || "o destino que a plataforma informar";
+  const comum = [`Em Tipo, escolha CNAME.`, `Em Nome (ou Host), escreva só «${nome}».`, `Em Valor (ou Aponta para / Destino), cole ${valor}.`];
+  switch (id) {
+    case "registrobr": return ["Entre em registro.br e abra o domínio.", "Clique em «Editar zona» (se aparecer «Utilizar DNS do Registro.br», ative antes).", "Clique em «Nova entrada».", ...comum, "Salve e clique em «Salvar alterações»."];
+    case "hostinger": return ["No hPanel, abra Domínios → o domínio → «DNS / Nameservers».", "Na parte «Gerenciar registros DNS», adicione um registro.", ...comum, "Deixe o TTL padrão e clique em «Adicionar registro»."];
+    case "cloudflare": return ["No painel da Cloudflare, abra o domínio → DNS → Registros.", "Clique em «Adicionar registro».", ...comum, "Deixe o proxy DESLIGADO (nuvem cinza, «somente DNS») e salve."];
+    case "godaddy": return ["Em Meus produtos, abra o domínio → «Gerenciar DNS».", "Clique em «Adicionar novo registro».", ...comum, "Salve."];
+    default: return comum;
+  }
+}
+/** plano 2000d · DU-161: domínio raiz digitado → o subdomínio sugerido (app.agencia.com.br); null quando já é subdomínio. */
+export function sugestaoSubdominio(host) {
+  const x = normalizarHost(host);
+  return x && ehDominioRaiz(x) ? `app.${x}` : null;
+}
+
+/** plano 2000d · DU-164: pagamento pendente → o prazo para regularizar (antes da suspensão). */
+export function avisoPagamentoPendente(regularizarAte) {
+  const d = dataCurta(regularizarAte);
+  return { texto: `O pagamento está pendente.${d ? ` Regularize até ${d} para a conta não ser suspensa.` : " Regularize para a conta não ser suspensa."}`, tom: "aten" };
+}
+
+/** plano 2000d · DU-167: os planos do «Comparar» por preço (sob consulta no fim) e o selo «Mais escolhido» no marcado pela revenda. */
+export function ordenarPlanosComparar(lista) {
+  const preco = p => (p && p.preco_mensal != null && Number.isFinite(Number(p.preco_mensal)) ? Number(p.preco_mensal) : Infinity);
+  return (Array.isArray(lista) ? lista : []).filter(Boolean).map((p, i) => ({ p, i })).sort((a, b) => preco(a.p) - preco(b.p) || a.i - b.i).map(x => x.p);
+}
+
+/** plano 2000d · DU-168: quando a cota de IA volta a zero (dia 1º do mês seguinte, data de São Paulo). */
+export function textoRenovacaoIA(hoje) {
+  const m = /^(\d{4})-(\d{2})/.exec(String(hoje || ""));
+  if (!m) return "";
+  const d = new Date(Date.UTC(+m[1], +m[2], 1));
+  return `Renova em 01/${String(d.getUTCMonth() + 1).padStart(2, "0")}.`;
+}
+
+/** plano 2000d · DU-169: o pedido de um pacote avulso de IA para o mês (não troca o plano inteiro). */
+export function textoPedidoPacoteIA({ cliente = "", quantidade = 500 } = {}) {
+  return `Olá! Quero comprar um pacote extra de ${quantidade} usos de IA neste mês para a ${cliente}, sem mudar o plano.`.replace(/\s+/g, " ").trim();
+}
+
+/** plano 2000d · DU-170: o plano sem preço diz com quem o valor foi combinado. */
+export const textoSemPreco = org => (org ? `Valor combinado com a ${org}.` : "Valor combinado com quem cuida do seu plano.");
+
+/** plano 2000d · DU-171: «6 de 9 prontos» a partir das pendências do checklist (só as seções visíveis que o checklist acompanha). */
+export function progressoChecklist(pend, idsVisiveis) {
+  const ids = (Array.isArray(idsVisiveis) ? idsVisiveis : []).filter(id => SECOES_COM_PEND.includes(id));
+  const p = pend || {};
+  return { feitos: ids.filter(id => !(Number(p[id]) > 0)).length, total: ids.length };
+}
+
+/** plano 2000d · DU-173: as seções que cada módulo de outra frente publica — se o import falhar, o item continua no menu com o erro. */
+export const SECOES_EXTERNAS_CONHECIDAS = Object.freeze({
+  "crm-config.js": Object.freeze([["funis", "Funis e etapas", "CRM"], ["campos", "Campos personalizados", "CRM"], ["etiquetas", "Etiquetas", "CRM"], ["motivos", "Motivos de perda", "CRM"]]),
+  "cv-config.js": Object.freeze([["numeros", "Números de WhatsApp", "Atendimento"], ["respostas", "Respostas rápidas", "Atendimento"], ["atendimento", "Preferências do atendimento", "Atendimento"], ["ia", "Assistente de IA", "Atendimento"], ["departamentos", "Departamentos e horários", "Equipe"]]),
+  "ads-config.js": Object.freeze([["anuncios", "Anúncios", "Anúncios"], ["formulario", "Formulário do site", "Anúncios"]]),
+  "agenda-config.js": Object.freeze([["agenda", "Agenda", "CRM"]]),
+  "rastreio-config.js": Object.freeze([["rastreio", "Site e anúncios", "Anúncios"]]),
+});
+
+/** plano 2000d · DU-174: há um diálogo ou gaveta aberto (o «/» não rouba o foco de dentro dele)? */
+export function haCamadaAberta(doc = typeof document !== "undefined" ? document : null) {
+  try { return !!(doc && doc.querySelector && doc.querySelector("dialog[open], [aria-modal=\"true\"], .gaveta[open]")); } catch { return false; }
+}
+
+/** plano 2000d · DU-178: a senha atual errada na troca avisa quantas tentativas faltam (hint «restam:N», a mesma régua do login). */
+export function fraseSenhaAtualErrada(hint) {
+  const base = "A senha atual não confere.";
+  const m = /restam:(\d{1,2})\b/.exec(String(hint ?? ""));
+  if (!m) return base;
+  const n = Number(m[1]);
+  return n <= 0 ? `${base} A próxima tentativa errada bloqueia por 15 min.` : `${base} Mais ${n} tentativa${n === 1 ? "" : "s"} antes de bloquear por 15 min.`;
+}
+
+/** plano 2000d · DU-179: o texto da seção indisponível cita quem cuida do plano (a revenda) — nunca a plataforma. */
+export function textoMotivoSecao(motivo, orgNome = null) {
+  const quem = orgNome ? `a ${orgNome}` : "quem cuida do seu plano";
+  if (motivo === "modulo") return `Ela não faz parte do plano desta empresa. Veja o Plano e uso ou fale com ${quem}.`;
+  if (motivo === "papel") return "O seu acesso não inclui esta seção. Peça a um administrador da empresa.";
+  if (motivo === "inexistente") return "Esse endereço não corresponde a nenhuma seção.";
+  return "";
+}
+
+/** plano 2000d · DU-394/DU-395/DU-422: Dados da empresa — fusos do Brasil, prazos de guarda e as variáveis para as mensagens. */
+export const FUSOS_BR = Object.freeze([["America/Sao_Paulo", "Brasília (SP, RJ, MG, Sul, Nordeste…)"], ["America/Manaus", "Amazonas (−1 h)"], ["America/Cuiaba", "Mato Grosso (−1 h)"],
+  ["America/Porto_Velho", "Rondônia (−1 h)"], ["America/Boa_Vista", "Roraima (−1 h)"], ["America/Rio_Branco", "Acre (−2 h)"], ["America/Noronha", "Fernando de Noronha (+1 h)"]]);
+export const PRAZOS_GUARDA = Object.freeze([["", "Para sempre (padrão)"], ["12", "12 meses"], ["24", "24 meses"], ["60", "60 meses"]]);
+/** → [{campo, texto}] */
+export function validarDadosEmpresa(d) {
+  const x = d || {}, erros = [];
+  if (x.telefone_empresa && !telefoneValido(x.telefone_empresa)) erros.push({ campo: "telefone_empresa", texto: "Use DDD + número, ex.: (12) 3632-0000." });
+  if (x.instagram && !/^@?[a-z0-9._]{1,30}$/i.test(String(x.instagram).trim())) erros.push({ campo: "instagram", texto: "Só o usuário, ex.: @suaclinica." });
+  if (x.endereco && String(x.endereco).trim().length > 200) erros.push({ campo: "endereco", texto: "Até 200 caracteres." });
+  if (x.fuso && !FUSOS_BR.some(([v]) => v === x.fuso)) erros.push({ campo: "fuso", texto: "Escolha um fuso da lista." });
+  if (x.retencao_meses && !PRAZOS_GUARDA.some(([v]) => v === String(x.retencao_meses))) erros.push({ campo: "retencao_meses", texto: "Escolha um prazo da lista." });
+  return erros;
+}
+/** DU-395: {endereco}, {telefone_empresa} e {instagram} trocados pelo cadastro (o que falta fica como está). */
+export function trocarVariaveisEmpresa(texto, d) {
+  const x = d || {};
+  return String(texto || "").replace(/\{(endereco|telefone_empresa|instagram)\}/g, (t, k) => {
+    const v = String(x[k] || "").trim();
+    if (!v) return t;
+    return k === "instagram" ? `@${v.replace(/^@/, "")}` : v;
+  });
+}
+
+/** plano 2000d · DU-148: o nome curto do app instalado (short_name do manifesto) — a mesma régua do rotas.nomeCurto, sem carregar o shell. */
+export function nomeCurtoManifesto(produto, curto, max = 12) {
+  const p = String(produto || "").trim(), c = String(curto || "").trim();
+  const junto = `${p} ${c}`.trim();
+  if (junto.length <= max) return junto;
+  if (p.length <= max) return p;
+  const corte = p.slice(0, max + 1).lastIndexOf(" ");
+  if (corte > 0) return p.slice(0, corte).trim();
+  return c && c.length <= max ? c : p.slice(0, max);
+}
+
 let _podeSair = null, _pendente = null;      // plano 1000 · AS-082: a seção aberta diz se pode sair (alteração não salva → pergunta antes de trocar)
 
-async function secoesExternas(ctx) {
+/** plano 2000d · DU-173: importar = (caminho) → módulo (injetável no teste). Falha no import de um módulo que esta versão conhece não some
+    em silêncio: as seções dele continuam no menu e abrem «Não carregou — tentar de novo»; nada fica em cache, a próxima abertura tenta de novo. */
+export async function secoesExternas(ctx, importar = null) {
   if (_externas && _versaoExt === ctx.versao) return _externas;
   const lista = [];
+  let falhou = false;
   await Promise.all(EXTERNOS.map(async arq => {
     try {
-      const m = await import(`./${arq}?v=${encodeURIComponent(ctx.versao)}`);
+      const m = importar ? await importar(`./${arq}?v=${encodeURIComponent(ctx.versao)}`) : await import(`./${arq}?v=${encodeURIComponent(ctx.versao)}`);
       if (Array.isArray(m.secoesConfig)) for (const s of m.secoesConfig) if (s && s.id && typeof s.montar === "function") lista.push(s);
-    } catch { /* frente ainda não publicou: a seção não aparece */ }
+    } catch (e) {
+      falhou = true;
+      console.error(`config: ${arq} não carregou`, e);
+      for (const [id, titulo, grupo] of SECOES_EXTERNAS_CONHECIDAS[arq] || []) lista.push({ id, titulo, grupo, desc: "Não carregou — toque para tentar de novo", icone: "alerta", falhou: true, papelMin: "admin",
+        montar: (c, alvo) => { c.ui.limpar(alvo); alvo.appendChild(c.ui.erroCartao(Object.assign(new Error("Esta seção não carregou. Confira a internet e tente de novo."), { codigo: "secao_nao_carregou" }), () => { _externas = null; montar(c); })); } });
+    }
   }));
-  _externas = lista; _versaoExt = ctx.versao;
+  _externas = falhou ? null : lista; _versaoExt = falhou ? null : ctx.versao;
   return lista;
 }
 
@@ -360,6 +749,9 @@ function secoesProprias() {
   return [
     { id: "perfil", titulo: "Perfil", desc: "Seu nome, celular e senha", grupo: "Você", papelMin: null, icone: "usuario", semCliente: true, montar: secaoPerfil },
     { id: "usuarios", titulo: "Usuários e convites", desc: "Quem entra e com qual papel", grupo: "Equipe", papelMin: "admin", icone: "convidar", montar: secaoUsuarios },
+    // plano 2000d · DU-394/DU-395/DU-422: endereço, telefone e Instagram para as mensagens, fuso e prazo de guarda (aparece quando o shell
+    // lista «empresa» em CONFIG_PRONTAS — o servidor precisa de nx_empresa_dados/nx_empresa_dados_salvar)
+    { id: "empresa", titulo: "Dados da empresa", desc: "Endereço, telefone, Instagram e fuso horário", grupo: "Equipe", papelMin: "admin", icone: "empresa", montar: secaoEmpresa },
     ...secoesMarcaPlano(),
   ];
 }
@@ -481,6 +873,7 @@ export async function montar(ctx) {
       if (ev.key !== "/" || ev.ctrlKey || ev.metaKey || ev.altKey || !campoBusca.isConnected) return;
       const a = document.activeElement;
       if (a && (/^(input|textarea|select)$/i.test(a.localName || a.tagName || "") || a.isContentEditable)) return;
+      if (haCamadaAberta(document)) return;      // plano 2000d · DU-174: com diálogo/gaveta aberto o «/» é dele
       ev.preventDefault();
       try { campoBusca.focus(); } catch { /* ok */ }
     };
@@ -570,9 +963,14 @@ function visaoGeral(ctx, sec, vistas) {
   const ids = new Set(vistas.map(s => s.id));
   if (!ctx.cliente || !ctx.pode("admin") || !SECOES_COM_PEND.some(id => ids.has(id))) { pend.hidden = true; return; }      // UCB-082
   pend.append(h("p", { class: "fraco" }, "Conferindo o que falta…"));
+  // plano 2000d · DU-396: «Alterações recentes» nas configurações (nx_auditoria_listar; servidor sem a função → o cartão nem aparece)
+  sec.append(cartaoAuditoria(ctx, { tipo: "config", titulo: "Alterações recentes", sub: "Quem mudou o quê nas configurações, mais recente primeiro.", limite: 20 }));
   return pendenciasDoHub(ctx).then(p => {
     if (!pend.isConnected) return;
     ui.limpar(pend);
+    // plano 2000d · DU-171: o total do checklist no topo («6 de 9 prontos»)
+    const prog = progressoChecklist(p, vistas.map(s => s.id));
+    if (prog.total) pend.append(h("div", { class: "cfg-vg-prog" }, ui.barraUso(`${prog.feitos} de ${prog.total} ${prog.total === 1 ? "pronto" : "prontos"}`, prog.feitos, prog.total)));
     const falta = vistas.filter(s => p[s.id] > 0);
     if (!falta.length) {
       pend.append(h("p", { class: "aviso aviso-ok" }, ui.icone("check"), h("span", null, "Tudo o que o checklist pede já está configurado.")));
@@ -605,9 +1003,8 @@ async function montarSecao(ctx, sec, atual, pedida, vistas = [], todas = []) {
     ctx.titulo("Configurações");      // AS-275: a seção que não existe não herda o título da anterior
     // plano 1500c · UCB-123: a tela sabe se é o acesso (papel) ou o plano (módulo) — diz qual
     const motivo = pedida ? motivoSecaoIndisponivel(ctx, (todas || []).find(s => s.id === pedida)) : null;
-    const textoMotivo = motivo === "modulo" ? "Ela não faz parte do plano desta empresa. Veja o Plano e uso ou fale com quem cuida do seu plano."
-      : motivo === "papel" ? "O seu acesso não inclui esta seção. Peça a um administrador da empresa."
-      : motivo === "inexistente" ? "Esse endereço não corresponde a nenhuma seção." : "";
+    // plano 2000d · DU-179: cita a revenda (quem cuida do plano), não «a equipe» genérica
+    const textoMotivo = textoMotivoSecao(motivo, ctx.sessao && ctx.sessao.org ? ctx.sessao.org.nome : null);
     sec.appendChild(ui.vazio({ titulo: pedida ? "Esta seção não está disponível." : "Nada para configurar por aqui.",
       texto: textoMotivo, icone: "engrenagem",
       acao: pedida ? { rotulo: "Ver as configurações", fn: () => ctx.navegar("#/config") } : null }));
@@ -620,6 +1017,12 @@ async function montarSecao(ctx, sec, atual, pedida, vistas = [], todas = []) {
   if (pedida && typeof ui.anunciar === "function") ui.anunciar(`${atual.titulo} aberta.`);
   try {
     const r = await atual.montar(ctx, alvo);
+    // plano 2000d · DU-172: ?campo=<nome> rola até o ajuste e o foca (a busca leva ao campo, não só à seção)
+    const campoQ = ctx.rota && ctx.rota.query && ctx.rota.query.campo;
+    if (campoQ && /^[\w-]{1,40}$/.test(campoQ)) {
+      const el = alvo.querySelector(`[name="${campoQ}"], #${campoQ}`);
+      if (el) try { el.scrollIntoView({ block: "center" }); el.focus({ preventScroll: true }); } catch { /* ok */ }
+    }
     // a seção devolve a limpeza (função) e/ou {limpar, podeSair}; podeSair() → Promise<boolean> (AS-082)
     if (typeof r === "function") _limpeza.push(r);
     else if (r && typeof r === "object" && typeof r.limpar === "function") _limpeza.push(r.limpar);
@@ -650,6 +1053,8 @@ async function secaoPerfil(ctx, alvo) {
   const { ui, api } = ctx;
   const h = ui.h;
   const c = ctx.sessao.conta;
+  // plano 2000d · DU-129: «Como assinar as mensagens» (só com o servidor que guarda — a conta já vem com «assinatura»)
+  const temAssinatura = Object.hasOwn(c, "assinatura");
   const formDados = h("form", { class: "pilha", novalidate: true },
     h("div", { class: "form-grade" },
       ui.campo({ rotulo: "Nome", nome: "nome", valor: c.nome, obrigatorio: true, autocomplete: "name", max: 80 }),
@@ -657,9 +1062,22 @@ async function secaoPerfil(ctx, alvo) {
       ui.campo({ rotulo: "Celular (WhatsApp)", nome: "telefone", tipo: "tel", validar: "telefone", valor: c.telefone ? ui.telBR(c.telefone) : "", autocomplete: "tel",
         // plano 1000b · UB-196/UB-197: ajudas que dizem para que serve o celular e onde se troca o e-mail
         ajuda: "Opcional. Para avisos do sistema a você; clientes não veem." }),
-      // plano 1500c · UCB-111: nenhum administrador tem essa ação na tela — quem troca é o suporte
-      ui.campo({ rotulo: "E-mail", nome: "email_ro", valor: c.email, desabilitado: true, ajuda: "O e-mail é o seu login. Para trocar o e-mail, fale com o suporte." })),
+      // plano 1500c · UCB-111 / plano 2000d · DU-144: quem troca o e-mail (outro administrador, quando existe e o servidor permite)
+      ui.campo({ rotulo: "E-mail", nome: "email_ro", valor: c.email, desabilitado: true, ajuda: ajudaEmailPerfil({ gestor: c.papel === "gestor" || !!c.super }) }),
+      temAssinatura ? ui.campo({ rotulo: "Como assinar as mensagens", nome: "assinatura", valor: c.assinatura || "", max: 60, autocomplete: "off", placeholder: "— Ana, recepção",
+        ajuda: "Vai no fim das mensagens que você envia quando a empresa liga a assinatura por pessoa." }) : null),
     h("div", { class: "linha linha-fim" }, h("button", { type: "submit", class: "bt bt-prim" }, "Salvar dados")));
+  // DU-144: o administrador sabe se outro administrador pode trocar o e-mail dele (a lista de Usuários já fica em cache)
+  if (!c.super && c.papel !== "gestor" && ctx.cliente && typeof ctx.pode === "function" && ctx.pode("admin")) {
+    Promise.resolve().then(() => api.rpcC("nx_usuarios_listar")).then(dd => {
+      const outros = ((dd && dd.usuarios) || []).filter(u => u && !u.gestor && u.papel === "admin" && !u.eu && u.email !== c.email).length;
+      const aj = formDados.querySelector("[data-campo=email_ro] .campo-ajuda");
+      if (aj) aj.textContent = ajudaEmailPerfil({ trocarEmail: dd && dd.trocar_email === true, outrosAdmins: outros });
+    }).catch(() => { /* fica a ajuda padrão */ });
+  }
+  // plano 2000d · DU-397: sair do Perfil com o nome/celular mexido e não salvo pergunta antes
+  const estadoDados = () => { try { return JSON.stringify(ui.lerForm(formDados)); } catch { return ""; } };
+  let dadosSalvos = estadoDados();
   formDados.addEventListener("submit", async ev => {
     ev.preventDefault();
     ui.marcarErro(formDados, null);
@@ -670,7 +1088,10 @@ async function secaoPerfil(ctx, alvo) {
     if (d.telefone && !telefoneValido(d.telefone)) return ui.marcarErro(formDados, "telefone", "Use DDD + número, ex.: (12) 99830-3030.");
     try {
       // plano 1500c · UCB-113: o celular vai só com dígitos (55 + DDD + número), como nos outros pontos
-      await ui.carregando(formDados.querySelector("[type=submit]"), api.rpc("nx_perfil_salvar", { p_dados: { nome: nomeLimpo, telefone: normalizarTelefone(d.telefone) } }));
+      const dadosPerfil = { nome: nomeLimpo, telefone: normalizarTelefone(d.telefone) };
+      if (temAssinatura) dadosPerfil.assinatura = String(d.assinatura || "").trim() || null;      // DU-129
+      await ui.carregando(formDados.querySelector("[type=submit]"), api.rpc("nx_perfil_salvar", { p_dados: dadosPerfil }));
+      dadosSalvos = estadoDados();
       ui.toast("Dados salvos.", { tipo: "ok" });
     } catch (e) {
       if (e.codigo === "telefone_invalido") return ui.marcarErro(formDados, "telefone", "Use DDD + número, ex.: (12) 99830-3030.");
@@ -708,7 +1129,8 @@ async function secaoPerfil(ctx, alvo) {
       ui.toast(n === null ? "Senha trocada. Entre de novo nos outros aparelhos." : n === 0 ? "Senha trocada. Não havia outras sessões abertas."
         : `Senha trocada. ${n} ${n === 1 ? "outra sessão encerrada" : "outras sessões encerradas"}.`, { tipo: "ok" });
     } catch (e) {
-      if (e.codigo === "credenciais_invalidas") return ui.marcarErro(formSenha, "atual", "A senha atual não confere.");
+      // plano 2000d · DU-178: com o hint «restam:N», avisa quantas tentativas faltam antes do bloqueio (a régua do login)
+      if (e.codigo === "credenciais_invalidas") return ui.marcarErro(formSenha, "atual", fraseSenhaAtualErrada(e.hint));
       ui.toast(api.mensagemErro(e), { tipo: "erro" });
     }
   });
@@ -738,16 +1160,232 @@ async function secaoPerfil(ctx, alvo) {
 
   // plano 1000 · AS-085: o papel na empresa ativa (e nas outras), em vez de «usuário da empresa»
   const papel = papelNaConta(ctx);
+  const avisos = blocoAvisos(ctx);
+  // plano 2000d · DU-177: índice no topo (Dados · Avisos · Senha · Sessões) — no celular o Perfil é uma rolagem longa
+  const ancoras = [["cfg-pf-dados", "Dados"], avisos ? ["cfg-pf-avisos", "Avisos"] : null, ["cfg-pf-seguranca", "Segurança"], ["cfg-pf-senha", "Senha"], ["cfg-pf-sessoes", "Sessões"]].filter(Boolean);
+  const indice = h("nav", { class: "cfg-pf-indice linha", "aria-label": "Partes do perfil" }, ancoras.map(([id, rot]) => {
+    const a = h("a", { href: `#${id}`, class: "bt bt-fant bt-p" }, rot);
+    a.addEventListener("click", ev => { const el = alvo.querySelector(`#${id}`); if (!el) return; ev.preventDefault(); try { el.scrollIntoView({ block: "start" }); el.focus({ preventScroll: true }); } catch { /* ok */ } });
+    return a;
+  }));
+  if (avisos) { avisos.id = "cfg-pf-avisos"; avisos.setAttribute("tabindex", "-1"); }
   alvo.append(
-    h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Seus dados"),
+    indice,
+    h("div", { class: "cartao", id: "cfg-pf-dados", tabindex: "-1" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Seus dados"),
       h("p", { class: "sub cfg-papel" }, papel.frase),
-      papel.outras.length ? h("p", { class: "fraco cfg-papel-outras" }, `Também tem acesso a: ${papel.outras.join(" · ")}.`) : null)), formDados),
-    ...[blocoAvisos(ctx)].filter(Boolean),
-    h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Senha"),
+      papel.outras.length ? h("p", { class: "fraco cfg-papel-outras" }, `Também tem acesso a: ${papel.outras.join(" · ")}.`) : null)),
+      blocoFoto(ctx), blocoAusente(ctx), formDados, blocoCelularVerificado(ctx)),
+    ...[avisos].filter(Boolean),
+    blocoSeguranca(ctx),
+    h("div", { class: "cartao", id: "cfg-pf-senha", tabindex: "-1" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Senha"),
       h("p", { class: "sub" }, "Ao trocar, as sessões abertas em outros aparelhos são encerradas."))), formSenha),
-    h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Sessões em outros aparelhos"),
+    h("div", { class: "cartao", id: "cfg-pf-sessoes", tabindex: "-1" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Sessões em outros aparelhos"),
       // plano 1000b · UB-087: o título não promete uma lista de aparelhos que a tela não tem
       h("p", { class: "sub" }, "Esqueceu a conta aberta num computador da recepção? Encerre todas as sessões de uma vez, inclusive esta."))), listaSessoes(ctx), btTodas));
+  // DU-397: alteração não salva nos dados → pergunta antes de sair
+  return {
+    pendente: () => formDados.isConnected && estadoDados() !== dadosSalvos,
+    podeSair: async () => estadoDados() === dadosSalvos || ui.confirmar({ titulo: "Sair sem salvar os seus dados?", rotulo: "Sair sem salvar", perigo: true,
+      texto: "O nome, o celular ou a assinatura mudaram e ainda não foram salvos." }),
+  };
+}
+
+/** plano 2000d · DU-127: foto de perfil (reduzida a 256 px, como o logo) — só com o servidor que guarda (a conta já vem com «foto»). */
+function blocoFoto(ctx) {
+  const { ui, api } = ctx;
+  const h = ui.h;
+  const c = ctx.sessao.conta;
+  if (!Object.hasOwn(c, "foto")) return null;
+  const amostra = h("span", { class: "cfg-foto-amostra" });
+  const pintar = () => { ui.limpar(amostra); amostra.append(ui.avatar(c.nome, c.id, c.foto || null, { tamanho: "g" })); };
+  const arquivo = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp", class: "sr-only", tabindex: "-1", "aria-hidden": "true" });
+  const btEnviar = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("clipe"), c.foto ? "Trocar foto" : "Enviar foto");
+  const btTirar = h("button", { type: "button", class: "bt bt-fant bt-p", hidden: !c.foto }, ui.icone("lixeira"), "Tirar foto");
+  const erro = h("small", { class: "campo-erro", role: "alert", hidden: true });
+  const salvar = async (foto, botao) => {
+    erro.hidden = true;
+    try {
+      await ui.carregando(botao, api.rpc("nx_perfil_salvar", { p_dados: { nome: c.nome, telefone: c.telefone || "", foto } }));
+      c.foto = foto; pintar(); btTirar.hidden = !foto;
+      ui.toast(foto ? "Foto salva." : "Foto tirada.", { tipo: "ok" });
+      try { await ctx.shell.recarregarSessao(); } catch { /* aparece na próxima leitura */ }
+    } catch (e) { erro.textContent = api.mensagemErro(e); erro.hidden = false; }
+  };
+  btEnviar.addEventListener("click", () => arquivo.click());
+  arquivo.addEventListener("change", async () => {
+    const f = arquivo.files && arquivo.files[0];
+    arquivo.value = "";
+    if (!f) return;
+    try { const r = await processarImagem(f, { W: 256, H: 256, quadrado: true }); await salvar(r.url, btEnviar); }
+    catch (e) { erro.textContent = textoErroImagem(e); erro.hidden = false; }
+  });
+  btTirar.addEventListener("click", () => salvar(null, btTirar));
+  pintar();
+  return h("div", { class: "linha cfg-foto" }, amostra, h("div", { class: "pilha-p" }, h("b", null, "Foto"), h("small", { class: "fraco" }, "Aparece para a equipe no lugar das iniciais."),
+    h("div", { class: "linha" }, btEnviar, btTirar), erro), arquivo);
+}
+
+/** plano 2000d · DU-128: «Ficar ausente» tira a pessoa do rodízio por 1 h ou até amanhã (servidor com ausente_ate na conta). */
+function blocoAusente(ctx) {
+  const { ui, api } = ctx;
+  const h = ui.h;
+  const c = ctx.sessao.conta;
+  if (!Object.hasOwn(c, "ausente_ate") || !ctx.cliente) return null;
+  const caixa = h("div", { class: "linha cfg-ausente", role: "group", "aria-label": "Ficar ausente" });
+  const pintar = () => {
+    ui.limpar(caixa);
+    const ate = ausenteAte(c);
+    if (ate) {
+      const voltar = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Voltar agora");
+      voltar.addEventListener("click", () => mudar(null, voltar));
+      caixa.append(ui.pilula(`Ausente até ${ui.dataHoraBR(ate)}`, "aten"), voltar);
+      return;
+    }
+    const b1 = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("relogio"), "Ficar ausente por 1 h");
+    const b2 = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Ausente até amanhã");
+    b1.addEventListener("click", () => mudar(fimAusencia("1h"), b1));
+    b2.addEventListener("click", () => mudar(fimAusencia("amanha"), b2));
+    caixa.append(b1, b2, h("small", { class: "fraco" }, "Enquanto ausente, você não recebe conversas novas do rodízio."));
+  };
+  const mudar = async (ate, botao) => {
+    try {
+      await ui.carregando(botao, api.rpc("nx_ausencia_salvar", { p_ate: ate }));
+      c.ausente_ate = ate; pintar();
+      ui.toast(ate ? "Você está ausente: conversas novas vão para os colegas." : "De volta ao rodízio.", { tipo: "ok" });
+    } catch (e) { ui.toast(semFuncaoRpc(e) ? "Este servidor ainda não tem o «ausente»." : api.mensagemErro(e), { tipo: "erro" }); }
+  };
+  pintar();
+  return caixa;
+}
+
+/** plano 2000d · DU-143: «Verificar celular» manda um código e marca o número como verificado (conta com «celular_verificado»). */
+function blocoCelularVerificado(ctx) {
+  const { ui, api } = ctx;
+  const h = ui.h;
+  const c = ctx.sessao.conta;
+  if (!Object.hasOwn(c, "celular_verificado") || !c.telefone) return null;
+  const caixa = h("div", { class: "linha cfg-cel-verif" });
+  const pintar = () => {
+    ui.limpar(caixa);
+    if (c.celular_verificado === true) { caixa.append(ui.pilula("Celular verificado", "ok", { icone: "check" })); return; }
+    const b = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("whatsapp"), "Verificar celular");
+    b.addEventListener("click", async () => {
+      try { await ui.carregando(b, api.rpc("nx_celular_verificar_iniciar", {})); }
+      catch (e) { ui.toast(semFuncaoRpc(e) ? "Este servidor ainda não verifica o celular." : api.mensagemErro(e), { tipo: "erro" }); return; }
+      const fm = h("form", { class: "pilha", novalidate: true }, h("p", null, `Mandamos um código de 6 dígitos para ${ui.telBR(c.telefone)} pelo WhatsApp.`),
+        ui.campo({ rotulo: "Código", nome: "codigo", inputmode: "numeric", autocomplete: "one-time-code", max: 6 }));
+      const ok = await ui.modal({ titulo: "Verificar celular", corpo: fm, largura: "p", acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Verificar", tipo: "primario", fn: async () => {
+        ui.marcarErro(fm, null);
+        const cod = String(ui.lerForm(fm).codigo || "").replace(/\s/g, "");
+        if (!codigoValido(cod)) { ui.marcarErro(fm, "codigo", "Digite os 6 números do código."); return false; }
+        try { await api.rpc("nx_celular_verificar_confirmar", { p_codigo: cod }); return true; }
+        catch (e) { if (e && e.codigo === "codigo_invalido") { ui.marcarErro(fm, "codigo", "Código errado ou vencido."); return false; } throw e; }
+      } }] });
+      if (ok) { c.celular_verificado = true; pintar(); ui.toast("Celular verificado.", { tipo: "ok" }); }
+    });
+    caixa.append(ui.pilula("Celular não verificado", "aten"), b);
+  };
+  pintar();
+  return caixa;
+}
+
+/**
+ * plano 2000d · DU-132/DU-137: «Verificação em duas etapas» (nx_2fa_estado/iniciar/confirmar/desligar) e o aviso de entrada em aparelho novo.
+ * Servidor sem as funções → o cartão some (a tela não promete o que o servidor não faz).
+ */
+function blocoSeguranca(ctx) {
+  const { ui, api } = ctx;
+  const h = ui.h;
+  const corpo = h("div", { class: "pilha" });
+  const cartao = h("div", { class: "cartao cfg-seguranca", id: "cfg-pf-seguranca", tabindex: "-1", hidden: true },
+    h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Verificação em duas etapas"),
+      h("p", { class: "sub" }, "Além da senha, um código do celular ou de um app autenticador na hora de entrar."))), corpo);
+  let est = null;
+  const pintar = () => {
+    ui.limpar(corpo);
+    if (est.ativo) {
+      const desligar = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Desligar");
+      desligar.addEventListener("click", async () => {
+        if (est.exigido) { ui.toast("A empresa exige a verificação em duas etapas: ela não pode ser desligada.", { tipo: "info" }); return; }
+        if (!(await ui.confirmar({ titulo: "Desligar a verificação em duas etapas?", perigo: true, rotulo: "Desligar", texto: "Sua conta volta a pedir só a senha." }))) return;
+        try { await ui.carregando(desligar, api.rpc("nx_2fa_desligar", {})); est.ativo = false; pintar(); ui.toast("Verificação em duas etapas desligada.", { tipo: "ok" }); }
+        catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+      });
+      corpo.append(h("p", { class: "linha" }, ui.pilula(`Ligada · ${est.metodo === "totp" ? "app autenticador" : "WhatsApp"}`, "ok", { icone: "check" }), est.exigido ? null : desligar));
+    } else {
+      const bWa = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("whatsapp"), "Ligar com o WhatsApp");
+      const bApp = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("cadeado"), "Ligar com app autenticador");
+      bWa.addEventListener("click", () => ativar("whatsapp", bWa));
+      bApp.addEventListener("click", () => ativar("totp", bApp));
+      corpo.append(...[est.exigido ? h("p", { class: "aviso aviso-aten" }, ui.icone("alerta"), h("span", null, "A empresa exige a verificação em duas etapas. Ligue agora para continuar entrando.")) : null,
+        h("div", { class: "linha" }, bWa, bApp)].filter(Boolean));
+    }
+    // DU-137: aviso quando a conta entra num aparelho novo (só com o servidor que guarda a preferência)
+    if (typeof est.avisar_nova_sessao === "boolean") {
+      const sw = ui.campo({ tipo: "interruptor", nome: "avisar_nova_sessao", rotulo: "Avisar quando a conta entrar num aparelho novo", valor: est.avisar_nova_sessao,
+        ajuda: "Chega no sino e no WhatsApp do seu perfil, com o botão para encerrar a sessão se não foi você." });
+      const inp = sw.querySelector("input");
+      inp.addEventListener("change", async () => {
+        try { await api.rpc("nx_2fa_preferencias_salvar", { p_avisar_nova_sessao: inp.checked }); est.avisar_nova_sessao = inp.checked; ui.toast(inp.checked ? "Aviso de aparelho novo ligado." : "Aviso de aparelho novo desligado.", { tipo: "ok" }); }
+        catch (e) { inp.checked = !inp.checked; ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+      });
+      corpo.append(sw);
+    }
+  };
+  async function ativar(metodo, botao) {
+    let ini;
+    try { ini = await ui.carregando(botao, api.rpc("nx_2fa_iniciar", { p_metodo: metodo })); }
+    catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); return; }
+    ini = ini || {};
+    const fm = h("form", { class: "pilha", novalidate: true },
+      metodo === "totp"
+        ? h("div", { class: "pilha-p" }, h("p", null, "No app autenticador (Google Authenticator, Microsoft Authenticator…), adicione uma conta pela chave abaixo e digite o código que aparecer."),
+          ini.segredo ? h("p", { class: "mono cfg-2fa-segredo" }, String(ini.segredo)) : null,
+          ini.otpauth ? h("a", { href: String(ini.otpauth).startsWith("otpauth://") ? ini.otpauth : "#", class: "bt bt-fant bt-p" }, "Abrir no app deste aparelho") : null)
+        : h("p", null, "Mandamos um código de 6 dígitos para o celular do seu perfil pelo WhatsApp."),
+      ui.campo({ rotulo: "Código", nome: "codigo", inputmode: "numeric", autocomplete: "one-time-code", max: 6 }));
+    const r = await ui.modal({ titulo: "Ligar a verificação em duas etapas", corpo: fm, largura: "m", acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Confirmar", tipo: "primario", fn: async () => {
+      ui.marcarErro(fm, null);
+      const cod = String(ui.lerForm(fm).codigo || "").replace(/\s/g, "");
+      if (!codigoValido(cod)) { ui.marcarErro(fm, "codigo", "Digite os 6 números do código."); return false; }
+      try { return (await api.rpc("nx_2fa_confirmar", { p_codigo: cod })) || {}; }
+      catch (e) { if (e && e.codigo === "codigo_invalido") { ui.marcarErro(fm, "codigo", "Código errado ou vencido."); return false; } throw e; }
+    } }] });
+    if (!r) return;
+    est.ativo = true; est.metodo = metodo; pintar();
+    const cods = Array.isArray(r.codigos_recuperacao) ? r.codigos_recuperacao : [];
+    if (cods.length) {
+      const txt = cods.join("\n");
+      await ui.modal({ titulo: "Guarde os códigos de recuperação", largura: "m", corpo: h("div", { class: "pilha" },
+        h("p", null, "Cada código vale uma vez, para entrar se você perder o celular. Guarde num lugar seguro: eles não aparecem de novo."),
+        h("pre", { class: "mono cfg-2fa-cods" }, txt), h("div", { class: "linha" }, h("button", { type: "button", class: "bt bt-sec", on: { click: () => ui.copiar(txt, { aviso: "Códigos copiados." }) } }, ui.icone("copiar"), "Copiar os códigos"))),
+        acoes: [{ rotulo: "Já guardei", tipo: "primario", valor: true }] });
+    }
+    ui.toast("Verificação em duas etapas ligada. O próximo login pede o código.", { tipo: "ok" });
+  }
+  Promise.resolve().then(() => api.rpc("nx_2fa_estado", {})).then(r => {
+    if (!r || typeof r !== "object" || typeof r.ativo !== "boolean") return;
+    est = r; cartao.hidden = false; pintar();
+  }).catch(() => { /* servidor sem 2 etapas: o cartão fica escondido */ });
+  return cartao;
+}
+
+/** plano 2000d · DU-113/DU-396: «Histórico de acessos» / «Alterações recentes» (nx_auditoria_listar); sem a função ou com erro, some. */
+export function cartaoAuditoria(ctx, { tipo = "equipe", titulo = "Histórico de acessos", sub = "", limite = 50 } = {}) {
+  const { ui, api } = ctx;
+  const h = ui.h;
+  const lista = h("ul", { class: "cfg-audit-lista" });
+  const cartao = h("details", { class: "cartao cfg-audit", hidden: true }, h("summary", null, h("b", null, titulo), sub ? h("small", { class: "fraco" }, ` · ${sub}`) : null), lista);
+  cartao.pronto = Promise.resolve().then(() => api.rpcC ? api.rpcC("nx_auditoria_listar", { p_tipo: tipo, p_limite: limite }) : api.rpc("nx_auditoria_listar", { p_tipo: tipo, p_limite: limite })).then(evs => {
+    if (!Array.isArray(evs)) return false;
+    ui.limpar(lista);
+    if (!evs.length) lista.append(h("li", { class: "fraco" }, "Nada registrado ainda."));
+    for (const ev of evs.slice(0, limite)) lista.append(h("li", { class: "linha linha-entre" }, h("span", null, textoEventoAuditoria(ev)),
+      ev.em ? h("small", { class: "fraco", title: ui.dataHoraBR(ev.em) }, ui.relativo(ev.em)) : null));
+    cartao.hidden = false;
+    return true;
+  }).catch(() => { cartao.hidden = true; return false; });
+  return cartao;
 }
 
 /**
@@ -766,6 +1404,10 @@ export function listaSessoes(ctx) {
     caixa.append(h("ul", { class: "cfg-sessoes-lista" }, l.map(s => {
       const b = s.atual ? null : h("button", { type: "button", class: "bt bt-fant bt-p" }, "Encerrar");
       if (b) b.addEventListener("click", async () => {
+        // plano 2000d · DU-139: encerrar pede confirmação com o aparelho e o último uso (antes agia no primeiro toque)
+        const quando = s.ultimo_uso ? `usado ${ui.relativo(s.ultimo_uso)}` : s.criado_em ? `aberto em ${ui.dataBR(s.criado_em)}` : "";
+        if (!(await ui.confirmar({ titulo: `Encerrar a sessão ${rotuloSessao(s)}?`, rotulo: "Encerrar", perigo: true,
+          texto: `${quando ? `${quando[0].toUpperCase()}${quando.slice(1)}. ` : ""}Quem estiver usando esse aparelho precisa entrar de novo.` }))) return;
         try {
           await ui.carregando(b, api.rpc("nx_sessao_encerrar", { p_id: s.id }));
           ui.toast("Sessão encerrada.", { tipo: "ok" });
@@ -774,8 +1416,9 @@ export function listaSessoes(ctx) {
           try { (prox || caixa.closest(".cartao") || caixa).focus(); } catch { /* ok */ }
         } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
       });
-      return h("li", { class: "linha linha-entre cfg-sessao" },
-        h("span", null, h("b", null, s.navegador || "Navegador"), s.atual ? ui.pilula("Este aparelho", "info") : null,
+      // plano 2000d · DU-138: sistema e cidade aproximada (quando o servidor manda) e a deste aparelho em destaque
+      return h("li", { class: ["linha", "linha-entre", "cfg-sessao", s.atual && "cfg-sessao-atual"] },
+        h("span", null, h("b", null, rotuloSessao(s)), s.atual ? ui.pilula("Este aparelho", "info") : null,
           h("small", { class: "fraco" }, ` · ${s.ultimo_uso ? `usado ${ui.relativo(s.ultimo_uso)}` : s.criado_em ? `desde ${ui.dataBR(s.criado_em)}` : ""}`)), b);
     })));
   };
@@ -789,7 +1432,7 @@ export function listaSessoes(ctx) {
  */
 export function papelNaConta(ctx) {
   const conta = (ctx.sessao && ctx.sessao.conta) || {};
-  const rot = p => ({ admin: "Administrador", supervisor: "Supervisor", atendente: "Atendente", leitura: "Somente leitura", gestor: "Gestor" })[p] || p || "usuário";
+  const rot = p => rotuloPapel(p);      // plano 2000d · DU-435: o rótulo do papel num lugar só
   const outras = [];
   try {
     const todas = ctx.shell && typeof ctx.shell.clientes === "function" ? ctx.shell.clientes() || [] : [];
@@ -811,8 +1454,11 @@ function blocoAvisos(ctx) {
   const { ui } = ctx;
   const h = ui.h;
   if (!ctx.cliente || (typeof ctx.temModulo === "function" && !ctx.temModulo("conversas"))) return null;
-  const ler = () => { try { const p = JSON.parse(localStorage.getItem("nx-cv-avisos") || "{}"); return p && typeof p === "object" ? p : {}; } catch { return {}; } };
-  const gravar = mud => { try { localStorage.setItem("nx-cv-avisos", JSON.stringify({ ...ler(), ...mud })); return true; } catch { return false; } };
+  // plano 2000d · DU-142: por pessoa (chave com a conta, migrando a antiga) — no computador da recepção cada atendente tem o seu som
+  const conta = ctx.sessao && ctx.sessao.conta ? ctx.sessao.conta.id : null;
+  const armaz = (() => { try { return localStorage; } catch { return null; } })();
+  const ler = () => lerAvisos(armaz, conta);
+  const gravar = mud => gravarAvisos(armaz, conta, mud);
   const p = ler();
   const nota = h("p", { class: "fraco cfg-avisos-nota", "aria-live": "polite" });
   const sw = (id, rotulo, ajuda, ligado, aoMudar) => {
@@ -847,6 +1493,61 @@ function blocoAvisos(ctx) {
 }
 
 /* ============================================================
+   plano 2000d · DU-394/DU-395/DU-422: DADOS DA EMPRESA
+   (nx_empresa_dados / nx_empresa_dados_salvar; servidor sem as funções → a seção diz que ainda não está disponível)
+   ============================================================ */
+async function secaoEmpresa(ctx, alvo) {
+  const { ui, api } = ctx;
+  const h = ui.h;
+  alvo.append(ui.esqueleto("cartoes", 1));
+  let d;
+  try { d = (await api.rpcC("nx_empresa_dados", {})) || {}; }
+  catch (e) {
+    ui.limpar(alvo);
+    if (semFuncaoRpc(e)) { alvo.append(ui.vazio({ titulo: "Ainda não disponível.", texto: "Os dados da empresa chegam com a próxima atualização do sistema.", icone: "empresa" })); return; }
+    alvo.append(ui.erroCartao(e, () => { ui.limpar(alvo); secaoEmpresa(ctx, alvo); }));
+    return;
+  }
+  ui.limpar(alvo);
+  const form = h("form", { class: "pilha", novalidate: true },
+    h("div", { class: "form-grade" },
+      ui.campo({ rotulo: "Endereço", nome: "endereco", valor: d.endereco || "", max: 200, autocomplete: "street-address", ajuda: "Vira {endereco} nas mensagens e automações." }),
+      ui.campo({ rotulo: "Telefone da empresa", nome: "telefone_empresa", tipo: "tel", validar: "telefone", valor: d.telefone_empresa ? ui.telBR(d.telefone_empresa) : "", ajuda: "Vira {telefone_empresa}." }),
+      ui.campo({ rotulo: "Instagram", nome: "instagram", valor: d.instagram || "", max: 31, placeholder: "@suaempresa", autocomplete: "off", ajuda: "Vira {instagram}." }),
+      ui.campo({ rotulo: "Fuso horário", nome: "fuso", tipo: "select", valor: d.fuso || "America/Sao_Paulo", opcoes: FUSOS_BR.map(([valor, rotulo]) => ({ valor, rotulo })),
+        ajuda: "Lembretes, automações e o horário de funcionamento seguem este fuso." }),
+      ui.campo({ rotulo: "Guardar as conversas por", nome: "retencao_meses", tipo: "select", valor: d.retencao_meses ? String(d.retencao_meses) : "", opcoes: PRAZOS_GUARDA.map(([valor, rotulo]) => ({ valor, rotulo })),
+        ajuda: "Passado o prazo, as conversas mais antigas são apagadas sozinhas (com aviso 30 dias antes). Contatos e negócios ficam." })),
+    h("div", { class: "linha linha-fim" }, h("button", { type: "submit", class: "bt bt-prim" }, "Salvar dados da empresa")));
+  // DU-395: a prévia de uma frase com as variáveis já trocadas
+  const previa = h("p", { class: "cv-previa cfg-empresa-previa", "aria-live": "polite" });
+  const pintarPrevia = () => { previa.textContent = trocarVariaveisEmpresa("Estamos na {endereco}. Ligue {telefone_empresa} ou veja {instagram}.", ui.lerForm(form)); };
+  form.addEventListener("input", pintarPrevia); pintarPrevia();
+  const estado = () => { try { return JSON.stringify(ui.lerForm(form)); } catch { return ""; } };
+  let salvo = estado();
+  form.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    ui.marcarErro(form, null);
+    const x = ui.lerForm(form);
+    const erros = validarDadosEmpresa(x);
+    if (erros.length) { for (const e of erros) ui.marcarErro(form, e.campo, e.texto); return; }
+    const p = { endereco: String(x.endereco || "").trim() || null, telefone_empresa: normalizarTelefone(x.telefone_empresa) || null,
+      instagram: String(x.instagram || "").trim().replace(/^@/, "") || null, fuso: x.fuso || "America/Sao_Paulo", retencao_meses: x.retencao_meses ? Number(x.retencao_meses) : null };
+    if (p.retencao_meses && String(p.retencao_meses) !== String(d.retencao_meses || "") && !(await ui.confirmar({ titulo: `Guardar as conversas por ${p.retencao_meses} meses?`, perigo: true, rotulo: "Usar este prazo",
+      texto: "As conversas mais antigas que o prazo serão apagadas de vez (com aviso 30 dias antes). Isso não pode ser desfeito." }))) return;
+    try { d = (await ui.carregando(form.querySelector("[type=submit]"), api.rpcC("nx_empresa_dados_salvar", { p_dados: p }))) || p; salvo = estado(); ui.toast("Dados da empresa salvos.", { tipo: "ok" }); }
+    catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+  });
+  alvo.append(h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Dados da empresa"),
+    h("p", { class: "sub" }, "Usados nas mensagens, na IA e nas automações — escreva uma vez só."))), form,
+    h("p", { class: "rotulo" }, "Como fica numa mensagem"), previa));
+  return {
+    pendente: () => form.isConnected && estado() !== salvo,
+    podeSair: async () => estado() === salvo || ui.confirmar({ titulo: "Sair sem salvar os dados da empresa?", rotulo: "Sair sem salvar", perigo: true, texto: "As mudanças ainda não foram salvas." }),
+  };
+}
+
+/* ============================================================
    USUÁRIOS E CONVITES
    ============================================================ */
 const PAPEIS_EMPRESA = [
@@ -855,9 +1556,13 @@ const PAPEIS_EMPRESA = [
   { valor: "atendente", rotulo: "Atendente", ajuda: "Atende as conversas e cuida do CRM." },
   { valor: "leitura", rotulo: "Somente leitura", ajuda: "Só consulta; não altera nada." },
 ];
-const ROT_PAPEL = Object.fromEntries(PAPEIS_EMPRESA.map(p => [p.valor, p.rotulo]));
+const ROT_PAPEL = Object.fromEntries(PAPEIS_EMPRESA.map(p => [p.valor, rotuloPapel(p.valor)]));      // plano 2000d · DU-435
 
-function linkCompleto(ctx, link) { return String(link || "").startsWith("#") ? ctx.linkPublico(link) : link; }
+/** plano 2000d · DU-149: com o domínio ativo da revenda/empresa (dados.dominio_ativo, quando o servidor manda), o link sai com ele. */
+function linkCompleto(ctx, link, dominio = null) {
+  if (dominio && String(link || "").startsWith("#")) return linkComDominio(link, dominio);
+  return String(link || "").startsWith("#") ? ctx.linkPublico(link) : link;
+}
 
 async function secaoUsuarios(ctx, alvo) {
   const { ui, api } = ctx;
@@ -880,6 +1585,7 @@ async function secaoUsuarios(ctx, alvo) {
   // plano 1000b · UB-088: o termo da busca de pessoas sobrevive ao redesenho (salvar um interruptor não apaga o filtro)
   let termoUs = "";
   let soNunca = false;          // plano 1500c · UCB-033: chip «Nunca entraram»
+  let papelFiltro = "", soSem2 = false;      // plano 2000d · DU-130 / DU-118
   async function salvar(conta_id, mudanca, { desfazer = null, texto = "Acesso atualizado.", focoId = null } = {}) {
     try {
       dados = await api.rpcC("nx_usuario_salvar", { p_usuario: { conta_id, ...mudanca } });
@@ -900,12 +1606,26 @@ async function secaoUsuarios(ctx, alvo) {
     if (!u.editavel || !deps.length) return h("span", { class: "fraco" }, txt());
     const b = h("button", { type: "button", class: "bt bt-fant bt-p", "aria-label": `Departamentos de ${u.nome}: ${txt()}` }, txt(), ui.icone("seta-baixo"));
     b.addEventListener("click", () => {
-      const lista = h("div", { class: "flut-lista" }, deps.map(d => h("label", { class: "flut-op" },
-        h("input", { type: "checkbox", checked: sel.has(d.id), on: { change: ev => { ev.target.checked ? sel.add(d.id) : sel.delete(d.id); } } }),
-        ui.etiqueta({ nome: d.nome, cor: d.cor }))));
+      const lista = h("div", { class: "flut-lista" });
+      // plano 2000d · DU-116: com mais de 6 departamentos, busca e «Todos/Nenhum» (a pilha de caixas não cabia nem se achava)
+      const pintarLista = (termo = "") => {
+        ui.limpar(lista);
+        const vis = filtrarDepartamentos(deps, termo);
+        lista.append(...vis.map(d => h("label", { class: "flut-op" },
+          h("input", { type: "checkbox", checked: sel.has(d.id), value: d.id, on: { change: ev => { ev.target.checked ? sel.add(d.id) : sel.delete(d.id); } } }),
+          ui.etiqueta({ nome: d.nome, cor: d.cor }))));
+        if (!vis.length) lista.append(h("p", { class: "fraco" }, "Nenhum departamento com esse nome."));
+      };
+      pintarLista();
+      const muitos = deps.length > 6;
+      const busca = muitos ? h("input", { type: "search", class: "cfg-deps-busca", placeholder: "Buscar departamento", "aria-label": "Buscar departamento", autocomplete: "off" }) : null;
+      if (busca) busca.addEventListener("input", () => pintarLista(busca.value));
+      const marcarTodos = on => { for (const d of filtrarDepartamentos(deps, busca ? busca.value : "")) on ? sel.add(d.id) : sel.delete(d.id); pintarLista(busca ? busca.value : ""); };
+      const bTodos = muitos ? h("button", { type: "button", class: "bt bt-fant bt-p cfg-deps-todos", on: { click: () => marcarTodos(true) } }, "Todos") : null;
+      const bNenhum = muitos ? h("button", { type: "button", class: "bt bt-fant bt-p cfg-deps-nenhum", on: { click: () => marcarTodos(false) } }, "Nenhum") : null;
       const ok = h("button", { type: "button", class: "bt bt-prim bt-p" }, "Aplicar");
       const f = ui.flutuante(b, h("div", { class: "pilha-p" }, h("p", { class: "rotulo" }, "Departamentos"),
-        h("p", { class: "fraco" }, "Nenhum marcado = todos."), lista, ok), { largura: 260 });
+        h("p", { class: "fraco" }, "Nenhum marcado = todos."), busca, muitos ? h("div", { class: "linha" }, bTodos, bNenhum) : null, lista, ok), { largura: 260 });
       ok.addEventListener("click", () => {
         f.fechar();
         // plano 1000b · UB-090: «Aplicar» sem mudar nada só fecha (nada de chamada nem de «Acesso atualizado.»)
@@ -921,9 +1641,17 @@ async function secaoUsuarios(ctx, alvo) {
     const id = `sw-${chave}-${u.conta_id}`;
     // plano 1000 · AS-265: o texto oculto é o ÚNICO nome (aria-labelledby): o <label> que envolve e aponta por for não soma outra leitura
     const inp = h("input", { type: "checkbox", id, role: "switch", checked: !!u[chave], disabled: !u.editavel, "aria-labelledby": `${id}-rot` });
-    inp.addEventListener("change", () => {
+    inp.addEventListener("change", async () => {
       // plano 1000b · UB-089: travado até a resposta — dois toques rápidos não geram duas chamadas fora de ordem
       if (inp.getAttribute("aria-busy") === "true") return;
+      // plano 2000d · DU-117: desligar o último que recebe conversas deixa a fila sem ninguém — pergunta antes
+      if (chave === "recebe_conversas" && !inp.checked && ultimoNoRodizio(dados.usuarios, u.conta_id)) {
+        inp.setAttribute("aria-busy", "true");
+        const ok = await ui.confirmar({ titulo: "Ninguém mais vai receber conversas novas", rotulo: "Tirar do rodízio", perigo: true,
+          texto: `${u.nome} é a única pessoa no rodízio. Sem ninguém nele, as conversas novas ficam na fila até alguém pegar.` });
+        inp.removeAttribute("aria-busy");
+        if (!ok) { inp.checked = true; try { inp.focus(); } catch { /* ok */ } return; }
+      }
       inp.disabled = true; inp.setAttribute("aria-busy", "true");
       salvar(u.conta_id, { [chave]: inp.checked }, { focoId: id });
     });
@@ -956,6 +1684,7 @@ async function secaoUsuarios(ctx, alvo) {
     const us = dados.usuarios || [];
     const lim = dados.limite;
     const comDono = us.some(x => typeof x.dono === "boolean");      // UCB-036: o servidor novo diz quem é o dono
+    const com2Etapas = informa2Etapas(us);      // plano 2000d · DU-118
     const textoUso = () => lim ? `${dados.uso} de ${lim} usuários do plano (convites pendentes contam).` : `${us.length} ${us.length === 1 ? "pessoa" : "pessoas"} com acesso.`;
     const subUso = h("p", { class: "sub" }, textoUso());
     // plano 1500c · UCB-034: o uso de usuários também em barra (some sem limite)
@@ -998,12 +1727,20 @@ async function secaoUsuarios(ctx, alvo) {
       rotulo: "Usuários com acesso",
       chave: "conta_id",
       colunas: [
-        { chave: "nome", rotulo: "Pessoa", ordenavel: true, principal: true, render: u => h("div", { class: "cel-nome" }, ui.avatar(u.nome, u.conta_id),
+        // plano 2000d · DU-127: a foto da pessoa (quando o servidor manda) no lugar das iniciais
+        { chave: "nome", rotulo: "Pessoa", ordenavel: true, principal: true, render: u => h("div", { class: "cel-nome" }, ui.avatar(u.nome, u.conta_id, u.foto || null),
           h("div", null, h("b", null, u.nome, u.eu ? " (você)" : ""),
             // plano 1000 · AS-273: quem está com o app aberto agora (acesso nos últimos 5 min)
             estaOnline(u.ultimo_acesso) ? h("span", { class: "cfg-online" }, h("i", { "aria-hidden": "true" }), "online") : null,
-            h("small", null, u.email))) },
+            h("small", null, u.email),
+            // plano 2000d · DU-111 / DU-128 / DU-114: acesso pausado, ausente (fora do rodízio) e horário de acesso
+            acessoPausado(u) ? ui.pilula(`Acesso pausado até ${ui.dataBR(u.pausado_ate)}`, "aten", { class: "cfg-us-pausado" }) : null,
+            ausenteAte(u) ? ui.pilula(`Ausente até ${ui.dataHoraBR(u.ausente_ate)}`, "neutra", { class: "cfg-us-ausente" }) : null,
+            rotuloHorarioAcesso(u) ? h("small", { class: "fraco cfg-us-horario" }, rotuloHorarioAcesso(u)) : null)) },
         colPapel,
+        // plano 2000d · DU-118: quem já ligou a verificação em duas etapas (só quando o servidor informa)
+        ...(com2Etapas ? [{ chave: "dois_fatores", rotulo: "2 etapas", render: u => u.gestor ? h("span", { class: "fraco" }, "—")
+          : u.dois_fatores === true ? ui.pilula("Sim", "ok", { icone: "check", class: "cfg-2fa-sim" }) : ui.pilula("Não", "aten", { class: "cfg-2fa-nao" }) }] : []),
         { chave: "departamentos", rotulo: "Departamento", render: seletorDeps },
         // plano 1000b · UB-221: no celular a tabela vira cartão — «Vê colegas», «Rodízio» e «Acesso» vão para um «Mais» recolhido (até 4 linhas por pessoa)
         ...(celularAgora ? [{ chave: "mais", rotulo: "Mais", render: u => h("details", { class: "cfg-us-mais" }, h("summary", null, "Mais"),
@@ -1032,6 +1769,11 @@ async function secaoUsuarios(ctx, alvo) {
             dados.trocar_email === true ? { rotulo: "Trocar e-mail", icone: "editar", fn: () => trocarEmail(u) } : null,
             // plano 1500c · UCB-036: tornar dono (só com o servidor que conhece o dono)
             comDono && u.dono !== true ? { rotulo: "Tornar dono", icone: "chave", fn: () => tornarDono(u) } : null,
+            // plano 2000d · DU-114: horário de acesso por pessoa (servidor que anuncia dados.horario_acesso)
+            dados.horario_acesso === true && !u.eu ? { rotulo: "Horário de acesso", icone: "relogio", fn: () => horarioAcesso(u) } : null,
+            // plano 2000d · DU-111: pausar (férias) sem remover — servidor que anuncia dados.pausar_acesso
+            dados.pausar_acesso === true && !u.eu ? (acessoPausado(u) ? { rotulo: "Liberar o acesso agora", icone: "play", fn: () => pausarAcesso(u, null) }
+              : { rotulo: "Pausar acesso até…", icone: "pausa", desabilitado: ultimo, motivo: ultimo ? MOTIVO_ULTIMO_ADMIN : null, fn: () => pausarAcesso(u) }) : null,
             "-",
             // UCB-015: o último administrador não sai (o motivo aparece no próprio item)
             { rotulo: "Remover acesso", icone: "lixeira", perigo: true, desabilitado: ultimo, motivo: ultimo ? MOTIVO_ULTIMO_ADMIN : null, fn: () => remover(u) },
@@ -1050,7 +1792,17 @@ async function secaoUsuarios(ctx, alvo) {
     if (!buscaUs) termoUs = "";
     const nunca = nuncaEntraram(usVis.filter(u => !u.gestor));
     if (!nunca.length) soNunca = false;
-    const filtrar = () => { const base = soNunca ? nuncaEntraram(usVis.filter(u => !u.gestor)) : usVis; return termoUs ? filtrarUsuarios(base, termoUs) : base; };
+    // plano 2000d · DU-130 / DU-118: filtro por papel e «Sem 2 etapas» (somam ao «Nunca entraram» e à busca)
+    const porPapel = contarPorPapel(usVis);
+    if (papelFiltro && !porPapel[papelFiltro]) papelFiltro = "";
+    const semDois = com2Etapas ? sem2Etapas(usVis) : [];
+    if (!semDois.length) soSem2 = false;
+    const filtrar = () => {
+      let base = soNunca ? nuncaEntraram(usVis.filter(u => !u.gestor)) : usVis;
+      if (papelFiltro) base = filtrarPorPapel(base, papelFiltro);
+      if (soSem2) base = base.filter(u => !u.gestor && u.dois_fatores === false);
+      return termoUs ? filtrarUsuarios(base, termoUs) : base;
+    };
     // UB-088: o redesenho (depois de salvar) mantém o filtro digitado
     let tab = montarTabela(filtrar());
     const caixaTab = h("div", { class: "cfg-us-tab", tabindex: "-1" }, tab.el);
@@ -1061,15 +1813,38 @@ async function secaoUsuarios(ctx, alvo) {
       const vis = filtrar();
       tab = montarTabela(vis);
       ui.limpar(caixaTab); caixaTab.appendChild(tab.el);
-      statusUs.textContent = termoUs.trim() || soNunca ? `${vis.length} ${vis.length === 1 ? "pessoa encontrada" : "pessoas encontradas"}.` : "";
+      statusUs.textContent = termoUs.trim() || soNunca || papelFiltro || soSem2 ? `${vis.length} ${vis.length === 1 ? "pessoa encontrada" : "pessoas encontradas"}.` : "";
     };
     if (buscaUs) buscaUs.addEventListener("input", ui.debounce(() => { termoUs = buscaUs.value; repintarTabela(); }, 150));
     // plano 1500c · UCB-033: «Nunca entraram (N)» filtra quem ainda não usou o sistema
     const chipNunca = nunca.length ? h("button", { type: "button", class: "bt bt-fant bt-p cfg-us-nunca", "aria-pressed": String(soNunca) }, `Nunca entraram (${nunca.length})`) : null;
     if (chipNunca) chipNunca.addEventListener("click", () => { soNunca = !soNunca; chipNunca.setAttribute("aria-pressed", String(soNunca)); repintarTabela(); });
+    // plano 2000d · DU-130: chips por papel com a contagem (só com 2 papéis ou mais na equipe)
+    const papeisPresentes = PAPEIS_EMPRESA.filter(p => porPapel[p.valor]);
+    const chipsPapel = papeisPresentes.length > 1 ? papeisPresentes.map(p => {
+      const b = h("button", { type: "button", class: "bt bt-fant bt-p cfg-us-papel-chip", "aria-pressed": String(papelFiltro === p.valor), dataset: { papel: p.valor } }, `${p.rotulo} (${porPapel[p.valor]})`);
+      b.addEventListener("click", () => {
+        papelFiltro = papelFiltro === p.valor ? "" : p.valor;
+        for (const x of b.parentNode ? b.parentNode.querySelectorAll(".cfg-us-papel-chip") : [b]) x.setAttribute("aria-pressed", String(x.dataset.papel === papelFiltro));
+        repintarTabela();
+      });
+      return b;
+    }) : [];
+    // plano 2000d · DU-118: «Sem 2 etapas (N)»
+    const chipSem2 = semDois.length ? h("button", { type: "button", class: "bt bt-fant bt-p cfg-us-sem2", "aria-pressed": String(soSem2) }, `Sem 2 etapas (${semDois.length})`) : null;
+    if (chipSem2) chipSem2.addEventListener("click", () => { soSem2 = !soSem2; chipSem2.setAttribute("aria-pressed", String(soSem2)); repintarTabela(); });
+    // plano 2000d · DU-131: a lista da equipe em CSV (auditoria de LGPD: quem tem acesso)
+    const btCsv = h("button", { type: "button", class: "bt bt-fant bt-p cfg-us-csv" }, ui.icone("baixar"), "Baixar lista (CSV)");
+    btCsv.addEventListener("click", () => {
+      const ok = baixarTexto(csvEquipe(us, dados.departamentos || []), `equipe-${(ctx.cliente && ctx.cliente.nome ? ctx.cliente.nome : "empresa").toLowerCase().normalize("NFD").replace(/[^\w]+/g, "-")}-${ui.hojeSP()}.csv`, "text/csv");
+      ui.toast(ok ? "Lista da equipe baixada." : "O navegador não deixou baixar o arquivo.", { tipo: ok ? "ok" : "erro" });
+    });
     // plano 1500c · UCB-032: o que cada papel pode fazer, recolhido acima da tabela (o seletor aponta para cá)
     const ajudaPapeis = h("details", { class: "cfg-papeis" }, h("summary", null, "O que cada papel pode fazer"),
       h("dl", { class: "cfg-papeis-lista", id: ID_PAPEIS }, PAPEIS_EMPRESA.flatMap(p => [h("dt", null, p.rotulo), h("dd", null, p.ajuda)])));
+    // plano 2000d · DU-115: empresa sem departamentos vê o caminho para criar (Conversas no plano)
+    const semDeps = !(dados.departamentos || []).length && (typeof ctx.temModulo !== "function" || ctx.temModulo("conversas"));
+    const linkDeps = semDeps ? h("p", { class: "fraco cfg-us-sem-deps" }, "Sem departamentos: todo mundo vê todas as filas. ", h("a", { href: "#/config/departamentos" }, "Criar departamentos")) : null;
 
     // plano 1000b · UB-092: revogar tira só o item da lista de convites — a tabela de usuários não some nem pisca com o esqueleto
     const caixaConv = h("div", { class: "cfg-conv-lista" });
@@ -1102,12 +1877,15 @@ async function secaoUsuarios(ctx, alvo) {
       const logo = !cv.vencido && conviteVenceLogo(cv.expira_em);
       return h("div", { class: ["convite-item", logo && "cfg-conv-logo"] }, ui.icone("link"),
         h("div", null,
-          h("div", { class: "linha cfg-conv-tit" }, h("b", null, cv.nome || cv.email || "Convite sem nome"),
+          // plano 2000d · DU-123: sem nome nem e-mail, o papel e quando foi criado («Atendente · criado há 1 dia»)
+          h("div", { class: "linha cfg-conv-tit" }, h("b", null, rotuloConvite(cv)),
             ui.pilula(ROT_PAPEL[cv.papel] || cv.papel || "Papel", cv.papel === "admin" ? "prim" : "neutra", { class: "cfg-conv-papel" }),
             // plano 1500c · UCB-028: menos de 24 h para vencer → em destaque
             logo ? ui.pilula("vence hoje", "aten", { class: "cfg-conv-vence" }) : null),
           h("small", null, [cv.email && cv.nome ? cv.email : null, Array.isArray(cv.departamentos) ? (depsCv.length ? `Departamentos: ${depsCv.join(", ")}` : "Todos os departamentos") : null,
-            cv.vencido ? `venceu ${ui.relativo(cv.expira_em)} sem uso` : `vence ${ui.relativo(cv.expira_em)}`].filter(Boolean).join(" · "))),
+            cv.vencido ? `venceu ${ui.relativo(cv.expira_em)} sem uso` : `vence ${ui.relativo(cv.expira_em)}`,
+            // plano 2000d · DU-121: o convite enviado pelo sistema diz se o e-mail saiu (e se foi aberto)
+            cv.email_aberto_em ? "e-mail aberto" : cv.email_enviado_em ? "e-mail enviado" : null].filter(Boolean).join(" · "))),
         h("div", { class: "linha cfg-conv-acoes" }, cv.vencido || logo ? bNovo : null, cv.vencido ? null : b));
     };
     const listaDeConvites = () => {
@@ -1128,21 +1906,143 @@ async function secaoUsuarios(ctx, alvo) {
         caixaBarra,
         avisoLimite,
         chipDep,
+        linkDeps,
         ajudaPapeis,
-        buscaUs || chipNunca ? h("div", { class: "linha cfg-us-filtros" }, buscaUs ? h("label", { class: "busca cfg-us-busca" }, ui.icone("busca"), buscaUs) : null, chipNunca) : null,
+        h("div", { class: "linha cfg-us-filtros" }, buscaUs ? h("label", { class: "busca cfg-us-busca" }, ui.icone("busca"), buscaUs) : null, chipNunca, ...chipsPapel, chipSem2,
+          h("span", { class: "marca-espaco" }), btCsv),
         statusUs,
         caixaTab),
       h("div", { class: "cartao cfg-conv-cartao" },
         h("div", { class: "cartao-cab" }, h("div", null, titConv,
           h("p", { class: "sub" }, "Links gerados que ainda não foram usados. Quem abrir cria a conta; se já usar o sistema, entra com a senha atual."))),
-        caixaConv));
+        caixaConv),
+      ...[cartaoLinkEquipe(), cartaoPoliticas(), cartaoMatriz(), cartaoAuditoria(ctx, { tipo: "equipe", titulo: "Histórico de acessos", sub: "convites, papéis e remoções (últimos 50)" })].filter(Boolean));
+  }
+
+  /** plano 2000d · DU-119: «Exigir verificação em duas etapas» para a empresa (servidor que manda dados.exigir_2fa). */
+  function cartaoPoliticas() {
+    if (typeof dados.exigir_2fa !== "boolean") return null;
+    const sw = ui.campo({ tipo: "interruptor", nome: "exigir_2fa", rotulo: "Exigir verificação em duas etapas de toda a equipe", valor: dados.exigir_2fa,
+      ajuda: "Quem ainda não ligou é levado a ligar no próximo login (no Perfil). Recomendado para dados de saúde." });
+    const inp = sw.querySelector("input");
+    inp.addEventListener("change", async () => {
+      const ligar = inp.checked;
+      if (ligar && !(await ui.confirmar({ titulo: "Exigir duas etapas de todos?", rotulo: "Exigir", texto: `${sem2Etapas(dados.usuarios).length || "Quem"} ainda sem a verificação vai precisar ligar no próximo login.` }))) { inp.checked = false; return; }
+      try { await api.rpcC("nx_empresa_politica_salvar", { p_exigir_2fa: ligar }); dados.exigir_2fa = ligar; ui.toast(ligar ? "Duas etapas exigidas da equipe." : "Duas etapas agora são opcionais.", { tipo: "ok" }); }
+      catch (e) { inp.checked = !ligar; ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+    });
+    return h("div", { class: "cartao cfg-politicas" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Segurança da equipe"))), sw);
+  }
+
+  /** plano 2000d · DU-109: a matriz de permissões por papel (servidor que manda dados.permissoes). */
+  function cartaoMatriz() {
+    if (!dados.permissoes || typeof dados.permissoes !== "object") return null;
+    const mat = matrizPermissoes(dados.permissoes);
+    const papeis = PAPEIS_EMPRESA.map(p => p.valor);
+    const tab = h("table", { class: "cfg-perm-tab" }, h("caption", { class: "sr-only" }, "O que cada papel pode fazer"),
+      h("thead", null, h("tr", null, h("th", { scope: "col" }, "Permissão"), papeis.map(p => h("th", { scope: "col" }, rotuloPapel(p))))),
+      h("tbody", null, PERMISSOES.map(pm => h("tr", null, h("th", { scope: "row" }, pm.rotulo), papeis.map(p => {
+        const fixo = p === "admin" || (p === "leitura" && (pm.id === "excluir" || pm.id === "automacoes"));
+        return h("td", null, h("input", { type: "checkbox", checked: mat[p][pm.id], disabled: fixo, dataset: { papel: p, perm: pm.id }, "aria-label": `${pm.rotulo} — ${rotuloPapel(p)}` }));
+      })))));
+    const bt = h("button", { type: "button", class: "bt bt-prim bt-p" }, "Salvar permissões");
+    bt.addEventListener("click", async () => {
+      const nova = matrizPermissoes({});
+      for (const cb of tab.querySelectorAll("input[type=checkbox]")) nova[cb.dataset.papel][cb.dataset.perm] = !!cb.checked;
+      try { await ui.carregando(bt, api.rpcC("nx_permissoes_salvar", { p_permissoes: matrizPermissoes(nova) })); dados.permissoes = matrizPermissoes(nova); ui.toast("Permissões salvas. Valem no próximo carregamento de cada pessoa.", { tipo: "ok" }); }
+      catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+    });
+    return h("details", { class: "cartao cfg-perm" }, h("summary", null, h("b", null, "Permissões por papel"), h("small", { class: "fraco" }, " · exportar, excluir, ver valores, automações e anúncios")),
+      h("div", { class: "cfg-perm-rolagem" }, tab), h("div", { class: "linha linha-fim" }, bt));
+  }
+
+  /** plano 2000d · DU-124: link de equipe reutilizável (QR na recepção) — dados.link_equipe (null = o servidor tem, mas não há link). */
+  function cartaoLinkEquipe() {
+    if (!Object.hasOwn(dados, "link_equipe")) return null;
+    const le = dados.link_equipe;
+    const corpo = h("div", { class: "pilha-p" });
+    if (le && le.link) {
+      const desligar = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Desligar o link");
+      desligar.addEventListener("click", async () => {
+        if (!(await ui.confirmar({ titulo: "Desligar o link de equipe?", perigo: true, rotulo: "Desligar", texto: "Quem abrir o link depois disso não consegue mais pedir acesso." }))) return;
+        try { dados = (await ui.carregando(desligar, api.rpcC("nx_link_equipe_salvar", { p_ativo: false }))) || { ...dados, link_equipe: null }; desenhar(); }
+        catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+      });
+      corpo.append(ui.blocoLink(linkCompleto(ctx, le.link, dados && dados.dominio_ativo), { rotulo: "Link de equipe" }),
+        h("p", { class: "fraco" }, [`Entra como ${rotuloPapel(le.papel || "atendente", { minusculo: true })}`, le.limite ? `${le.usos || 0} de ${le.limite} usos` : null, le.expira_em ? `vale até ${ui.dataBR(le.expira_em)}` : null].filter(Boolean).join(" · ")),
+        h("div", { class: "linha" }, desligar));
+    } else {
+      const criar = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("link"), "Criar link de equipe");
+      criar.addEventListener("click", async () => {
+        const fm = h("form", { class: "pilha", novalidate: true },
+          ui.campo({ rotulo: "Papel de quem entrar", nome: "papel", tipo: "select", valor: "atendente", opcoes: PAPEIS_EMPRESA.filter(p => p.valor !== "admin").map(p => ({ valor: p.valor, rotulo: p.rotulo })) }),
+          ui.campo({ rotulo: "Quantas pessoas podem usar", nome: "limite", tipo: "numero", valor: 5, min: 1, max: 50 }),
+          ui.campo({ rotulo: "Vale por", nome: "dias", tipo: "select", valor: "7", opcoes: [["1", "1 dia"], ["7", "7 dias"], ["30", "30 dias"]].map(([valor, rotulo]) => ({ valor, rotulo })) }));
+        const r = await ui.modal({ titulo: "Link de equipe", corpo: fm, largura: "p", acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Criar link", tipo: "primario", fn: async () => {
+          const d = ui.lerForm(fm);
+          const lim = Math.floor(Number(d.limite));
+          if (!(lim >= 1 && lim <= 50)) { ui.marcarErro(fm, "limite", "De 1 a 50 pessoas."); return false; }
+          return api.rpcC("nx_link_equipe_salvar", { p_ativo: true, p_papel: d.papel, p_limite: lim, p_dias: Number(d.dias) || 7 });
+        } }] });
+        if (r) { dados = r.usuarios ? r : { ...dados, link_equipe: r }; desenhar(); ui.toast("Link de equipe criado. Cada entrada aparece aqui para você aprovar.", { tipo: "ok" }); }
+      });
+      corpo.append(h("p", { class: "fraco" }, "Um link só para a recepção (ou um QR impresso): cada pessoa que abrir pede acesso e você aprova aqui."), h("div", { class: "linha" }, criar));
+    }
+    // as entradas pelo link aguardam aprovação
+    const pend = Array.isArray(dados.entradas_pendentes) ? dados.entradas_pendentes : [];
+    if (pend.length) corpo.append(h("p", { class: "rotulo" }, "Aguardando aprovação"), h("ul", { class: "cfg-entradas" }, pend.map(x => {
+      const ap = h("button", { type: "button", class: "bt bt-prim bt-p" }, "Aprovar"), rc = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Recusar");
+      const decidir = (ok, b) => async () => { try { dados = (await ui.carregando(b, api.rpcC("nx_entrada_equipe_decidir", { p_id: x.id, p_aprovar: ok }))) || dados; desenhar(); } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); } };
+      ap.addEventListener("click", decidir(true, ap)); rc.addEventListener("click", decidir(false, rc));
+      return h("li", { class: "linha linha-entre" }, h("span", null, h("b", null, x.nome || x.email || "Sem nome"), x.email && x.nome ? h("small", { class: "fraco" }, ` · ${x.email}`) : null), h("span", { class: "linha" }, ap, rc));
+    })));
+    return h("div", { class: "cartao cfg-link-equipe" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Link de equipe"),
+      h("p", { class: "sub" }, "Para quem contrata sempre: um link reutilizável, com limite de usos e validade."))), corpo);
+  }
+
+  /** plano 2000d · DU-111: pausar o acesso até uma data (bloqueia o login e tira do rodízio; volta sozinho). ate=null libera. */
+  async function pausarAcesso(u, ateDado) {
+    let ate = ateDado;
+    if (ateDado === undefined) {
+      const fm = h("form", { class: "pilha", novalidate: true }, ui.campo({ rotulo: "Volta em", nome: "ate", tipo: "data", valor: "", obrigatorio: true,
+        ajuda: "Até lá a pessoa não entra e sai do rodízio. Conversas e registros dela ficam. Na data, o acesso volta sozinho." }));
+      ate = await ui.modal({ titulo: `Pausar o acesso de ${u.nome}`, corpo: fm, largura: "p", acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Pausar acesso", tipo: "primario", fn: async () => {
+        const d = String(ui.lerForm(fm).ate || "");
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d <= ui.hojeSP()) { ui.marcarErro(fm, "ate", "Escolha uma data a partir de amanhã."); return false; }
+        return d;
+      } }] });
+      if (!ate) return;
+    }
+    return salvar(u.conta_id, { pausado_ate: ate }, { texto: ate ? `Acesso de ${u.nome} pausado até ${ui.dataBR(ate)}.` : `Acesso de ${u.nome} liberado.` });
+  }
+
+  /** plano 2000d · DU-114: «Pode entrar de… até…» (vazio = sem limite). */
+  async function horarioAcesso(u) {
+    const hz = u.horario_acesso || {};
+    const fm = h("form", { class: "pilha", novalidate: true }, h("p", { class: "fraco" }, "Fora deste horário o login é recusado com uma mensagem clara. Deixe vazio para não limitar."),
+      h("div", { class: "form-grade" }, ui.campo({ rotulo: "Pode entrar de", nome: "de", tipo: "hora", valor: hz.de || "" }), ui.campo({ rotulo: "até", nome: "ate", tipo: "hora", valor: hz.ate || "" })));
+    const r = await ui.modal({ titulo: `Horário de acesso de ${u.nome}`, corpo: fm, largura: "p", acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Salvar horário", tipo: "primario", fn: async () => {
+      ui.marcarErro(fm, null);
+      const d = ui.lerForm(fm);
+      if (!horarioAcessoValido(d.de, d.ate)) { ui.marcarErro(fm, "ate", "Preencha os dois horários (o fim depois do início) ou deixe os dois vazios."); return false; }
+      return { valor: d.de && d.ate ? { de: d.de, ate: d.ate } : null };
+    } }] });
+    if (!r) return;
+    return salvar(u.conta_id, { horario_acesso: r.valor }, { texto: r.valor ? `Horário de ${u.nome} salvo.` : `${u.nome} pode entrar a qualquer hora.` });
   }
 
   /** UCB-110: no celular, «Mudar papel» abre um seletor num modal curto. */
   async function mudarPapelModal(u) {
+    // plano 2000d · DU-126: a lista de papéis é a descrição do seletor (aria-describedby) e o papel escolhido fica em destaque
+    const idLista = `cfg-papeis-modal-${++_seqAjuda}`;
+    const lista = h("dl", { class: "cfg-papeis-lista", id: idLista }, PAPEIS_EMPRESA.flatMap(p => [h("dt", { dataset: { papel: p.valor } }, p.rotulo), h("dd", { dataset: { papel: p.valor } }, p.ajuda)]));
     const form = h("form", { class: "pilha", novalidate: true },
       ui.campo({ rotulo: `Papel de ${u.nome}`, nome: "papel", tipo: "select", valor: u.papel, opcoes: PAPEIS_EMPRESA.map(p => ({ valor: p.valor, rotulo: p.rotulo })) }),
-      h("dl", { class: "cfg-papeis-lista" }, PAPEIS_EMPRESA.flatMap(p => [h("dt", null, p.rotulo), h("dd", null, p.ajuda)])));
+      lista);
+    const sel = form.querySelector("select[name=papel]");
+    sel.setAttribute("aria-describedby", [...new Set([...(sel.getAttribute("aria-describedby") || "").split(" ").filter(Boolean), idLista])].join(" "));
+    const destacar = () => { for (const x of lista.querySelectorAll("dt, dd")) x.classList.toggle("cfg-papel-escolhido", x.dataset.papel === sel.value); };
+    sel.addEventListener("change", destacar); destacar();
     const r = await ui.modal({ titulo: "Mudar papel", corpo: form, largura: "p",
       acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Aplicar", tipo: "primario", fn: async () => ui.lerForm(form).papel }] });
     if (r && r !== u.papel) await trocarPapel(u, r);
@@ -1182,7 +2082,8 @@ async function secaoUsuarios(ctx, alvo) {
   /** UCB-017: o convite recém-criado entra na lista e no uso sem recarregar a seção. */
   function acrescentarConvite(r, pd) {
     dados.convites = [...(dados.convites || []), { id: r && r.id != null ? r.id : `novo-${Date.now()}`, papel: pd.papel, nome: pd.nome || null, email: pd.email || null,
-      departamentos: pd.departamentos || [], expira_em: r && r.expira_em }];
+      departamentos: pd.departamentos || [], expira_em: r && r.expira_em, criado_em: (r && r.criado_em) || new Date().toISOString(),      // plano 2000d · DU-123
+      email_enviado_em: (r && r.email_enviado_em) || null }];      // DU-121
     if (typeof dados.uso === "number") dados.uso++;
     pint.convites(); pint.uso();
   }
@@ -1215,11 +2116,11 @@ async function secaoUsuarios(ctx, alvo) {
       })());
     } catch (e) { pint.convites(); pint.uso(); ui.toast(api.mensagemErro(e), { tipo: "erro" }); return; }
     acrescentarConvite(r, pd);
-    const saud = pd.nome ? `Olá, ${String(pd.nome).split(" ")[0]}!` : "Olá!";
     await ui.modal({ titulo: "Convite gerado de novo", largura: "m",
       corpo: h("div", { class: "pilha" },
         h("p", null, "O link antigo deixou de valer. Envie este para a pessoa — ele não chega por e-mail."),
-        ui.blocoLink(linkCompleto(ctx, r.link), { rotulo: "Link do convite", textoWhats: `${saud} Você foi convidado para acessar a ${ctx.cliente.nome} no ${ctx.shell.marcaEfetiva().produto}. Crie seu acesso por este link:` }),
+        // plano 2000d · DU-120: texto neutro («Você recebeu um convite»)
+        ui.blocoLink(linkCompleto(ctx, r.link, dados && dados.dominio_ativo), { rotulo: "Link do convite", textoWhats: textoConviteWhats({ nome: pd.nome, cliente: ctx.cliente.nome, produto: ctx.shell.marcaEfetiva().produto }) }),
         r.expira_em ? h("p", { class: "fraco" }, `Vale até ${ui.dataHoraBR(r.expira_em)} e só uma vez.`) : null),
       acoes: [{ rotulo: "Concluir", tipo: "primario", valor: true }] });
   }
@@ -1242,11 +2143,22 @@ async function secaoUsuarios(ctx, alvo) {
       caixaUm.hidden = varios; caixaVarios.hidden = !varios;
       btVarios.lastChild.textContent = varios ? "Convidar uma pessoa só" : "Convidar várias pessoas de uma vez";
     });
+    // plano 2000d · DU-125: o seletor nasce no último papel escolhido nesta empresa (quem convida 5 supervisores não troca 5 vezes)
+    const contaId = ctx.sessao && ctx.sessao.conta ? ctx.sessao.conta.id : null;
+    const armaz = (() => { try { return localStorage; } catch { return null; } })();
+    const papelIni = lerPapelPreferido(armaz, contaId, ctx.cliente && ctx.cliente.id);
+    // plano 2000d · DU-121: o servidor que manda e-mail (dados.convite_email) ganha «Mandar por e-mail agora»
+    const comEmail = dados.convite_email === true;
+    const swEmail = comEmail ? ui.campo({ tipo: "interruptor", nome: "enviar_email", rotulo: "Mandar o convite por e-mail agora", valor: true,
+      ajuda: "Sai com a marca da sua empresa para o e-mail preenchido. Sem e-mail, só o link." }) : null;
     const form = h("form", { class: "pilha", novalidate: true },
-      ui.campo({ rotulo: "Papel", nome: "papel", tipo: "select", valor: "atendente", opcoes: PAPEIS_EMPRESA.map(p => ({ valor: p.valor, rotulo: p.rotulo })) }),
-      h("p", { class: "campo-ajuda", id: idAjudaPapel }, PAPEIS_EMPRESA[2].ajuda),
+      ui.campo({ rotulo: "Papel", nome: "papel", tipo: "select", valor: papelIni, opcoes: PAPEIS_EMPRESA.map(p => ({ valor: p.valor, rotulo: p.rotulo })) }),
+      h("p", { class: "campo-ajuda", id: idAjudaPapel }, (PAPEIS_EMPRESA.find(p => p.valor === papelIni) || PAPEIS_EMPRESA[2]).ajuda),
       caixaUm, caixaVarios, h("div", { class: "linha" }, btVarios),
-      deps.length ? ui.campo({ rotulo: "Departamentos", nome: "departamentos", tipo: "multipla", opcoes: deps.map(d => ({ valor: d.id, rotulo: d.nome })), ajuda: "Nenhum marcado = todos." }) : null,
+      // plano 2000d · DU-115: sem departamentos, o caminho para criar aparece no convite também
+      deps.length ? ui.campo({ rotulo: "Departamentos", nome: "departamentos", tipo: "multipla", opcoes: deps.map(d => ({ valor: d.id, rotulo: d.nome })), ajuda: "Nenhum marcado = todos." })
+        : typeof ctx.temModulo !== "function" || ctx.temModulo("conversas") ? h("p", { class: "fraco cfg-conv-sem-deps" }, "Sem departamentos: a pessoa vê todas as filas. ", h("a", { href: "#/config/departamentos" }, "Criar departamentos")) : null,
+      swEmail,
       ui.campo({ rotulo: "O link vale por", nome: "dias", tipo: "select", valor: DIAS_CONVITE_PADRAO, opcoes: [["1", "1 dia"], ["3", "3 dias"], ["7", "7 dias"], ["14", "14 dias"], ["30", "30 dias (menos seguro)"]].map(([v, r]) => ({ valor: v, rotulo: r })) }));
     // plano 1000 · AS-297: 3 dias por padrão; escolher 30 mostra o risco
     const selDias = form.querySelector("select[name=dias]");
@@ -1266,7 +2178,9 @@ async function secaoUsuarios(ctx, alvo) {
           if (criado) return true;
           ui.marcarErro(form, null);
           const d = ui.lerForm(form);
+          gravarPapelPreferido(armaz, contaId, ctx.cliente && ctx.cliente.id, d.papel);      // DU-125
           const base = { papel: d.papel, departamentos: d.departamentos || [], dias: Number(d.dias) || Number(DIAS_CONVITE_PADRAO) };
+          if (comEmail && d.enviar_email) base.enviar_email = true;      // DU-121: só o servidor que anuncia recebe a chave
           if (varios) return criarVarios(m, form, d, base);
           const email = normEmail(d.email);
           if (email && !RE_EMAIL.test(email)) { ui.marcarErro(form, "email", "Esse e-mail não parece válido."); return false; }
@@ -1284,12 +2198,14 @@ async function secaoUsuarios(ctx, alvo) {
           catch (e) { if (erroDoConvite(form, e)) return false; throw e; }
           criado = r;
           acrescentarConvite(r, pd);
-          const link = linkCompleto(ctx, r.link);
-          const saud = d.nome ? `Olá, ${d.nome.split(" ")[0]}!` : "Olá!";
+          const link = linkCompleto(ctx, r.link, dados && dados.dominio_ativo);
           ui.limpar(m.corpo);
+          // plano 2000d · DU-121: com o e-mail enviado pelo sistema, a frase diz isso (e não «não chega por e-mail»)
+          const foiEmail = !!(pd.enviar_email && pd.email && (r.email_enviado_em || r.email_enviado));
           m.corpo.append(
-            h("div", { class: "aviso aviso-ok" }, ui.icone("check"), h("p", null, "Convite criado. Envie o link para a pessoa — ele não chega por e-mail.")),
-            ui.blocoLink(link, { rotulo: "Link do convite", textoWhats: `${saud} Você foi convidado para acessar a ${ctx.cliente.nome} no ${ctx.shell.marcaEfetiva().produto}. Crie seu acesso por este link:`,
+            h("div", { class: "aviso aviso-ok" }, ui.icone("check"), h("p", null, foiEmail ? `Convite criado e enviado para ${pd.email}. O link abaixo também serve.` : "Convite criado. Envie o link para a pessoa — ele não chega por e-mail.")),
+            // plano 2000d · DU-120: texto neutro
+            ui.blocoLink(link, { rotulo: "Link do convite", textoWhats: textoConviteWhats({ nome: d.nome, cliente: ctx.cliente.nome, produto: ctx.shell.marcaEfetiva().produto }),
               // plano 1000 · AS-272: abre as Conversas com o texto pronto no campo (não envia sozinho); só com o módulo de Conversas
               // plano 1000b · UB-199: o texto (com o TOKEN do convite) não vai mais no endereço das Conversas (parâmetro «texto»), que ficava no histórico
               // do navegador e em Recentes: segue pela área de transferência — o mesmo caminho que Conversas já usava sem conversa aberta
@@ -1330,12 +2246,15 @@ async function secaoUsuarios(ctx, alvo) {
       if (!feitos.length) { ui.marcarErro(form, "emails", `Nenhum convite criado: ${falhas[0] || "tente de novo"}.`); return false; }
       criado = feitos;
       ui.limpar(m.corpo);
-      m.corpo.append(
+      m.corpo.append(...[      // plano 2000d: com o «Copiar todos» condicional, a lista inteira passa pelo filter(Boolean)
         h("div", { class: "aviso aviso-ok" }, ui.icone("check"), h("p", null, `${feitos.length} ${feitos.length === 1 ? "convite criado" : "convites criados"}. Envie cada link para a pessoa — eles não chegam por e-mail.`)),
         membros.length ? h("p", { class: "fraco" }, `Já tinham acesso (sem convite): ${membros.join(", ")}.`) : null,
         falhas.length ? h("p", { class: "aviso aviso-aten" }, ui.icone("alerta"), h("span", null, `Não deu para convidar: ${falhas.join("; ")}.`)) : null,
-        h("div", { class: "pilha cfg-conv-links" }, feitos.map(f => ui.blocoLink(linkCompleto(ctx, f.r.link), { rotulo: f.email,
-          textoWhats: `Olá! Você foi convidado para acessar a ${ctx.cliente.nome} no ${ctx.shell.marcaEfetiva().produto}. Crie seu acesso por este link:` }))));
+        // plano 2000d · DU-122: «Copiar todos» monta «email: link» por linha (8 pessoas = 1 cópia, não 8)
+        feitos.length > 1 ? h("div", { class: "linha" }, h("button", { type: "button", class: "bt bt-sec bt-p cfg-conv-copiar-todos",
+          on: { click: () => ui.copiar(textoTodosLinks(feitos.map(f => ({ email: f.email, link: linkCompleto(ctx, f.r.link, dados && dados.dominio_ativo) }))), { aviso: `${feitos.length} links copiados.` }) } }, ui.icone("copiar"), "Copiar todos")) : null,
+        h("div", { class: "pilha cfg-conv-links" }, feitos.map(f => ui.blocoLink(linkCompleto(ctx, f.r.link, dados && dados.dominio_ativo), { rotulo: f.email,
+          textoWhats: textoConviteWhats({ cliente: ctx.cliente.nome, produto: ctx.shell.marcaEfetiva().produto }) })))].filter(Boolean));      // DU-120
       trocarRodape(m);
       return false;
     }
@@ -1344,7 +2263,7 @@ async function secaoUsuarios(ctx, alvo) {
   async function linkSenha(u) {
     try {
       const r = await api.rpcC("nx_senha_link_criar", { p_conta: u.conta_id });
-      const link = linkCompleto(ctx, r.link);
+      const link = linkCompleto(ctx, r.link, dados && dados.dominio_ativo);
       await ui.modal({
         titulo: "Link de nova senha", largura: "m",
         corpo: h("div", { class: "pilha" },
@@ -1361,10 +2280,27 @@ async function secaoUsuarios(ctx, alvo) {
     const n = Number.isFinite(Number(u.conversas_abertas)) && u.conversas_abertas !== null ? Number(u.conversas_abertas) : null;
     const extra = n === null ? " Ela sai do rodízio de conversas novas." : n === 0 ? " Ela sai do rodízio e não tem conversas abertas."
       : ` Ela sai do rodízio e tem ${n} ${n === 1 ? "conversa aberta, que volta" : "conversas abertas, que voltam"} para a fila.`;
-    const ok = await ui.confirmar({ titulo: `Remover o acesso de ${u.nome}?`, texto: `A conta continua existindo; ela só deixa de entrar nesta empresa. Conversas e registros dela ficam.${extra}`, rotulo: "Remover acesso", perigo: true });
-    if (!ok) return;
+    const textoBase = `A conta continua existindo; ela só deixa de entrar nesta empresa. Conversas e registros dela ficam.${extra}`;
+    // plano 2000d · DU-112: com o servidor que transfere (dados.remover_transfere), negócios e tarefas passam para outra pessoa (padrão: quem remove)
+    let params = { p_conta: u.conta_id };
+    if (dados.remover_transfere === true) {
+      const outros = (dados.usuarios || []).filter(x => x && x.conta_id !== u.conta_id && !x.gestor && !acessoPausado(x));
+      const eu = outros.find(x => x.eu) || outros[0];
+      const resumo = resumoTransferencia(u);
+      const fm = h("form", { class: "pilha", novalidate: true }, h("p", null, textoBase),
+        outros.length ? ui.campo({ rotulo: "Passar negócios e tarefas para", nome: "para", tipo: "select", valor: eu ? eu.conta_id : "",
+          opcoes: outros.map(x => ({ valor: x.conta_id, rotulo: `${x.nome}${x.eu ? " (você)" : ""}` })),
+          ajuda: resumo ? `${resumo} ${/^1 /.test(resumo) && !/ e /.test(resumo) ? "muda" : "mudam"} de dono.` : "Os negócios e as tarefas abertas dela mudam de dono." }) : null);
+      const r = await ui.modal({ titulo: `Remover o acesso de ${u.nome}?`, corpo: fm, largura: "m",
+        acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Remover acesso", tipo: "perigo", icone: "lixeira", fn: async () => ({ para: ui.lerForm(fm).para || null }) }] });
+      if (!r) return;
+      if (r.para) params = { ...params, p_transferir_para: r.para };
+    } else {
+      const ok = await ui.confirmar({ titulo: `Remover o acesso de ${u.nome}?`, texto: textoBase, rotulo: "Remover acesso", perigo: true });
+      if (!ok) return;
+    }
     try {
-      dados = await api.rpcC("nx_usuario_remover", { p_conta: u.conta_id });
+      dados = await api.rpcC("nx_usuario_remover", params);
       ui.toast("Acesso removido.", { tipo: "ok" });
       desenhar();
       // plano 1500c · UCB-039: o foco fica no cartão de usuários (busca ou tabela) e o leitor ouve o que aconteceu
@@ -1420,9 +2356,17 @@ export function montarPreviaLogin(ui) {
         h("span", { class: "pv-login-campo" }, h("small", null, "Senha"), h("span", null, "••••••••")),
         h("span", { class: "bt bt-prim pv-login-bt" }, "Entrar"),
         h("span", { class: "pv-link" }, "Esqueci a senha")),
-      rod));
+      rod,
+      // plano 2000d · DU-145: Termos e Política de Privacidade no rodapé da entrada (decoração na prévia)
+      h("p", { class: "pv-login-legais" })));
+  const legaisEl = el.querySelector(".pv-login-legais");
   return {
     el,
+    legais({ termos = "", privacidade = "" } = {}) {
+      const partes = [termos ? "Termos de uso" : null, privacidade ? "Política de Privacidade" : null].filter(Boolean);
+      legaisEl.textContent = partes.join(" · ");
+      legaisEl.hidden = !partes.length;
+    },
     atualizar(ef = {}, { logo: lg = null } = {}) {
       ui.limpar(logo);
       logo.append(lg ? h("img", { src: lg, alt: "" }) : h("svg", { class: "pv-marca", viewBox: "0 0 48 48", "aria-hidden": "true" }, h("use", { href: "#marca-orbita" })));
@@ -1447,6 +2391,7 @@ function erroCod(codigo) { return Object.assign(new Error(codigo), { codigo }); 
 /* ---------------- imagens (reimplementa a lógica do web/marca.js: canvas, WebP, ≤ 60 KB) ---------------- */
 const LIMITE_LOGO = 60 * 1024;
 const LIMITE_FAVICON = 28000;
+const LIMITE_ICONE_APP = 120 * 1024;      // plano 2000d · DU-147
 
 function paraDataUrl(blob) {
   return new Promise((ok, falha) => {
@@ -1616,19 +2561,23 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
   const m = soTema
     ? { logo: base.logo || "", logo_claro: base.logo_claro || "", cores: { ...coresOrg, ...(reserva.corMarca && T.corValida(reserva.corMarca) ? { primaria: reserva.corMarca.toUpperCase() } : {}), ...(base.cores || {}) } }
     : { produto: base.produto || "", assinatura: base.assinatura || "", logo: base.logo || "", logo_claro: base.logo_claro || "", favicon: base.favicon || "",
-        cores: { ...coresOrg, ...(base.cores || {}) }, login_titulo: base.login_titulo || "", login_texto: base.login_texto || "", suporte_wa: base.suporte_wa || "" };
+        cores: { ...coresOrg, ...(base.cores || {}) }, login_titulo: base.login_titulo || "", login_texto: base.login_texto || "", suporte_wa: base.suporte_wa || "",
+        // plano 2000d · DU-145/DU-146/DU-147/DU-202: contato, links legais, e-mails do sistema, ícone do app e teste grátis pelo site
+        ...Object.fromEntries(CHAVES_MARCA_NOVAS.map(k => [k, k === "teste_aberto" ? base[k] === true : typeof base[k] === "string" ? base[k] : ""])) };
   let coresProprias = soTema ? !!(base.cores && Object.keys(base.cores).length) : true;
   let appInteiro = false;
   let salvo = JSON.stringify(payload());
 
   function payload() {
     const r = {};
-    const chaves = soTema ? ["logo", "logo_claro"] : ["produto", "assinatura", "logo", "logo_claro", "favicon", "login_titulo", "login_texto", "suporte_wa"];
+    const chaves = soTema ? ["logo", "logo_claro"] : ["produto", "assinatura", "logo", "logo_claro", "favicon", "login_titulo", "login_texto", "suporte_wa",
+      ...CHAVES_MARCA_NOVAS.filter(k => k !== "teste_aberto")];      // plano 2000d · DU-145/DU-146/DU-147: só vão quando preenchidos
     for (const k of chaves) {
       let v = typeof m[k] === "string" ? m[k].trim() : "";
       if (k === "suporte_wa") v = v.replace(/\D/g, "");
       if (v) r[k] = v;
     }
+    if (!soTema && m.teste_aberto === true) r.teste_aberto = true;      // plano 2000d · DU-202
     if (!soTema || coresProprias) {
       const c = {};
       for (const k of ["primaria", "secundaria", "fundo"]) { const x = T.normalizarHex(m.cores[k]); if (x) c[k] = x; }
@@ -1676,12 +2625,31 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
       ui.campo({ rotulo: "Título da tela de entrada", nome: "login_titulo", valor: m.login_titulo, max: T.LIMITES_MARCA.login_titulo, placeholder: "Anúncio, conversa e venda na mesma órbita." }),
       ui.campo({ rotulo: "Texto de apoio", nome: "login_texto", tipo: "textarea", linhas: 2, valor: m.login_texto, max: T.LIMITES_MARCA.login_texto, placeholder: "Entre com o e-mail e a senha que você recebeu." }),
       ui.campo({ rotulo: "WhatsApp de suporte", nome: "suporte_wa", tipo: "tel", valor: m.suporte_wa, placeholder: "5512999998888", ajuda: "Só números, com 55 e DDD. Aparece em \"Esqueci a senha\" e nos avisos de teste e suspensão." }),
-      h("div", { class: "linha cfg-wa-linha" }, previaWa, testarWa), avisoSemWa);
+      h("div", { class: "linha cfg-wa-linha" }, previaWa, testarWa), avisoSemWa,
+      // plano 2000d · DU-202: o teste grátis pelo site (/app/?org=slug#/testar) — a revenda liga aqui
+      ui.campo({ tipo: "interruptor", nome: "teste_aberto", rotulo: "Teste grátis pelo site", valor: m.teste_aberto === true,
+        ajuda: "Liga o «Testar grátis» na tela de entrada: quem chega pelo seu link cria uma conta de teste de 14 dias sozinho." }));
   }
-  for (const f of [form, formEntrada]) {
+  // plano 2000d · DU-145/DU-146: contato, site, Termos e Política de Privacidade (LGPD) e os e-mails que o sistema manda
+  const formLegal = h("form", { class: "pilha", novalidate: true });
+  formLegal.addEventListener("submit", ev => ev.preventDefault());
+  if (!soTema) formLegal.append(
+    h("div", { class: "form-grade" },
+      ui.campo({ rotulo: "E-mail de suporte", nome: "suporte_email", tipo: "email", valor: m.suporte_email, autocomplete: "off", placeholder: "suporte@suaagencia.com.br" }),
+      ui.campo({ rotulo: "Site", nome: "site", tipo: "url", valor: m.site, autocomplete: "off", placeholder: "https://suaagencia.com.br" }),
+      ui.campo({ rotulo: "Termos de uso (link)", nome: "termos_url", tipo: "url", valor: m.termos_url, autocomplete: "off", placeholder: "https://suaagencia.com.br/termos" }),
+      ui.campo({ rotulo: "Política de Privacidade (link)", nome: "privacidade_url", tipo: "url", valor: m.privacidade_url, autocomplete: "off", placeholder: "https://suaagencia.com.br/privacidade",
+        ajuda: "A LGPD pede que a política esteja à vista: aparece no rodapé da tela de entrada e no teste grátis." }),
+      ui.campo({ rotulo: "Nome do remetente dos e-mails", nome: "email_remetente", valor: m.email_remetente, max: 60, autocomplete: "off", placeholder: "Equipe Conecta" }),
+      ui.campo({ rotulo: "Rodapé dos e-mails", nome: "email_rodape", tipo: "textarea", linhas: 2, valor: m.email_rodape, max: 200, placeholder: "Conecta Marketing · Taubaté/SP" })));
+  formEntrada.addEventListener("change", ev => {
+    if (!ev.target || ev.target.name !== "teste_aberto") return;
+    m.teste_aberto = !!ev.target.checked; atualizar();
+  });
+  for (const f of [form, formEntrada, formLegal]) {
     f.addEventListener("input", ev => {
       const n = ev.target && ev.target.name;
-      if (!n || !(n in m) || n === "cores") return;
+      if (!n || !(n in m) || n === "cores" || n === "teste_aberto") return;
       m[n] = ev.target.value;
       ui.marcarErro(f, n, null);
       atualizar();
@@ -1706,8 +2674,8 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     }
   }
   let colarLogo = null;         // AS-110: Ctrl+V de uma imagem no editor vai para o logo
-  function controleImagem({ chave, rotulo, ajuda, claro = false, favicon = false }) {
-    const amostra = h("div", { class: ["logo-amostra", claro && "claro", favicon && "favicon"], title: "Arraste uma imagem para cá" });
+  function controleImagem({ chave, rotulo, ajuda, claro = false, favicon = false, icone = false }) {
+    const amostra = h("div", { class: ["logo-amostra", claro && "claro", (favicon || icone) && "favicon"], title: "Arraste uma imagem para cá" });
     const arquivo = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp", class: "sr-only", tabindex: "-1", "aria-hidden": "true" });
     const btEnviar = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("clipe"), "Enviar imagem");
     const btRemover = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("lixeira"), "Remover");
@@ -1752,7 +2720,9 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
       if (!f) return;
       esconderErro();
       try {
-        const r = await ui.carregando(btEnviar, processarImagem(f, favicon ? { W: 64, H: 64, limite: LIMITE_FAVICON, quadrado: true, png: true } : {}));
+        // plano 2000d · DU-147: o ícone do app é quadrado (até 512 px)
+        const r = await ui.carregando(btEnviar, processarImagem(f, favicon ? { W: 64, H: 64, limite: LIMITE_FAVICON, quadrado: true, png: true }
+          : icone ? { W: 512, H: 512, limite: LIMITE_ICONE_APP, quadrado: true } : {}));
         m[chave] = r.url;
         if (chave === "logo") mostrarSugestoes(r.px);
         desenhar(); atualizar();
@@ -1884,6 +2854,12 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
   const pvAbaIc = h("span", { class: "pv-aba-ic" });
   const pvAbaNome = h("span", { class: "pv-aba-nome" });
   const pvAba = h("div", { class: "pv-aba", role: "img", "aria-label": "Pré-visualização da aba do navegador" }, h("span", { class: "pv-aba-guia", "aria-hidden": "true" }, pvAbaIc, pvAbaNome));
+  // plano 2000d · DU-148: o ícone e o nome curto na tela inicial do celular (o short_name do manifesto, cortado por rotas.nomeCurto)
+  const pvHomeIc = h("span", { class: "pv-home-ic" });
+  const pvHomeNome = h("span", { class: "pv-home-nome" });
+  const pvHome = h("div", { class: "pv-home", role: "img", "aria-label": "Pré-visualização do app instalado no celular" }, h("span", { class: "pv-home-app", "aria-hidden": "true" }, pvHomeIc, pvHomeNome));
+  // (os módulos não carregam rotas.js — vem do shell; nomeCurtoManifesto é a mesma régua do rotas.nomeCurto)
+  const nomeCurtoFn = nomeCurtoManifesto;
   const segPrevia = ui.segmentado({ tipo: "abas", rotulo: "Qual prévia mostrar", valor: "app", classe: "marca-seg",
     opcoes: [{ valor: "app", rotulo: "App", icone: "inicio" }, { valor: "celular", rotulo: "Celular", icone: "telefone" }, { valor: "entrada", rotulo: "Tela de entrada", icone: "cadeado" }],
     aoMudar: v => { previa.hidden = v !== "app"; pvLogin.el.hidden = v !== "entrada"; pvCel.hidden = v !== "celular"; } });
@@ -1937,6 +2913,15 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     pvAbaIc.append(fav ? h("img", { src: fav, alt: "" }) : h("svg", { class: "pv-marca", viewBox: "0 0 48 48", "aria-hidden": "true" }, h("use", { href: "#marca-orbita" })));
     pvAbaNome.textContent = ef.produto || "";
     pvAba.setAttribute("aria-label", `Aba do navegador: ${fav ? "com o ícone" : "sem ícone próprio"}, «${ef.produto || ""}»`);
+    // DU-148 / DU-147: o ícone instalado prefere o «Ícone do app» ao logo
+    ui.limpar(pvHomeIc);
+    const ic = T.imagemSegura(origemIconeApp({ icone_app: soTema ? null : m.icone_app, logo_cliente: soTema ? ef.logo_cliente : null, favicon: soTema ? ef.favicon : m.favicon, logo: lg }));
+    pvHomeIc.append(ic ? h("img", { src: ic, alt: "" }) : h("svg", { class: "pv-marca", viewBox: "0 0 48 48", "aria-hidden": "true" }, h("use", { href: "#marca-orbita" })));
+    const curto = nomeCurtoFn(ef.produto || "", "");
+    pvHomeNome.textContent = curto;
+    pvHome.setAttribute("aria-label", `App instalado no celular: «${curto}»`);
+    // DU-145: os links legais no rodapé da prévia da tela de entrada
+    if (!soTema) pvLogin.legais({ termos: m.termos_url, privacidade: m.privacidade_url });
     // plano 1000b · UB-200: as regiões vivas só são reescritas quando o TEXTO muda — digitar o hex não faz o leitor repetir o aviso a cada tecla
     const chaveAvisos = t.avisos.map(a => a.texto).join("\n");
     if (avisos.dataset.chave !== chaveAvisos || !avisos.firstChild) {
@@ -1978,9 +2963,10 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
   });
   btSalvar.addEventListener("click", async () => {
     if (btSalvar.getAttribute("aria-disabled") === "true") { ui.toast("Nada para salvar: a marca está igual à salva.", { tipo: "info" }); return; }      // UB-261
-    ui.marcarErro(form, null); ui.marcarErro(formEntrada, null);
+    ui.marcarErro(form, null); ui.marcarErro(formEntrada, null); ui.marcarErro(formLegal, null);
     const p = payload();
-    let erros = T.validarMarca(p, soTema);
+    // plano 2000d · DU-145: as chaves novas têm validação própria (o validarMarca do tema ainda não as conhece)
+    let erros = [...T.validarMarca(semChavesNovas(p).resto, soTema), ...(soTema ? [] : validarLinksMarca(p))];
     if (!soTema && !p.produto) erros.push({ campo: "produto", texto: "Informe o nome do produto." });
     // plano 1000b · UB-178: uma frase só para o WhatsApp de suporte (a do tema.js saía junto, diferente)
     if (!soTema && m.suporte_wa && !suporteWaValido(m.suporte_wa).ok) erros = [...erros.filter(e => e.campo !== "suporte_wa"), { campo: "suporte_wa", texto: suporteWaValido(m.suporte_wa).erro }];
@@ -1988,9 +2974,10 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
       for (const e of erros) {
         if (form.querySelector(`[name="${e.campo}"]`)) ui.marcarErro(form, e.campo, e.texto);
         else if (formEntrada.querySelector(`[name="${e.campo}"]`)) ui.marcarErro(formEntrada, e.campo, e.texto);
+        else if (formLegal.querySelector(`[name="${e.campo}"]`)) ui.marcarErro(formLegal, e.campo, e.texto);
       }
       // plano 1000b · UB-094: marcarErro foca cada campo; o foco termina no PRIMEIRO erro (na ordem da tela), não no último
-      const primeiro = [form, formEntrada].map(f => f.querySelector("[data-campo][data-estado=erro] input, [data-campo][data-estado=erro] textarea, [data-campo][data-estado=erro] select")).find(Boolean);
+      const primeiro = [form, formEntrada, formLegal].map(f => f.querySelector("[data-campo][data-estado=erro] input, [data-campo][data-estado=erro] textarea, [data-campo][data-estado=erro] select")).find(Boolean);
       if (primeiro) try { primeiro.focus({ preventScroll: false }); } catch { /* ok */ }
       ui.toast(erros[0].texto, { tipo: "erro" });
       return;
@@ -2002,12 +2989,22 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     try {
       if (soTema) await ui.carregando(btSalvar, api.rpcC("nx_tema_salvar", { p_tema: p }));
       else {
-        const r = await ui.carregando(btSalvar, api.rpc("nx_org_salvar", { p_org: { id: orgInfo.id, marca: p } }));
+        let r, tiradas = [];
+        try { r = await ui.carregando(btSalvar, api.rpc("nx_org_salvar", { p_org: { id: orgInfo.id, marca: p } })); }
+        catch (e) {
+          // plano 2000d · DU-145: o servidor antigo recusa as chaves novas — salva o resto e diz o que ficou de fora
+          if (!(e && e.codigo === "marca_invalida" && CHAVES_MARCA_NOVAS.includes(e.hint))) throw e;
+          const s = semChavesNovas(p, e.hint);
+          tiradas = s.tiradas;
+          r = await ui.carregando(btSalvar, api.rpc("nx_org_salvar", { p_org: { id: orgInfo.id, marca: s.resto } }));
+        }
         if (r && r.marca) orgInfo.marca = r.marca;
+        if (tiradas.length) ui.toast(`Marca salva, mas este servidor ainda não guarda: ${tiradas.map(rotuloChaveMarca).join(", ")}.`, { tipo: "info", ms: 9000 });
       }
       salvo = JSON.stringify(p);
       if (appInteiro) { appInteiro = false; btApp.setAttribute("aria-pressed", "false"); }
-      ui.toast(soTema ? "Tema salvo. Quem entrar nesta empresa já vê a marca nova." : "Marca salva. A tela de entrada e o app já usam a marca nova.", { tipo: "ok" });
+      // plano 2000d · DU-150: quem já está com o app aberto vê a marca nova ao abrir de novo (ou na próxima conferência, em até 10 min)
+      ui.toast(soTema ? "Tema salvo. Quem entrar nesta empresa já vê a marca nova." : "Marca salva. Seus clientes veem a marca nova ao abrir o app (quem já está com ele aberto, em até 10 min).", { tipo: "ok" });
       try { await ctx.shell.recarregarMarca(); } catch { /* aparece na próxima entrada */ }
       atualizar();
       if (aoSalvar) try { aoSalvar(p); } catch { /* ok */ }
@@ -2015,6 +3012,7 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
       const campo = e && e.codigo === "marca_invalida" && e.hint;
       if (campo && form.querySelector(`[name="${campo}"]`)) ui.marcarErro(form, campo, api.mensagemErro(e));
       else if (campo && formEntrada.querySelector(`[name="${campo}"]`)) ui.marcarErro(formEntrada, campo, api.mensagemErro(e));
+      else if (campo && formLegal.querySelector(`[name="${campo}"]`)) ui.marcarErro(formLegal, campo, api.mensagemErro(e));
       ui.toast(api.mensagemErro(e), { tipo: "erro" });
     }
   });
@@ -2035,6 +3033,41 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     }).catch(() => { /* fica o link padrão */ });
   }
 
+  /** plano 2000d · DU-151 / DU-158: as últimas versões salvas da marca (nx_marca_versoes) e «Ver como cliente» (empresa de demonstração). */
+  function blocoVersoes() {
+    const lista = h("ul", { class: "cfg-marca-versoes" });
+    const caixa = h("div", { class: "cartao cfg-marca-hist", hidden: true }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Versões anteriores"),
+      h("p", { class: "sub" }, "Salvou um logo errado? Volte a uma das últimas versões salvas."))), lista);
+    if (orgInfo && orgInfo.demo_disponivel === true) {
+      const bDemo = h("button", { type: "button", class: "bt bt-sec bt-p cfg-ver-cliente" }, ui.icone("olho"), "Ver como cliente");
+      bDemo.addEventListener("click", async () => {
+        try { await ui.carregando(bDemo, api.rpc("nx_demo_entrar", { p_org: orgInfo.id })); await ctx.shell.recarregarSessao(); ctx.navegar("#/"); }
+        catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+      });
+      caixa.append(h("p", { class: "linha" }, bDemo, h("small", { class: "fraco" }, "Abre a empresa de demonstração com a sua marca, só para olhar.")));
+      caixa.hidden = false;
+    }
+    Promise.resolve().then(() => api.rpc("nx_marca_versoes", { p_org: orgInfo.id })).then(vs => {
+      if (!Array.isArray(vs) || !vs.length) return;
+      for (const v of vs.slice(0, 5)) {
+        const b = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Voltar a esta");
+        b.addEventListener("click", async () => {
+          if (sujo() && !(await ui.confirmar({ titulo: "Descartar as mudanças não salvas?", perigo: true, rotulo: "Descartar e voltar", texto: "A versão escolhida substitui o que está na tela." }))) return;
+          if (!(await ui.confirmar({ titulo: `Voltar à marca de ${ui.dataHoraBR(v.em)}?`, rotulo: "Voltar a esta versão", texto: "Ela passa a valer para todos os seus clientes. A atual fica guardada nas versões." }))) return;
+          try {
+            await ui.carregando(b, api.rpc("nx_marca_versoes", { p_org: orgInfo.id, p_restaurar: v.id }));
+            ui.toast("Marca de volta à versão escolhida.", { tipo: "ok" });
+            try { await ctx.shell.recarregarMarca(); } catch { /* ok */ }
+            editorMarca(ctx, alvo, { tipo, org, aoSalvar });
+          } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+        });
+        lista.append(h("li", { class: "linha linha-entre" }, h("span", null, `Salva ${ui.relativo(v.em)}`, v.autor ? h("small", { class: "fraco" }, ` · ${v.autor}`) : null), b));
+      }
+      caixa.hidden = false;
+    }).catch(() => { /* servidor sem versões: o cartão só aparece com o «Ver como cliente» */ });
+    return caixa;
+  }
+
   // ---- montagem
   const cartao = (titulo, sub, ...filhos) => h("div", { class: "cartao" },
     h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, titulo), sub ? h("p", { class: "sub" }, sub) : null)), ...filhos);
@@ -2043,16 +3076,20 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     controleImagem({ chave: "logo", rotulo: "Logo", ajuda: "PNG com fundo transparente, de preferência horizontal (até 320 × 160). Também aceita JPEG e WebP. Reduzimos para até 60 KB." }),
     controleImagem({ chave: "logo_claro", rotulo: "Logo para fundo claro", ajuda: "Opcional: usado quando o fundo é claro.", claro: true }),
     soTema ? null : controleImagem({ chave: "favicon", rotulo: "Ícone da aba", ajuda: "Quadrado, 64 × 64. Pode gerar a partir do logo.", favicon: true }),
+    // plano 2000d · DU-147: o ícone do app instalado no celular (logo largo vira ícone ilegível)
+    soTema ? null : controleImagem({ chave: "icone_app", rotulo: "Ícone do app instalado", ajuda: "Quadrado, 512 × 512, sem texto pequeno. Sem ele, o app usa o ícone da aba ou o logo.", icone: true }),
   ];
   const esquerda = h("div", { class: "pilha" },
     soTema ? null : cartao("Identidade", "Como o produto se chama para os seus clientes.", form),
     cartao("Logo", null, h("div", { class: "pilha" }, imagens, sugestoes)),
     cartao("Cores", "Três cores bastam: o app deriva todo o resto e garante o contraste.", h("div", { class: "pilha" }, blocoProprias, notaCoresOff, caixaCores)),
-    soTema ? null : cartao("Tela de entrada", "O que aparece antes do login, no seu domínio ou pelo link de entrada.", linhaLinkEntrada, formEntrada));
+    soTema ? null : cartao("Tela de entrada", "O que aparece antes do login, no seu domínio ou pelo link de entrada.", linhaLinkEntrada, formEntrada),
+    soTema ? null : cartao("Contato, links legais e e-mails", "Para os seus clientes acharem você e para os e-mails do sistema saírem com a sua marca.", formLegal),
+    soTema ? null : blocoVersoes());
   const direita = h("div", { class: "marca-previa-env" },
     h("div", { class: "linha linha-entre" }, h("p", { class: "rotulo" }, "Pré-visualização ao vivo"), pvEsquema),
     h("div", { class: "linha linha-entre cfg-prev-ctl" }, segPreviaEl, segEsquema),
-    pvAba, previa, pvCel, pvLogin.el, avisos,
+    h("div", { class: "linha cfg-prev-mini" }, pvAba, pvHome), previa, pvCel, pvLogin.el, avisos,
     h("div", { class: "linha marca-acoes" }, btApp, btPadrao, h("span", { class: "marca-espaco" }), btSalvar),
     estado);
   ui.limpar(alvo);
@@ -2084,12 +3121,27 @@ async function secaoDominio(ctx, alvo) {
   const clientes = (typeof ctx.shell.clientes === "function" && ctx.shell.clientes()) || [];      // plano 1500c · UCB-018: gestor sem clientes ainda
   const form = h("form", { class: "pilha", novalidate: true },
     h("div", { class: "form-grade" },
-      ui.campo({ rotulo: "Endereço", nome: "host", placeholder: "crm.suaagencia.com.br", autocomplete: "off", inputmode: "url",
-        ajuda: "Use um subdomínio: domínio raiz (suaagencia.com.br) não aceita CNAME." }),
+      // plano 2000d · DU-161: a sugestão é «app.» + o seu domínio (o domínio raiz é o do site e não aceita CNAME)
+      ui.campo({ rotulo: "Endereço", nome: "host", placeholder: "app.suaagencia.com.br", autocomplete: "off", inputmode: "url",
+        ajuda: "Use um subdomínio, como app.suaagencia.com.br: o domínio raiz (suaagencia.com.br) é o do seu site e não aceita CNAME." }),
       ui.campo({ rotulo: "Para quem", nome: "cliente", tipo: "select", valor: "",
         opcoes: [{ valor: "", rotulo: "Toda a agência (login com a sua marca)" }, ...clientes.map(c => ({ valor: c.id, rotulo: `Só a ${c.nome}` }))],
         ajuda: "Com um cliente escolhido, quem entra por esse endereço já cai na empresa dele." })),
     h("div", { class: "linha linha-fim" }, h("button", { type: "submit", class: "bt bt-prim" }, ui.icone("mais"), "Adicionar domínio")));
+  // DU-161: digitou o domínio raiz → avisa já e oferece o subdomínio com um toque
+  const inpHost = form.querySelector("input[name=host]");
+  const sugestao = h("p", { class: "aviso aviso-aten cfg-dom-sugestao", role: "status", hidden: true });
+  inpHost.closest("[data-campo]").appendChild(sugestao);
+  inpHost.addEventListener("input", ui.debounce ? ui.debounce(() => pintarSugestao(), 250) : () => pintarSugestao());
+  function pintarSugestao() {
+    const s = sugestaoSubdominio(inpHost.value);
+    ui.limpar(sugestao);
+    sugestao.hidden = !s;
+    if (!s) return;
+    const usar = h("button", { type: "button", class: "bt bt-sec bt-p" }, `Usar ${s}`);
+    usar.addEventListener("click", () => { inpHost.value = s; sugestao.hidden = true; inpHost.focus(); });
+    sugestao.append(ui.icone("alerta"), h("span", null, "Esse é o domínio do seu site: ele não aceita CNAME. "), usar);
+  }
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     ui.marcarErro(form, null);
@@ -2205,7 +3257,10 @@ export function cartaoDominio(ctx, d, { aoRemover, aoStatus, mostrarOrg = false,
       h("div", { class: "dom-tit" }, ui.icone("globo"),
         h("div", null, h("b", { class: "mono" }, d.host),
           h("small", null, [mostrarOrg && d.org ? d.org.nome : null, d.cliente ? `Só a ${d.cliente.nome}` : "Agência toda"].filter(Boolean).join(" · ")))),
-      ui.pilula(ativo ? "Ativo" : "Pendente", ativo ? "ok" : "aten")),
+      // plano 2000d · DU-160: o ativo que parou de apontar fica em vermelho
+      d.status === "quebrado" ? ui.pilula("Parou de apontar", "ruim", { icone: "alerta" }) : ui.pilula(ativo ? "Ativo" : "Pendente", ativo ? "ok" : "aten")),
+    d.status === "quebrado" ? h("p", { class: "aviso aviso-ruim dom-quebrado", role: "status" }, ui.icone("alerta"),
+      h("span", null, `O CNAME de ${d.host} não aponta mais para o app${d.verificado_em ? ` (conferido ${ui.relativo(d.verificado_em)})` : ""}: quem entra por ele cai num erro. Confira o registro no seu provedor.`)) : null,
     ativo ? null : h("dl", { class: "dns" },
       h("dt", null, "Tipo"), h("dd", null, "CNAME"),
       h("dt", null, "Nome"), h("dd", null, copiavel(d.host, "Nome")),
@@ -2217,6 +3272,10 @@ export function cartaoDominio(ctx, d, { aoRemover, aoStatus, mostrarOrg = false,
         : `Peça à plataforma o destino do registro CNAME de ${d.host} antes de mexer no DNS. A plataforma ativa o domínio em até 1 dia útil.`),
     // plano 1500c · UCB-068: a armadilha do proxy do Cloudflare (com a nuvem laranja o certificado não sai)
     ativo ? null : h("p", { class: "fraco dom-nota dom-cloudflare" }, "Usa Cloudflare? Deixe o proxy desligado (nuvem cinza, «somente DNS»)."),
+    // plano 2000d · DU-159: o passo a passo nos provedores mais comuns, com o nome e o valor já certos
+    ativo ? null : h("details", { class: "dom-provedores" }, h("summary", null, "Passo a passo no seu provedor"),
+      h("div", { class: "pilha-p" }, PROVEDORES_DNS.map(pv => h("details", { class: "dom-provedor", dataset: { provedor: pv.id } }, h("summary", null, pv.nome),
+        h("ol", { class: "dom-passos" }, passosProvedor(pv.id, d.host, alvoDns).map(p => h("li", null, p))))))),
     linhaDns,
     linhaIdade,
     acoes.childNodes.length ? acoes : null);
@@ -2234,6 +3293,53 @@ export async function conferirCname(host, esperado, buscar = typeof fetch === "f
   const resp = (Array.isArray(j && j.Answer) ? j.Answer : []).find(a => a && a.type === 5);
   const valor = resp ? normalizarHost(String(resp.data || "")) : null;
   return { aponta: !!valor && !!esperado && valor === normalizarHost(esperado), valor };
+}
+
+/** plano 2000d · DU-163: «Pagamentos» — próximas cobranças, faturas pagas (PDF) e trocar forma de pagamento (nx_faturas_listar). Sem a função → some. */
+function cartaoFaturas(ctx) {
+  const { ui, api } = ctx;
+  const h = ui.h;
+  const corpo = h("div", { class: "pilha-p" });
+  const cartao = h("div", { class: "cartao cfg-faturas", hidden: true }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Pagamentos"),
+    h("p", { class: "sub" }, "Próximas cobranças e faturas pagas."))), corpo);
+  const linkOk = u => typeof u === "string" && /^https:\/\//.test(u);
+  cartao.pronto = Promise.resolve().then(() => api.rpcC("nx_faturas_listar", {})).then(r => {
+    const fs = Array.isArray(r) ? r : r && Array.isArray(r.faturas) ? r.faturas : null;
+    if (!fs) return false;
+    ui.limpar(corpo);
+    if (!fs.length) corpo.append(h("p", { class: "fraco" }, "Nenhuma fatura ainda."));
+    else corpo.append(h("ul", { class: "cfg-faturas-lista" }, fs.slice(0, 24).map(f => h("li", { class: "linha linha-entre" },
+      h("span", null, h("b", null, f.vencimento ? ui.dataBR(f.vencimento) : "—"), h("small", { class: "fraco" }, ` · ${f.valor != null ? ui.brl(f.valor) : ""}`)),
+      h("span", { class: "linha" }, ui.pilula(f.status === "paga" ? "Paga" : f.status === "atrasada" ? "Atrasada" : "Em aberto", f.status === "paga" ? "ok" : f.status === "atrasada" ? "ruim" : "aten"),
+        linkOk(f.pdf_url) ? h("a", { class: "bt bt-fant bt-p", href: f.pdf_url, target: "_blank", rel: "noopener noreferrer" }, ui.icone("baixar"), "Recibo") : null,
+        f.status !== "paga" && linkOk(f.pagar_url) ? h("a", { class: "bt bt-prim bt-p", href: f.pagar_url, target: "_blank", rel: "noopener noreferrer" }, "Pagar") : null)))));
+    if (r && linkOk(r.trocar_pagamento_url)) corpo.append(h("a", { class: "bt bt-sec bt-p", href: r.trocar_pagamento_url, target: "_blank", rel: "noopener noreferrer" }, ui.icone("cartao"), "Trocar forma de pagamento"));
+    cartao.hidden = false;
+    return true;
+  }).catch(() => { cartao.hidden = true; return false; });
+  return cartao;
+}
+
+/** plano 2000d · DU-165: «Cancelar assinatura» — motivo, o que faltou, oferta de pausa; avisa quem cuida do plano (nx_cancelamento_pedir). */
+export const MOTIVOS_CANCELAMENTO = Object.freeze([["preco", "O preço não cabe agora"], ["uso", "A equipe não está usando"], ["falta", "Falta algo que preciso"], ["outro_sistema", "Vou para outro sistema"], ["fechou", "A empresa fechou ou parou"], ["outro", "Outro motivo"]]);
+function cartaoCancelar(ctx, { nomeCli = "", quem = null } = {}) {
+  const { ui, api } = ctx;
+  const h = ui.h;
+  const b = h("button", { type: "button", class: "bt bt-fant bt-p cfg-cancelar" }, "Cancelar assinatura");
+  b.addEventListener("click", async () => {
+    const fm = h("form", { class: "pilha", novalidate: true },
+      ui.campo({ rotulo: "Por que você quer cancelar?", nome: "motivo", tipo: "select", valor: "", obrigatorio: true, opcoes: [{ valor: "", rotulo: "Escolha um motivo" }, ...MOTIVOS_CANCELAMENTO.map(([valor, rotulo]) => ({ valor, rotulo }))] }),
+      ui.campo({ rotulo: "O que faltou para continuar? (opcional)", nome: "faltou", tipo: "textarea", linhas: 3, max: 500 }),
+      ui.campo({ tipo: "interruptor", nome: "pausar", rotulo: "Prefiro pausar por 1 mês em vez de cancelar", valor: false, ajuda: "Os dados ficam guardados e nada é cobrado na pausa." }));
+    const r = await ui.modal({ titulo: `Cancelar a assinatura da ${nomeCli}`, corpo: fm, largura: "m", acoes: [{ rotulo: "Voltar", tipo: "neutro" }, { rotulo: "Enviar pedido", tipo: "perigo", icone: "alerta", fn: async () => {
+      ui.marcarErro(fm, null);
+      const d = ui.lerForm(fm);
+      if (!d.motivo) { ui.marcarErro(fm, "motivo", "Escolha um motivo."); return false; }
+      return api.rpcC("nx_cancelamento_pedir", { p_motivo: d.motivo, p_detalhe: String(d.faltou || "").trim() || null, p_pausar: !!d.pausar }).then(x => x || { ok: true, pausar: !!d.pausar });
+    } }] });
+    if (r) ui.toast(r.pausar ? `Pedido de pausa enviado${quem ? ` para a ${quem}` : ""}.` : `Pedido de cancelamento enviado${quem ? ` para a ${quem}` : ""}. Os dados ficam guardados.`, { tipo: "ok" });
+  });
+  return h("div", { class: "cartao cfg-cancelar-cartao" }, h("p", { class: "linha linha-entre" }, h("span", { class: "fraco" }, "Quer parar de usar? Conte o motivo: quem cuida do plano recebe o pedido."), b));
 }
 
 /* ---------------- seção: Plano e uso ---------------- */
@@ -2268,7 +3374,8 @@ export const GERENCIAR_USO = Object.freeze({
   // plano 1500c · UCB-129 / UCB-128: contatos levam à lista do CRM; a IA leva à seção da IA (tom, ligar/desligar)
   contatos: { href: "#/crm/contatos", modulo: "crm" }, ia_mes: { href: "#/config/ia", modulo: "conversas" },
 });
-const ROT_STATUS = { ativo: ["Ativo", "ok"], teste: ["Em teste", "info"], suspenso: ["Suspenso", "aten"], cancelado: ["Cancelado", "ruim"] };
+const ROT_STATUS = { ativo: ["Ativo", "ok"], teste: ["Em teste", "info"], suspenso: ["Suspenso", "aten"], cancelado: ["Cancelado", "ruim"],
+  pendente: ["Pagamento pendente", "aten"] };      // plano 2000d · DU-164
 const ROT_MOD = { crm: "CRM", conversas: "Conversas", relatorios: "Relatórios", ads: "Anúncios", automacoes: "Automações", marca: "Marca própria" };
 
 /** plano 1000b · UB-100: «IA nos últimos meses» (mês atual e os dois anteriores) por nx_ia_uso_dia; servidor sem a função ou erro → o cartão some. */
@@ -2349,11 +3456,12 @@ async function secaoPlano(ctx, alvo) {
         h("p", { class: "cv-previa" }, pedido), h("div", { class: "linha" }, bCopiar)),
       acoes: [{ rotulo: "Fechar", tipo: "neutro" }] });
   });
+  const checkoutOk = typeof r.checkout_url === "string" && /^https:\/\//.test(r.checkout_url);      // plano 2000d · DU-162
   // plano 1500c · UCB-074: em teste o preço diz que nada é cobrado até o fim do teste
   const precoTxt = p.preco_mensal != null ? `${ui.brl(p.preco_mensal, { centavos: false })} por mês` : null;
   const subPreco = emTeste && r.teste_ate && r.teste_ate >= hoje
     ? `Grátis até ${ui.dataBR(r.teste_ate)}${precoTxt ? ` · depois ${precoTxt}` : ""}`
-    : precoTxt || "Condição combinada com a equipe.";
+    : precoTxt || textoSemPreco(quem);      // plano 2000d · DU-170: com quem o valor foi combinado (a revenda)
   // plano 1500c · UCB-072: quantos dias de teste faltam (atenção a partir de 3)
   const dias = rotuloDiasTeste(r.status, r.teste_ate, hoje);
   // plano 1500c · UC-040: «Dia 9 de 14» quando o servidor diz o início do teste
@@ -2372,13 +3480,17 @@ async function secaoPlano(ctx, alvo) {
       h("div", { class: "linha" }, (r.modulos || []).map(m => ui.pilula(ROT_MOD[m] || m, "neutra"))),
       // plano 1000 · AS-241: sempre há um próximo passo para aumentar (WhatsApp da revenda, ou quem procurar quando não há WhatsApp)
       h("div", { class: "linha" },
-        wa ? h("a", { class: "bt bt-prim cfg-quero-aumentar", href: ui.linkWhatsApp(pedido, wa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), rotuloPedido)
+        // plano 2000d · DU-162: com checkout da revenda configurado (r.checkout_url, https), «Assinar agora» paga pelo próprio app
+        checkoutOk ? h("a", { class: "bt bt-prim cfg-assinar", href: r.checkout_url, target: "_blank", rel: "noopener noreferrer" }, ui.icone("cartao"), emTeste ? "Assinar agora" : "Pagar agora") : null,
+        wa ? h("a", { class: ["bt", checkoutOk ? "bt-sec" : "bt-prim", "cfg-quero-aumentar"], href: ui.linkWhatsApp(pedido, wa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), rotuloPedido)
           : bQueroAumentar,
         wa ? h("a", { class: "bt bt-sec", href: ui.linkWhatsApp(`Olá! Quero falar sobre o plano da ${nomeCli}.`, wa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), "Falar com o suporte") : null)));
   // plano 1500c · UCB-075: suspensa, cancelada ou teste encerrado — o que parou e o caminho de volta
-  const st = avisoStatusPlano(r.status, r.teste_ate, hoje);
+  const st = avisoStatusPlano(r.status, r.teste_ate, hoje, { regularizarAte: r.regularizar_ate || null });      // plano 2000d · DU-164
   const avisoSt = st ? h("div", { class: ["aviso", st.tom === "ruim" ? "aviso-ruim" : "aviso-aten", "cfg-plano-status"], role: "status" }, ui.icone("alerta"),
-    h("p", null, st.texto, wa ? " " : "", wa ? h("a", { href: ui.linkWhatsApp(pedido, wa), target: "_blank", rel: "noopener noreferrer" }, "Falar com o suporte") : null)) : null;
+    h("p", null, st.texto, wa ? " " : "", wa ? h("a", { href: ui.linkWhatsApp(pedido, wa), target: "_blank", rel: "noopener noreferrer" }, "Falar com o suporte") : null,
+      // DU-164: pagamento pendente com checkout → «Pagar agora» no próprio aviso
+      r.status === "pendente" && checkoutOk ? h("a", { class: "bt bt-prim bt-p cfg-pagar", href: r.checkout_url, target: "_blank", rel: "noopener noreferrer" }, "Pagar agora") : null)) : null;
   // plano 1500c · UCB-078: projeção da IA até o fim do mês
   const projIA = projecaoMes(r.uso ? r.uso.ia_mes : 0, hoje);
   const limIA = r.limites ? r.limites.ia_mes : null;
@@ -2392,7 +3504,15 @@ async function secaoPlano(ctx, alvo) {
       const passa = limIA != null && limIA > 0 && projIA > limIA;
       b.appendChild(h("small", { class: ["uso-det", "cfg-uso-proj", passa && "cfg-uso-proj-aten"] },
         `No ritmo atual, chega a ~${ui.num(projIA)} até o fim do mês${passa ? " — passa do limite do plano" : ""}.`));
+      // plano 2000d · DU-169: perto de passar, um pacote avulso de IA só para este mês (não o plano inteiro)
+      if (passa) {
+        const txtPacote = textoPedidoPacoteIA({ cliente: nomeCli, quantidade: 500 });
+        b.appendChild(wa ? h("a", { class: "bt bt-sec bt-p cfg-pacote-ia", href: ui.linkWhatsApp(txtPacote, wa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), "Comprar +500 usos de IA neste mês")
+          : h("button", { type: "button", class: "bt bt-sec bt-p cfg-pacote-ia", on: { click: () => ui.copiar(txtPacote, { aviso: "Pedido do pacote de IA copiado. Mande para quem cuida do seu plano." }) } }, ui.icone("copiar"), "Pedir +500 usos de IA neste mês"));
+      }
     }
+    // plano 2000d · DU-168: quando a cota de IA zera
+    if (k === "ia_mes" && lim !== 0) b.appendChild(h("small", { class: "uso-det cfg-ia-renova" }, textoRenovacaoIA(hoje)));
     if (REGRA_USO[k] && lim !== 0) b.appendChild(h("small", { class: "uso-det cfg-uso-regra" }, REGRA_USO[k]));
     // plano 1000b · UB-264: cada barra leva à tela que libera a vaga
     const ir = GERENCIAR_USO[k];
@@ -2422,7 +3542,8 @@ async function secaoPlano(ctx, alvo) {
     h("div", { class: "cfg-resumo-grade" }, rp.itens.map(x => h("div", { class: "cfg-resumo-it" }, h("b", { class: "mono dado" }, ui.num(x.valor)), h("small", null, x.rotulo))),
       rp.ganhos != null ? h("div", { class: "cfg-resumo-it" }, h("b", { class: "mono dado" }, ui.brl(rp.ganhos, { centavos: false })), h("small", null, "Em negócios ganhos")) : null)) : null;
   // plano 1500c · UCB-080 / UC-009: comparar com os outros planos (servidor novo manda planos_disponiveis)
-  const outros = Array.isArray(r.planos_disponiveis) ? r.planos_disponiveis.filter(x => x && x.nome) : [];
+  // plano 2000d · DU-167: por preço, com o selo «Mais escolhido» no plano que a revenda destacou
+  const outros = ordenarPlanosComparar(Array.isArray(r.planos_disponiveis) ? r.planos_disponiveis.filter(x => x && x.nome) : []);
   const cartaoComparar = outros.length > 1 || (outros.length === 1 && outros[0].nome !== p.nome) ? h("div", { class: "cartao cfg-comparar" },
     h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Comparar planos"), h("p", { class: "sub" }, "O que cada plano libera em relação ao seu."))),
     h("div", { class: "cfg-comparar-grade" }, outros.map(x => {
@@ -2430,7 +3551,7 @@ async function secaoPlano(ctx, alvo) {
       const dif = atual ? [] : diferencasPlanoTexto({ limites: r.limites || p.limites || {}, modulos: r.modulos || [] }, x);
       const txt = textoPedidoAumento({ plano: x.nome, cliente: nomeCli, teste: emTeste, testeAte: r.teste_ate || "" });
       return h("article", { class: ["cfg-comparar-it", atual && "atual"], "aria-current": atual ? "true" : null },
-        h("b", null, x.nome, atual ? " (o seu)" : ""),
+        h("b", null, x.nome, atual ? " (o seu)" : ""), x.destaque === true ? ui.pilula("Mais escolhido", "prim", { class: "cfg-comparar-selo" }) : null,
         h("p", { class: "sub" }, x.preco_mensal != null ? `${ui.brl(x.preco_mensal, { centavos: false })} por mês` : "Sob consulta"),
         dif.length ? h("ul", { class: "cfg-comparar-dif" }, dif.map(d => h("li", null, d))) : atual ? null : h("p", { class: "fraco" }, "Mesmos limites."),
         atual ? null : wa ? h("a", { class: "bt bt-sec bt-p", href: ui.linkWhatsApp(txt, wa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), `Quero o ${x.nome}`)
@@ -2448,8 +3569,15 @@ async function secaoPlano(ctx, alvo) {
     h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Uso do plano"),
       h("p", { class: "sub" }, "Contagem de agora. Sugestões de IA contam no mês corrente."))), usos,
       // plano 1000b · UB-098: 1 casa e GB acima de 1024 MB (antes «12,345678 MB»)
-      h("p", { class: "fraco plano-storage" }, ui.icone("clipe"), `Mídia guardada: ${formatarArmazenamento(r.storage_mb)}`)),
+      // plano 2000d · DU-166: com limite de mídia no plano, a barra (e o caminho para os arquivos grandes, quando o servidor diz onde)
+      r.limites && Number(r.limites.storage_mb) > 0
+        ? h("div", { class: "plano-storage-barra" }, ui.barraUso(`Mídia guardada (${formatarArmazenamento(r.storage_mb)} de ${formatarArmazenamento(r.limites.storage_mb)})`, Math.round(Number(r.storage_mb) || 0), Number(r.limites.storage_mb)),
+          typeof r.arquivos_grandes_href === "string" && r.arquivos_grandes_href.startsWith("#/") ? h("a", { class: "cfg-uso-ir", href: r.arquivos_grandes_href }, "Ver arquivos grandes", ui.icone("seta-dir")) : null)
+        : h("p", { class: "fraco plano-storage" }, ui.icone("clipe"), `Mídia guardada: ${formatarArmazenamento(r.storage_mb)}`)),
     cartaoComparar,
+    cartaoFaturas(ctx),
+    // plano 2000d · DU-165: cancelar pelo app com 3 perguntas e oferta de pausa (só com o servidor que anuncia r.pode_cancelar)
+    r.pode_cancelar === true ? cartaoCancelar(ctx, { nomeCli, quem }) : null,
     historicoIA(ctx),
     agencia ? h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Sua agência"),
       h("p", { class: "sub" }, "Soma de todos os clientes da revenda."))),

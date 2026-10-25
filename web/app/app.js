@@ -204,7 +204,8 @@ async function iniciar() {
     E.comandos = comandos.criarComandos();      // M18: o que as telas oferecem à paleta (ctx.comandos.registrar)
     E.workspace = rotas.produtoDe(location.search);
     document.documentElement.dataset.produto = E.workspace || "orbita";
-    document.title = E.workspace ? rotas.PRODUTOS[E.workspace].titulo : "Órbita · Nexus";
+    // plano 2000d · DU-276: o título nasce com o produto guardado da marca (revenda) — nada de «Órbita · Nexus» antes de a marca chegar
+    document.title = rotas.nomeDoApp({ produto: E.produto, workspace: E.workspace }).name;
     const manifesto = $("manifest");
     if (manifesto) manifesto.setAttribute("href", E.workspace ? rotas.manifestoProduto(E.workspace) : "manifest.webmanifest");
   } catch (e) {
@@ -609,6 +610,14 @@ function definirAparelhoCompartilhado(sim) {
 
 /* ---- plano 1000b · UB-168: saída por inatividade em aparelho compartilhado (recepção) — 2 h sem toque nem tecla, com aviso 1 min antes ---- */
 const OCIOSO_MS = 2 * 3600e3, AVISO_OCIOSO_MS = 60e3;
+/** plano 2000d · DU-140: a política da empresa (inatividade_min: 30 / 60 / 120; 0 = nunca) vale em TODOS os aparelhos; sem política, o de sempre:
+    só o aparelho compartilhado sai depois de 2 h. → ms ou null (não vigia). */
+function limiteOciosidade({ politicaMin = null, compartilhado = false } = {}) {
+  const n = Number(politicaMin);
+  if (politicaMin !== null && politicaMin !== undefined && politicaMin !== "" && Number.isFinite(n)) return n > 0 ? Math.max(5, Math.min(24 * 60, n)) * 60e3 : null;
+  return compartilhado ? OCIOSO_MS : null;
+}
+function textoTempoOcioso(ms) { const min = Math.round(ms / 60e3); return min >= 60 && min % 60 === 0 ? `${min / 60} h` : `${min} min`; }
 /** criarVigiaOciosidade({agora, agendar, cancelar, limite, aviso, aoAvisar, aoSair, aoVoltar}) → {ligar, desligar, tocar, estado}.
     O relógio de verdade (agora) decide: um setTimeout atrasado pela aba em segundo plano não apressa nem adia a saída. */
 function criarVigiaOciosidade({ agora = () => Date.now(), agendar = setTimeout, cancelar = clearTimeout, limite = OCIOSO_MS, aviso = AVISO_OCIOSO_MS, aoAvisar, aoSair, aoVoltar } = {}) {
@@ -634,24 +643,97 @@ function criarVigiaOciosidade({ agora = () => Date.now(), agendar = setTimeout, 
 }
 function ligarOciosidade() {
   const comp = aparelhoCompartilhado();
-  if (E.ocioso && comp) return;              // sessão revalidada pela rede não é uso: o relógio que já corre continua
+  // plano 2000d · DU-140: a política da empresa (marca da org ou do cliente) decide o tempo; sem ela, só o compartilhado
+  const politica = E.cliente && E.cliente.inatividade_min !== undefined ? E.cliente.inatividade_min : (E.marca && E.marca.inatividade_min !== undefined ? E.marca.inatividade_min : null);
+  const limite = limiteOciosidade({ politicaMin: politica, compartilhado: comp });
+  if (E.ocioso && E.ocioso.limite === limite && limite) return;   // sessão revalidada pela rede não é uso: o relógio que já corre continua
   if (E.ocioso) { E.ocioso.desligar(); E.ocioso = null; }
-  if (!comp) return;
+  if (!limite) return;
   let aviso = null;
   const fecharAviso = () => { if (aviso) { aviso.fechar("acao"); aviso = null; } };
+  const comPin = () => temPinDeBloqueio();
   E.ocioso = criarVigiaOciosidade({
+    limite,
     aoAvisar: () => {
-      aviso = E.ui.toast("Por segurança, este aparelho compartilhado sai da conta em 1 minuto por falta de uso.", { tipo: "aten", ms: 0, fixo: true,
+      // plano 2000d · DU-141: com PIN definido neste aparelho, a tela é bloqueada (não sai da conta)
+      aviso = E.ui.toast(comPin() ? "Por segurança, a tela será bloqueada em 1 minuto por falta de uso." : `Por segurança, este aparelho sai da conta em 1 minuto por falta de uso.`, { tipo: "aten", ms: 0, fixo: true,
         acao: { rotulo: "Continuar conectado", fn: () => { if (E.ocioso) E.ocioso.tocar(); } }, aoFechar: () => { aviso = null; } });
     },
     aoVoltar: fecharAviso,
     aoSair: async () => {
       fecharAviso();
       if (!E.sessao) return;
-      if (await sair({ perguntar: false })) E.ui.toast("Você saiu por inatividade (aparelho compartilhado). Entre de novo para continuar.", { tipo: "info", ms: 0 });
+      if (comPin()) { bloquearTela(); return; }
+      if (await sair({ perguntar: false })) E.ui.toast(`Você saiu depois de ${textoTempoOcioso(limite)} sem uso. Entre de novo para continuar.`, { tipo: "info", ms: 0 });
     },
   });
+  E.ocioso.limite = limite;
   E.ocioso.ligar();
+}
+
+/* ---- plano 2000d · DU-141: bloquear a tela com PIN (recepção) — cobre o app sem encerrar a sessão; 5 erros = sair ---- */
+const CHAVE_PIN = "nx-pin-bloqueio", PIN_MAX_ERROS = 5;
+function chavePin() { return `${CHAVE_PIN}:${E.sessao && E.sessao.conta ? E.sessao.conta.id : "-"}`; }
+function temPinDeBloqueio() { return !!LS.lerTxt(chavePin()); }
+async function resumoPin(pin, sal) {
+  const txt = `${sal}:${String(pin)}`;
+  try {
+    if (globalThis.crypto && crypto.subtle && typeof TextEncoder === "function") {
+      const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
+      return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, "0")).join("");
+    }
+  } catch { /* sem subtle (http): cai no simples */ }
+  let h = 0; for (const c of txt) h = (h * 31 + c.codePointAt(0)) >>> 0;
+  return `s${h.toString(16)}`;
+}
+async function definirPinDeBloqueio() {
+  const { ui } = E;
+  let janela = null;
+  const campo = ui.campo({ rotulo: "PIN de 4 números", nome: "pin", inputmode: "numeric", autocomplete: "off", max: 4, obrigatorio: true, ajuda: "Vale só neste aparelho. Desbloqueia a tela sem digitar a senha." });
+  const inp = campo.querySelector("input"); if (inp) inp.setAttribute("type", "password");
+  return new Promise(resolve => {
+    janela = ui.modal({ titulo: "Bloquear a tela com PIN", largura: "p", protegerTexto: false, corpo: ui.h("div", { class: "pilha-p" }, campo),
+      acoes: [{ rotulo: "Cancelar", tipo: "neutro", fn: () => { resolve(false); return true; } },
+        { rotulo: "Salvar PIN", tipo: "primario", fn: async () => {
+          const v = String(inp ? inp.value : "").replace(/\D/g, "");
+          if (v.length !== 4) { ui.marcarErro(janela.el || campo.parentNode, "pin", "Digite exatamente 4 números."); return false; }
+          LS.gravar(chavePin(), await resumoPin(v, E.sessao.conta.id));
+          ui.toast("PIN salvo. Use «Bloquear a tela» na paleta ou espere o tempo sem uso.", { tipo: "ok" });
+          resolve(true); return true;
+        } }] });
+  });
+}
+function bloquearTela() {
+  const { ui } = E;
+  if (!E.sessao || document.querySelector(".tela-bloqueio")) return null;
+  if (!temPinDeBloqueio()) { definirPinDeBloqueio().then(ok => { if (ok) bloquearTela(); }); return null; }
+  const app = $("app");
+  let erros = 0;
+  const campo = ui.campo({ rotulo: "PIN", nome: "pin", inputmode: "numeric", autocomplete: "off", max: 4 });
+  const inp = campo.querySelector("input"); if (inp) inp.setAttribute("type", "password");
+  const msg = ui.h("p", { class: "entrar-erro", role: "alert", hidden: true });
+  const form = ui.h("form", { class: "pilha-p", novalidate: true }, campo, msg, ui.h("button", { type: "submit", class: "bt bt-prim bt-bloco" }, "Desbloquear"));
+  const sairBt = ui.h("button", { type: "button", class: "link" }, "Sair da conta");
+  const tela = ui.h("div", { class: "tela-bloqueio", role: "dialog", "aria-modal": "true", "aria-labelledby": "t-bloqueio" },
+    ui.h("div", { class: "tela-bloqueio-cartao" }, ui.icone("cadeado"), ui.h("h2", { id: "t-bloqueio" }, "Tela bloqueada"),
+      ui.h("p", { class: "sub" }, `${E.sessao.conta.nome || "Conta"} continua conectada. Digite o PIN para voltar.`), form, sairBt));
+  const destravar = () => { tela.remove(); if (app) { app.removeAttribute("inert"); app.removeAttribute("aria-hidden"); } if (E.ocioso) E.ocioso.ligar(); };
+  form.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const v = String(inp ? inp.value : "").replace(/\D/g, "");
+    if (v.length === 4 && await resumoPin(v, E.sessao.conta.id) === LS.lerTxt(chavePin())) { destravar(); return; }
+    erros += 1;
+    if (inp) inp.value = "";
+    if (erros >= PIN_MAX_ERROS) { tela.remove(); if (app) { app.removeAttribute("inert"); app.removeAttribute("aria-hidden"); } await sair({ perguntar: false }); return; }
+    msg.textContent = `PIN incorreto. ${PIN_MAX_ERROS - erros} tentativa${PIN_MAX_ERROS - erros === 1 ? "" : "s"} antes de sair da conta.`; msg.hidden = false;
+    if (inp) inp.focus();
+  });
+  sairBt.addEventListener("click", async () => { tela.remove(); if (app) { app.removeAttribute("inert"); app.removeAttribute("aria-hidden"); } await sair({ perguntar: false }); });
+  if (app) { app.setAttribute("inert", ""); app.setAttribute("aria-hidden", "true"); }
+  document.body.appendChild(tela);
+  if (E.ocioso) E.ocioso.desligar();
+  setTimeout(() => { if (inp) inp.focus(); }, 0);
+  return tela;
 }
 
 /* ============================================================
@@ -662,6 +744,22 @@ let manifestoTimer = null;
 function agendarManifesto() {
   clearTimeout(manifestoTimer);
   manifestoTimer = setTimeout(atualizarManifestoApp, 350);   // várias pinturas seguidas (marca, tema da empresa) viram uma montagem só
+}
+/** O que o service worker pede à aba aberta: abrir a conversa do aviso (plano 1500c · UCC-123); plano 2000d · DU-253: «Marcar como lida» no próprio
+    aviso (a aba tem a sessão); DU-254: a inscrição de push renovada pelo navegador volta ao servidor (melhor esforço: sem a RPC, nada muda). */
+function mensagemDoSW(m) {
+  if (!m || typeof m !== "object") return null;
+  if (m.tipo === "abrir" && /^#\//.test(String(m.hash || ""))) { navegar(m.hash); return "abrir"; }
+  if (m.tipo === "ler" && /^[A-Za-z0-9_-]{1,64}$/.test(String(m.conversa || "")) && E.api && E.cliente) {
+    Promise.resolve().then(() => (E.api.rpcC ? E.api.rpcC("nx_cv_marcar_lida", { p_conversa: m.conversa }) : E.api.rpc("nx_cv_marcar_lida", { p_conversa: m.conversa })))
+      .then(() => { if (E.pulso && typeof E.pulso.agora === "function") E.pulso.agora(); }).catch(() => { /* fica não lida */ });
+    return "ler";
+  }
+  if (m.tipo === "push-renovar" && m.inscricao && typeof m.inscricao === "object" && E.api && E.sessao) {
+    E.api.rpc("nx_push_inscrever", { p_inscricao: m.inscricao }).catch(() => { /* servidor sem push: nada muda */ });
+    return "push-renovar";
+  }
+  return null;
 }
 /** Plano 1000b · UB-126: ícone do aviso de área de trabalho — o da marca já rasterizado, o favicon/logo da marca ou o ícone empacotado do app. */
 function iconeDoAviso() {
@@ -677,15 +775,18 @@ async function atualizarManifestoApp() {
   const seq = ++manifestoEstado.seq;
   try {
     const base = new URL("./", location.href).href;
-    const nome = E.M.rotas.nomeDoApp({ produto: E.produto, workspace: E.workspace });
+    // plano 2000d · DU-153: a descrição da revenda (login_texto) em vez do slogan da plataforma; DU-445: o nome no ícone escolhido pela revenda
+    const nome = E.M.rotas.nomeDoApp({ produto: E.produto, workspace: E.workspace, texto: E.marca && E.marca.login_texto, curto: E.marca && E.marca.nome_curto });
     const fundo = getComputedStyle(document.documentElement).getPropertyValue("--c-fundo").trim() || E.M.tema.FUNDOS_ESQUEMA.escuro;
     const m = E.marca;
     let raster = null;
     try { raster = await P.rasterizarIcones({ origem: m.logo_cliente || m.favicon || m.logo || null, fundo }); }
     catch (e) { raster = null; console.warn("ícones da marca indisponíveis; ficam os empacotados", e && e.message); }   // sem logo próprio ou imagem sem CORS
     if (seq !== manifestoEstado.seq) return;
+    // plano 2000d · DU-261: atalhos do ícone pelos módulos da empresa (com o nome da vertical); DU-446: recebe «Compartilhar» do celular
+    const atalhos = P.atalhosDoIcone ? P.atalhosDoIcone(E.cliente && E.cliente.modulos, mod => { try { return mod === "crm" && E.M.vocab ? E.M.vocab.vocab(E.cliente ? E.cliente.vertical : "generico").crm : null; } catch { return null; } }) : [];
     const manifesto = P.construirManifesto({ nome, base, workspace: E.workspace, rota: E.workspace ? E.M.rotas.produtoInicial(E.workspace) : null, fundo,
-      icones: raster ? P.iconesDeRaster(raster) : P.iconesPadrao(base) });
+      icones: raster ? P.iconesDeRaster(raster) : P.iconesPadrao(base), atalhos, compartilhar: !!E.sessao });
     if (!P.aplicarManifesto({ manifesto, estado: manifestoEstado })) throw new Error("manifesto_nao_aplicado");
     E.iconeAviso = raster ? raster.apple180 : null;   // plano 1000b · UB-126: o aviso de área de trabalho usa o ícone da marca
     P.atualizarMetasApple({ titulo: nome.short_name, icone: raster ? raster.apple180 : null, escuro: document.documentElement.dataset.esquema !== "claro" });
@@ -708,8 +809,13 @@ async function instalarApp() {
     return;
   }
   if (modo === "ios") {
+    // plano 2000d · DU-258: cada passo com o desenho do botão e onde ele fica (a pessoa procura a figura, não o nome)
+    const passos = E.pwaMod.PASSOS_IOS_VISUAL || E.pwaMod.PASSOS_IOS.map(texto => ({ texto }));
     ui.modal({ titulo: "Instalar no iPhone ou iPad", largura: "p", protegerTexto: false,
-      corpo: ui.h("div", { class: "pilha-p" }, ui.h("p", null, "O iPhone instala pelo menu do Safari:"), ui.h("ol", { class: "instalar-passos" }, E.pwaMod.PASSOS_IOS.map(t => ui.h("li", null, t)))),
+      corpo: ui.h("div", { class: "pilha-p" }, ui.h("p", null, "O iPhone instala pelo menu do Safari:"),
+        ui.h("ol", { class: "instalar-passos instalar-passos-ios" }, passos.map(p => ui.h("li", null,
+          p.icone ? ui.h("span", { class: "instalar-passo-ico", "aria-hidden": "true" }, ui.icone(p.icone)) : null,
+          ui.h("span", { class: "instalar-passo-txt" }, p.texto, p.onde ? ui.h("small", null, p.onde) : null))))),
       acoes: [{ rotulo: "Entendi", tipo: "primario" }] });
     return;
   }
@@ -844,7 +950,7 @@ function iniciarPwa() {
       E.pwa = pwa.iniciar({ versao: VERSAO, ui: E.ui, alvo: $("faixas-sistema"), produto: () => E.produto || "Órbita", ocupado: ocupadoParaAtualizar, urlsPrecache: urlsPrecacheDoAparelho, leitorVersao: E.leitorVersao || null,
         aoVerificar: () => conferirMigracao() });   // plano 1500c · UCC-129: mesmo relógio da versão
       // plano 1500c · UCC-123: o service worker pede para abrir a conversa do aviso clicado (aba já aberta)
-      try { if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", e => { const m = e.data || {}; if (m.tipo === "abrir" && /^#\//.test(String(m.hash || ""))) navegar(m.hash); }); } catch { /* sem SW */ }
+      try { if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", e => mensagemDoSW(e.data || {})); } catch { /* sem SW */ }
       agendarManifesto();
       conferirMigracao();   // A4: a sessão pode ter chegado antes do pwa.js (que tem a comparação de migrações)
       // plano 1000b · UB-131: a faixa de migração reconfere a cada 10 min com a aba à vista (some quando o banco for atualizado)
@@ -1005,7 +1111,8 @@ function pintarMarca(m, { guardar = false, cacheCliente = null, respeitarEsquema
   // plano 1500c · UCC-049: a página «Sem conexão» do service worker sai com a cor e o nome desta marca
   try {
     const ctl = typeof navigator !== "undefined" && navigator.serviceWorker && navigator.serviceWorker.controller;
-    if (ctl) ctl.postMessage({ tipo: "marca", fundo: t.vars["--c-fundo"], texto: t.vars["--c-texto"], produto: m.produto || "Órbita" });
+    // plano 2000d · DU-251: o ícone da marca vai junto (o aviso de push de uma revenda não sai com o ícone da plataforma)
+    if (ctl) ctl.postMessage({ tipo: "marca", fundo: t.vars["--c-fundo"], texto: t.vars["--c-texto"], produto: m.produto || "Órbita", icone: (() => { const u = m.favicon || m.logo_cliente || m.logo; return typeof u === "string" && /^https:/.test(u) ? u : null; })() });
   } catch { /* sem service worker */ }
   if (cacheCliente) LS.gravar(`nx-app-tema-${cacheCliente.id}`, { ...cacheCliente.dados, vars: t.vars, hash: tema.hashCurto(t.vars), host: location.host });
   return t;
@@ -1304,6 +1411,8 @@ async function adotarSessao(s, { forcarImagens = false } = {}) {
   try { if (E.M.api && typeof E.M.api.mostrarCodigoTecnico === "function") E.M.api.mostrarCodigoTecnico(!!(s.conta && s.conta.super)); } catch { /* ok */ }
   // plano 1000b · UB-277: o sem_permissao do administrador da empresa manda falar com o suporte (não «com o administrador»)
   try { if (E.M.api && typeof E.M.api.definirPapelDasMensagens === "function") E.M.api.definirPapelDasMensagens(() => papelAtual()); } catch { /* ok */ }
+  // plano 2000d · DU-157: as frases de erro usam a palavra da vertical (orçamentos na oficina, visita em vez de consulta)
+  try { if (E.M.api && typeof E.M.api.definirVocabDasMensagens === "function" && E.M.vocab) E.M.api.definirVocabDasMensagens(() => E.M.vocab.vocab(E.cliente ? E.cliente.vertical : "generico")); } catch { /* ok */ }
   // AS-192: rascunhos guardados por um «Sair» da sessão expirada são de outra conta → saem antes de a tela nascer
   const donoRascunhos = LS.lerTxt(CHAVE_RASCUNHOS_DE);
   if (donoRascunhos && s.conta && donoRascunhos !== s.conta.id) {
@@ -1438,6 +1547,9 @@ async function escolherCliente(id, { remontar = true } = {}) {
   if (mudou) { E.notif = 0; atualizarSinoUI(); }
   if (mudou && remontar) {
     desmontarAtual();
+    // plano 2000d · DU-451: fica na mesma tela; um item aberto (contato, conversa) é da empresa anterior → volta à lista da tela
+    const destino = E.M.rotas.rotaAoTrocarEmpresa ? E.M.rotas.rotaAoTrocarEmpresa(E.ultimaRota) : null;
+    if (destino && destino !== location.hash) { navegar(destino, { substituir: true }); return; }
     await aoMudarRota(false);
   }
 }
@@ -1462,6 +1574,7 @@ function opcoesAcesso() {
     gestorConta: !!(E.sessao && E.sessao.conta && E.sessao.conta.papel === "gestor"),
     temCliente: !!E.cliente,
     produto: E.workspace,
+    papel,   // plano 2000d · DU-110: o papel «marketing» entra por módulo
   };
 }
 
@@ -1751,6 +1864,21 @@ function construirCtx(r, alvo) {
       E.assinaturas.add(cancelar);
       return () => { cancelar(); E.assinaturas.delete(cancelar); };
     },
+    /** RC-151 (plano 1500c) · plano 2000d: o atalho do caso comum — fn() → true enquanto houver alteração não salva; o shell pergunta
+        «Sair sem salvar?» antes de trocar de tela, de empresa ou de sair (a tela não precisa montar a pergunta). Devolve cancelar(). */
+    guardaSaida(fn, { titulo = "Sair sem salvar?", texto = "As alterações desta tela ainda não foram salvas e vão se perder." } = {}) {
+      if (typeof fn !== "function") return () => {};
+      const guarda = async () => {
+        let sujo = false;
+        try { sujo = !!fn(); } catch { sujo = false; }
+        if (!sujo) return true;
+        return E.ui.confirmar({ titulo, texto, rotulo: "Sair sem salvar", perigo: true });
+      };
+      guardasDeRota.add(guarda);
+      const cancelar = () => { guardasDeRota.delete(guarda); };
+      E.assinaturas.add(cancelar);
+      return () => { cancelar(); E.assinaturas.delete(cancelar); };
+    },
     /** AS-191: a tela começou a guardar algo que não pode se perder (fila de saída): pede ao navegador armazenamento persistente (uma vez). */
     armazenamentoPersistente: () => pedirArmazenamentoPersistente(),
     /** Comandos desta tela na paleta Ctrl/⌘+K (M18): registrar({ id, rotulo, palavras?, atalho?, icone?, fazer }) → cancelar(). Somem sozinhos ao sair da tela. */
@@ -1913,6 +2041,8 @@ async function montarNoShell(r, seq, doUsuario) {
   const equipe = !!(E.sessao && E.sessao.conta && (E.sessao.conta.super || E.sessao.conta.papel === "gestor"));
   const acesso = acessoDaRota === "ok" && E.cliente && E.cliente.ativo === false && !equipe && !(def && def.semCliente) ? "pausado" : acessoDaRota;
   E.ultimaRota = r;
+  // plano 2000d · DU-408: a última tela principal aberta (o app instalado reabre nela)
+  if (acesso === "ok" && E.sessao && /^[a-z-]{2,20}$/.test(String(r.modulo || "")) && r.modulo !== "inicio") LS.gravar(E.pwaMod && E.pwaMod.CHAVE_ULTIMA_ROTA || "nx-ultima-rota", `#/${r.modulo}`);
   reiniciarSelo();
   marcarMenu(r.modulo);
   if (E.pulso) E.pulso.modo(r.modulo === "conversas" ? "conversas" : "normal");
@@ -1978,6 +2108,8 @@ async function montarNoShell(r, seq, doUsuario) {
   desenharRegioes();
   // plano 1500c · UCC-075: o foco vai ao título só quando a TELA mudou — abrir um item ou trocar de aba na mesma tela não tira o teclado do lugar
   if (doUsuario && trocouDeTela) focarTitulo(seq);
+  // plano 2000d · DU-246: primeira visita a esta tela → o tour dela (depois do foco no título e dos dados chegarem)
+  if (trocouDeTela) setTimeout(() => { if (seq === E.montando) iniciarTourDaRota(r.modulo); }, 1800);
 }
 
 /* ============================================================
@@ -2084,6 +2216,7 @@ async function montarPublico(r, seq) {
   ui.limpar(alvo);
   const ctx = {
     alvo, versao: VERSAO, rota: r, api: E.api, ui, tema: E.M.tema,
+    rotas: E.M.rotas,   // plano 2000d · DU-218: o rótulo do papel do convite sai do rotas.js (sem baixar o config.js)
     marca: E.marca, marcaPublica: E.marcaPublica,
     produtoAberto: E.workspace ? { id: E.workspace, titulo: E.M.rotas.nomeDoApp({ produto: E.produto, workspace: E.workspace }).name, resumo: E.M.rotas.PRODUTOS[E.workspace].resumo,
       icone: E.M.rotas.iconeDoProduto(E.workspace) } : null,
@@ -2095,7 +2228,9 @@ async function montarPublico(r, seq) {
     /** AS-185: o aparelho está marcado como compartilhado? (o login mostra «Lembrar neste aparelho» desmarcado) */
     aparelhoCompartilhado,
     /** depois de entrar/aceitar convite: guarda o token e abre o app. `compartilhado` (login): true = nada vai para o disco do aparelho. */
-    async aoEntrar(token, { cliente_id, compartilhado, expira_em, boasVindas, demo } = {}) {
+    async aoEntrar(token, { cliente_id, compartilhado, expira_em, boasVindas, demo, tentativas } = {}) {
+      // plano 2000d · DU-222: houve tentativas erradas recentes nesta conta → aviso depois de abrir, com o caminho para as sessões
+      E.tentativasRecentes = tentativas && typeof tentativas === "object" ? tentativas : null;
       if (typeof compartilhado === "boolean") definirAparelhoCompartilhado(compartilhado);
       // outra conta podia estar aberta neste navegador (o admin testando o convite que acabou de criar): a sessão lida com o token antigo e o
       // que o aparelho guardava dela (sessão, respostas, Recentes) não podem ser adotados por quem entrou agora
@@ -2133,15 +2268,39 @@ function mostrarApp() {
   E.ui.limpar($("publico"));
   $("app").hidden = false;
   mostrarBoasVindasConvite();   // plano 1500c · UC-019
+  avisarTentativasRecentes();   // plano 2000d · DU-222
   vigiarValidadeDaSessao();     // plano 1500c · UCC-031
   ouvirPassosDaEquipe();        // plano 1500c · UC-012
   aplicarApresentacao();        // plano 1500c · UC-030: o modo continua depois de recarregar a aba
   avisarNovidades();            // plano 1500c · UC-037
+  try { if (sessionStorage.getItem("nx-modo-foco") === "1") document.documentElement.classList.add("modo-foco"); } catch { /* ok */ }   // plano 2000d · DU-281
+  abrirNaUltimaRota();          // plano 2000d · DU-408
+  receberCompartilhado();       // plano 2000d · DU-446
   // plano 1500c · UC-018/UC-005: boas-vindas (1ª vez do admin na empresa) ou, se não, o aviso do fim do teste; o tour só quando nenhum dos dois abriu
   const abriu = E.sessao && (mostrarBoasVindas() || avisarFimDoTeste());
   if (E.sessao && !E.tourAgendado && !abriu) { E.tourAgendado = true; setTimeout(() => iniciarTour(), 2500); }   // plano 1500c · UCC-098
 }
 
+/** plano 2000d · DU-408: uma vez por abertura — instalado, sem hash próprio → a última tela principal. nx-abrir-ultima="0" desliga (Perfil). */
+function abrirNaUltimaRota() {
+  if (E.abriuUltimaRota || !E.sessao || !E.pwaMod || !E.pwaMod.rotaAoAbrirInstalado) return null;
+  E.abriuUltimaRota = true;
+  const alvo = E.pwaMod.rotaAoAbrirInstalado({ instalado: rodandoInstalado(), hash: location.hash, ultima: LS.lerTxt(E.pwaMod.CHAVE_ULTIMA_ROTA), ligado: LS.lerTxt("nx-abrir-ultima") !== "0" });
+  if (alvo) navegar(alvo, { substituir: true });
+  return alvo;
+}
+/** plano 2000d · DU-446: texto recebido pelo «Compartilhar» do celular → guardado para a próxima mensagem (nx-compartilhado, só nesta aba) e a
+    pessoa vai às Conversas escolher o contato. O endereço perde o ?compartilhar (recarregar não repete). */
+function receberCompartilhado() {
+  if (!E.pwaMod || !E.pwaMod.textoCompartilhado || !E.sessao) return null;
+  const texto = E.pwaMod.textoCompartilhado(location.search);
+  if (!texto) return null;
+  try { sessionStorage.setItem("nx-compartilhado", texto); } catch { /* sem armazenamento: fica só o aviso */ }
+  try { history.replaceState(null, "", `${location.pathname}${location.hash || ""}`); } catch { /* ok */ }
+  navegar("#/conversas", { substituir: true });
+  E.ui.toast("Texto recebido. Abra a conversa do contato para enviar.", { acao: navigator.clipboard ? { rotulo: "Copiar texto", fn: () => { navigator.clipboard.writeText(texto).catch(() => {}); } } : null });
+  return texto;
+}
 /** plano 1500c · UCC-098: tour de primeira vez — 4 balões (busca, produtos, sino, conta) que apontam para o topo, com «Próximo» e «Pular».
     Visto uma vez por conta neste aparelho (nx-tour-visto:<conta>); o servidor (nx_onboarding_marcar) guardará entre aparelhos quando existir.
     {forcar}: menu Ajuda e paleta («Fazer o tour»). Sem paradas na tela (celular estreito), nada acontece. */
@@ -2151,12 +2310,31 @@ function iniciarTour({ forcar = false } = {}) {
   if (!E.sessao || !C || !C.paradasDoTour || $("app").hidden) return false;
   const chave = C.chaveTour(E.sessao.conta.id);
   if (!forcar && (LS.lerTxt(chave) || emModoDemo() || document.querySelector("dialog[open]"))) return false;
-  const paradas = C.paradasDoTour(document);
+  const nav = typeof navigator !== "undefined" ? navigator : {};
+  const paradas = C.paradasDoTour(document, C.PASSOS_TOUR, (nav.userAgentData && nav.userAgentData.platform) || nav.platform || "");   // plano 2000d · DU-447
   if (!paradas.length) return false;
   if (tourAberto) tourAberto.fechar();
   LS.gravar(chave, "1");
   if (E.api && E.api.rpc && !forcar) E.api.rpc("nx_onboarding_marcar", { p_passo: "tour" }).catch(() => {});   // melhor esforço: servidor atual não tem
+  return mostrarParadasDoTour(paradas);
+}
+/** plano 2000d · DU-246: o tour de cada tela na primeira visita (Conversas: responder; CRM: arrastar; Automações: receitas) — só depois do tour geral. */
+function iniciarTourDaRota(modulo, { forcar = false } = {}) {
+  const R = E.M.rotas, C = E.M.comandos;
+  if (!E.sessao || !R.paradasDoTour || !C || tourAberto || emModoDemo()) return false;
+  const conta = E.sessao.conta.id;
+  const chave = R.chaveTourRota(conta, modulo);
+  if (!forcar && (LS.lerTxt(chave) || !LS.lerTxt(C.chaveTour(conta)) || document.querySelector("dialog[open]"))) return false;
+  const paradas = R.paradasDoTour(modulo).map(p => { let el = null; try { el = document.querySelector(p.alvo); } catch { el = null; } return { ...p, el }; }).filter(p => p.el && !p.el.hidden);
+  if (!paradas.length) return false;
+  LS.gravar(chave, "1");
+  return mostrarParadasDoTour(paradas);
+}
+/** As paradas de um tour (geral ou da tela) em balões. plano 2000d · DU-247: o foco vai ao «Próximo» de cada balão e, no fim (ou no Esc),
+    volta para onde estava antes do tour. */
+function mostrarParadasDoTour(paradas) {
   const { ui } = E;
+  const focoAntes = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
   let i = 0, f = null;
   const mostrar = () => {
     if (f) { const velho = f; f = null; velho.fechar(); }
@@ -2171,9 +2349,12 @@ function iniciarTour({ forcar = false } = {}) {
       ui.h("p", { class: "rotulo" }, `${p.titulo} · ${i + 1} de ${paradas.length}`),
       ui.h("p", null, p.texto),
       ui.h("div", { class: "linha linha-entre" }, pular || ui.h("span"), prox));
-    f = ui.flutuante(p.el, corpo, { classe: "tour-balao", rotulo: `Tour: ${p.titulo}`, aoFechar: () => { if (f) { f = null; tourAberto = null; } } });
+    // o Esc do balão foca a âncora depois do aoFechar: o foco volta ao lugar de antes do tour no próximo giro
+    f = ui.flutuante(p.el, corpo, { classe: "tour-balao", rotulo: `Tour: ${p.titulo}`, aoFechar: () => { if (f) { f = null; tourAberto = null; setTimeout(devolverFoco, 0); } } });
+    setTimeout(() => { if (prox.isConnected) try { prox.focus({ preventScroll: true }); } catch { prox.focus(); } }, 20);   // plano 2000d · DU-247
   };
-  const fim = () => { const velho = f; f = null; tourAberto = null; if (velho) velho.fechar(); };
+  const devolverFoco = () => { if (focoAntes && focoAntes.isConnected) try { focoAntes.focus({ preventScroll: true }); } catch { focoAntes.focus(); } };
+  const fim = () => { const velho = f; f = null; tourAberto = null; if (velho) velho.fechar(); devolverFoco(); };
   tourAberto = { fechar: fim };
   mostrar();
   return true;
@@ -2246,7 +2427,7 @@ function desenharMenu() {
   atualizarSeloPrimeirosPassos();   // plano 1500c · UC-034
   // barra inferior: até 4 + Mais
   // plano 1000b · UB-278: o item mais aberto pelo «Mais» neste aparelho ganha o 4º lugar
-  const prefer = E.M.rotas.itensDaBarra(itens, lerUsosDaBarra());
+  const prefer = E.M.rotas.itensDaBarra(itens, lerUsosDaBarra(), undefined, lerEscolhaDaBarra());   // plano 2000d · DU-277
   const resto = itens.filter(i => !prefer.includes(i));
   for (const it of prefer) {
     barra.appendChild(ui.h("a", { class: "barra-b", href: `#/${it.rota}`, dataset: { id: it.id } },
@@ -2290,6 +2471,41 @@ function contarUsoDaBarra(id) {
   return n;
 }
 
+/** plano 2000d · DU-277: a barra de baixo do celular escolhida pela pessoa (até 4 + «Mais»), por conta, neste aparelho. */
+function chaveEscolhaBarra() { return `nx-barra-escolha:${E.sessao && E.sessao.conta ? E.sessao.conta.id : "-"}`; }
+function lerEscolhaDaBarra() {
+  const v = LS.ler(chaveEscolhaBarra());
+  return Array.isArray(v) ? v.filter(x => typeof x === "string").slice(0, 8) : null;
+}
+function editarBarra() {
+  const { ui } = E;
+  const itens = itensVisiveis().filter(i => !i.fixo);
+  const atuais = E.M.rotas.itensDaBarra(itensVisiveis(), lerUsosDaBarra(), undefined, lerEscolhaDaBarra()).map(i => i.id);
+  const MAX = E.M.rotas.MAX_ITENS_BARRA || 4;
+  const aviso = ui.h("p", { class: "sub", "aria-live": "polite" }, `Escolha até ${MAX}. O resto fica em «Mais».`);
+  const caixas = itens.map(it => {
+    const c = ui.h("input", { type: "checkbox", name: "barra", value: it.id });
+    c.checked = atuais.includes(it.id);
+    return { it, c, el: ui.h("label", { class: "opcao-check" }, c, ui.icone(it.icone), ui.h("span", null, it.rotulo)) };
+  });
+  const conferir = () => {
+    const n = caixas.filter(x => x.c.checked).length;
+    for (const x of caixas) x.c.disabled = !x.c.checked && n >= MAX;
+    aviso.textContent = n >= MAX ? `Limite de ${MAX} itens: desmarque um para trocar.` : `Escolha até ${MAX}. O resto fica em «Mais».`;
+  };
+  for (const x of caixas) x.c.addEventListener("change", conferir);
+  conferir();
+  ui.modal({ titulo: "Editar a barra de baixo", largura: "p", protegerTexto: false, corpo: ui.h("div", { class: "pilha-p" }, aviso, ...caixas.map(x => x.el)),
+    acoes: [
+      { rotulo: "Voltar ao automático", tipo: "neutro", fn: () => { LS.apagar(chaveEscolhaBarra()); desenharMenu(); return true; } },
+      { rotulo: "Salvar", tipo: "primario", fn: () => {
+        const ids = caixas.filter(x => x.c.checked).map(x => x.it.id);
+        if (ids.length) LS.gravar(chaveEscolhaBarra(), ids); else LS.apagar(chaveEscolhaBarra());
+        desenharMenu();
+        ui.toast("Barra atualizada.", { tipo: "ok" });
+        return true;
+      } }] });
+}
 function abrirFolhaMais(itens) {
   const { ui } = E;
   let api = null;
@@ -2308,6 +2524,10 @@ function abrirFolhaMais(itens) {
     bt.addEventListener("click", () => { if (api) api.fechar(null); instalarApp(); });
     grade.appendChild(bt);
   }
+  // plano 2000d · DU-277: «Editar barra» no fim da folha
+  const editar = ui.h("button", { type: "button" }, ui.icone("editar"), "Editar barra");
+  editar.addEventListener("click", () => { if (api) api.fechar(null); setTimeout(editarBarra, 0); });
+  grade.appendChild(editar);
   ui.modal({ titulo: "Mais", corpo: grade, acoes: [{ rotulo: "Fechar", tipo: "neutro" }], aoAbrir: a => { api = a; } });
   atualizarBadges();
 }
@@ -2352,8 +2572,9 @@ function pilulaDeTeste(cli) {
   const dias = diasDeTeste(cli);
   // plano 1500c · UC-027: nos últimos 7 dias a pílula conta os dias («Teste: 3 dias»); antes disso, a data
   const txTeste = E.M.rotas.textoPilulaTeste(dias, ui.dataCurtaBR(String(cli.teste_ate).slice(0, 10)));
+  // plano 2000d · DU-278: o nome diz para onde a pílula leva («… Ver planos»)
   const bt = ui.h("button", { type: "button", class: "pilula-teste", "aria-haspopup": "dialog", dataset: { urgente: dias !== null && dias <= 3 ? "1" : "0" },
-    title: txTeste.longo, "aria-label": txTeste.longo }, ui.icone("relogio"), ui.h("span", { class: "pt-txt", "aria-hidden": "true" }, txTeste.curto),
+    title: txTeste.longo, "aria-label": `${txTeste.longo} Ver planos e como continuar.` }, ui.icone("relogio"), ui.h("span", { class: "pt-txt", "aria-hidden": "true" }, txTeste.curto),
     // plano 1500c · UCC-092: no celular, o número compacto («3 d») em vez de sumir com os dias
     dias !== null && dias >= 0 && dias <= 7 ? ui.h("span", { class: "pt-compacto", "aria-hidden": "true" }, dias === 0 ? "hoje" : `${dias} d`) : null);
   bt.addEventListener("click", () => abrirAvisoTeste(bt, cli, dias));
@@ -2479,7 +2700,7 @@ function desenharConta() {
     { rotulo: "Perfil e senha", icone: "usuario", fn: () => navegar("#/config/perfil") },
     { rotulo: "Configurações", icone: "engrenagem", fn: () => navegar("#/config") },
     { rotulo: "Aparência", icone: { claro: "sol", escuro: "lua", marca: "pincel" }[esquemaPreferido()] || "sol", fn: () => abrirMenuTema(ancora) },
-    { rotulo: "Ajuda", icone: "ajuda", fn: () => abrirMenuAjuda(ancora) },
+    { rotulo: novidadesPendentes() ? "Ajuda · há novidades" : "Ajuda", icone: "ajuda", fn: () => abrirMenuAjuda(ancora) },   // plano 2000d · DU-286
     modoInstalacao() ? { rotulo: "Instalar o app", icone: "baixar", fn: () => instalarApp() } : null,
     // app instalado não tem o botão de recarregar do navegador: se uma tela travar, a saída é esta
     E.pwaMod && E.pwaMod.emStandalone() ? { rotulo: "Recarregar", icone: "reabrir", fn: () => location.reload() } : null,
@@ -2488,7 +2709,9 @@ function desenharConta() {
     "-",
     { rotulo: "Sair", icone: "sair", fn: () => sair() },
   ].filter(Boolean));
-  const btPe = ui.h("button", { type: "button", class: "lat-conta", "aria-label": `Conta de ${c.nome}` },
+  // plano 2000d · DU-286: ponto discreto na conta enquanto houver novidade da versão não aberta
+  const temNovidade = novidadesPendentes();
+  const btPe = ui.h("button", { type: "button", class: "lat-conta", "aria-label": `Conta de ${c.nome}${temNovidade ? " (há novidades desta versão)" : ""}`, dataset: { novidade: temNovidade ? "1" : null } },
     ui.avatar(c.nome, c.id), ui.h("span", null, ui.h("b", null, c.nome), ui.h("small", null, papelTxt)));
   btPe.addEventListener("click", () => abrirMenuConta(btPe));
   pe.appendChild(btPe);
@@ -2503,10 +2726,16 @@ function desenharConta() {
 function desenharFerramentasTopo(dir) {
   const { ui } = E;
   if (E.sessao) {
-    const prodAberto = E.workspace ? E.M.rotas.PRODUTOS[E.workspace] : null;
-    const btProdutos = ui.h("button", { type: "button", class: "topo-produtos", "aria-haspopup": "dialog", title: prodAberto ? prodAberto.resumo : "Trocar entre CRM, Nexus Ads e Atendimento",
-      "aria-label": prodAberto ? `${E.M.rotas.nomeDoApp({ produto: E.produto, workspace: E.workspace }).name}: ${prodAberto.resumo} Trocar de produto` : "Trocar entre CRM, Nexus Ads e Atendimento" },
-      ui.icone(E.M.rotas.iconeDoProduto(E.workspace, E.cliente ? E.M.vocab.vocab(E.cliente.vertical).icone_crm : "funil")), ui.h("span", null, prodAberto?.nome || "Produtos"));
+    // plano 2000d · DU-154/DU-197: nomes e resumos calculados — numa revenda o Ads é «Anúncios» (nunca o nome da plataforma); o resumo só promete o que o plano tem
+    const R = E.M.rotas;
+    const padraoMarca = (E.produto || "") === "Órbita";
+    const nomesProd = R.nomesProdutos ? R.nomesProdutos({ padrao: padraoMarca }) : {};
+    const prodAberto = E.workspace ? R.PRODUTOS[E.workspace] : null;
+    const resumoAberto = prodAberto ? (R.resumoDoProduto ? R.resumoDoProduto(E.workspace, E.cliente ? E.cliente.modulos : null) : prodAberto.resumo) : "";
+    const trocar = R.textoTrocarProdutos ? R.textoTrocarProdutos({ padrao: padraoMarca }) : "Trocar de produto";
+    const btProdutos = ui.h("button", { type: "button", class: "topo-produtos", "aria-haspopup": "dialog", title: prodAberto ? resumoAberto : trocar,
+      "aria-label": prodAberto ? `${R.nomeDoApp({ produto: E.produto, workspace: E.workspace }).name}: ${resumoAberto} Trocar de produto` : trocar },
+      ui.icone(R.iconeDoProduto(E.workspace, E.cliente ? E.M.vocab.vocab(E.cliente.vertical).icone_crm : "funil")), ui.h("span", null, prodAberto ? (nomesProd[E.workspace] || prodAberto.nome) : "Produtos"));
     btProdutos.addEventListener("click", () => abrirSeletorProduto(btProdutos));
     dir.appendChild(btProdutos);
   }
@@ -2548,8 +2777,10 @@ function abrirSeletorProduto(ancora) {
   const rotas = E.M.rotas;
   // plano 1500c · UCC-094: produto fora do plano da empresa ganha o selo «Não incluso»; o toque abre o «Conhecer» (o que ele faz + pedir)
   const modulos = E.cliente ? E.cliente.modulos : null;
+  const nomesProd = rotas.nomesProdutos ? rotas.nomesProdutos({ padrao: (E.produto || "") === "Órbita" }) : {};   // plano 2000d · DU-154
   let janela = null;
-  const grade = ui.h("div", { class: "produto-grade" }, Object.entries(rotas.PRODUTOS).map(([id, item]) => {
+  const grade = ui.h("div", { class: "produto-grade" }, Object.entries(rotas.PRODUTOS).map(([id, item0]) => {
+    const item = { ...item0, nome: nomesProd[id] || item0.nome, resumo: rotas.resumoDoProduto ? rotas.resumoDoProduto(id, modulos) : item0.resumo };
     const atual = id === E.workspace;
     const incluso = !modulos || !rotas.produtoIncluso || rotas.produtoIncluso(id, modulos);
     const b = ui.h("button", { type: "button", class: ["produto-op", !incluso && "produto-op-fora"], "aria-current": atual ? "page" : null },
@@ -2575,8 +2806,9 @@ function abrirSeletorProduto(ancora) {
 /** plano 1500c · UCC-094: «Conhecer» um produto fora do plano — o que ele resolve e o caminho para pedir (registra o interesse). */
 function conhecerProduto(id) {
   const { ui } = E, rotas = E.M.rotas;
-  const item = rotas.PRODUTOS[id];
-  if (!item) return;
+  const item0 = rotas.PRODUTOS[id];
+  if (!item0) return;
+  const item = { ...item0, nome: rotas.nomesProdutos ? rotas.nomesProdutos({ padrao: (E.produto || "") === "Órbita" })[id] || item0.nome : item0.nome };   // plano 2000d · DU-154
   if (E.api && E.api.evento) E.api.evento("conhecer_produto", { produto: id });
   const lista = rotas.beneficiosDe ? rotas.beneficiosDe(id) : [];
   const admin = rotas.podePapel(papelAtual(), "admin");
@@ -2625,6 +2857,12 @@ function ambienteComandos() {
     pode: min => rotas.podePapel(papelAtual(), min),
     empresas: E.sessao ? E.sessao.clientes.length : 0,
     instalar: !!modoInstalacao(), suporte: !!(E.marca && E.marca.suporte_wa), temCliente: !!cli,
+    // plano 2000d · DU-283: quantos produtos a empresa tem (o «Trocar de produto» só com 2+); DU-281: o modo foco; DU-239: passos dispensados
+    produtosLiberados: cli ? Object.keys(rotas.PRODUTOS).filter(id => !rotas.produtoIncluso || rotas.produtoIncluso(id, cli.modulos)).length : 0,
+    outrosProdutos: cli && rotas.nomesProdutos ? Object.keys(rotas.PRODUTOS).filter(id => id !== E.workspace && (!rotas.produtoIncluso || rotas.produtoIncluso(id, cli.modulos)))
+      .map(id => rotas.nomesProdutos({ padrao: (E.produto || "") === "Órbita" })[id]) : [],
+    modoFoco: document.documentElement.classList.contains("modo-foco"),
+    passosDispensados: !!(E.onbDispensado),
     // plano 1500c · UC-012/UC-037: «Comece aqui» só para a equipe com passo pendente; «Novidades» quando a versão nova trouxe notas
     passosEquipe: !!(cli && !rotas.podePapel(papelAtual(), "admin") && estadoComeceAqui() && !estadoComeceAqui().completo),
     novidades: novidadesDestaVersao().length > 0,
@@ -2658,9 +2896,50 @@ function falarComSuporte() {
   const wa = E.marca && E.marca.suporte_wa;
   if (!wa) return;
   const app = E.M.rotas.nomeDoApp({ produto: E.produto, workspace: E.workspace }).name;
-  const tela = E.titulo ? ` na tela «${E.titulo}»` : "";
-  const emp = E.cliente ? ` (empresa ${E.cliente.nome})` : "";
-  window.open(E.ui.linkWhatsApp(`Olá! Preciso de ajuda no ${app}${tela}${emp}.`, wa), "_blank", "noopener,noreferrer");
+  // plano 2000d · DU-285: empresa, tela, versão e aparelho já vão na mensagem (nada de dado de cliente)
+  const nav = typeof navigator !== "undefined" ? navigator : {};
+  const aparelho = `${String((nav.userAgentData && nav.userAgentData.platform) || nav.platform || "").slice(0, 30)}${typeof innerWidth === "number" ? ` · ${innerWidth} px` : ""}`.trim();
+  const texto = E.M.comandos && E.M.comandos.textoSuporte ? E.M.comandos.textoSuporte({ app, tela: E.titulo, empresa: E.cliente ? E.cliente.nome : "", versao: VERSAO, aparelho })
+    : `Olá! Preciso de ajuda no ${app}.`;
+  window.open(E.ui.linkWhatsApp(texto, wa), "_blank", "noopener,noreferrer");
+}
+/** plano 2000d · DU-281: modo foco — recolhe o menu lateral e esconde as faixas que não bloqueiam; vale nesta aba até sair. */
+function alternarModoFoco(on = !document.documentElement.classList.contains("modo-foco")) {
+  document.documentElement.classList.toggle("modo-foco", !!on);
+  try { if (on) sessionStorage.setItem("nx-modo-foco", "1"); else sessionStorage.removeItem("nx-modo-foco"); } catch { /* vale até recarregar */ }
+  if (E.ui) E.ui.anunciar(on ? "Modo foco ligado: menu lateral e avisos escondidos." : "Modo foco desligado.");
+  return !!on;
+}
+/** plano 2000d · DU-284: «Recarregar o app» com texto não enviado pergunta antes (o rascunho fica guardado, mas o formulário aberto se perde). */
+async function recarregarComCuidado(recarregar = () => location.reload()) {
+  if (ocupadoParaAtualizar()) {
+    const ok = await E.ui.confirmar({ titulo: "Recarregar agora?", rotulo: "Recarregar", icone: "alerta",
+      texto: "Há texto digitado ou um formulário mexido nesta tela. Os rascunhos de mensagem ficam guardados, mas o que não foi salvo no formulário se perde." });
+    if (!ok) return false;
+  }
+  recarregar();
+  return true;
+}
+/** plano 2000d · DU-270: as automações da empresa para a paleta (lidas uma vez por abertura, 60 s de memória). */
+function automacoesParaPaleta() {
+  const cli = E.cliente;
+  if (!cli || !E.api || !cli.modulos.includes("automacoes") || !E.M.rotas.podePapel(papelAtual(), "supervisor")) return;
+  const memo = E.autoPaleta && E.autoPaleta.cli === cli.id && Date.now() - E.autoPaleta.em < 60000;
+  if (memo) return;
+  E.autoPaleta = { cli: cli.id, em: Date.now(), lista: E.autoPaleta && E.autoPaleta.cli === cli.id ? E.autoPaleta.lista : [] };
+  Promise.resolve().then(() => (E.api.rpcC ? E.api.rpcC("nx_automacoes_listar") : E.api.rpc("nx_automacoes_listar", {})))
+    .then(r => { const l = Array.isArray(r) ? r : (r && Array.isArray(r.itens) ? r.itens : r && Array.isArray(r.automacoes) ? r.automacoes : []); if (E.autoPaleta && E.autoPaleta.cli === cli.id) E.autoPaleta.lista = l; })
+    .catch(() => { /* sem a lista: a paleta não mostra automações */ });
+}
+async function alternarAutomacaoPelaPaleta(a) {
+  if (a.ativo && !(await E.ui.confirmar({ titulo: `Desligar «${a.nome}»?`, rotulo: "Desligar", perigo: true, icone: "pausa",
+    texto: "Enquanto estiver desligada, ela não roda para ninguém. Dá para ligar de novo a qualquer momento." }))) return false;
+  try {
+    await (E.api.rpcC ? E.api.rpcC("nx_automacao_ativar", { p_id: a.id, p_ativo: !a.ativo }) : E.api.rpc("nx_automacao_ativar", { p_id: a.id, p_ativo: !a.ativo }));
+    if (E.autoPaleta) E.autoPaleta.em = 0;
+    E.ui.toast(a.ativo ? `«${a.nome}» desligada.` : `«${a.nome}» ligada.`, { tipo: "ok" });
+    return true;
+  } catch (e) { E.ui.toast(E.api.mensagemErro(e), { tipo: "erro" }); return false; }
 }
 
 /** Como o shell executa cada ação do catálogo (comandos.CATALOGO); a paleta só mostra as que valem para a pessoa. */
@@ -2685,7 +2964,10 @@ function acoesDoShell() {
     "central-ajuda": () => navegar("#/ajuda"),
     "ver-plano": () => { if (E.api && E.api.evento) E.api.evento("ver_plano", { origem: "paleta" }); navegar("#/config/plano"); },
     "tour": () => iniciarTour({ forcar: true }),
-    "recarregar": () => location.reload(),
+    "recarregar": () => recarregarComCuidado(),   // plano 2000d · DU-284
+    "bloquear-tela": () => bloquearTela(),        // plano 2000d · DU-141
+    "modo-foco": () => alternarModoFoco(),        // plano 2000d · DU-281
+    "reabrir-passos": () => { E.onbDispensado = false; if (E.api && E.api.rpc) E.api.rpc("nx_onboarding_marcar", { p_passo: "reabrir" }).catch(() => {}); navegar("#/inicio?passos=1"); },   // plano 2000d · DU-239
     "notificacoes": () => { const b = $("bt-sino"); if (b) abrirSino(b); else E.ui.toast("Escolha uma empresa para ver as notificações.", { tipo: "info" }); },
     // plano 1500c · UC-028: o Configurações e o CRM leem a query (convidar=1, assistente=novo, importar=1) — pendência das frentes config/crm;
     // até lá a pessoa chega na tela certa
@@ -2830,6 +3112,11 @@ function ambientePaleta(inicial) {
     // plano 1500c · UCC-138: «Trocar para <empresa>» pelo nome
     empresas: typeof C.empresasDaPaleta === "function" ? termo => C.empresasDaPaleta(E.sessao ? E.sessao.clientes : [], termo, { atualId: E.cliente && E.cliente.id })
       .map(e => ({ ...e, fazer: async () => { if (await podeSairDaRota()) escolherCliente(e.id); } })) : null,
+    // plano 2000d · DU-270: automações pelo nome (Abrir · Ligar/Desligar)
+    automacoes: E.autoPaleta && E.autoPaleta.cli === (E.cliente && E.cliente.id) ? termo => C.automacoesDaPaleta(E.autoPaleta.lista, termo)
+      .map(a => ({ ...a, hash: "#/automacoes", abrir: () => navegar(`#/automacoes?abrir=${encodeURIComponent(a.id)}`), alternar: () => alternarAutomacaoPelaPaleta(a) })) : null,
+    // plano 2000d · DU-275: «Limpar recentes» nesta empresa
+    limparRecentes: rec ? () => { rec.limpar(); E.ui.anunciar("Recentes apagados deste aparelho."); } : null,
     navegar, mensagemErro: E.api.mensagemErro,
     aoEscolher: it => {
       if (rec && it.hash && it.tipo) rec.registrar({ hash: it.hash, titulo: it.titulo, sub: it.sub, tipo: it.tipo });
@@ -2851,6 +3138,7 @@ async function abrirPaleta(inicial = "") {
   if (paletaAbrindo) return;
   paletaAbrindo = true;
   try {
+    automacoesParaPaleta();   // plano 2000d · DU-270: a lista chega enquanto a paleta carrega (sem esperar)
     if (!E.paleta.mod) E.paleta.mod = await arq("paleta.js");
     if (!E.ajudaMod) try { E.ajudaMod = await arq("ajuda.js"); } catch { E.ajudaMod = null; }   // plano 1500c · UC-014
     if (E.paleta.janela || !E.sessao) return;
@@ -2891,7 +3179,7 @@ async function abrirMenuAjuda(ancora) {
     artigoDaTela ? { rotulo: "Ajuda desta tela", icone: "info", fn: artigoDaTela } : null,
     a.rotaOk("inicio") && a.pode("admin") ? { rotulo: "Primeiros passos", icone: "check", fn: () => abrirPrimeirosPassos() } : null,   // plano 1500c · UC-011
     a.passosEquipe ? { rotulo: `Comece aqui (${estadoComeceAqui().feitos}/${estadoComeceAqui().total})`, icone: "check", fn: () => abrirComeceAqui() } : null,   // plano 1500c · UC-012
-    a.novidades ? { rotulo: "Novidades desta versão", icone: "info", fn: () => abrirNovidades() } : null,   // plano 1500c · UC-037
+    a.novidades ? { rotulo: novidadesPendentes() ? "Novidades desta versão (nova)" : "Novidades desta versão", icone: "info", fn: () => abrirNovidades() } : null,   // plano 1500c · UC-037 · plano 2000d · DU-286
     E.cliente ? { rotulo: "Situação dos serviços", icone: "info", fn: () => abrirSituacaoServicos() } : null,   // plano 1500c · UC-038
     { rotulo: "Atalhos de teclado", icone: "ajuda", fn: () => abrirAtalhos() },
     E.marca && E.marca.suporte_wa ? { rotulo: "Falar com o suporte", icone: "whatsapp", fn: () => falarComSuporte() } : null,
@@ -2939,15 +3227,38 @@ function estadoOnboarding() {
 function atualizarSeloPrimeirosPassos() {
   estadoOnboarding().then(est => {
     const s = est ? E.M.rotas.seloPrimeirosPassos(est) : null;
+    // plano 2000d · DU-236: o selo diz qual é o próximo passo e quanto tempo leva
+    const prox = s && E.M.rotas.proximoPasso ? E.M.rotas.proximoPasso(est) : null;
+    const rotulo = s ? `${s.rotulo}${prox && prox.titulo ? `. Próximo: ${prox.titulo}${prox.tempo ? ` (${prox.tempo})` : ""}` : ""}` : "";
     for (const a of document.querySelectorAll('.nav-b[data-id="inicio"]')) {
       let selo = a.querySelector(".nav-passos");
       if (!s) { if (selo) selo.remove(); continue; }
       if (!selo) { selo = E.ui.h("span", { class: "nav-passos" }); a.appendChild(selo); }
       selo.textContent = s.texto;
-      selo.setAttribute("title", s.rotulo);
-      selo.setAttribute("aria-label", s.rotulo);
+      selo.setAttribute("title", rotulo);
+      selo.setAttribute("aria-label", rotulo);
     }
+    conferirMarcos(est);   // plano 2000d · DU-238
   }).catch(() => { /* sem selo */ });
+}
+/** plano 2000d · DU-238: os contadores de ativação (est.contadores: ia_respostas, automacoes_execucoes, conversas_respondidas — quando o servidor
+    mandar) comemoram o 1º, o 10º e o 100º. A última contagem vista fica no aparelho: a primeira leitura só guarda (não comemora o passado). */
+function conferirMarcos(est, { ls = LS, ui = E.ui, cli = E.cliente } = {}) {
+  const cont = est && est.contadores && typeof est.contadores === "object" ? est.contadores : null;
+  if (!cont || !cli || !E.M.rotas.marcoAtingido) return [];
+  const chave = `nx-marcos:${cli.id}`;
+  const visto = ls.ler(chave);
+  const antes = visto && typeof visto === "object" ? visto : null;
+  const ditos = [];
+  for (const tipo of ["ia_respostas", "automacoes_execucoes", "conversas_respondidas"]) {
+    const n = Number(cont[tipo]);
+    if (!Number.isFinite(n)) continue;
+    const m = antes ? E.M.rotas.marcoAtingido(antes[tipo], n) : null;
+    const txt = m ? E.M.rotas.textoMarco(tipo, n) : null;
+    if (txt) { ditos.push(txt); ui.toast(txt, { tipo: "ok", icone: "estrela", ms: 9000 }); }
+  }
+  ls.gravar(chave, Object.fromEntries(["ia_respostas", "automacoes_execucoes", "conversas_respondidas"].map(t => [t, Number(cont[t]) || 0])));
+  return ditos;
 }
 /** plano 1500c · UC-011: «Primeiros passos» leva direto ao cartão (#/inicio?passos=1 — o Início rola até ele); tudo feito → «Tudo pronto». */
 async function abrirPrimeirosPassos() {
@@ -2981,7 +3292,7 @@ function estadoComeceAqui() {
 function rodandoInstalado() {
   try { return !!(E.pwaMod && E.pwaMod.emStandalone ? E.pwaMod.emStandalone() : matchMedia("(display-mode: standalone)").matches); } catch { return false; }
 }
-function abrirComeceAqui() {
+function abrirComeceAqui({ destaque = null } = {}) {
   const { ui } = E;
   const est = estadoComeceAqui();
   if (!est || !est.itens.length) return null;
@@ -2995,7 +3306,8 @@ function abrirComeceAqui() {
   const lista = ui.h("ul", { class: "passos-equipe" }, est.itens.map(it => {
     const bt = ui.h("button", { type: "button", class: "bt bt-sec bt-p", disabled: it.feito }, it.feito ? "Feito" : "Fazer agora");
     bt.addEventListener("click", () => { if (janela) janela.fechar(null); setTimeout(() => fazer[it.id] && fazer[it.id](), 0); });
-    return ui.h("li", { class: "passo-equipe", dataset: { feito: it.feito ? "1" : "0" } },
+    // plano 2000d · DU-227: o passo pedido (ex.: instalar, depois do convite) vem destacado
+    return ui.h("li", { class: "passo-equipe", dataset: { feito: it.feito ? "1" : "0", destaque: destaque === it.id && !it.feito ? "1" : null } },
       ui.icone(it.feito ? "check" : "relogio"), ui.h("span", null, it.rotulo), bt);
   }));
   ui.modal({ titulo: "Comece aqui", largura: "p", protegerTexto: false,
@@ -3032,9 +3344,15 @@ async function pedirPermissaoAvisos() {
 function novidadesDestaVersao() {
   try { return E.pwaMod && E.pwaMod.novidadesDaVersao ? E.pwaMod.novidadesDaVersao(localStorage, VERSAO).notas : []; } catch { return []; }
 }
+/** plano 2000d · DU-286: há notas desta versão que a pessoa ainda não abriu? (ponto discreto na conta e «nova» no item do menu) */
+function novidadesPendentes() {
+  try { if (!E.pwaMod || !E.pwaMod.novidadesDaVersao) return false; const n = E.pwaMod.novidadesDaVersao(localStorage, VERSAO); return n.notas.length > 0 && !n.abertas; } catch { return false; }
+}
 function abrirNovidades() {
   const notas = novidadesDestaVersao();
   if (!notas.length) { E.ui.toast("Esta versão não trouxe notas de novidade.", { tipo: "info" }); return null; }
+  try { if (E.pwaMod && E.pwaMod.marcarNovidadesAbertas) E.pwaMod.marcarNovidadesAbertas(localStorage); } catch { /* ok */ }   // plano 2000d · DU-286
+  for (const el of document.querySelectorAll("[data-novidade]")) delete el.dataset.novidade;
   return E.ui.modal({ titulo: "Novidades desta versão", largura: "p", protegerTexto: false,
     corpo: E.ui.h("ul", { class: "lista-novidades" }, notas.map(t => E.ui.h("li", null, t))), acoes: [{ rotulo: "Fechar", tipo: "primario" }] });
 }
@@ -3108,11 +3426,16 @@ function avisarFimDoTeste() {
   if (document.querySelector("dialog[open]") || ocupadoParaAtualizar()) return false;   // não abre por cima de outra janela nem de formulário mexido
   LS.gravar(chave, "1");
   const { ui } = E;
-  ui.modal({ titulo: dias === 1 ? "Seu teste acaba amanhã" : `Seu teste acaba em ${dias} dias`, largura: "p", protegerTexto: false,
-    corpo: ui.h("div", { class: "pilha-p" },
+  // plano 2000d · DU-233: 7, 3, 1 e 0 dias, com o tom mudando (lembrança → urgência) e «Ver planos» direto
+  const av = E.M.rotas.avisoFimTeste ? E.M.rotas.avisoFimTeste(dias) : { titulo: dias === 1 ? "Seu teste acaba amanhã" : `Seu teste acaba em ${dias} dias`, texto: "", tom: "aviso" };
+  ui.modal({ titulo: av.titulo, largura: "p", protegerTexto: false,
+    corpo: ui.h("div", { class: "pilha-p", dataset: { tom: av.tom } },
+      av.texto ? ui.h("p", { class: "aviso-teste-tom" }, av.texto) : null,
       ui.h("p", null, `O teste grátis da ${cli.nome} vai até ${ui.dataCurtaBR(String(cli.teste_ate).slice(0, 10))}. Depois disso, dá para consultar, mas não alterar nada, e os envios automáticos param.`),
       ui.h("p", { class: "fraco" }, "Para continuar sem interrupção, peça a assinatura agora.")),
-    acoes: [{ rotulo: "Lembrar amanhã", tipo: "neutro" }, { rotulo: "Quero continuar", tipo: "primario", fn: () => { setTimeout(() => abrirPedidoDeContratacao(cli, "aviso_teste"), 0); return true; } }] });
+    acoes: [{ rotulo: dias > 1 ? "Lembrar depois" : "Lembrar amanhã", tipo: "neutro" },
+      { rotulo: "Ver planos", tipo: "neutro", fn: () => { setTimeout(() => navegar("#/config/plano"), 0); return true; } },
+      { rotulo: "Quero continuar", tipo: "primario", fn: () => { setTimeout(() => abrirPedidoDeContratacao(cli, "aviso_teste"), 0); return true; } }] });
   return true;
 }
 
@@ -3140,12 +3463,37 @@ function mostrarBoasVindas() {
     E.marca && E.marca.demo_cliente_id && E.sessao.clientes.some(c => c.id === E.marca.demo_cliente_id)
       ? cartao("info", "Ver com dados de exemplo", "Uma empresa fictícia para explorar sem medo.", () => { if (janela) janela.fechar(null); escolherCliente(E.marca.demo_cliente_id); }) : null,
   ].filter(Boolean);
-  ui.modal({ titulo: `Bem-vindo ao ${E.produto || "Órbita"}`, largura: "m", protegerTexto: false,
-    corpo: ui.h("div", { class: "pilha-p" }, ui.h("p", { class: "sub" }, `Três coisas deixam a ${cli.nome} pronta para atender. Comece por qualquer uma.`),
-      ui.h("div", { class: "bv-grade" }, cartoes)),
+  // plano 2000d · DU-152: a revenda escreve a própria boas-vindas e o contato do gerente de conta (marca.boas_vindas / marca.contato_agencia)
+  const textosOrg = textosBoasVindasDaOrg(E.marca);
+  // plano 2000d · DU-242: uma pergunta — o objetivo principal ordena o Início e os primeiros passos (guardado por empresa neste aparelho)
+  const R = E.M.rotas;
+  const objetivo = R.OBJETIVOS ? ui.h("fieldset", { class: "bv-objetivo" }, ui.h("legend", null, "O que você quer resolver primeiro?"),
+    R.OBJETIVOS.map(o => {
+      const b = ui.h("button", { type: "button", class: "chip-op", "aria-pressed": String(LS.lerTxt(R.chaveObjetivo(cli.id)) === o.id), dataset: { objetivo: o.id } }, o.rotulo);
+      b.addEventListener("click", () => {
+        LS.gravar(R.chaveObjetivo(cli.id), o.id);
+        for (const x of b.parentNode.querySelectorAll("[data-objetivo]")) x.setAttribute("aria-pressed", String(x === b));
+        try { document.dispatchEvent(new CustomEvent("nx:objetivo", { detail: { objetivo: o.id, cliente: cli.id } })); } catch { /* ok */ }
+        if (E.api && E.api.evento) E.api.evento("objetivo", { objetivo: o.id });
+      });
+      return b;
+    })) : null;
+  ui.modal({ titulo: textosOrg.titulo || `Bem-vindo ao ${E.produto || "sistema"}`, largura: "m", protegerTexto: false,
+    corpo: ui.h("div", { class: "pilha-p" },
+      textosOrg.texto ? ui.h("p", { class: "bv-org" }, textosOrg.texto) : null,
+      ui.h("p", { class: "sub" }, `Três coisas deixam a ${cli.nome} pronta para atender. Comece por qualquer uma.`),
+      objetivo,
+      ui.h("div", { class: "bv-grade" }, cartoes),
+      textosOrg.contato ? ui.h("p", { class: "bv-contato fraco" }, ui.icone("usuario"), textosOrg.contato) : null),
     acoes: [{ rotulo: "Explorar sozinho", tipo: "neutro", fn: () => { setTimeout(() => iniciarTour({ forcar: true }), 300); return true; } }],
     aoAbrir: m => { janela = m; } });
   return true;
+}
+/** plano 2000d · DU-152: os textos da revenda para as boas-vindas (sem eles, o padrão). Texto puro, cortado; nada de HTML. */
+function textosBoasVindasDaOrg(marca) {
+  const limpo = (v, n) => String(v ?? "").replace(/[<>]/g, "").replace(/\s+/g, " ").trim().slice(0, n);
+  const m = marca || {};
+  return { titulo: limpo(m.boas_vindas_titulo, 80), texto: limpo(m.boas_vindas, 400), contato: limpo(m.contato_agencia, 160) };
 }
 
 /* ---- plano 1500c · UC-030: modo apresentação — borra nomes, fotos e telefones de clientes para mostrar a tela (só nesta aba) ---- */
@@ -3170,7 +3518,7 @@ function faixaSemWhatsapp(cli) {
   const chave = E.M.rotas.chaveSemWhatsapp(cli.id);
   if (!E.M.rotas.faltaWhatsapp({ cli, papel: papelAtual(), dispensadoEm: Number(LS.lerTxt(chave)) || 0 })) return null;
   const conectar = ui.h("a", { class: "bt bt-prim", href: "#/config/numeros?assistente=novo" }, ui.icone("whatsapp"), "Conectar o WhatsApp");
-  const depois = ui.h("button", { type: "button", class: "bt bt-fant", "aria-label": "Lembrar daqui a 7 dias" }, "Depois");
+  const depois = ui.h("button", { type: "button", class: "bt bt-fant", "aria-label": cli.status === "teste" ? "Lembrar daqui a 2 dias" : "Lembrar daqui a 7 dias" }, "Depois");   // plano 2000d · DU-244
   depois.addEventListener("click", () => { LS.gravar(chave, String(Date.now())); desenharFaixas(); });
   return ui.h("div", { class: "faixa faixa-aviso faixa-sem-whatsapp", role: "status" }, ui.icone("whatsapp"),
     ui.h("p", null, "Conecte o WhatsApp para começar a atender."), conectar, depois);
@@ -3446,7 +3794,20 @@ function mostrarBoasVindasConvite() {
   if (!bv) return;
   E.boasVindasConvite = null;
   const t = textoBoasVindas(bv, E.M.vocab ? E.M.vocab.ROTULO_PAPEL || {} : {});
-  if (t) E.ui.toast(t, { tipo: "ok", ms: 8000 });
+  // plano 2000d · DU-227: entrou por convite → o «Comece aqui» (com o passo de instalar o app) fica a um toque, sem esperar a 3ª abertura
+  if (t) E.ui.toast(t, { tipo: "ok", ms: 12000, acao: { rotulo: "Comece aqui", fn: () => abrirComeceAqui({ destaque: "instalar" }) } });
+}
+/** plano 2000d · DU-222: «Houve 5 tentativas erradas ontem às 22:10» — o servidor manda {quantas, ultima_em} no nx_entrar. */
+function textoTentativas(t, dataHora = x => String(x)) {
+  const n = Number(t && t.quantas);
+  if (!Number.isInteger(n) || n <= 0) return "";
+  return `Houve ${n} tentativa${n === 1 ? "" : "s"} errada${n === 1 ? "" : "s"} de entrar na sua conta${t.ultima_em ? `, a última em ${dataHora(t.ultima_em)}` : ""}. Se não foi você, troque a senha.`;
+}
+function avisarTentativasRecentes() {
+  const t = E.tentativasRecentes;
+  E.tentativasRecentes = null;
+  const txt = textoTentativas(t, x => { try { return E.ui.dataHoraBR ? E.ui.dataHoraBR(x) : String(x); } catch { return String(x); } });
+  if (txt) E.ui.toast(txt, { tipo: "aten", ms: 0, fixo: true, acao: { rotulo: "Ver sessões", fn: () => navegar("#/config/perfil") } });
 }
 
 function faixasDoMomento() {
@@ -3489,9 +3850,11 @@ function faixasDoMomento() {
     // plano 1500c · UC-006: diz o que para e (com marca.retencao_dias) por quanto tempo os dados ficam; UC-003: «Quero continuar» abre o pedido pronto
     const continuar = equipe ? null : ui.h("button", { type: "button", class: "bt bt-prim" }, "Quero continuar");
     if (continuar) continuar.addEventListener("click", () => abrirPedidoDeContratacao(cli, "faixa_vencido"));
+    // plano 2000d · DU-240: o próximo passo — «Ver planos» para quem pode assinar
+    const planos = !equipe && E.M.rotas.podePapel(papelAtual(), "admin") ? ui.h("a", { class: "bt bt-sec", href: "#/config/plano" }, "Ver planos") : null;
     out.push(ui.h("div", { class: "faixa faixa-bloqueio", role: "status" }, ui.icone("cadeado"),
       ui.h("p", null, E.M.rotas.textoTesteVencido({ equipe, retencaoDias: E.marca && E.marca.retencao_dias })),
-      continuar, equipe ? null : btWa(`Olá! O teste da ${cli.nome} terminou e quero continuar.`)));
+      continuar, planos, equipe ? null : btWa(`Olá! O teste da ${cli.nome} terminou e quero continuar.`)));
   } else if (faixaFimDeTeste(cli, { hoje, equipe })) {
     // plano 1500c · UCC-091: faltam 3 dias ou menos — o administrador da empresa vê a faixa com «Assinar agora» (antes, só depois de vencer)
     const d = faixaFimDeTeste(cli, { hoje, equipe });
@@ -3630,7 +3993,8 @@ function tocarSomNaoLidas() {
 }
 function lerAvisosConversas() {
   const p = LS.ler("nx-cv-avisos") || {};
-  return { som: p.som !== false, tela: p.tela === true };
+  // plano 2000d · DU-268: o horário silencioso guardado no Perfil ({de, ate}) vai junto
+  return { som: p.som !== false, tela: p.tela === true, silencio: p.silencio && typeof p.silencio === "object" ? p.silencio : null };
 }
 /* plano 1500c · UCC-120: um aviso por empresa (tag nx-cv-<empresa>) que se SUBSTITUI e volta a alertar (renotify) em vez de empilhar;
    quando o som do app já tocou, o aviso fica mudo — e aí sem renotify (o navegador recusa silent + renotify juntos).
@@ -3663,7 +4027,7 @@ function avisarNaoLidas(n, ultima = null) {
   if (ultima) E.ultimaMsgEm = ultima;   // plano 1500c · UCC-018: carimbo da última mensagem (servidor novo)
   if (!E.cliente || !E.cliente.modulos.includes("conversas") || !pronto("conversas")) return;
   const a = E.M.pulso.avisoDeNaoLidas({ antes, depois: n, emConversas: !!(E.atual && E.atual.arquivo === "conversas.js"), escondida: !!document.hidden, pref: lerAvisosConversas(),
-    ultimaAntes, ultimaDepois: ultima });
+    ultimaAntes, ultimaDepois: ultima, agora: new Date() });   // plano 2000d · DU-268
   // revisão: toda aba recebe o resultado do pulso — o som (que é do aparelho, não da aba) toca só na líder (ou na aba sozinha): um som por mensagem
   const papel = E.pulso && E.pulso.estado ? E.pulso.estado.papel : "solo";
   if (a.som && (papel === "lider" || papel === "solo")) tocarSomNaoLidas();

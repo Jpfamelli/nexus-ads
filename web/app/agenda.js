@@ -72,6 +72,7 @@ export const normServico = s => String(s || "").trim().normalize("NFD").replace(
 export function filtrarPorProfissional(consultas, filtro = "todos", eu = null) {
   const lista = Array.isArray(consultas) ? consultas : [];
   if (!filtro || filtro === "todos") return lista;
+  if (filtro === "sem") return lista.filter(c => c && (c.dono_id === null || c.dono_id === undefined || c.dono_id === ""));   // plano 1500c · GX-014
   const alvo = filtro === "eu" ? (eu ? String(eu) : null) : String(filtro);
   return alvo ? lista.filter(c => c && c.dono_id != null && String(c.dono_id) === alvo) : lista;
 }
@@ -96,7 +97,9 @@ export function textoAnuncioPeriodo({ modo = "semana", de, dias = 7, n = 0 } = {
 /** Atalhos da Agenda sem modificador («[», «]», «T»), como o «?» do app: Alt+setas são Voltar/Avançar do navegador e não podem ser tomados.
     O chamador ignora campos editáveis e diálogos. */
 export function acaoTeclaAgenda(ev) {
-  if (!ev || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return null;
+  if (!ev || ev.altKey || ev.ctrlKey || ev.metaKey) return null;
+  if (ev.key === "/") return "filtrar";      // plano 1500c · GX-018: «/» vai ao «Filtrar nesta tela» (em alguns teclados o «/» vem com Shift)
+  if (ev.shiftKey) return null;
   const k = String(ev.key).toLowerCase();
   if (k === "[") return "anterior";
   if (k === "]") return "proximo";
@@ -115,7 +118,9 @@ const _horaSP = new Intl.DateTimeFormat("pt-BR", { timeZone: FUSO, hour: "2-digi
 export function textoCarimbo(lidaEm, agora = Date.now()) {
   if (!Number.isFinite(lidaEm) || lidaEm <= 0) return "";
   const min = Math.floor((agora - lidaEm) / 60000);
-  return `Atualizada às ${_horaSP.format(new Date(lidaEm))}${min >= 5 ? ` · há ${min < 60 ? `${min} min` : `${Math.floor(min / 60)} h`}` : ""}`;
+  // plano 1500c · GX-001: «há 1 h 30 min» (90 min não vira «há 1 h») e, passado um dia, «há mais de um dia» (não «há 26 h»)
+  const ha = min < 60 ? `${min} min` : min < 24 * 60 ? `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ""}` : "mais de um dia";
+  return `Atualizada às ${_horaSP.format(new Date(lidaEm))}${min >= 5 ? ` · há ${ha}` : ""}`;
 }
 /** CA-261: o período mostrado já contém hoje? (o «Hoje» fica neutro, com aria-current). */
 export function periodoTemHoje(de, dias, hojeISO) {
@@ -238,6 +243,12 @@ export function horarioAberto(config, iso, min) {
   const faixas = faixasDoDia(config, iso);
   if (faixas === null) return null;
   return subtrair(faixas, intervalosDaConfig(config)).some(([a, b]) => min >= a && min < b);
+}
+/** Plano 1500c · GX-045: o minuto cai numa PAUSA (almoço…) dentro do expediente? → [ini, fim] da pausa (minutos), ou null. */
+export function pausaNoHorario(config, iso, min) {
+  const faixas = faixasDoDia(config, iso);
+  if (!faixas || !faixas.some(([a, b]) => min >= a && min < b)) return null;
+  return intervalosDaConfig(config).find(([a, b]) => min >= a && min < b) || null;
 }
 /** Janelas FECHADAS do dia dentro do eixo (minutos): fora do expediente, almoço e dia inteiro fechado. */
 export function janelasFechadas(config, iso, eixo) {
@@ -509,13 +520,27 @@ export function textoOcupacao(oc) {
   if (!oc) return "";
   if (oc.fechado) return "fechado";
   if (oc.pct === null) return "";
-  return `${Math.round(oc.pct * 100)}% ocupado${oc.estimada ? " (estimado)" : ""}`;
+  return `${pctTexto(oc.pct)} ocupado${oc.estimada ? " (estimado)" : ""}`;
 }
-/** Ocupação média dos dias abertos de um período (null se nenhum dia tem capacidade). */
+/** Plano 1500c · GX-002: a porcentagem honesta — uma consulta num dia enorme não é «0%» («abaixo de 1%») e 99,6% não é «100%» (ainda cabe). */
+export function pctTexto(pct) {
+  const p = Number(pct);
+  if (!Number.isFinite(p) || p <= 0) return "0%";
+  if (p < .01) return "abaixo de 1%";
+  if (p < 1) return `${Math.min(99, Math.round(p * 100))}%`;
+  return "100%";
+}
+/** Ocupação do período (null se nenhum dia tem capacidade).
+    Plano 1500c · GX-003: a soma do marcado sobre a soma da capacidade (o sábado de meio período não pesa como um dia inteiro). */
 export function ocupacaoDoPeriodo(consultas, dias, config, bloqueios = [], opcoes = {}) {
-  const abertos = (dias || []).map(d => ocupacaoDoDia(consultas, d, config, bloqueios, opcoes)).filter(o => o.pct !== null);   // plano 1500c · CC-190
+  return ocupacaoPonderada((dias || []).map(d => ocupacaoDoDia(consultas, d, config, bloqueios, opcoes)));   // plano 1500c · CC-190
+}
+/** GX-003/GX-004: [{marcados, capacidade, pct}] → marcado/capacidade dos dias abertos; null sem nenhum. */
+export function ocupacaoPonderada(dias) {
+  const abertos = (dias || []).filter(o => o && o.pct !== null && o.capacidade > 0);
   if (!abertos.length) return null;
-  return abertos.reduce((s, o) => s + o.pct, 0) / abertos.length;
+  const cap = abertos.reduce((s, o) => s + o.capacidade, 0);
+  return Math.min(1, abertos.reduce((s, o) => s + Math.min(o.marcados, o.capacidade), 0) / cap);
 }
 
 /* ---------- mês ---------- */
@@ -678,6 +703,18 @@ export function proximoDiaAberto(config, iso, { passo = 1, bloqueios = [] } = {}
 export function diaVirou(ultimoHoje, hojeAgora) { return dataAgendaValida(ultimoHoje) && dataAgendaValida(hojeAgora) && hojeAgora !== ultimoHoje; }
 /** CC-172/CC-284: quantos dias à frente a agenda abre (Configurações › Agenda, até 180); sem a configuração, 180. */
 export function limiteDiasAgenda(config) { const n = Math.floor(Number(config && config.dias_a_frente)); return n >= 1 ? Math.min(180, n) : 180; }
+/** Plano 1500c · GX-023: o instante `ms` cai dentro da antecedência mínima (config.antecedencia_horas)? Sem a configuração, nunca. */
+export function dentroDaAntecedencia(config, ms, agora = Date.now()) {
+  const hrs = Number(config && config.antecedencia_horas);
+  return Number.isFinite(hrs) && hrs > 0 && Number.isFinite(ms) && ms >= agora && ms < agora + hrs * 3600e3;
+}
+/** GX-023: «Antecedência mínima de 2 h: só dá para marcar a partir das 12:00.» (com o dia quando não é hoje). */
+export function textoAntecedencia(config, agora = Date.now()) {
+  const hrs = Number(config && config.antecedencia_horas) || 0;
+  const p = partesSP(new Date(agora + hrs * 3600e3)), hoje = (partesSP(new Date(agora)) || {}).dia;
+  if (!p) return `Antecedência mínima de ${hrs} h.`;
+  return `Antecedência mínima de ${hrs} h: só dá para marcar a partir ${p.dia === hoje ? "das" : `de ${rotuloDoDia(p.dia, hoje).toLowerCase()} às`} ${horaTxt(p.min)}.`;
+}
 /** CC-172/CC-284: «Ver mais 14 dias» ainda tem o que mostrar? (o próximo pedido começaria antes do último dia aberto) */
 export function podeVerMais({ janelaIni, janelaDias = 0, hoje, config = null } = {}) {
   if (!dataAgendaValida(janelaIni) || !dataAgendaValida(hoje)) return false;
@@ -753,13 +790,21 @@ export function assinaturaAgenda(r) {
 }
 /** CC-228: «tel:+55…» sem a crm-logica (o detalhe aberto antes de ela chegar): só dígitos, com +55 quando o número é brasileiro sem DDI. */
 export function telLocal(t) {
-  const d = String(t || "").replace(/\D/g, "");
+  const d = digitosTelefone(t);
   if (d.length < 8) return null;
   return `tel:+${d.length <= 11 ? `55${d}` : d}`;
 }
+/** Plano 1500c · GX-005: os dígitos do telefone como se disca no Brasil — «(012) 99999-0000» e «0 15 12 99999-0000» (zero e operadora
+    na frente) viram «12999990000»; antes o zero fazia o número parecer internacional («wa.me/012…», que não abre). */
+export function digitosTelefone(t) {
+  let d = String(t || "").replace(/\D/g, "");
+  if (d.startsWith("00")) return d.replace(/^0+/, "");                 // 00 + DDI: internacional
+  if (d.startsWith("0")) { d = d.replace(/^0+/, ""); if (d.length >= 12 && d.length <= 13 && !d.startsWith("55")) d = d.slice(2); }   // 0 + operadora + DDD
+  return d;
+}
 /** CC-227: o link do WhatsApp do aparelho (wa.me) com o texto pronto; sem número válido, null. */
 export function linkWhatsAppAgenda(t, texto = "") {
-  const d = String(t || "").replace(/\D/g, "");
+  const d = digitosTelefone(t);
   if (d.length < 10) return null;
   return `https://wa.me/${d.length <= 11 ? `55${d}` : d}${texto ? `?text=${encodeURIComponent(texto)}` : ""}`;
 }
@@ -773,30 +818,75 @@ export function taxaFaltas(consultas, agora = Date.now()) {
 const csvCampo = v => { const t = String(v ?? ""); return /[";\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
 /** CC-258: as consultas do período em CSV (separador «;», como o Excel em português abre): data, hora, paciente, serviço, profissional, presença, origem. */
 export function csvDaAgenda(consultas, { nomes = {}, contato = "Paciente" } = {}) {
-  const linhas = [["Data", "Hora", contato, "Serviço", "Profissional", "Presença", "Origem"]];
+  // plano 1500c · GX-006: a coluna «Fim» (quem imprime a planilha vê até quando vai cada consulta)
+  const linhas = [["Data", "Hora", "Fim", contato, "Serviço", "Profissional", "Presença", "Origem"]];
   for (const c of [...(consultas || [])].sort((a, b) => Date.parse(a.inicio) - Date.parse(b.inicio))) {
     const p = partesSP(c && c.inicio);
     if (!p) continue;
     const pres = c.presenca === "compareceu" ? "Compareceu" : c.presenca === "faltou" ? "Faltou" : c.status === "ganho" ? "Concluída" : "";
     const prof = c.dono_id ? (nomes[String(c.dono_id)] || c.dono_nome || "") : "";
     const orig = origemDo(c);
-    linhas.push([`${p.dia.slice(8, 10)}/${p.dia.slice(5, 7)}/${p.dia.slice(0, 4)}`, horaTxt(p.min), c.nome || c.titulo || "", c.servico || "", prof, pres, orig === SEM_ORIGEM ? "" : orig]);
+    const m = c.fim ? minutosDaConsulta(c, 30) : null;
+    linhas.push([`${p.dia.slice(8, 10)}/${p.dia.slice(5, 7)}/${p.dia.slice(0, 4)}`, horaTxt(p.min), m ? horaTxt(m.fim) : "", c.nome || c.titulo || "", c.servico || "", prof, pres, orig === SEM_ORIGEM ? "" : orig]);
   }
   return `${String.fromCodePoint(0xfeff)}${linhas.map(l => l.map(csvCampo).join(";")).join("\r\n")}\r\n`;
 }
 /** CC-261: a lista do dia em texto para mandar ao profissional: «Amanhã · Sex 24/10\n08:00 Maria Souza (Avaliação)…». */
-export function textoCompartilharDia(consultas, iso, hojeISO) {
+export function textoCompartilharDia(consultas, iso, hojeISO, bloqueios = []) {
   const itens = consultasDoDia(consultas, iso);
   const rot = rotuloDoDia(iso, hojeISO);
-  const cab = rot === "Hoje" || rot === "Amanhã" ? `${rot} · ${nomeDia(iso, true)}` : nomeDia(iso, true);
-  if (!itens.length) return `${cab}: sem consultas.`;
-  return [cab, ...itens.map(c => { const p = partesSP(c.inicio); return `${p ? horaTxt(p.min) : ""} ${c.nome || c.titulo || "Consulta"}${c.servico ? ` (${c.servico})` : ""}`; })].join("\n");
+  const cab = rot === "Hoje" || rot === "Amanhã" || rot === "Ontem" ? `${rot} · ${nomeDia(iso, true)}` : nomeDia(iso, true);
+  // plano 1500c · GX-008: os bloqueios do dia vão junto («Bloqueado das 12:00 às 13:00: almoço») — quem recebe sabe que o buraco é de propósito
+  const travas = bloqueiosDoDia(bloqueios, iso).map(b => textoBloqueioNoDia(b, iso));
+  if (!itens.length) return [`${cab}: sem consultas.`, ...travas].join("\n");
+  // GX-009: a presença já marcada vai na linha («— faltou», «— compareceu», «— concluída»): o dia que passou se lê sem abrir a agenda
+  const marca = c => (c.presenca === "faltou" || c.marco === "faltou" ? " — faltou" : c.presenca === "compareceu" ? " — compareceu" : c.status === "ganho" ? " — concluída" : "");
+  return [cab, ...itens.map(c => { const p = partesSP(c.inicio); return `${p ? horaTxt(p.min) : ""} ${c.nome || c.titulo || "Consulta"}${c.servico ? ` (${c.servico})` : ""}${marca(c)}`; }), ...travas].join("\n");
 }
 /** CC-294: «Última: 12/09 (compareceu)» — a consulta que já passou e a presença registrada; "" sem nada. */
 export function textoUltimaConsulta(em, presenca = null) {
   const p = em ? partesSP(em) : null;
   if (!p) return "";
   return `Última: ${p.dia.slice(8, 10)}/${p.dia.slice(5, 7)}${presenca === "compareceu" ? " (compareceu)" : presenca === "faltou" ? " (faltou)" : ""}`;
+}
+
+/** Plano 1500c · GX-010: a consulta já começou e ainda não terminou (nem foi concluída nem é falta)? */
+export function consultaEmAndamento(c, agora = Date.now(), duracaoPadrao = 30) {
+  if (!c || c.status === "ganho" || c.presenca === "faltou" || c.marco === "faltou") return false;
+  const t0 = Date.parse(c.inicio);
+  if (!Number.isFinite(t0) || t0 > agora) return false;
+  let t1 = Date.parse(c.fim);
+  if (!Number.isFinite(t1) || t1 <= t0) t1 = t0 + Math.max(5, Number(duracaoPadrao) || 30) * 60000;
+  return agora < t1;
+}
+/** Plano 1500c · GX-011/GX-012: a linha «quando» do detalhe — «Hoje · 10:00–10:45 · 45 min» (Amanhã/Ontem pelo nome; os outros dias, «Sex 24/10»). */
+export function quandoDoDetalhe(c, hojeISO, duracaoPadrao = 30) {
+  const p = partesSP(c && c.inicio);
+  if (!p) return "";
+  const m = minutosDaConsulta(c, Number(duracaoPadrao) || 30);
+  const dia = dataAgendaValida(hojeISO) ? rotuloDoDia(p.dia, hojeISO) : p.dia;
+  const dur = m ? m.fim - m.ini : null;
+  return [dia, `${horaTxt(p.min)}${m && c.fim ? `–${horaTxt(m.fim)}` : ""}`, dur ? `${dur} min` : null].filter(Boolean).join(" · ");
+}
+
+/** Plano 1500c · GX-017: a chave do «Filtrar nesta tela» — nome e serviço sem acento/caixa e os dígitos do telefone (acha pelo final do número). */
+export function chaveFiltroConsulta(c) {
+  if (!c) return "";
+  const tel = digitosTelefone(c.telefone);
+  return `${normServico(`${c.nome || c.titulo || "Consulta sem nome"} ${c.servico || ""}`)}${tel ? ` ${tel}` : ""}`;
+}
+/** GX-017: o texto digitado casa com a chave? Só dígitos e sinais de telefone («9999-4321») comparam os dígitos; o resto, o texto normalizado. */
+export function casaFiltroNome(chave, q) {
+  const t = String(q || "").trim();
+  if (!t) return true;
+  if (/^[\d\s()+.-]+$/.test(t)) { const d = t.replace(/\D/g, ""); return !d || String(chave || "").includes(d); }
+  return String(chave || "").includes(normServico(t));
+}
+/** GX-016: «2 de 14 consultas» / «Nenhuma consulta com «x»» — o retorno do filtro, para os olhos e para o leitor de tela. */
+export function textoContaFiltro(n, total, q) {
+  if (!String(q || "").trim()) return "";
+  if (!n) return `Nenhuma consulta com «${String(q).trim().slice(0, 40)}» nesta tela.`;
+  return `${n} de ${total} ${total === 1 ? "consulta" : "consultas"}`;
 }
 
 /* ---------- peças de tela (recebem o `h` do ui: dá para montar sem navegador) ---------- */
@@ -843,13 +933,13 @@ export function montarMiniCalendario({ h, mes, consultas = [], bloqueios = [], c
   const porDia = consultasPorDia(consultas);           // CA-218: uma passada; cada célula olha só as do próprio dia
   const doDia = iso => porDia.get(iso) || [];
   const total = dentro.reduce((s, d) => s + doDia(d).length, 0);
-  const ocDentro = dentro.map(d => ocupacaoDoDia(doDia(d), d, config, bloqueios, ocupacao)).filter(o => o.pct !== null);
-  const media = ocDentro.length ? ocDentro.reduce((s, o) => s + o.pct, 0) / ocDentro.length : null;
+  // plano 1500c · GX-004: a ocupação do mês pesa cada dia pela capacidade (o sábado de 4 h não vale um dia de 10 h)
+  const media = ocupacaoPonderada(dentro.map(d => ocupacaoDoDia(doDia(d), d, config, bloqueios, ocupacao)));
   const el = h("section", { class: ["ag-mes", compacto && "ag-mes-compacto", comSemanas && "ag-mes-com-semanas"], "aria-label": `Mês de ${nomeDoMes(mes)}`, "aria-busy": carregando ? "true" : null });
   el.appendChild(h("header", { class: "ag-mes-cab" },
     h("button", { type: "button", class: "bt-icone ag-mes-nav", "aria-label": "Mês anterior", on: { click: () => aoMudarMes && aoMudarMes(-1) } }, h("span", { "aria-hidden": "true" }, "‹")),
     h("div", { class: "ag-mes-tit" }, h("h2", { class: "ag-mes-nome" }, nomeDoMes(mes)),
-      h("p", { class: "ag-mes-resumo" },   /* plano 1000b · CB-176: sem role=status (um status novo a cada desenho); o anúncio do período (CA-161) já diz */ carregando ? "Carregando…" : `${num(total)} ${total === 1 ? "consulta" : "consultas"}${media === null ? "" : ` · ocupação média ${media > 0 && media < .005 ? "abaixo de 1%" : `${Math.round(media * 100)}%`}`}`)),
+      h("p", { class: "ag-mes-resumo" },   /* plano 1000b · CB-176: sem role=status (um status novo a cada desenho); o anúncio do período (CA-161) já diz */ carregando ? "Carregando…" : `${num(total)} ${total === 1 ? "consulta" : "consultas"}${media === null ? "" : ` · ocupação média ${pctTexto(media)}`}`)),
     h("button", { type: "button", class: "bt-icone ag-mes-nav", "aria-label": "Próximo mês", on: { click: () => aoMudarMes && aoMudarMes(1) } }, h("span", { "aria-hidden": "true" }, "›"))));
   el.appendChild(h("div", { class: "ag-mes-sem", "aria-hidden": "true" }, comSemanas ? h("span", { class: "ag-mes-sem-n" }, "sem") : null, ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"].map(d => h("span", null, d))));
   const grade = h("div", { class: "ag-mes-grade", role: "group", "aria-label": `Dias de ${nomeDoMes(mes).toLowerCase()}` });
@@ -907,7 +997,7 @@ export function pendentesDePresenca(consultas, iso, L, agora = Date.now()) {
 }
 
 export function montarPainelDia({ h, iso, consultas = [], config = null, hoje, aoAbrir, aoMarcar, horaBR = x => x, num = String, pode = false, titulo = null, presenca = null, vazio = null,
-  telBR = String, imprimir = null, contatos = null, desmarcadas = null, compartilhar = null } = {}) {   // plano 1500c · CC-225/CC-226: contatos = {hrefTel, aoConversar, aoLembrar, lembrado}
+  telBR = String, imprimir = null, contatos = null, desmarcadas = null, compartilhar = null, rotuloCompartilhar = "Compartilhar" } = {}) {   // plano 1500c · CC-225/CC-226: contatos = {hrefTel, aoConversar, aoLembrar, lembrado}
   const r = resumoDoDia(consultas, iso, config);
   const futuro = !!hoje && iso > hoje;
   const el = h("aside", { class: "ag-painel", "aria-label": "Resumo do dia" });
@@ -917,7 +1007,7 @@ export function montarPainelDia({ h, iso, consultas = [], config = null, hoje, a
   el.appendChild(h("header", { class: "ag-painel-cab" }, h("h2", { class: "ag-painel-titulo" }, titulo || (iso === hoje ? "Hoje" : nomeDia(iso, true))),
     h("p", { class: "ag-painel-sub" }, subDia),
     typeof imprimir === "function" && r.itens.length ? h("button", { type: "button", class: "bt bt-fant bt-p ag-painel-imprimir", on: { click: () => imprimir(iso) } }, "Imprimir dia") : null,
-    typeof compartilhar === "function" && r.itens.length ? h("button", { type: "button", class: "bt bt-fant bt-p ag-painel-compartilhar", on: { click: () => compartilhar(iso) } }, "Compartilhar") : null));   // plano 1500c · CC-261
+    typeof compartilhar === "function" && r.itens.length ? h("button", { type: "button", class: "bt bt-fant bt-p ag-painel-compartilhar", on: { click: () => compartilhar(iso) } }, rotuloCompartilhar) : null));   // plano 1500c · CC-261
   // plano 1500c · CC-270: as desmarcadas do dia (quando o servidor mandar), recolhidas — quem chega à tarde sabe que a das 10h caiu
   if (Array.isArray(desmarcadas) && desmarcadas.length) {
     el.appendChild(h("details", { class: "ag-desmarcadas" }, h("summary", null, `${num(desmarcadas.length)} ${desmarcadas.length === 1 ? "desmarcada" : "desmarcadas"} neste dia`),
@@ -935,7 +1025,7 @@ export function montarPainelDia({ h, iso, consultas = [], config = null, hoje, a
   if (pendentes.length >= 2) el.appendChild(h("button", { type: "button", class: "bt bt-sec bt-p ag-pres-lote", on: { click: ev => presenca.aoLote(pendentes, ev.currentTarget || ev.target) } },
     presenca.icone ? presenca.icone("check") : null, `Marcar as ${num(pendentes.length)} que faltam como Compareceu`));
   if (!r.itens.length) {
-    const acao = pode && aoMarcar ? { rotulo: "Marcar consulta", icone: "mais", fn: () => aoMarcar(iso) } : null;
+    const acao = pode && aoMarcar && !(hoje && iso < hoje) ? { rotulo: "Marcar consulta", icone: "mais", fn: () => aoMarcar(iso) } : null;   // plano 1500c · GX-038: dia que passou não oferece marcar
     let v = null;
     if (typeof vazio === "function") try { v = vazio({ tema: "agenda", titulo: "Nenhuma consulta neste dia.", acao }); } catch { v = null; }
     el.appendChild(v ? h("div", { class: "ag-painel-vazio ag-painel-vazio-tema" }, v)
@@ -968,8 +1058,10 @@ function itemDoPainel({ h, it, presenca = null, pode = false, aoAbrir = null, ho
     c.confirmada_em && !it.feita ? ["Confirmada", "pilula-ok"] : null, c.marcado_por === "ia" ? ["Marcada pela IA", "pilula-info"] : null].filter(Boolean);
   const bt = h("button", { type: "button", class: ["ag-painel-item", it.feita && "feita"], "aria-haspopup": "dialog", on: { click: () => aoAbrir && aoAbrir(c, bt) } },
     h("span", { class: "ag-painel-hora dado" }, horaBR(c.inicio)),
-    h("span", { class: "ag-painel-txt" }, h("b", null, nome), c.servico ? h("small", null, c.servico) : null,
-      c.telefone ? h("small", { class: "ag-so-impressao dado" }, telBR(c.telefone)) : null),
+    // plano 1500c · GX-041: até quando vai (na lista do dia e na impressão ninguém via o fim)
+    c.fim && horaBR(c.fim) ? h("span", { class: "ag-painel-fim dado" }, `até ${horaBR(c.fim)}`) : null,
+    h("span", { class: "ag-painel-txt" }, h("b", { class: "dado-pessoal" }, nome), c.servico ? h("small", null, c.servico) : null,   // plano 1500c · UC-030: nome e telefone borrados no modo apresentação
+      c.telefone ? h("small", { class: "ag-so-impressao dado dado-pessoal" }, telBR(c.telefone)) : null),
     selos.length ? h("span", { class: "ag-painel-selos" }, selos.map(([t, cls]) => h("span", { class: ["pilula", cls] }, t))) : null);
   // plano 1500c · CC-225: ligar e abrir a conversa direto da linha (44 px, celular); CC-226: «Lembrar» nas consultas de amanhã, com a marca «lembrado»
   let rapidas = null;
@@ -987,12 +1079,12 @@ function itemDoPainel({ h, it, presenca = null, pode = false, aoAbrir = null, ho
     ].filter(Boolean);
     if (bts.length) rapidas = h("span", { class: "ag-li-rapidas" }, bts);
   }
-  return h("li", { class: ["ag-painel-li", grupo && "com-presenca", rapidas && "com-rapidas"], dataset: { negocio: c.negocio_id ?? null, nome: normServico(`${nome} ${c.servico || ""}`) } }, bt, rapidas, grupo);
+  return h("li", { class: ["ag-painel-li", grupo && "com-presenca", rapidas && "com-rapidas"], dataset: { negocio: c.negocio_id ?? null, nome: chaveFiltroConsulta(c) } }, bt, rapidas, grupo);   // plano 1500c · GX-017: com os dígitos do telefone
 }
 /** CA-269: a visão «Lista» — os dias do período em ordem, cada um com as consultas (hora, paciente, serviço, selos, presença) ou «Livre».
     Para o celular, onde a grade de horas mostra uma consulta num mar vazio. */
 export function montarListaDias({ h, dias = [], consultas = [], config = null, hoje = "", presenca = null, pode = false, aoAbrir = null, aoMarcar = null,
-  horaBR = x => x, telBR = String, num = String, uid = "l", bloqueios = [], contatos = null } = {}) {
+  horaBR = x => x, telBR = String, num = String, uid = "l", bloqueios = [], contatos = null, agora = Date.now() } = {}) {   // plano 1500c · GX-028: agora
   const el = h("div", { class: "ag-lista" });
   for (const iso of dias) {
     const r = resumoDoDia(consultas, iso, config);
@@ -1007,12 +1099,22 @@ export function montarListaDias({ h, dias = [], consultas = [], config = null, h
     const selo = r.total ? `${num(r.total)} ${r.total === 1 ? "consulta" : "consultas"}` : passado ? "sem consultas" : todoBloq ? "bloqueado" : fechado ? "fechado" : "livre";
     const sec = h("section", { class: ["ag-lista-dia", iso === hoje && "hoje", passado && "passado", (todoBloq || fechado) && !r.total && "ag-lista-fechado"], "aria-labelledby": id, dataset: { iso } },
       h("h3", { class: "ag-lista-tit", id }, h("span", null, titulo),
-        h("small", { class: "dado" }, selo)));
+        h("small", { class: "dado" }, selo),
+        // plano 1500c · GX-055: a ocupação do dia também na Lista («62% ocupado») — a grade mostrava, a Lista não
+        r.total && !passado && textoOcupacao(ocupacaoDoDia(consultas, iso, config, bloqueios)) ? h("span", { class: "ag-lista-ocup dado" }, textoOcupacao(ocupacaoDoDia(consultas, iso, config, bloqueios))) : null));
     if (travas.length) sec.appendChild(h("p", { class: "ag-lista-bloq" }, travas.map(b => textoBloqueioNoDia(b, iso)).join(" · ")));
     if (r.itens.length) {
       const ol = h("ol", { class: "ag-painel-lista" });
-      for (const it of r.itens) ol.appendChild(itemDoPainel({ h, it, presenca, pode, aoAbrir, horaBR, telBR, contatos }));
+      // plano 1500c · GX-028: no dia de hoje, a linha «Agora» separa o que já passou do que vem (quem atende acha o próximo de relance)
+      const iAgora = iso === hoje ? r.itens.findIndex(it => Date.parse(it.c.inicio) > agora) : -1;
+      r.itens.forEach((it, i) => {
+        if (i === iAgora && i > 0) ol.appendChild(h("li", { class: "ag-lista-agora", role: "separator", "aria-label": `Agora, ${horaTxt((partesSP(new Date(agora)) || { min: 0 }).min)}` }, h("span", { "aria-hidden": "true" }, "Agora")));
+        ol.appendChild(itemDoPainel({ h, it, presenca, pode, aoAbrir, horaBR, telBR, contatos }));
+      });
       sec.appendChild(ol);
+      // plano 1500c · GX-027: o dia que já tem consultas também marca mais uma dali (antes só o dia vazio tinha «Livre · Marcar»)
+      if (!passado && !todoBloq && !fechado && pode && typeof aoMarcar === "function")
+        sec.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p ag-lista-marcar", "aria-label": `Marcar consulta em ${nomeDia(iso, true)}`, on: { click: () => aoMarcar(iso) } }, "+ Marcar neste dia"));
     } else if (todoBloq || passado) {
       /* o motivo do bloqueio já está escrito; dia passado não marca */
     } else if (fechado) {
@@ -1232,6 +1334,7 @@ export function agruparLivres(horarios) {
 export function rotuloDoDia(iso, hojeISO) {
   if (iso === hojeISO) return "Hoje";
   if (iso === diaISO(hojeISO, 1)) return "Amanhã";
+  if (iso === diaISO(hojeISO, -1)) return "Ontem";     // plano 1500c · GX-007: «De ontem 10:00 → Hoje 15:00» (antes «Qua 14/10»)
   const sem = semanaCurta(iso);
   return `${sem.charAt(0).toUpperCase()}${sem.slice(1)} ${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 }
@@ -1305,9 +1408,16 @@ export function avisoVoltaEncaixe(r) {
     : "A consulta voltou como encaixe: o horário não aceitava mais marcação normal (antecedência ou horário de atendimento).";
 }
 
+/** Plano 1500c · GX-031/GX-032: o que vai para a busca — telefone com máscara (só dígitos e sinais, 4+ dígitos) vira só os dígitos; nome fica. */
+export function termoBusca(q) {
+  const t = String(q || "").trim();
+  return /^[\d\s()+.-]+$/.test(t) && t.replace(/\D/g, "").length >= 4 ? digitosTelefone(t) : t;
+}
 /** Oportunidades ABERTAS que casam com a busca (uma chamada: nx_buscar). Servidor sem a busca → cai no quadro do funil (mais lento). */
 async function procurarNegocios(ctx, q) {
   const { api } = ctx;
+  // plano 1500c · GX-031: telefone digitado com máscara («(12) 99999-0000») vai como dígitos — o cadastro guarda só os números
+  q = termoBusca(q);
   const r = await api.rpcC("nx_buscar", { p_q: q });
   // plano 1000b · CB-170: até 30 (a janela mostra 8 e «Ver mais»; homônimos não ficam de fora)
   // plano 1500c · CC-198: e até 10 já GANHOS (tratamento fechado) para «Marcar retorno» — quem chama separa pelo status
@@ -1436,6 +1546,9 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   const chipsServ = h("div", { class: "ag-serv-chips", role: "group", "aria-label": "Serviços cadastrados" });
   const outraData = ui.campo({ rotulo: "Ver a partir de", nome: "data", tipo: "data", valor: aPartirInicial });
   outraData.querySelector("input").setAttribute("min", hoje);   // plano 1000b · CB-169: o seletor não oferece dia passado
+  // plano 1500c · GX-033: nem dia além do limite de dias à frente (Configurações › Agenda) — o calendário já não oferece o que o servidor recusa
+  const ajustarMaxData = () => { if (cfgAgenda && Number(cfgAgenda.dias_a_frente) >= 1) outraData.querySelector("input").setAttribute("max", diaISO(hoje, limiteDiasAgenda(cfgAgenda))); };
+  ajustarMaxData();
   // plano 1500c · CC-202: retorno em 1 semana, 15 ou 30 dias sem contar no calendário
   const retornos = h("div", { class: "ag-retornos", role: "group", "aria-label": "Retorno em" },
     [[7, "Em 1 semana"], [15, "15 dias"], [30, "30 dias"]].map(([n, rot]) => h("button", { type: "button", class: "bt bt-fant bt-p ag-retorno", dataset: { dias: String(n) },
@@ -1495,7 +1608,7 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   pintarServicos();
   if (!cfgAgenda) {
     Promise.resolve(api.rpcC("nx_agenda_dia", { p_data: hoje, p_dias: 1 }, { cache: true }))
-      .then(r => { if (r && r.config && typeof r.config === "object") { cfgAgenda = r.config; pintarServicos(); } }).catch(() => { /* sem a configuração: sem sugestões */ });
+      .then(r => { if (r && r.config && typeof r.config === "object") { cfgAgenda = r.config; pintarServicos(); ajustarMaxData(); } }).catch(() => { /* sem a configuração: sem sugestões */ });
   }
   servInput.addEventListener("input", avisarServico);
 
@@ -1534,7 +1647,9 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
     encaixeChk.checked = lotado; encaixeEl.hidden = !lotado;
     desenharAtalhos(); desenharDias(); desenharHoras();
     // plano 1500c · CC-049: «horário de Brasília», o mesmo nome dos Departamentos (cv-config)
-    info.textContent = slot ? `${rotuloDoDia(slot.dia, hoje)}, ${ui.horaBR(slot.inicio)} · duração prevista ${ui.num(duracao)} min · horário de Brasília${lotado ? " · encaixe" : ""}` : "";
+    // plano 1500c · GX-051: «das 10:00 às 10:45» — o fim já calculado (cabe antes do almoço? da reunião?)
+    const ate = slot && Number(duracao) > 0 ? ` às ${horaTxt(Math.min(24 * 60 - 1, slot.min + Number(duracao)))}` : "";
+    info.textContent = slot ? `${rotuloDoDia(slot.dia, hoje)}, ${ate ? "das " : ""}${ui.horaBR(slot.inicio)}${ate} · duração prevista ${ui.num(duracao)} min · horário de Brasília${lotado ? " · encaixe" : ""}` : "";
     atualizarConfirmar();
   }
   function desenharAtalhos() {
@@ -1785,15 +1900,17 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
       // plano 1500c · CC-198: «Já atendidos» (negócio ganho) com «Marcar retorno»: cria a oportunidade nova já com o contato e a escolhe
       if (ganhos.length) {
         maisRes.appendChild(h("div", { class: "ag-ja-atendidos" }, h("p", { class: "ag-ja-atendidos-tit" }, "Já atendidos"),
-          ganhos.slice(0, 5).map(g => h("div", { class: "ag-ja-atendido" }, h("span", null, h("b", null, g.contato_nome || g.titulo || P.contato), g.titulo && g.titulo !== g.contato_nome ? h("small", null, ` · ${g.titulo}`) : null),
+          ganhos.slice(0, 5).map(g => h("div", { class: "ag-ja-atendido" }, h("span", null, h("b", { class: "dado-pessoal" }, g.contato_nome || g.titulo || P.contato), g.titulo && g.titulo !== g.contato_nome ? h("small", null, ` · ${g.titulo}`) : null),
             h("button", { type: "button", class: "bt bt-sec bt-p ag-retorno-bt", on: { click: () => marcarRetorno(g) } }, "Marcar retorno")))));
       }
       if (!itens.length) { resultados.appendChild(h("p", { class: "campo-ajuda" }, btNovo ? `${P.nenhuma} ${P.neg} ${P.aberta} com esse nome. Toque em «${P.novoContato}» para cadastrar.` : `${P.nenhuma} ${P.neg} ${P.aberta} com esse nome. Crie ou atualize pelo CRM.`)); return; }
       // plano 1500c · CC-197: o final do telefone separa homônimos («Maria Silva · final 4321»), quando a busca trouxer o número
       const finalTel = item => { const d = String(item.telefone || item.contato_telefone || "").replace(/\D/g, ""); return d.length >= 4 ? `final ${d.slice(-4)}` : null; };
       const opcao = (item, i) => h("button", { type: "button", class: "agenda-resultado", role: "option", id: `ag-res-${uid}-${i}`, tabindex: "-1", "aria-selected": "false", on: { click: () => escolher(item) } },
-        h("b", null, item.titulo || item.contato_nome || "Negócio"),
-        h("small", null, [item.contato_nome && item.contato_nome !== item.titulo ? item.contato_nome : null, finalTel(item), item.estagio_nome].filter(Boolean).join(" · ")));
+        h("b", { class: "dado-pessoal" }, item.titulo || item.contato_nome || "Negócio"),   // plano 1500c · UC-030
+        // plano 1500c · GX-052: quem já tem consulta marcada aparece com ela («consulta sexta às 10:00») quando a busca trouxer consulta_em
+        h("small", null, [item.contato_nome && item.contato_nome !== item.titulo ? item.contato_nome : null, finalTel(item), item.estagio_nome,
+          item.consulta_em && Date.parse(item.consulta_em) > Date.now() ? `consulta ${rotuloProximaFora({ inicio: item.consulta_em }, Date.now(), hoje)}` : null].filter(Boolean).join(" · ")));
       // plano 1000b · CB-170: 8 à vista e «Ver mais» com o resto (as setas andam só nas que aparecem: achados = o que está na lista)
       achados = itens.slice(0, 8);
       achados.forEach((item, i) => resultados.appendChild(opcao(item, i)));
@@ -1832,7 +1949,8 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
 
   /* ---------- a janela ---------- */
   pintarEscolhido();
-  const titulo = soEscolher ? "Escolher horário da consulta" : encaixeAgora ? "Encaixar agora" : sel && sel.consultaAtual ? "Remarcar consulta" : "Marcar consulta";
+  // plano 1500c · GX-026: «Remarcar» só quando a consulta atual ainda vai acontecer (a que já passou é um retorno: «Marcar»)
+  const titulo = soEscolher ? "Escolher horário da consulta" : encaixeAgora ? "Encaixar agora" : sel && sel.consultaAtual && Date.parse(sel.consultaAtual) > Date.now() ? "Remarcar consulta" : "Marcar consulta";
   const modal = ui.modal({
     titulo, corpo: formulario, largura: "m",
     descricao: soEscolher ? `Escolha o dia e o horário. A consulta é gravada junto com ${P.a} ${P.neg}.` : "Escolha o dia e o horário. A disponibilidade é validada de novo ao salvar.",
@@ -1925,6 +2043,8 @@ export function rotuloAvisar(tipo, vocab = null) {
   const art = vocab && typeof vocab.art === "function" ? vocab.art("contato") : "o";
   return `Escrever aviso ${art === "a" ? "à" : "ao"} ${quem}`;
 }
+/** Plano 1500c · GX-056: os motivos de bloqueio mais comuns (chips na janela «Bloquear horário»). */
+export const MOTIVOS_BLOQUEIO = Object.freeze(["Almoço", "Reunião", "Folga", "Manutenção", "Feriado"]);
 /** CA-177: motivos padronizados de desmarcação (viram o começo do p_motivo; o detalhe livre continua opcional). */
 export const MOTIVOS_DESMARCAR = Object.freeze(["Paciente cancelou", "Vai remarcar", "Erro de marcação", "Clínica cancelou"]);
 /** Plano 1500c · CC-322: o chip que diz «não quero dizer o motivo» (vale como escolha; não vai para o p_motivo). */
@@ -1971,7 +2091,8 @@ export async function desmarcarConsulta(ctx, c, { aoMudar = null, avisar = null,
   const r = await ui.modal({
     titulo: "Desmarcar consulta", largura: "p",
     aoAbrir: avisoPassou ? a => { fecharDesmarcar = a && typeof a.fechar === "function" ? v => a.fechar(v) : null; } : undefined,
-    corpo: h("div", { class: "pilha" }, h("p", null, `${c.nome || c.titulo || "Esta consulta"} · ${ui.dataHoraBR(c.inicio)}`), avisoPassou,
+    // plano 1500c · GX-053: o serviço também (duas consultas da mesma pessoa no mesmo dia se distinguem)
+    corpo: h("div", { class: "pilha" }, h("p", { class: "ag-desmarcar-quem" }, `${c.nome || c.titulo || "Esta consulta"}${c.servico ? ` · ${c.servico}` : ""} · ${ui.dataHoraBR(c.inicio)}`), avisoPassou,
       h("div", { class: "pilha-p" }, h("p", { class: "ag-motivos-rot" }, "Motivo"), chips), detalhe),
     acoes: [
       { rotulo: "Voltar", tipo: "neutro", valor: false },
@@ -1990,7 +2111,8 @@ export async function desmarcarConsulta(ctx, c, { aoMudar = null, avisar = null,
   if (!(r && r.ok)) return null;
   if (aoMudar) try { aoMudar(r); } catch (e) { console.error(e); }
   ui.acaoComDesfazer({
-    texto: `Consulta de ${ui.dataHoraBR(c.inicio)} desmarcada`,
+    // plano 1500c · GX-030: o aviso diz DE QUEM era (com dois «Desfazer» na tela, a pessoa sabe qual é qual)
+    texto: `${c.nome || c.titulo ? `${c.nome || c.titulo} · consulta` : "Consulta"} de ${ui.dataHoraBR(c.inicio)} desmarcada`,
     acao: typeof avisar === "function" && c.contato_id != null ? { rotulo: rotuloAvisar("desmarcacao", ctx.vocab), fn: () => avisar(c, "desmarcacao") } : undefined,   // plano 1000b · CB-123
     reverter: async () => {
       // a consulta estava numa etapa que não é «Agendada» (e por isso o cartão não saiu dela ao desmarcar)? marcar de volta o levaria para «Agendada»:
@@ -2036,6 +2158,11 @@ export async function montar(ctx) {
   catch { preferencias = normalizarPreferenciasAgenda({}, hojeInicial); }
   let data = preferencias.data || hojeInicial;
   let modo = preferencias.modo;
+  // plano 1500c · RC-198/RC-203/RC-341: #/agenda?dia=AAAA-MM-DD&hora=HH:MM (as barras e os «+N depois» do Início) abre NESSE dia e rola até a hora;
+  // no Mês do computador, abre o Dia (o pedido é um dia)
+  const pedidoRota = (ctx.rota && ctx.rota.query) || {};
+  const horaPedida = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(pedidoRota.hora || "")) ? String(pedidoRota.hora) : null;
+  if (dataAgendaValida(pedidoRota.dia)) { data = pedidoRota.dia; if (modo === "mes" && !mq.matches) modo = "dia"; }
   let agrupar = preferencias.agrupar;      // dia com 2+ responsáveis: uma coluna por pessoa
   let corPor = preferencias.cor;           // cor dos blocos: por serviço ou por profissional (item 39)
   let extras = normalizarExtrasAgenda({});
@@ -2056,6 +2183,7 @@ export async function montar(ctx) {
   let ultimoHojeTela = hojeInicial;        // plano 1500c · CC-168: o «hoje» do último desenho (a virada do dia relê)
   let assinaturaAtual = "";                // plano 1500c · CC-248: a assinatura barata do que está na tela
   let filtroNome = "";                     // plano 1500c · CC-266: «Filtrar nesta tela»
+  let visiveisAtuais = [];                 // plano 1500c · GX-016: as consultas que a tela mostra (a conta do filtro)
   let semConfirmar = false;                // plano 1500c · CC-240: o servidor ainda não tem nx_agenda_confirmar
   let redesenhoPendente = false;           // plano 1500c · CC-249: o tique com a aba escondida deixa o redesenho para a volta
   /* plano 1500c · CC-226: «lembrado» fica marcado neste aparelho até o dia seguinte (sem conteúdo da consulta: só negocio|inicio) */
@@ -2130,7 +2258,7 @@ export async function montar(ctx) {
   function criarControles() {
     ctl.anterior = h("button", { type: "button", class: "bt-icone agenda-anterior", "aria-keyshortcuts": "[", on: { click: () => mover(-1) } }, ui.icone("seta-esq"));
     ctl.proximo = h("button", { type: "button", class: "bt-icone agenda-proximo", "aria-keyshortcuts": "]", on: { click: () => mover(1) } }, ui.icone("seta-dir"));
-    ctl.hoje = h("button", { type: "button", class: "bt bt-sec bt-p agenda-hoje", "aria-keyshortcuts": "T", on: { click: () => { data = ui.hojeSP(); gravarPreferencias(); carregar(); } } }, "Hoje");
+    ctl.hoje = h("button", { type: "button", class: "bt bt-sec bt-p agenda-hoje", "aria-keyshortcuts": "T", on: { click: () => irParaHoje() } }, "Hoje");
     ctl.seletor = h("input", { class: "agenda-data", type: "date", value: data, "aria-label": "Escolher data" });
     ctl.seletor.addEventListener("change", () => { if (dataAgendaValida(ctl.seletor.value)) { data = ctl.seletor.value; gravarPreferencias(); carregar(); } });
     const periodo = h("div", { class: "agenda-periodo" }, ctl.anterior, ctl.seletor, ctl.proximo, ctl.hoje);
@@ -2217,6 +2345,17 @@ export async function montar(ctx) {
     if (ctl.estado.textContent !== mensagemAtualizacao) ctl.estado.textContent = mensagemAtualizacao;
   }
 
+  /** Plano 1500c · GX-047: «Hoje» (botão ou T) já vendo hoje não fica mudo — diz que já está em hoje e leva a vista até agora. */
+  function irParaHoje() {
+    const hojeAgora = ui.hojeSP(), iv = intervalo();
+    const ja = !!atual && (movel && modo !== "lista" ? data === hojeAgora : periodoTemHoje(iv.de, iv.dias, hojeAgora));
+    data = hojeAgora; gravarPreferencias();
+    if (!ja) { carregar(); return; }
+    anunciar("Você já está vendo hoje.", { repetir: true });
+    if (movel) { diaFocado = ""; focarNoDia(); }
+    else { agoraFocado = ""; focarAgoraDesktop(`${iv.de}|${iv.dias}|${modo}`); }
+    carregar();     // mesmo período: só redesenha (o seletor de data e o «Dia» acompanham)
+  }
   function mover(delta) {
     data = nomeDoPasso() === "mes" ? mesISO(data, delta) : diaISO(data, delta * passoDeNavegacao());
     gravarPreferencias();
@@ -2236,6 +2375,9 @@ export async function montar(ctx) {
       caixa.appendChild(montarMiniCalendario({ h, mes: meu, consultas: d ? d.consultas : [], bloqueios: d ? d.bloqueios : [], config: d && d.config ? d.config : (atual && atual.config) || null,
         hoje: ui.hojeSP(), selecionado: data, num: ui.num, carregando: !d, compacto: true,
         aoEscolher: iso => { if (fecharCom) fecharCom(iso); }, aoMudarMes: delta => { mes = mesISO(mes, delta); pintar(); } }));
+      // plano 1500c · GX-050: longe do mês de hoje (foi ver dezembro), um toque volta — antes eram as setas mês a mês
+      const mesHoje = primeiroDoMes(ui.hojeSP());
+      if (meu !== mesHoje) caixa.appendChild(h("button", { type: "button", class: "bt bt-sec bt-p ag-mes-este", on: { click: () => { mes = mesHoje; pintar(); } } }, "Voltar a este mês"));
       // plano 1500c · CC-327: o erro não fica guardado para sempre — «Tentar de novo» apaga e pede outra vez (voltar ao mês também tenta)
       if (d && d.erro) {
         pedidos.delete(meu);
@@ -2291,8 +2433,13 @@ export async function montar(ctx) {
     const acao = acaoTeclaAgenda(ev);
     if (!acao) return;
     ev.preventDefault();
-    if (acao === "hoje") { data = ui.hojeSP(); gravarPreferencias(); carregar(); }
-    else if (acao === "marcar") { if (ctx.pode("atendente")) abrirAgendamento(null, { dia: movel || modo === "dia" ? data : null }); }   // plano 1500c · CC-300
+    if (acao === "hoje") irParaHoje();   // plano 1500c · GX-047
+    else if (acao === "marcar") { if (ctx.pode("atendente") && !ev.repeat) abrirAgendamento(null, { dia: movel || modo === "dia" ? data : null }); }   // plano 1500c · CC-300 (GX-019: tecla segurada não repete)
+    else if (acao === "filtrar") {   // plano 1500c · GX-018
+      const f = conteudo.querySelector(".agenda-filtro-nome");
+      if (f) { try { f.focus(); } catch { /* ok */ } if (typeof f.select === "function") try { f.select(); } catch { /* ok */ } }
+      else anunciar("Nada para filtrar nesta tela.", { repetir: true });
+    }
     else if (acao === "anterior" || acao === "proximo") mover(acao === "anterior" ? -1 : 1);
     else trocarModo(acao);       // CA-259: D/S/M/L
   }
@@ -2412,7 +2559,9 @@ export async function montar(ctx) {
     if (cl("ag-painel-item") && neg) return `.ag-painel-li[data-negocio="${v(neg.dataset.negocio)}"] .ag-painel-item`;
     if (cl("ag-pres-bt") && neg) return `.ag-painel-li[data-negocio="${v(neg.dataset.negocio)}"] .ag-pres-bt[data-estado="${v(el.dataset.estado)}"]`;
     if (cl("ag-col") && el.dataset.chave) return `.ag-col[data-chave="${v(el.dataset.chave)}"]`;
-    for (const c of ["ag-fechados-bt", "agenda-filtro-prof", "ag-pres-lote", "ag-painel-imprimir", "agenda-proxima"]) if (cl(c)) return `.${c}`;
+    // plano 1500c · GX-043/GX-044: o «Filtrar nesta tela» (digitando) e as ferramentas do resumo também guardam o foco no redesenho
+    for (const c of ["ag-fechados-bt", "agenda-filtro-prof", "ag-pres-lote", "ag-painel-imprimir", "agenda-proxima", "agenda-filtro-nome", "agenda-exportar", "agenda-imprimir-semana",
+      "agenda-tv", "agenda-encaixar-agora", "agenda-prox-livre", "ag-painel-compartilhar", "agenda-marcar-vazio"]) if (cl(c)) return `.${c}`;
     return null;
   }
   function desenhar() {
@@ -2423,6 +2572,8 @@ export async function montar(ctx) {
     // plano 1000b · CB-197: «Mostrar todas» some depois do clique — o foco vai para o 1º chip da legenda (antes caía no body)
     const alvo = foco ? (conteudo.querySelector(foco) || (foco === ".ag-leg-limpar" ? conteudo.querySelector(".ag-leg-chip") : null)) : null;
     if (alvo) try { alvo.focus({ preventScroll: true }); } catch { alvo.focus(); }
+    // plano 1500c · GX-043: o cursor do campo de filtro volta para o fim do que já foi digitado
+    if (alvo && foco === ".agenda-filtro-nome" && typeof alvo.setSelectionRange === "function") try { const n = String(alvo.value || "").length; alvo.setSelectionRange(n, n); } catch { /* ok */ }
   }
   function desenharAgora() {
     ui.limpar(conteudo);
@@ -2432,7 +2583,7 @@ export async function montar(ctx) {
     const hoje = ui.hojeSP();
     ultimoHojeTela = hoje;            // plano 1500c · CC-168
     // plano 1500c · CC-330: filtro guardado com alguém que saiu da equipe (e sem consulta no período) volta para «todos», com aviso
-    if (filtroProf !== "todos" && filtroProf !== "eu") {
+    if (filtroProf !== "todos" && filtroProf !== "eu" && filtroProf !== "sem") {
       const noPeriodo = todas.some(c => c && String(c.dono_id ?? "") === filtroProf);
       if (!noPeriodo && equipe && !equipe.some(u => u.id === filtroProf)) {
         filtroProf = "todos"; gravarPreferencias();
@@ -2458,7 +2609,7 @@ export async function montar(ctx) {
       ? h("a", { class: "agenda-fonte-link", href: "#/config/agenda", title: "Ajustar em Configurações › Agenda", on: { click: ev => { ev.preventDefault(); ctx.navegar("#/config/agenda"); } } }, legendaFonte, " · ajustar")
       : h("small", null, legendaFonte);
     // plano 1500c · CC-049: «horário de Brasília», o mesmo nome dos Departamentos (cv-config)
-    const nota = h("p", { class: "agenda-fuso" }, "Horários no horário de Brasília.");
+    const nota = h("p", { class: "agenda-fuso" }, "Horários de Brasília.");   // plano 1500c · CC-049 (pendência da frente conv): sem «horário» duas vezes
     proximaAtual = proximaConsulta(consultas);
     // plano 1500c · CC-306: empresa nova (horário padrão e nenhuma consulta) — o admin ganha o roteiro de 3 passos
     const roteiro = ctx.pode("admin") && fonte === "padrao" && !todas.length ? montarRoteiro() : null;
@@ -2488,6 +2639,7 @@ export async function montar(ctx) {
       titulo = `${ui.dataCurtaBR(carregados[0])} — ${ui.dataCurtaBR(carregados[6])}`;
     }
     const visiveis = consultas.filter(c => { const p = c.inicio && partesSP(c.inicio); return p && mostrados.includes(p.dia); });
+    visiveisAtuais = visiveis;              // plano 1500c · GX-016: a base da conta do filtro
     const nDentro = visiveis.length;
     const nBloq = bloqueios.filter(b => mostrados.some(d => bloqueiosDoDia([b], d).length)).length;
     const temResponsaveis = todas.some(c => c.dono_id);
@@ -2513,10 +2665,13 @@ export async function montar(ctx) {
     if (temResponsaveis || filtroProf !== "todos") {
       // plano 1500c · CC-191: as opções vêm da equipe (quem atende) e de quem tem consulta — o dentista com a semana vazia também aparece
       const ids = [...new Set([...todas.map(c => c.dono_id).filter(x => x != null).map(String), ...(equipe || []).map(u => u.id)])];
-      if (filtroProf !== "todos" && filtroProf !== "eu" && !ids.includes(filtroProf)) ids.push(filtroProf);
+      if (filtroProf !== "todos" && filtroProf !== "eu" && filtroProf !== "sem" && !ids.includes(filtroProf)) ids.push(filtroProf);
       const nomeDe = id => nomesAtuais[id] || "Profissional";
+      // plano 1500c · GX-014: «Sem responsável» acha as consultas que ninguém assumiu (para distribuir), quando houver alguma
+      const temSemDono = todas.some(c => c && (c.dono_id === null || c.dono_id === undefined || c.dono_id === ""));
       const opcoes = [["todos", "Todos os profissionais"], eu ? ["eu", "Minha agenda"] : null,
-        ...ids.filter(id => id !== eu).sort((a, b) => nomeDe(a).localeCompare(nomeDe(b), "pt-BR")).map(id => [id, nomeDe(id)])].filter(Boolean);
+        ...ids.filter(id => id !== eu).sort((a, b) => nomeDe(a).localeCompare(nomeDe(b), "pt-BR")).map(id => [id, nomeDe(id)]),
+        temSemDono || filtroProf === "sem" ? ["sem", "Sem responsável"] : null].filter(Boolean);
       // plano 1000b · CB-173: rótulo visível «Profissional» (o nome acessível é o mesmo texto que se vê)
       const sel = h("select", { class: "agenda-filtro-prof", id: `ag-prof-${idTela}` },
         opcoes.map(([valor, rotulo]) => h("option", { value: valor, selected: valor === filtroProf }, rotulo)));
@@ -2537,13 +2692,13 @@ export async function montar(ctx) {
     const umDia = iv.dias === 1;
     const chipProxima = proxima
       ? h("button", { type: "button", class: "agenda-proxima", on: { click: () => irParaConsulta(proxima) } },
-        h("span", { class: "agenda-proxima-rot" }, "Próxima"), h("b", null, proxima.nome || proxima.titulo || "Consulta"), h("span", { class: "dado agenda-proxima-quando" }, rotuloProxima(proxima, Date.now(), hoje)))
+        h("span", { class: "agenda-proxima-rot" }, "Próxima"), h("b", { class: "dado-pessoal" }, proxima.nome || proxima.titulo || "Consulta"), h("span", { class: "dado agenda-proxima-quando" }, rotuloProxima(proxima, Date.now(), hoje)))
       : h("span", { class: "agenda-proxima agenda-proxima-vazia narr" }, consultas.length
         ? `Nenhuma consulta por vir ${umDia ? "neste dia" : emLista ? "nestes 7 dias" : "nesta semana"}.`
         : `${umDia ? "Dia livre" : emLista ? "7 dias livres" : "Semana livre"} — nenhuma consulta marcada.`);
     const caixaProxima = h("span", { class: "agenda-proxima-caixa" }, chipProxima);
     // CA-262: período sem nenhuma consulta oferece marcar ali mesmo (o celular já tem «Livre · Marcar» no dia)
-    const marcarVazio = !nDentro && !movel && !emLista && ctx.pode("atendente")
+    const marcarVazio = !nDentro && !movel && !emLista && ctx.pode("atendente") && diaISO(iv.de, iv.dias - 1) >= hoje   // plano 1500c · GX-039: período todo no passado não oferece marcar
       ? h("button", { type: "button", class: "bt bt-sec bt-p agenda-marcar-vazio", on: { click: () => abrirAgendamento(null, { dia: modo === "dia" ? data : null }) } }, ui.icone("mais"), `Marcar ${palavraCompromisso(ctx.vocab)}`)
       : null;
     if (!proxima) completarProxima(caixaProxima, { de: inicioBuscaProxima(iv.de, iv.dias, hoje), umDia, hoje, chave: chaveAtual });
@@ -2561,8 +2716,14 @@ export async function montar(ctx) {
     const ferramentas = h("div", { class: "agenda-ferramentas" },
       visiveis.length ? h("label", { class: "agenda-filtro-nome-rot" }, h("span", { class: "sr-only" }, "Filtrar nesta tela"),
         h("input", { type: "search", class: "agenda-filtro-nome", placeholder: "Filtrar nesta tela", value: filtroNome, autocomplete: "off",
-          on: { input: ev => { filtroNome = String(ev.target.value || ""); aplicarFiltroNome(); } } })) : null,
-      !movel && visiveis.length ? h("button", { type: "button", class: "bt bt-fant bt-p agenda-exportar", on: { click: () => exportarCSV(visiveis, mostrados) } }, "Exportar CSV") : null,
+          "aria-keyshortcuts": atalhosLigados ? "/" : null, "aria-describedby": `ag-filtro-conta-${idTela}`,     // plano 1500c · GX-018
+          on: { input: ev => { filtroNome = String(ev.target.value || ""); aplicarFiltroNome({ anunciar: true }); },
+            // plano 1500c · GX-015: Esc limpa o filtro (e não fecha nada por trás); vazio, deixa o Esc seguir
+            keydown: ev => { if (ev.key === "Escape" && filtroNome) { ev.preventDefault(); if (ev.stopPropagation) ev.stopPropagation(); ev.target.value = ""; filtroNome = ""; aplicarFiltroNome({ anunciar: true }); } } } }),
+        // GX-016: «2 de 14 consultas» ao lado do campo (o leitor de tela ouve pelo status curto)
+        h("span", { class: "agenda-filtro-conta dado", id: `ag-filtro-conta-${idTela}` })) : null,
+      // plano 1500c · GX-054: com o filtro, o CSV leva só o que a tela mostra
+      !movel && visiveis.length ? h("button", { type: "button", class: "bt bt-fant bt-p agenda-exportar", on: { click: () => exportarCSV(visiveis.filter(c => casaFiltroNome(chaveFiltroConsulta(c), filtroNome)), mostrados) } }, "Exportar CSV") : null,
       !movel && (modo === "semana" || emLista) && visiveis.length ? h("button", { type: "button", class: "bt bt-fant bt-p agenda-imprimir-semana", on: { click: () => imprimirSemana(carregados, consultas, config, bloqueios, hoje) } }, "Imprimir semana") : null,
       !movel && temHoje ? h("button", { type: "button", class: "bt bt-fant bt-p agenda-tv", "aria-haspopup": "dialog", on: { click: abrirTV } }, "Tela da recepção") : null);
 
@@ -2578,7 +2739,7 @@ export async function montar(ctx) {
         // plano 1000b · CB-192: com o filtro de profissional a conta é só da agenda filtrada — o rótulo diz isso (a clínica pode estar cheia)
         ocup === null ? null : h("span", { class: "agenda-resumo-ocup", title: filtroProf === "todos" ? "Horas marcadas sobre o expediente dos dias mostrados"
           : `Horas marcadas ${filtroProf === "eu" ? "da sua agenda" : `da agenda de ${nomesAtuais[filtroProf] || "quem foi escolhido"}`} sobre o expediente dos dias mostrados (as dos outros profissionais não entram)` },
-          anelOcupacao(h, { pct: ocup }, { tamanho: 22 }), h("b", { class: "dado" }, `${Math.round(ocup * 100)}%`), filtroProf === "todos" ? " ocupado" : filtroProf === "eu" ? " da sua agenda" : " desta agenda"),
+          anelOcupacao(h, { pct: ocup }, { tamanho: 22 }), h("b", { class: "dado" }, pctTexto(ocup))   /* plano 1500c · GX-002 */, filtroProf === "todos" ? " ocupado" : filtroProf === "eu" ? " da sua agenda" : " desta agenda"),
         tf ? h("span", { class: "agenda-resumo-faltas", title: "Das consultas que já passaram nos dias mostrados" }, "Faltas: ", h("b", { class: "dado" }, `${Math.round(tf.pct * 100)}%`), ` (${ui.num(tf.faltas)} de ${ui.num(tf.de)})`) : null,
         nIA ? h("span", { class: "agenda-resumo-ia" }, h("b", { class: "dado" }, ui.num(nIA)), ` ${nIA === 1 ? "marcada" : "marcadas"} pela IA`) : null),
       caixaProxima, caixaLivre, marcarVazio, encaixarAgoraBt, ferramentas);
@@ -2589,7 +2750,12 @@ export async function montar(ctx) {
       temResponsaveis ? ui.segmentado({ opcoes: [{ valor: "servico", rotulo: "Por serviço" }, { valor: "profissional", rotulo: "Por profissional" }], valor: corPor, tipo: "filtro", rotulo: "Cor dos blocos", classe: "ag-legenda-por",
         aoMudar: v => { corPor = v; legendaAtivos = new Set(); gravarPreferencias(); desenhar(); } }) : null,
       montarLegenda({ h, itens: itensLegenda, ativos: legendaAtivos, num: ui.num, avatar: corPor === "profissional" && typeof ui.avatar === "function" ? ui.avatar : null,
-        aoAlternar: it => { legendaAtivos = it ? alternarLegenda(legendaAtivos, it) : new Set(); desenhar(); } })) : null;
+        aoAlternar: it => {
+          legendaAtivos = it ? alternarLegenda(legendaAtivos, it) : new Set(); desenhar();
+          // plano 1500c · GX-049: o destaque muda a grade em silêncio — o leitor de tela ouve quantas ficaram em destaque
+          const n = visiveisAtuais.filter(c => legendaAtivos.has(corDaConsulta(c, corPor, nomesAtuais, ordemServicos, ordemProfAtual).chave)).length;
+          anunciar(legendaAtivos.size ? `${n} ${n === 1 ? "consulta em destaque" : "consultas em destaque"}.` : "Todas as consultas à mostra.", { repetir: true });
+        } })) : null;
 
     // E1: «Compareceu / Faltou» nas consultas que já passaram (servidor sem nx_agenda_presenca → some); E5: vazio com a ilustração da agenda
     const presencaPainel = Lg && !semPresenca ? { L: Lg, aoMarcar: marcarPresenca, aoLote: marcarPresencaLote, icone: ui.icone } : null;
@@ -2599,7 +2765,9 @@ export async function montar(ctx) {
       presenca: presencaPainel, vazio: typeof ui.vazio === "function" ? ui.vazio : null, telBR: typeof ui.telBR === "function" ? ui.telBR : String,
       imprimir: movel ? null : imprimirDia, contatos: contatosLinha, desmarcadas: desmarcadasDia,
       // plano 1500c · CC-261: no celular, «Compartilhar» manda a lista do dia em texto (navigator.share) ao profissional
-      compartilhar: movel && typeof navigator !== "undefined" && navigator && typeof navigator.share === "function" ? iso => compartilharDia(iso, consultas, hoje) : null,
+      // plano 1500c · GX-029: sem o compartilhar do aparelho (computador, alguns navegadores), «Copiar lista» leva o mesmo texto para colar no WhatsApp Web
+      compartilhar: (movel && temShare()) || typeof ui.copiar === "function" ? iso => compartilharDia(iso, consultas, hoje, bloqueios) : null,
+      rotuloCompartilhar: movel && temShare() ? "Compartilhar" : "Copiar lista",
       aoAbrir: (c, bt) => abrirDetalhe(c, bt), aoMarcar: iso => abrirAgendamento(null, { dia: iso }) });
     if (presencaPainel) lerPresencasQueFaltam(emLista ? visiveis : consultasDoDia(consultas, data));
 
@@ -2635,6 +2803,7 @@ export async function montar(ctx) {
       conteudo.append(...[roteiro, resumo, legenda, modo === "dia" ? h("div", { class: "ag-dia-layout" }, grade, painel()) : grade, nota].filter(Boolean));
     }
     posicionarAgora();
+    if (!movel && !emLista) focarAgoraDesktop(`${iv.de}|${iv.dias}|${modo}`);   // plano 1500c · GX-035
     animarNumeros();
     aplicarFiltroNome();
     if (tvAberta) tvAberta.pintar();     // CC-323: a tela da recepção acompanha a releitura
@@ -2686,6 +2855,18 @@ export async function montar(ctx) {
     for (const b of el.querySelectorAll("button")) { if (cabecalhoFora) b.removeAttribute("tabindex"); else b.setAttribute("tabindex", "-1"); }
   }
 
+  /** Plano 1500c · RC-198: a hora pedida pelo endereço vira o cursor de horário na coluna do dia (visível) e a vista rola até ela; na Lista,
+      até o dia. Hora fora do eixo vai para a ponta mais perto. */
+  function irParaHoraPedida(hhmm) {
+    if (modo === "lista") { const s = conteudo.querySelector(`.ag-lista-dia[data-iso="${data}"]`); if (s && s.scrollIntoView) try { s.scrollIntoView({ block: "start" }); } catch { /* ok */ } return; }
+    const col = conteudo.querySelector(`.ag-col[data-iso="${data}"]`);
+    const min = paraMin(hhmm);
+    if (!col || !eixoAtual || min === null) return;
+    cursorMin = Math.max(eixoAtual.ini * 60, Math.min(eixoAtual.fim * 60 - 5, min));
+    mostrarCursor(col, eixoAtual);
+    const cur = col.querySelector(".ag-cursor");
+    if (cur && cur.scrollIntoView) try { cur.scrollIntoView({ block: "center", behavior: ui.comportamentoRolagem ? ui.comportamentoRolagem() : "auto" }); } catch { /* ok */ }
+  }
   /** Leva a vista até a consulta (troca o dia no celular ou em «Dia», se preciso) e põe o foco no bloco. */
   function irParaConsulta(c) {
     const p = partesSP(c.inicio);
@@ -2707,6 +2888,21 @@ export async function montar(ctx) {
     if (maisBt) maisBt.click();
   }
 
+  /** Plano 1500c · GX-035: no computador, abrir o período de hoje com a grade comprida (07h às 22h) leva a vista até a linha de «agora»
+      quando ela está fora da tela — uma vez por período (não briga com quem já rolou). */
+  let agoraFocado = "";
+  function focarAgoraDesktop(chave) {
+    if (agoraFocado === chave) return;
+    agoraFocado = chave;
+    requestAnimationFrame(() => {
+      if (!vivo) return;
+      const el = conteudo.querySelector(".ag-agora:not([hidden])");
+      if (!el) return;
+      const r = el.getBoundingClientRect(), alt = typeof innerHeight === "number" ? innerHeight : 0;
+      if (!alt || !r.width || (r.top >= 80 && r.top <= alt - 80)) return;      // sem largura = ainda sem layout
+      try { globalThis.scrollBy({ top: Math.round(r.top - alt * 0.35), behavior: ui.comportamentoRolagem ? ui.comportamentoRolagem() : "auto" }); } catch { /* ok */ }
+    });
+  }
   /** Celular: ao abrir um dia (ou trocar de dia) leva a vista para o que importa — a linha de agora (hoje) ou a 1ª consulta —, sem brigar com a rolagem de quem já rolou. */
   let diaFocado = "";
   function focarNoDia() {
@@ -2825,7 +3021,9 @@ export async function montar(ctx) {
       h("span", { class: "ag-dia-total", title: `${c.consultas.length} ${c.consultas.length === 1 ? "consulta" : "consultas"}` }, c.consultas.length ? ui.num(c.consultas.length) : ""),
       // plano 1000b · CB-148: sem «+» em dia passado
       // plano 1500c · CC-165: o comentário tinha engolido o aria-label e o title (o «+» ficava sem nome) — cada um na sua linha
-      ctx.pode("atendente") && !(c.iso < ui.hojeSP()) ? h("button", { type: "button", class: "bt-icone ag-dia-mais",
+      // plano 1500c · GX-046: nem em dia fechado pela configuração ou bloqueado o dia todo (o «+» abria a janela em outro dia, sem dizer por quê)
+      ctx.pode("atendente") && !(c.iso < ui.hojeSP()) && !(Array.isArray(faixasDoDia(config, c.iso)) && !faixasDoDia(config, c.iso).length) && !diaTodoBloqueado(c.bloqueios, c.iso)
+        ? h("button", { type: "button", class: "bt-icone ag-dia-mais",
         "aria-label": `Marcar ${palavraCompromisso(ctx.vocab)} em ${nomeDia(c.iso, true)}`, title: `Marcar ${palavraCompromisso(ctx.vocab)} neste dia`,
         on: { click: () => abrirAgendamento(null, { dia: c.iso }) } }, ui.icone("mais")) : null,
       // barra de ocupação do dia (item 40): largura = fração do expediente marcada; a cor sobe com o nível
@@ -2835,7 +3033,7 @@ export async function montar(ctx) {
 
   function colunaDoDia(c, eixo, config, passo, focavel = false) {
     const duracaoPadrao = Number(config.duracao_min) || 30;
-    const edita = ctx.pode("atendente");
+    const edita = ctx.pode("atendente") && !(c.iso < ui.hojeSP());   // plano 1500c · GX-040: coluna de dia que passou não se diz marcável (sem cursor de clique nem «Enter marca»)
     // CA-197: pelo teclado a coluna também marca — Enter abre «Marcar» no dia; ↑↓ movem um cursor de horário visível; ←→ trocam de coluna
     // plano 1500c · CC-220: o nome é só o dia; a instrução vem do aria-describedby comum (o leitor não repete tudo a cada troca de dia)
     const col = h("ol", { class: ["ag-col", c.hoje && "hoje", edita && "ag-edita"], dataset: { iso: c.iso, chave: c.chave },
@@ -2896,12 +3094,14 @@ export async function montar(ctx) {
     const cl = classificarConsulta(c, col.config || null, { iso: col.iso, vizinhas: col.vizinhas || [] });
     // plano 1500c · CC-324: o que a IA marcou sozinha ganha o ícone; CC-239: a confirmada (confirmada_em, quando o servidor mandar) o selo
     const ia = c.marcado_por === "ia", confirmada = !!c.confirmada_em && !feita;
-    const extrasRot = [confirmada ? "confirmada" : null, ia ? "marcada pela IA" : null, c.obs ? `observação: ${c.obs}` : null].filter(Boolean).join(", ");
-    const bt = h("button", { type: "button", class: ["ag-bloco", curto && "curto", feita && "feita", arrastavel && "ag-arrastavel", confirmada && "confirmada"], "aria-haspopup": "dialog",
+    // plano 1500c · GX-010: a consulta que está acontecendo agora fica marcada (borda forte) e o leitor ouve «em andamento»
+    const emCurso = consultaEmAndamento(c, Date.now(), Number(col.config && col.config.duracao_min) || 30);
+    const extrasRot = [emCurso ? "em andamento" : null, confirmada ? "confirmada" : null, ia ? "marcada pela IA" : null, c.obs ? `observação: ${c.obs}` : null].filter(Boolean).join(", ");
+    const bt = h("button", { type: "button", class: ["ag-bloco", curto && "curto", feita && "feita", arrastavel && "ag-arrastavel", confirmada && "confirmada", emCurso && "ag-em-curso"], "aria-haspopup": "dialog",
       "aria-label": `${rotuloDoBloco(c, { inicio, fim, nome, feita, falta: cl.falta, encaixe: cl.encaixe, proxima: ehProxima })}${extrasRot ? `, ${extrasRot}` : ""}`,
       // plano 1500c · CC-218: o title cita os atalhos de remarcar do detalhe (teclado sem mouse)
       title: [`${inicio}${fim ? `–${fim}` : ""}`, nome, c.servico, c.obs || null, corPor === "profissional" ? k.rotulo : null, arrastavel ? "Arraste para remarcar (ou Enter › Dia seguinte)" : null].filter(Boolean).join(" · ") },
-      h("span", { class: "ag-bloco-l1" }, h("span", { class: "ag-bloco-hora dado" }, inicio), h("b", { class: "ag-bloco-nome" }, nome),
+      h("span", { class: "ag-bloco-l1" }, h("span", { class: "ag-bloco-hora dado" }, inicio), h("b", { class: "ag-bloco-nome dado-pessoal" }, nome),
         ia && typeof ui.icone === "function" ? h("span", { class: "ag-bloco-ia", "aria-hidden": "true", title: "Marcada pela IA" }, ui.icone("ia")) : null,
         confirmada ? h("span", { class: "ag-bloco-conf", "aria-hidden": "true" }, "✓") : null),
       c.servico ? h("span", { class: "ag-bloco-serv" }, c.servico) : null,
@@ -2911,7 +3111,7 @@ export async function montar(ctx) {
       if (ignorarClique) { ignorarClique = false; return; }   // o clique que fecha um arrasto não abre o detalhe
       abrirDetalhe(c, bt);
     });
-    const item = h("li", { class: ["ag-item", ehProxima && "ag-proxima", apagado && "apagado"], dataset: { cols: b.cols, chave: k.chave, negocio: c.negocio_id ?? null, nome: normServico(`${nome} ${c.servico || ""}`) },   // CC-266
+    const item = h("li", { class: ["ag-item", ehProxima && "ag-proxima", apagado && "apagado"], dataset: { cols: b.cols, chave: k.chave, negocio: c.negocio_id ?? null, nome: chaveFiltroConsulta(c) },   // CC-266; plano 1500c · GX-017 (telefone)
       style: { "--t": String(b.topo), "--d": String(b.altura), "--col": String(b.col), "--cols": String(b.cols), "--cor-bloco": `var(--pal-${cor})`, "--i": String(seqBloco++) } },
       ehProxima ? h("span", { class: "ag-proxima-selo", "aria-hidden": "true" }, "Próxima") : null, bt);
     if (arrastavel) bt.addEventListener("pointerdown", ev => iniciarArrasto(ev, bt, item, c, col));
@@ -3046,6 +3246,8 @@ export async function montar(ctx) {
     if (instanteNoFuso(d.iso, d.hora) < Date.now()) return "passou";
     const cfg = (atual && atual.config) || {};
     if (horarioAberto(cfg, d.iso, d.min) === false) return "fechado";
+    // plano 1500c · GX-023: dentro da antecedência mínima (Configurações › Agenda) o servidor recusa a marcação normal — avisa já no soltar
+    if (dentroDaAntecedencia(cfg, instanteNoFuso(d.iso, d.hora))) return "antecedencia";
     const a = quem || arrasto || ultimoArrasto;    // quem = {c, duracao} (atalho do detalhe, CA-206); senão o arrasto
     const k = conflitoNoDestino({ iso: d.iso, min: d.min, duracao: a ? a.duracao : 30, config: cfg, ignorar: a ? a.c : null,
       bloqueios: atual && Array.isArray(atual.bloqueios) ? atual.bloqueios : [], consultas: atual && Array.isArray(atual.consultas) ? atual.consultas : [],
@@ -3069,9 +3271,13 @@ export async function montar(ctx) {
     const motivo = destinoValido(d);
     // lotado: supervisor pode encaixar (fantasma em atenção); os demais veem o vermelho, como bloqueado, fechado e passado
     const encaixe = motivo === "lotado" && ctx.pode("supervisor");
-    a.rotulo.textContent = `${d.hora}–${horaTxt(d.min + a.duracao)}${motivo === "bloqueado" ? " · bloqueado" : motivo === "lotado" ? (encaixe ? " · encaixe" : " · lotado") : ""}`;
-    a.fantasma.classList.toggle("ag-fantasma-ruim", !!motivo && !encaixe);
-    a.fantasma.classList.toggle("ag-fantasma-encaixe", encaixe);
+    // plano 1500c · GX-024: o fantasma vermelho diz POR QUÊ («já passou», «fechado», «antecedência»), não só bloqueado e lotado
+    const encaixeAnt = motivo === "antecedencia" && ctx.pode("supervisor");
+    const porque = { bloqueado: " · bloqueado", passou: " · já passou", fechado: " · fechado", antecedencia: encaixeAnt ? " · encaixe" : " · antecedência" }[motivo]
+      || (motivo === "lotado" ? (encaixe ? " · encaixe" : " · lotado") : "");
+    a.rotulo.textContent = `${d.hora}–${horaTxt(d.min + a.duracao)}${porque}`;
+    a.fantasma.classList.toggle("ag-fantasma-ruim", !!motivo && !encaixe && !encaixeAnt);
+    a.fantasma.classList.toggle("ag-fantasma-encaixe", encaixe || encaixeAnt);
   }
   let ultimoArrasto = null;
   function limparArrasto() {
@@ -3134,9 +3340,13 @@ export async function montar(ctx) {
     // CA-164/CA-165: bloqueio e horário cheio avisam já no soltar (antes abria a confirmação e só o servidor recusava)
     if (motivo === "bloqueado") { ui.toast(`Horário bloqueado: ${d.conflito.rotulo}.`, { tipo: "info" }); return false; }
     if (motivo === "lotado" && !ctx.pode("supervisor")) { ui.toast(`Esse horário já está cheio. ${dica}`, { tipo: "info" }); return false; }
-    confirmarRemarcacao(c, d, { encaixe: motivo === "lotado", dica });   // plano 1000b · CB-149: o erro do servidor usa a dica de quem chamou
+    // plano 1500c · GX-023: antecedência — o supervisor encaixa (com o aviso); os demais ficam sabendo a regra
+    if (motivo === "antecedencia" && !ctx.pode("supervisor")) { ui.toast(`${textoAntecedencia((atual && atual.config) || {})} ${dica}`, { tipo: "info" }); return false; }
+    confirmarRemarcacao(c, d, { encaixe: motivo === "lotado" || motivo === "antecedencia", porAntecedencia: motivo === "antecedencia", dica });   // plano 1000b · CB-149: o erro do servidor usa a dica de quem chamou
     return true;
   }
+  /** Plano 1500c · GX-025: a duração da consulta em minutos (o fim que veio, ou a duração padrão). */
+  const duracaoDe = c => { const m = c && c.inicio ? minutosDaConsulta(c, Number(atual && atual.config && atual.config.duracao_min) || 30) : null; return m ? m.fim - m.ini : null; };
   /** CA-206: no celular não há arrasto — «Dia seguinte» e «Semana seguinte» (mesmo horário) abrem a mesma confirmação «De → Para». */
   function remarcarAtalho(c, dias) {
     const p = partesSP(c && c.inicio);
@@ -3155,7 +3365,7 @@ export async function montar(ctx) {
   }
   /** Confirmação «De → Para»; confirmar grava com p_req (nx_agenda_marcar, como a janela) e oferece Desfazer (volta como encaixe).
       encaixe = o destino está cheio e quem arrasta é supervisor+: grava como encaixe (p_encaixe), com o aviso na confirmação. */
-  async function confirmarRemarcacao(c, d, { encaixe = false, dica = "Escolha outro horário." } = {}) {
+  async function confirmarRemarcacao(c, d, { encaixe = false, dica = "Escolha outro horário.", porAntecedencia = false } = {}) {
     const nome = c.nome || c.titulo || "Consulta";
     const hoje = ui.hojeSP();
     const de = partesSP(c.inicio);
@@ -3163,12 +3373,16 @@ export async function montar(ctx) {
     const req = Lg.novaReq();        // a mesma intenção em todas as tentativas desta janela: o servidor não marca duas vezes
     const inicioNovo = isoNoFuso(d.iso, d.hora);      // CA-194: o instante pelo fuso, sem «-03:00» fixo
     const corpo = h("div", { class: "ag-remarcar" },
-      h("p", { class: "ag-remarcar-nome" }, h("b", null, nome), c.servico ? h("small", null, ` · ${c.servico}`) : null),
+      h("p", { class: "ag-remarcar-nome" }, h("b", { class: "dado-pessoal" }, nome), c.servico ? h("small", null, ` · ${c.servico}`) : null),
       h("div", { class: "ag-remarcar-de-para" },
         h("span", { class: "ag-remarcar-de" }, h("small", null, "De"), h("b", { class: "dado" }, de ? `${rotuloDoDia(de.dia, hoje)} ${horaTxt(de.min)}` : ui.dataHoraBR(c.inicio))),
         h("span", { class: "ag-remarcar-seta", "aria-hidden": "true" }, "→"),
-        h("span", { class: "ag-remarcar-para" }, h("small", null, "Para"), h("b", { class: "dado" }, `${rotuloDoDia(d.iso, hoje)} ${d.hora}`))),
-      encaixe ? h("p", { class: "aviso aviso-aten ag-remarcar-encaixe" }, ui.icone("info"), h("span", null, "Esse horário já está cheio: a consulta entra como encaixe, acima da capacidade.")) : null,
+        h("span", { class: "ag-remarcar-para" }, h("small", null, "Para"), h("b", { class: "dado" }, `${rotuloDoDia(d.iso, hoje)} ${d.hora}`),
+          // plano 1500c · GX-025: até quando vai no horário novo («até 10:45»), para conferir se cabe antes do almoço
+          duracaoDe(c) ? h("small", { class: "dado ag-remarcar-ate" }, `até ${horaTxt(d.min + duracaoDe(c))}`) : null)),
+      encaixe ? h("p", { class: "aviso aviso-aten ag-remarcar-encaixe" }, ui.icone("info"), h("span", null, porAntecedencia
+        ? `${textoAntecedencia((atual && atual.config) || {})} A consulta entra como encaixe.`      // plano 1500c · GX-023
+        : "Esse horário já está cheio: a consulta entra como encaixe, acima da capacidade.")) : null,
       h("p", { class: "campo-ajuda" }, "A disponibilidade é validada de novo ao salvar."));
     const statusEl = h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true });
     corpo.appendChild(statusEl);
@@ -3225,6 +3439,9 @@ export async function montar(ctx) {
   function pedirMarcarEm(iso, hora, config) {
     const min = paraMin(hora);
     if (instanteNoFuso(iso, hora) < Date.now()) { ui.toast("Esse horário já passou.", { tipo: "info" }); return; }
+    // plano 1500c · GX-045: tocar no almoço diz que é a pausa (12:00–13:00), não «fora do horário de atendimento» no meio da tarde
+    const pausa = pausaNoHorario(config, iso, min);
+    if (pausa) { ui.toast(`Pausa das ${horaTxt(pausa[0])} às ${horaTxt(pausa[1])}: escolha outro horário.`, { tipo: "info" }); return; }
     if (horarioAberto(config, iso, min) === false) { ui.toast("Fora do horário de atendimento da agenda.", { tipo: "info" }); return; }
     const bloq = conflitoNoDestino({ iso, min, duracao: 5, bloqueios: atual && Array.isArray(atual.bloqueios) ? atual.bloqueios : [] });
     if (bloq && bloq.motivo === "bloqueado") { ui.toast(`Horário bloqueado: ${bloq.rotulo}.`, { tipo: "info" }); return; }
@@ -3327,10 +3544,29 @@ export async function montar(ctx) {
       const cruzou = lista.some(c => { const t = Date.parse(c && c.inicio); return Number.isFinite(t) && t > antes && t <= agora; });
       if (cruzou || chaveConsulta(proximaConsulta(lista, agora)) !== chaveConsulta(proximaAtual)) {
         // plano 1500c · CC-249: com a aba escondida o redesenho espera a volta (visibilitychange)
-        if (typeof document !== "undefined" && document.hidden) redesenhoPendente = true; else desenhar();
+        if (typeof document !== "undefined" && document.hidden) redesenhoPendente = true;
+        // plano 1500c · GX-042: com o detalhe (ou outra janela) aberto, o redesenho espera — o balão ficava preso a um bloco que saiu da tela
+        else if (janelaAberta()) redesenhoPendente = true;
+        else desenhar();
       }
     }
+    if (redesenhoPendente && !document.hidden && !janelaAberta() && atual) { redesenhoPendente = false; desenhar(); }
+    atualizarRelativos();
     releituraAutomatica();
+  }
+  /** Plano 1500c · GX-042: há uma janela ou o balão do detalhe aberto por cima da Agenda? */
+  function janelaAberta() {
+    return typeof document !== "undefined" && !!(document.querySelector && document.querySelector("dialog[open], .flut-ag"));
+  }
+  /** Plano 1500c · GX-020/GX-021: o que é relativo a «agora» acompanha o relógio sem redesenhar a grade — «em 25 min» da Próxima vira
+      «em 24 min» a cada tique, e o «Próximo livre» que já passou é pedido de novo. */
+  function atualizarRelativos() {
+    if (!vivo || !atual) return;
+    const hoje = ui.hojeSP();
+    const q = conteudo.querySelector("button.agenda-proxima:not(.agenda-proxima-fora) .agenda-proxima-quando");
+    if (q && proximaAtual) { const t = rotuloProxima(proximaAtual, Date.now(), hoje); if (q.textContent !== t) q.textContent = t; }
+    const caixa = conteudo.querySelector(".agenda-prox-livre-caixa");
+    if (caixa && livreCache.slot && Date.parse(livreCache.slot.inicio) <= Date.now()) { livreCache = { em: 0, chave: "", slot: null, p: null }; ui.limpar(caixa); completarProximoLivre(caixa, hoje); }
   }
   function releituraAutomatica({ minimo = 55_000 } = {}) {
     if (!vivo || !atual || arrasto || atualizandoManual || Date.now() - ultimaLeitura < minimo) return;
@@ -3502,9 +3738,12 @@ export async function montar(ctx) {
       ui.toast(`Arquivo ${nome} baixado.`, { tipo: "ok" });
     } catch (e) { ui.toast("Não foi possível gerar o arquivo neste aparelho.", { tipo: "erro" }); console.error(e); }
   }
+  const temShare = () => typeof navigator !== "undefined" && !!navigator && typeof navigator.share === "function";   // plano 1500c · GX-029
   /** CC-261: manda a lista do dia em texto pelo compartilhar do celular (WhatsApp, e-mail…). */
-  async function compartilharDia(iso, consultas, hoje) {
-    const texto = textoCompartilharDia(consultas, iso, hoje);
+  async function compartilharDia(iso, consultas, hoje, bloqueios = []) {
+    const texto = textoCompartilharDia(consultas, iso, hoje, bloqueios);   // plano 1500c · GX-008: com os bloqueios do dia
+    // plano 1500c · GX-029: sem o compartilhar do celular, copia (o aviso diz que copiou)
+    if (!(movel && temShare())) { const ok = await copiarSemAviso(texto); ui.toast(ok ? "Lista do dia copiada — cole no WhatsApp ou onde quiser." : "Não foi possível copiar neste aparelho.", { tipo: ok ? "ok" : "erro" }); return; }
     try { await navigator.share({ title: "Agenda do dia", text: texto }); }
     catch (e) { if (!(e && e.name === "AbortError")) { const ok = await copiarSemAviso(texto); ui.toast(ok ? "Lista copiada para colar onde quiser." : "Não foi possível compartilhar.", { tipo: "info" }); } }
   }
@@ -3540,9 +3779,15 @@ export async function montar(ctx) {
       h("a", { class: "bt bt-prim bt-p ag-roteiro-ir", href: "#/config/agenda", on: { click: ev => { ev.preventDefault(); ctx.navegar("#/config/agenda"); } } }, "Configurar a agenda"));
   }
   /** CC-266: «Filtrar nesta tela» apaga (sem redesenhar) os blocos e as linhas que não casam com o nome ou o serviço digitado. */
-  function aplicarFiltroNome() {
-    const q = normServico(filtroNome);
-    for (const el of conteudo.querySelectorAll(".ag-item[data-nome], .ag-painel-li[data-nome]")) el.classList.toggle("ag-filtrado", !!q && !String(el.dataset.nome || "").includes(q));
+  function aplicarFiltroNome({ anunciar: dizer = false } = {}) {
+    const q = String(filtroNome || "").trim();
+    for (const el of conteudo.querySelectorAll(".ag-item[data-nome], .ag-painel-li[data-nome]")) el.classList.toggle("ag-filtrado", !!q && !casaFiltroNome(el.dataset.nome, q));   // plano 1500c · GX-017
+    // plano 1500c · GX-016: a conta do que sobrou (cada consulta uma vez, mesmo aparecendo na grade e no painel)
+    const conta = conteudo.querySelector(".agenda-filtro-conta");
+    const n = visiveisAtuais.filter(c => casaFiltroNome(chaveFiltroConsulta(c), q)).length;
+    const txt = textoContaFiltro(n, visiveisAtuais.length, q);
+    if (conta && conta.textContent !== txt) conta.textContent = txt;
+    if (dizer && txt) anunciar(txt, { repetir: true });
   }
   /** CC-225/CC-226: ligar, conversar e «Lembrar» direto nas linhas do painel e da Lista. */
   function contatosDaLinha(hoje) {
@@ -3659,7 +3904,7 @@ export async function montar(ctx) {
       ui.limpar(caixa);
       caixa.appendChild(px
         ? h("button", { type: "button", class: "agenda-proxima agenda-proxima-fora", on: { click: () => irParaConsultaFora(px) } },
-          h("span", { class: "agenda-proxima-rot" }, "Próxima"), h("b", null, px.nome || px.titulo || "Consulta"), h("span", { class: "dado agenda-proxima-quando" }, rotuloProximaFora(px, Date.now(), hoje)))
+          h("span", { class: "agenda-proxima-rot" }, "Próxima"), h("b", { class: "dado-pessoal" }, px.nome || px.titulo || "Consulta"), h("span", { class: "dado agenda-proxima-quando" }, rotuloProximaFora(px, Date.now(), hoje)))
         : h("span", { class: "agenda-proxima agenda-proxima-vazia narr" }, textoSemProxima({ umDia, desde: de, hojeISO: hoje })));
     };
     if (e.pronto) pintar(true); else e.p.then(() => pintar(false));
@@ -3678,7 +3923,7 @@ export async function montar(ctx) {
       if (filtroProf !== "todos") {
         const linha = atual && Array.isArray(atual.consultas) ? atual.consultas.find(x => x && x.negocio_id === c.negocio_id) : null;
         const dono = linha && linha.dono_id != null ? (nomesAtuais[String(linha.dono_id)] || linha.dono_nome || "outro profissional") : "outro profissional";
-        ui.toast(`Está na agenda de ${dono}: o filtro «${filtroProf === "eu" ? "Minha agenda" : nomesAtuais[filtroProf] || "Profissional"}» esconde esta consulta.`, { tipo: "info",
+        ui.toast(`Está na agenda de ${dono}: o filtro «${filtroProf === "eu" ? "Minha agenda" : filtroProf === "sem" ? "Sem responsável" : nomesAtuais[filtroProf] || "Profissional"}» esconde esta consulta.`, { tipo: "info",
           acao: { rotulo: "Ver todos", fn: () => { filtroProf = "todos"; gravarPreferencias(); desenhar(); anunciarPeriodo(); const b = blocoDaTela(c.negocio_id); if (b) try { b.focus({ preventScroll: false }); } catch { b.focus(); } } } });
       }
       return;
@@ -3829,12 +4074,17 @@ export async function montar(ctx) {
     (notaPronta !== null ? Promise.resolve(notaPronta) : lerUltimaNota(c.negocio_id)).then(t => { if (t) { notaEl.textContent = t; notaEl.title = t; notaEl.hidden = false; } });
     const etapa = etapaDo(c), origemTxt = origemDo(c);
     const corpo = h("div", { class: "ag-det" },
-      h("b", { class: "ag-det-nome" }, nome),
-      h("span", { class: "ag-det-quando dado" }, `${p ? nomeDia(p.dia) : ""} · ${ui.horaBR(c.inicio)}${c.fim ? `–${ui.horaBR(c.fim)}` : ""}`),
+      h("b", { class: "ag-det-nome dado-pessoal" }, nome),   // plano 1500c · UC-030
+      // plano 1500c · GX-011/GX-012: «Hoje · 10:00–10:45 · 45 min» (o dia pelo nome e a duração); GX-010: «em andamento» quando já começou
+      h("span", { class: "ag-det-quando dado" }, quandoDoDetalhe(c, ui.hojeSP(), Number(atual && atual.config && atual.config.duracao_min) || 30),
+        consultaEmAndamento(c, Date.now(), Number(atual && atual.config && atual.config.duracao_min) || 30) ? h("span", { class: "pilula pilula-info ag-det-agora" }, "em andamento") : null),
       c.servico ? h("span", null, c.servico) : null,
       c.telefone ? (hrefTel
-        ? h("a", { class: "dado ag-det-tel", href: hrefTel, "aria-label": `Ligar para ${nome}, ${ui.telBR(c.telefone)}` }, ui.icone("telefone"), ui.telBR(c.telefone))
-        : h("span", { class: "dado" }, ui.telBR(c.telefone))) : null,
+        ? h("a", { class: "dado ag-det-tel dado-pessoal", href: hrefTel, "aria-label": `Ligar para ${nome}, ${ui.telBR(c.telefone)}` }, ui.icone("telefone"), ui.telBR(c.telefone))
+        : h("span", { class: "dado dado-pessoal" }, ui.telBR(c.telefone))) : null,
+      // plano 1500c · GX-013: no computador o «tel:» não disca — «Copiar» leva o número para o telefone fixo, o WhatsApp Web, a planilha
+      c.telefone && typeof ui.copiar === "function" ? h("button", { type: "button", class: "bt bt-fant bt-p ag-det-copiar-tel", "aria-label": `Copiar o telefone de ${nome}`,
+        on: { click: () => { Promise.resolve(ui.copiar(ui.telBR(c.telefone), { aviso: "Telefone copiado." })).catch(() => { /* o ui avisa */ }); } } }, ui.icone("copiar"), "Copiar") : null,
       // CA-280: origem e etapa em linhas próprias (antes «WhatsApp · Avaliação agendada» parecia uma coisa só)
       // plano 1000b · CB-164: sem origem conhecida a linha sai («Origem: Origem não informada» não dizia nada)
       origemTxt !== SEM_ORIGEM ? h("span", { class: "ag-det-origem" }, h("span", { class: "ag-det-rot" }, "Origem: "), origemTxt) : null,
@@ -3865,7 +4115,8 @@ export async function montar(ctx) {
   }
 
   /* ============================================================ marcar / remarcar / desmarcar (as janelas são marcarConsulta e desmarcarConsulta) */
-  const recarregar = () => carregar({ silencioso: true, forcar: true });
+  // plano 1500c · GX-022: marcou, remarcou ou desmarcou — o «Próximo livre» guardado (60 s) pode ter acabado de ser ocupado: é pedido de novo
+  const recarregar = () => { livreCache = { em: 0, chave: "", slot: null, p: null }; return carregar({ silencioso: true, forcar: true }); };
   /** pre = consulta a remarcar (ou null); quando = {dia, hora} do clique na grade ou do «+» do dia */
   /** Marcou/remarcou pela janela: relê o período e o bloco da consulta confirma com o check (E5); o Desfazer (aoMudar(null)) só relê. */
   const aoMarcado = r => recarregar().then(() => {
@@ -3878,12 +4129,27 @@ export async function montar(ctx) {
     const c = { ...(linha && tipo !== "desmarcacao" ? linha : {}), ...Object.fromEntries(Object.entries(info || {}).filter(([, v]) => v !== null && v !== undefined)) };
     if (c.contato_id == null) { ui.toast("Esta consulta não tem contato com conversa. Abra o negócio para falar com o paciente.", { tipo: "info" }); return; }
     lembrar(c, tipo);
+  } : ctx.pode("atendente") ? (info, tipo) => {
+    // plano 1500c · GX-034: sem o módulo Conversas, o aviso (confirmação, desmarcação, remarcação) abre o WhatsApp do aparelho (wa.me) com o
+    // texto pronto — a pessoa confere e envia; antes o botão nem aparecia e o paciente não ficava sabendo
+    const linha = atual && Array.isArray(atual.consultas) ? atual.consultas.find(x => x && info && x.negocio_id === info.negocio_id) : null;
+    const c = { ...(linha || {}), ...Object.fromEntries(Object.entries(info || {}).filter(([, v]) => v !== null && v !== undefined)) };
+    const fn = { confirmacao: textoConfirmacao, desmarcacao: textoDesmarcacao, remarcacao: textoRemarcacao, falta: textoFalta }[tipo] || textoLembrete;
+    const link = linkWhatsAppAgenda(c.telefone, fn(c, ui.hojeSP(), { vocab: ctx.vocab || null }));
+    if (!link) { ui.toast("Esta consulta não tem telefone com WhatsApp. Abra o negócio para falar com o paciente.", { tipo: "info" }); return; }
+    try { if (typeof globalThis.open === "function") globalThis.open(link, "_blank", "noopener"); } catch { /* janela bloqueada pelo navegador: nada a fazer */ }
   } : null;
-  const abrirAgendamento = (pre = null, quando = null) => offline()
-    ? (ui.toast("Sem internet: marcar exige conexão. Assim que a conexão voltar, tente de novo.", { tipo: "info" }), Promise.resolve(null))
-    : marcarConsulta(ctx, { negocio: pre, dia: quando && quando.dia, hora: quando && quando.hora, base: data,
-    config: atual && atual.config ? atual.config : null, avisar: avisarPaciente, encaixeAgora: !!(quando && quando.encaixeAgora),   // plano 1500c · CC-253
-    aoBloquear: ctx.pode("admin") && quando && quando.dia && quando.hora ? bloquearHorario : null, aoMudar: aoMarcado });
+  // plano 1500c · GX-019: dois toques rápidos em «Marcar» (ou N duas vezes) abriam duas janelas uma sobre a outra — uma de cada vez
+  let marcando = false;
+  const abrirAgendamento = (pre = null, quando = null) => {
+    if (offline()) { ui.toast("Sem internet: marcar exige conexão. Assim que a conexão voltar, tente de novo.", { tipo: "info" }); return Promise.resolve(null); }
+    if (marcando) return Promise.resolve(null);
+    marcando = true;
+    return Promise.resolve(marcarConsulta(ctx, { negocio: pre, dia: quando && quando.dia, hora: quando && quando.hora, base: data,
+      config: atual && atual.config ? atual.config : null, avisar: avisarPaciente, encaixeAgora: !!(quando && quando.encaixeAgora),   // plano 1500c · CC-253
+      aoBloquear: ctx.pode("admin") && quando && quando.dia && quando.hora ? bloquearHorario : null, aoMudar: aoMarcado }))
+      .finally(() => { marcando = false; });
+  };
   /** CA-215: «Bloquear este horário» (admin, a partir do clique no vazio): das HH:MM até HH:MM + o passo da agenda, motivo opcional
       (nx_agenda_bloqueio_salvar, o mesmo das Configurações). Consulta que já cai no trecho avisa antes (2º toque salva mesmo assim). */
   async function bloquearHorario({ dia, hora, existente = null }) {
@@ -3903,8 +4169,12 @@ export async function montar(ctx) {
     const diaTodoChk = h("input", { type: "checkbox", name: "dia_inteiro", class: "ag-bloq-dia-todo", checked: !!(ed && ed.todo) });
     const horas = h("div", { class: "agenda-form-grade", hidden: !!(ed && ed.todo) }, das, ate);
     diaTodoChk.addEventListener("change", () => { horas.hidden = diaTodoChk.checked; });
+    // plano 1500c · GX-056: os motivos mais comuns num toque (o campo continua livre)
+    const inMotivo = motivo.querySelector("input");
+    const chipsMotivo = h("div", { class: "ag-bloq-motivos", role: "group", "aria-label": "Motivos comuns" },
+      MOTIVOS_BLOQUEIO.map(m => h("button", { type: "button", class: "ag-serv-chip ag-bloq-motivo", dataset: { motivo: m }, on: { click: () => { inMotivo.value = m; try { inMotivo.focus(); } catch { /* ok */ } } } }, m)));
     const corpo = h("div", { class: "pilha ag-bloquear" }, h("p", null, `${nomeDia(dia, true)}. Ninguém (nem a IA) marca consulta neste trecho.`),
-      h("label", { class: "ag-encaixe ag-bloq-dia-todo-rot" }, diaTodoChk, h("span", null, "Dia inteiro")), horas, motivo);
+      h("label", { class: "ag-encaixe ag-bloq-dia-todo-rot" }, diaTodoChk, h("span", null, "Dia inteiro")), horas, motivo, chipsMotivo);
     let conferido = "";
     const r = await ui.modal({ titulo: ed ? "Editar bloqueio" : "Bloquear horário", corpo, largura: "p", acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: null },
@@ -3967,15 +4237,17 @@ export async function montar(ctx) {
     caixa.append(campo, statusBusca, lista);
     let fecharCom = null, seq = 0;
     const fichasLidas = new Map();   // CB-179
+    let ultimaBusca = "";      // plano 1500c · GX-048: o texto da busca que está na tela
     async function buscar() {
       const q = input.value.trim();
       const minha = ++seq;
+      ultimaBusca = q;
       ui.limpar(lista);
       dizer("");
       if (q.length < 2) { if (q.length) dizer(TEXTO_BUSCA_CURTA); return; }
       dizer("Procurando…");
       try {
-        const r = await api.rpcC("nx_buscar", { p_q: q });
+        const r = await api.rpcC("nx_buscar", { p_q: termoBusca(q) });   // plano 1500c · GX-032: o telefone com máscara também acha
         // plano 1500c · CC-293: confere até 30 (cache, 4 por vez) e corta em 8 DEPOIS de achar quem tem consulta — a do 12º não some
         const negocios = escolherCandidatos(r && Array.isArray(r.negocios) ? r.negocios : [], 30);
         // plano 1000b · CB-179: a ficha de cada um é lida uma vez por janela (cache por id), no máximo 4 ao mesmo tempo; se a busca já trouxer
@@ -4000,19 +4272,26 @@ export async function montar(ctx) {
         for (const x of ultimas) {
           const nome = x.n.contato_nome || x.contato || x.n.titulo || "Paciente";
           lista.appendChild(h("div", { class: "ag-procurar-item ag-procurar-ultima" },
-            h("span", { class: "ag-procurar-txt" }, h("b", null, nome), h("small", { class: "dado" }, `${textoUltimaConsulta(x.em, x.presenca)}${x.n.titulo && x.n.titulo !== nome ? ` · ${x.n.titulo}` : ""}`))));
+            h("span", { class: "ag-procurar-txt" }, h("b", { class: "dado-pessoal" }, nome), h("small", { class: "dado" }, `${textoUltimaConsulta(x.em, x.presenca)}${x.n.titulo && x.n.titulo !== nome ? ` · ${x.n.titulo}` : ""}`))));
         }
         for (const x of achadas) {
           const nome = x.n.contato_nome || x.contato || x.n.titulo || "Paciente";
           lista.appendChild(h("div", { class: "ag-procurar-item" },
-            h("span", { class: "ag-procurar-txt" }, h("b", null, nome), h("small", { class: "dado" }, `${rotuloProximaFora({ inicio: x.em }, Date.now(), ui.hojeSP())}${x.n.titulo && x.n.titulo !== nome ? ` · ${x.n.titulo}` : ""}`)),
+            h("span", { class: "ag-procurar-txt" }, h("b", { class: "dado-pessoal" }, nome), h("small", { class: "dado" }, `${rotuloProximaFora({ inicio: x.em }, Date.now(), ui.hojeSP())}${x.n.titulo && x.n.titulo !== nome ? ` · ${x.n.titulo}` : ""}`)),
             h("button", { type: "button", class: "bt bt-sec bt-p", "aria-label": `Ir para a consulta de ${nome}`, on: { click: () => { if (fecharCom) fecharCom({ negocio_id: x.n.id, inicio: x.em }); } } }, "Ir para")));
         }
       } catch (e) { if (minha === seq) { ui.limpar(lista); dizer(""); lista.appendChild(h("p", { class: "agenda-erro", role: "alert" }, api.mensagemErro(e))); } }
     }
     const depois = ui.debounce(buscar, 300);
     input.addEventListener("input", depois);
-    input.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); if (depois.cancelar) depois.cancelar(); buscar(); } });
+    input.addEventListener("keydown", ev => {
+      if (ev.key !== "Enter") return;
+      ev.preventDefault();
+      // plano 1500c · GX-048: com um resultado só já na tela, Enter vai direto para a consulta (sem caçar o «Ir para» com o Tab)
+      const irs = lista.querySelectorAll(".ag-procurar-item:not(.ag-procurar-ultima) button");
+      if (irs.length === 1 && input.value.trim() === ultimaBusca) { irs[0].click(); return; }
+      if (depois.cancelar) depois.cancelar(); buscar();
+    });
     const escolha = await ui.modal({ titulo: `Procurar ${PC.contato}`, corpo: caixa, largura: "p", protegerTexto: false,
       aoAbrir: a => { fecharCom = v => a.fechar(v); try { input.focus(); } catch { /* ok */ } },
       acoes: [{ rotulo: "Fechar", tipo: "neutro", valor: null }] });
@@ -4034,6 +4313,15 @@ export async function montar(ctx) {
   // CA-260: «Ir para a data…» na paleta (Agenda de 25/10 sem clicar semana a semana): abre o seletor de data do cabeçalho
   const desregistrarData = ctx.comandos && typeof ctx.comandos.registrar === "function"
     ? ctx.comandos.registrar({ id: "agenda.data", rotulo: "Ir para a data…", palavras: "agenda data dia ir calendario semana mes pular", icone: "calendario", fazer: irParaData }) : null;
+  // plano 1500c · GX-036: «Minha agenda ⇄ todos os profissionais» pela paleta (Ctrl/⌘+K), sem procurar o seletor no resumo
+  const desregistrarMinha = eu && ctx.comandos && typeof ctx.comandos.registrar === "function"
+    ? ctx.comandos.registrar({ id: "agenda.minha", rotulo: "Agenda: alternar entre a minha agenda e todos os profissionais", palavras: "agenda minha meus profissional filtro todos",
+      fazer: () => {
+        if (!vivo) return;
+        filtroProf = filtroProf === "eu" ? "todos" : "eu"; profEscolhido = true; legendaAtivos = new Set(); gravarPreferencias();
+        if (atual) { desenhar(); anunciarPeriodo({ repetir: true }); }
+        ui.toast(filtroProf === "eu" ? "Mostrando só a sua agenda." : "Mostrando todos os profissionais.", { tipo: "info" });
+      } }) : null;
   /* plano 1000b · CB-151: «Desligar/Ligar atalhos de uma tecla» na paleta (lembrado nas preferências); desligados, os botões deixam de
      anunciar aria-keyshortcuts e a folha «?» não lista D/S/M/L */
   let desregistrarAtalhos = null, desregistrarModos = [];
@@ -4049,7 +4337,7 @@ export async function montar(ctx) {
     desregistrarAtalhos = ctx.comandos.registrar({ id: "agenda.atalhos", rotulo: atalhosLigados ? "Desligar atalhos de uma tecla da Agenda" : "Ligar atalhos de uma tecla da Agenda",
       palavras: "agenda atalhos teclado tecla acessibilidade leitor voz", fazer: () => {
         atalhosLigados = !atalhosLigados; gravarPreferencias(); aplicarAtalhos();
-        ui.toast(atalhosLigados ? "Atalhos de uma tecla ligados (T, N, D, S, M, L, [ e ])." : "Atalhos de uma tecla desligados. Para ligar de novo, use a paleta (Ctrl+K).", { tipo: "info" });
+        ui.toast(atalhosLigados ? "Atalhos de uma tecla ligados (T, N, D, S, M, L, /, [ e ])." : "Atalhos de uma tecla desligados. Para ligar de novo, use a paleta (Ctrl+K).", { tipo: "info" });
       } });
   }
   function irParaData() {
@@ -4075,7 +4363,7 @@ export async function montar(ctx) {
     fecharTV();      // plano 1500c · CC-323
     if (desarmarEngolir) desarmarEngolir();
     if (typeof desregistrar === "function") try { desregistrar(); } catch { /* ok */ }
-    for (const f of [desregistrarData, desregistrarAtalhos, ...desregistrarModos]) if (typeof f === "function") try { f(); } catch { /* ok */ }
+    for (const f of [desregistrarData, desregistrarAtalhos, desregistrarMinha, ...desregistrarModos]) if (typeof f === "function") try { f(); } catch { /* ok */ }   // plano 1500c · GX-036
     if (typeof removeEventListener === "function") { removeEventListener("online", aoMudarConexao); removeEventListener("offline", aoMudarConexao); }
     if (typeof desassinarRede === "function") try { desassinarRede(); } catch { /* ok */ }
     limparComandoPresenca();
@@ -4087,5 +4375,6 @@ export async function montar(ctx) {
   limpezaAtual = limpar;
   montarCabecalho();
   await carregar();
+  if (horaPedida && vivo) irParaHoraPedida(horaPedida);   // plano 1500c · RC-198
   return limpar;
 }

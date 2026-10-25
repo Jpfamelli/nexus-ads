@@ -433,7 +433,8 @@ function avisarNovidades(antes, depois, nlAntes, nlDepois) {
     try {
       // plano 1500c · CC-018: o ícone do Órbita (no Windows aparecia o genérico do navegador)
       const n = new Notification(t.titulo, { body: t.corpo, tag: t.tag, silent: true, icon: "/app/icones/icon-192.png", badge: "/app/icones/icon-192.png" });
-      n.addEventListener("click", () => { try { window.focus(); } catch { /* ok */ } if (t.id && A) abrir(t.id); n.close(); });
+      // plano 1500c · CX-035: a notificação agrupada («3 conversas novas») leva à aba Aguardando (antes o clique não fazia nada)
+      n.addEventListener("click", () => { try { window.focus(); } catch { /* ok */ } if (t.id && A) abrir(t.id); else if (A) mudarLista({ aba: "aguardando", busca: "" }); n.close(); });
     } catch { /* navegador sem suporte */ }
   }
 }
@@ -651,7 +652,9 @@ async function selecionar(id) {
     A.marcaNovas = A.L.primeiraNaoLida(A.msgs, ver.conversa && ver.conversa.nao_lidas);   // «Mensagens novas» fica onde a leitura parou
     atualizarItemLista(A.ver.conversa);
     // plano 1000 · CA-240: «Mariana Costa · Conversas» — com várias abas abertas dá para saber que esta é a central
-    A.ctx.titulo(nomeContato(ver.contato) ? `${nomeContato(ver.contato)} · Conversas` : "Conversas");
+    // plano 1500c · CX-076: no modo apresentação (tela compartilhada, demonstração) o nome do paciente não vai para o título da aba
+    const emApresentacao = (() => { try { return document.documentElement.classList.contains("apresentacao"); } catch { return false; } })();
+    A.ctx.titulo(nomeContato(ver.contato) && !emApresentacao ? `${nomeContato(ver.contato)} · Conversas` : "Conversas");
     // CA-087: mais de 3 não lidas — abre no separador «Mensagens novas» (lendo de onde parou), com a pílula «Ir para o fim»
     A.chat.renderTudo({ rolar: A.L.abrirNoSeparador(A.marcaNovas, ver.conversa && ver.conversa.nao_lidas) ? "separador" : "fim" });
     A.composer.definirConversa();
@@ -1805,14 +1808,23 @@ async function encaminharMensagem(m) {
   const busca = ui.h("input", { type: "search", id: "cv-enc-busca", placeholder: "Buscar conversa", "aria-label": "Buscar conversa", autocomplete: "off" });
   const sel = ui.h("select", { class: "sel", id: "cv-enc-sel", size: Math.min(8, opcoes.length), "aria-label": "Conversa de destino" },
     opcoes.map((c, i) => ui.h("option", { value: c.id, selected: i === 0 }, nomeContato(c.contato) || `Conversa ${c.id}`)));
+  // plano 1500c · CX-036: a busca escolhe a 1ª conversa que sobrou (antes a escolhida podia ficar escondida e o texto ia para ela);
+  // sem nenhuma, diz isso; ↓ na busca desce para a lista
+  const nada = ui.h("p", { class: "sub", role: "status", hidden: true }, "Nenhuma conversa aberta com esse nome.");
   busca.addEventListener("input", () => {
     const q = A.L.semAcento(busca.value.trim());
-    for (const op of sel.querySelectorAll("option")) op.hidden = !!q && !A.L.semAcento(op.textContent).includes(q);
+    const ops = [...sel.querySelectorAll("option")];
+    for (const op of ops) op.hidden = !!q && !A.L.semAcento(op.textContent).includes(q);
+    const vis = ops.filter(op => !op.hidden);
+    const atual = ops.find(op => String(op.value) === String(sel.value));
+    if (vis.length && (!atual || atual.hidden)) { for (const op of ops) op.selected = op === vis[0]; sel.value = vis[0].value; }
+    nada.hidden = vis.length > 0;
   });
+  busca.addEventListener("keydown", ev => { if (ev.key === "ArrowDown") { ev.preventDefault(); sel.focus(); } });
   const corpo = ui.h("div", { class: "pilha" }, ui.h("p", { class: "sub" }, "O texto vai para o campo da conversa escolhida. Você revisa e envia."),
-    busca, sel, ui.h("blockquote", { class: "cv-enc-previa" }, A.L.resumoMensagem(m, 280)));
+    busca, sel, nada, ui.h("blockquote", { class: "cv-enc-previa" }, A.L.resumoMensagem(m, 280)));
   const destino = await ui.modal({ titulo: "Encaminhar mensagem", corpo, largura: "p",
-    acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Abrir com o texto", tipo: "primario", fn: () => Number(sel.value) || null }] });
+    acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Abrir com o texto", tipo: "primario", fn: () => { const op = [...sel.querySelectorAll("option")].find(o => String(o.value) === String(sel.value)); return op && !op.hidden ? Number(sel.value) || null : null; } }] });   // CX-036
   if (!destino || A !== E) return;
   // o texto do paciente não vai para o endereço (histórico do navegador): a conversa abre e o texto entra direto no campo
   const texto = String(m.corpo).slice(0, 4000);
@@ -1866,13 +1878,16 @@ async function exportarConversa({ pdf = false } = {}) {
   // plano 1500c · CC-097: quem atendeu, o departamento e o número (o período a lógica calcula)
   const dep = conv.departamento ? conv.departamento.nome : ((A.base && A.base.departamentos) || []).find(d => d.id === conv.departamento_id)?.nome;
   const cabecalho = [`Responsável: ${(conv.atribuida && conv.atribuida.nome) || conv.atribuida_nome || "sem dono"}`, dep ? `Departamento: ${dep}` : null,
-    conv.canal && conv.canal.nome ? `Número: ${conv.canal.nome}` : null];
+    conv.canal && conv.canal.nome ? `Número: ${conv.canal.nome}` : null,
+    // plano 1500c · CX-070: quem exportou fica no arquivo (o .txt/PDF tem dados do paciente — LGPD: rastro de quem tirou a cópia)
+    A.eu && A.eu.nome ? `Exportada por: ${A.eu.nome}` : null];
   const texto = A.L.textoExportacao(coletadas, { contato: nome, titulo, cabecalho });
   const n = coletadas.filter(m => m && !m.local && m.tipo !== "nota").length;
   if (pdf) { imprimirPagina(A.L.htmlImpressao({ titulo, empresa: (A.ctx.cliente && (A.ctx.cliente.nome || A.ctx.cliente.razao_social)) || "", texto }), n, temMais); return; }
   let url = null;
   try {
-    url = URL.createObjectURL(new Blob([texto], { type: "text/plain;charset=utf-8" }));
+    // plano 1500c · CX-054: com a marca BOM e quebras CRLF o Bloco de Notas antigo do Windows (recepção) mostra os acentos e as linhas certas
+    url = URL.createObjectURL(new Blob(["\uFEFF", texto.replace(/\r?\n/g, "\r\n")], { type: "text/plain;charset=utf-8" }));
     const arq = `conversa-${A.L.semAcento(nome).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "cliente"}-${A.L.diaSP(Date.now())}.txt`;
     const a = A.ui.h("a", { href: url, download: arq, hidden: true });
     document.body.appendChild(a);
@@ -1999,6 +2014,7 @@ function executarComando(id) {
     case "transferir": if (conversaParaAgir()) acoes.transferir(); break;
     case "abrir_negocio": comandoAbrirNegocio(); break;                                // plano 1000 · CA-157
     case "etiquetas": if (conversaParaAgir()) A.chat.abrirEtiquetas(); break;           // CA-158
+    case "fixar": if (A.selId) alternarFixar(A.selId); else aviso("Abra uma conversa para usar este atalho."); break;   // plano 1500c · CX-050
     case "mover_baixo": A.lista.moverFoco(1); break;
     case "mover_cima": A.lista.moverFoco(-1); break;
     case "buscar": A.lista.focarBusca(); break;
@@ -3012,7 +3028,8 @@ async function novaConversa({ contato = null, telefone: telIni = null, nome: nom
   const bDigitar = ui.h("button", { type: "button", "aria-pressed": "false" }, "Digitar telefone");
   const alterna = ui.h("div", { class: "cv-alterna", role: "group", "aria-label": "Como escolher o contato" }, bBuscar, bDigitar);
 
-  const busca = ui.h("input", { type: "search", id: "cv-nv-busca", placeholder: "Nome ou telefone", autocomplete: "off" });
+  // plano 1500c · CX-053: teclado do celular com «Buscar» e sem corretor trocando o nome procurado
+  const busca = ui.h("input", { type: "search", id: "cv-nv-busca", placeholder: "Nome ou telefone", autocomplete: "off", enterkeyhint: "search", spellcheck: "false", autocapitalize: "off" });
   // plano 1000 · CA-057: lista de verdade (<ul><li><button aria-pressed>): o botão continua botão para o leitor de tela
   // CA-114: sem aria-live no container (cada busca lia os 8 nomes inteiros) — um status à parte diz só quantos vieram
   const resultados = ui.h("div", { class: "cv-busca-contato" });
@@ -3020,7 +3037,8 @@ async function novaConversa({ contato = null, telefone: telIni = null, nome: nom
   const blocoBusca = ui.h("div", { class: "pilha-p" },
     ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-nv-busca" }, A.ctx.vocab.contato || "Contato"), busca), statusBusca, resultados);
   const tel = ui.h("input", { type: "tel", id: "cv-nv-tel", placeholder: "(12) 99999-9999", inputmode: "tel", autocomplete: "off", "aria-describedby": "cv-nv-tel-ajuda" });
-  const nome = ui.h("input", { type: "text", id: "cv-nv-nome", placeholder: "Opcional", maxlength: 160, autocomplete: "off" });
+  // plano 1500c · CX-052: nome com maiúscula em cada palavra no teclado do celular («Maria Souza»)
+  const nome = ui.h("input", { type: "text", id: "cv-nv-nome", placeholder: "Opcional", maxlength: 160, autocomplete: "off", autocapitalize: "words" });
   // D13: máscara enquanto digita (só número do Brasil; «+» fica como foi digitado) e o erro no próprio campo ao sair dele
   const telErro = ui.h("small", { class: "campo-erro cv-nv-tel-erro", id: "cv-nv-tel-erro", role: "alert", hidden: true });
   let telTocado = false;
@@ -3090,7 +3108,7 @@ async function novaConversa({ contato = null, telefone: telIni = null, nome: nom
         statusBusca.textContent = "Nenhum contato encontrado.";
         resultados.appendChild(ui.h("p", { class: "sub" }, "Ninguém com esse nome ou telefone. "));
         const dig = L.normalizarTelefone(q);
-        resultados.appendChild(ui.h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { tel.value = dig ? q : ""; nome.value = dig ? "" : q; pintarPrevia(); trocarModo("digitar"); } } },
+        resultados.appendChild(ui.h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { tel.value = dig ? L.mascaraTelefone(q) : ""; nome.value = dig ? "" : q; pintarPrevia(); trocarModo("digitar"); } } },   // CX-051: o número que veio da busca já entra com a máscara
           ui.icone("mais"), "Digitar o telefone"));
         return;
       }

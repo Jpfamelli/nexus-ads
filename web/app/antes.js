@@ -40,6 +40,8 @@
     var produtoAberto = new URLSearchParams(location.search).get("produto");
     if (produtoAberto === "crm" || produtoAberto === "ads" || produtoAberto === "atendimento") raiz.setAttribute("data-produto", produtoAberto);
   } catch (e) { /* sem query: o app.js põe depois */ }
+  // plano 2000d · DU-229: o «A+» da entrada (texto 12 % maior) vale desde a primeira pintura
+  try { if (window.localStorage.getItem("nx-texto-grande") === "1") raiz.setAttribute("data-texto", "grande"); } catch (e) { /* sem storage */ }
   var preferido = esquema();
   if (preferido === "claro" || preferido === "escuro") {
     raiz.setAttribute("data-esquema", preferido);

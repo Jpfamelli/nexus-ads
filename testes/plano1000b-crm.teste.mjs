@@ -1187,7 +1187,8 @@ test("RB-044/029/213/227/120 textos: linha do tempo com o nome da etapa; chip de
   assert.equal(L.textoChipDono("u1", { nome: "Helena" }), "Responsável: Helena");
   assert.equal(L.textoChipDono("eu"), "Responsável: eu");
   assert.equal(L.textoSemResultado({ busca: " ana " }), "Nada encontrado para «ana».");
-  assert.equal(L.textoSemResultado({ busca: "ana", dono: "eu" }), "Nada encontrado com esses filtros.");
+  // plano 1500c: RX-067 — com busca e filtro, a frase cita a busca também
+  assert.equal(L.textoSemResultado({ busca: "ana", dono: "eu" }), "Nada encontrado para «ana» com esses filtros.");
   assert.equal(L.textoSemResultado({}), "Nada encontrado com esses filtros.");
   const Vc = vert => VOC.vocab(vert);   // o vocabulário de verdade (vocab.js) da vertical
   assert.equal(L.textoGanhosEmpresa(1, Vc("odonto")), "fechada");

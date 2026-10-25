@@ -457,7 +457,14 @@ export async function montar(ctx) {
       });
       if (minha !== montagem) { gaveta && gaveta.fechar(); return; }
       if (telaAtual) telaAtual.gaveta = gaveta;
-    } else fecharGavetaAtual();
+    } else {
+      fecharGavetaAtual();
+      // plano 1500c · RX-064: #/crm/negocio/abc (link cortado/digitado errado) avisa em vez de só mostrar o quadro calado
+      if (tipo === "kanban" && partes[0] === "negocio" && partes[1] !== undefined && !/^\d+$/.test(partes[1] || "")) {
+        const art = ctx.vocab && typeof ctx.vocab.art === "function" ? ctx.vocab.art("negocio") : "o";
+        ui.toast(`Esse link não aponta para ${art === "a" ? "uma" : "um"} ${(ctx.vocab && typeof ctx.vocab.min === "function" && ctx.vocab.min("negocio")) || "negócio"} válid${art}.`, { tipo: "erro" });
+      }
+    }
   } catch (e) {
     console.error("crm: montar falhou", e);
     if (minha !== montagem) return;

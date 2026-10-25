@@ -235,9 +235,11 @@ export function kpisInicio(d, agenda, { hoje = null, links = {}, voc = {} } = {}
 }
 
 /** plano 1500c · RC-187: o prazo de 1ª resposta da empresa em minutos (nx_inicio.conversas.prazo_min); 15 sem o campo. */
-export function prazoResposta(c) { return c && fin(c.prazo_min) && +c.prazo_min > 0 ? Math.round(+c.prazo_min) : 15; }
+// plano 1500c · IC-022: prazo vindo torto do servidor (1 min, 3 dias) fica entre 5 min e 24 h — nada de vermelho com 1 min de espera
+const prazoValido = c => (c && fin(c.prazo_min) && +c.prazo_min > 0 ? Math.min(1440, Math.max(5, Math.round(+c.prazo_min))) : null);
+export function prazoResposta(c) { return prazoValido(c) ?? 15; }
 /** plano 1500c · RC-301: a partir de quantos minutos a espera fica vermelha — o prazo da empresa quando o servidor manda; 30 sem ele. */
-export function limiteEspera(c) { return c && fin(c.prazo_min) && +c.prazo_min > 0 ? Math.round(+c.prazo_min) : 30; }
+export function limiteEspera(c) { return prazoValido(c) ?? 30; }
 /**
  * plano 1500c · RC-204: a faixa da espera de quem está na fila — "ok" (< 5 min), "aten" (5 min até o limite) e "ruim" (≥ limite) — com o texto
  * que acompanha a cor (nunca só cor). → {faixa, texto}
@@ -558,6 +560,22 @@ export function guiaPrimeiroUso({ admin = false, podeSecao = () => true, temModu
     feito: !!feito(["agenda_faixas"]), rota: abre("agenda_faixas") ? "#/config/agenda" : null });
   return out;
 }
+/**
+ * plano 1500c · IC-010/IC-011: o progresso dos primeiros passos — quantos prontos, a % da barra e a frase.
+ * Todos prontos → a frase diz que falta só o primeiro movimento chegar (antes ficava «3 de 3 prontos» e a tela parecia travada).
+ */
+export function progressoGuia(passos) {
+  const l = Array.isArray(passos) ? passos : [];
+  const feitos = l.filter(p => p && p.feito).length, total = l.length;
+  const todos = total > 0 && feitos === total;
+  return { feitos, total, pct: total ? Math.round(feitos / total * 100) : 0, todos,
+    texto: todos ? "Tudo ligado. Os números aparecem aqui assim que chegar a primeira conversa ou venda." : `${feitos} de ${total} prontos` };
+}
+/** plano 1500c · IC-015: «Um passo», «Dois passos», «Três passos» — sem passo nenhum liberado no plano, não promete «Três passos». */
+export function textoQuantosPassos(n) {
+  const nomes = ["", "Um passo", "Dois passos", "Três passos", "Quatro passos"];
+  return nomes[n] || (n > 4 ? `${n} passos` : "Alguns ajustes");
+}
 /** plano 1500c · RC-193: as atrasadas primeiro (a mais antiga no topo), depois as outras na ordem do servidor — sem depender de o servidor ordenar. */
 export function ordenarTarefas(lista) {
   const l = Array.isArray(lista) ? lista.filter(Boolean) : [];
@@ -682,8 +700,16 @@ export function rotuloAbrirConsulta(nome, hora, palavra = "consulta", { agenda =
  * plano 1500c · RC-229: um Início de EXEMPLO para quem ainda não tem dados (só na tela, nada é gravado): números redondos de uma clínica
  * pequena, datas relativas a `hoje`. → {d (formato de nx_inicio, com exemplo: true), agenda (formato de nx_agenda_dia)}
  */
-export function dadosExemplo(hoje, agora = Date.now()) {
+// plano 1500c · IC-020: os serviços e tarefas do exemplo falam a língua do negócio (clínica, oficina, loja, outro)
+const EXEMPLO_VERTICAL = Object.freeze({
+  odonto: { s: ["Avaliação", "Implante", "Limpeza", "Clareamento"], t1: "Ligar para confirmar avaliação", t2: "Enviar orçamento do implante" },
+  oficina: { s: ["Revisão", "Troca de pastilhas", "Alinhamento", "Diagnóstico"], t1: "Ligar para aprovar o orçamento", t2: "Avisar que o carro está pronto" },
+  loja: { s: ["Retirada", "Entrega", "Troca", "Montagem"], t1: "Confirmar endereço de entrega", t2: "Mandar foto do produto" },
+  generico: { s: ["Reunião", "Visita", "Atendimento", "Retorno"], t1: "Ligar para o cliente", t2: "Enviar a proposta" },
+});
+export function dadosExemplo(hoje, agora = Date.now(), { vertical = "odonto" } = {}) {
   const dia = String(hoje || "").slice(0, 10) || diaSP(new Date(agora));
+  const X = EXEMPLO_VERTICAL[vertical] || EXEMPLO_VERTICAL.generico;
   const em = (dd, hh, mm = 0) => `${somarDiasIso(dia, dd)}T${p2(hh)}:${p2(mm)}:00-03:00`;
   const desde = min => new Date(agora - min * 60000).toISOString();
   const d = {
@@ -692,8 +718,8 @@ export function dadosExemplo(hoje, agora = Date.now()) {
       aguardando_lista: [{ id: "ex-1", nome: "Mariana Costa", espera_min: 18, canal: "codewords" }, { id: "ex-2", nome: "Rafael Mendes", espera_min: 7, canal: "meta" },
         { id: "ex-3", nome: "Ana Paula", espera_min: 2, canal: "codewords" }] },
     tarefas: { hoje: 3, atrasadas: 1, abertas: 6, proximas: [
-      { id: "ex-t1", titulo: "Ligar para confirmar avaliação", vence_em: em(-1, 16), atrasada: true, contato_nome: "Carla Souza" },
-      { id: "ex-t2", titulo: "Enviar orçamento do implante", vence_em: em(0, 17), atrasada: false, contato_nome: "Rafael Mendes" }] },
+      { id: "ex-t1", titulo: X.t1, vence_em: em(-1, 16), atrasada: true, contato_nome: "Carla Souza" },
+      { id: "ex-t2", titulo: X.t2, vence_em: em(0, 17), atrasada: false, contato_nome: "Rafael Mendes" }] },
     negocios: { abertos: 21, valor_aberto: 48600, previsao_ponderada: 19400, ganhos_mes: 12, receita_mes: 31800, receita_anuncio_mes: 21600, receita_mes_anterior: 27500,
       receita_mes_anterior_parcial: 22900, dia_do_mes: Number(dia.slice(8, 10)) || 1 },
     leads: { hoje: 5, hoje_anuncio: 3, semana: 34, semana_anuncio: 21 },
@@ -701,13 +727,20 @@ export function dadosExemplo(hoje, agora = Date.now()) {
     gasto_anuncios_mes: 2400,
     canais: [{ id: "ex-c1", nome: "Recepção", numero_exibicao: "+55 12 90000-0000", status: "ativo", estado: "conectado", ultima_entrada_em: desde(4) }],
     notificacoes_nao_lidas: 0,
+    // plano 1500c · IC-021: o exemplo mostra também os blocos que dependem do servidor novo (esfriando, equipe, desde o começo, aniversários)
+    esfriando: { total: 4, itens: [{ id: "ex-e1", contato_nome: "Paulo Reis", estagio_nome: "Orçamento enviado", parado_dias: 12, valor: 2400 },
+      { id: "ex-e2", contato_nome: "Lúcia Alves", estagio_nome: "Em conversa", parado_dias: 9, valor: 1800 }] },
+    equipe: [{ conta_id: "ex-a", nome: "Ana", ganhos: 7, valor: 18600, tpr_media_min: 6 }, { conta_id: "ex-b", nome: "Bruno", ganhos: 5, valor: 13200, tpr_media_min: 11 }],
+    desde_inicio: { primeiro: { mes: somarDiasIso(`${dia.slice(0, 7)}-01`, -150).slice(0, 7), leads: 38, tpr_media_min: 94, receita: 14200 },
+      atual: { mes: dia.slice(0, 7), leads: 96, tpr_media_min: 8, receita: 31800 } },
+    aniversariantes: [{ contato_id: "ex-n1", nome: "Helena Prado", conversa_id: null }],
   };
   const agenda = { data: dia, dias: 7, exemplo: true, consultas: [
-    { negocio_id: null, nome: "Mariana Costa", servico: "Avaliação", status: "aberto", inicio: em(0, 9), fim: em(0, 9, 45) },
-    { negocio_id: null, nome: "Rafael Mendes", servico: "Implante", status: "aberto", inicio: em(0, 14, 30), fim: em(0, 15, 15) },
-    { negocio_id: null, nome: "Ana Paula", servico: "Limpeza", status: "aberto", inicio: em(0, 16), fim: em(0, 16, 40) },
-    { negocio_id: null, nome: "Carla Souza", servico: "Clareamento", status: "aberto", inicio: em(1, 10), fim: em(1, 11) },
-    { negocio_id: null, nome: "Bruno Lima", servico: "Avaliação", status: "aberto", inicio: em(2, 15), fim: em(2, 15, 40) }] };
+    { negocio_id: null, nome: "Mariana Costa", servico: X.s[0], status: "aberto", inicio: em(0, 9), fim: em(0, 9, 45) },
+    { negocio_id: null, nome: "Rafael Mendes", servico: X.s[1], status: "aberto", inicio: em(0, 14, 30), fim: em(0, 15, 15) },
+    { negocio_id: null, nome: "Ana Paula", servico: X.s[2], status: "aberto", inicio: em(0, 16), fim: em(0, 16, 40) },
+    { negocio_id: null, nome: "Carla Souza", servico: X.s[3], status: "aberto", inicio: em(1, 10), fim: em(1, 11) },
+    { negocio_id: null, nome: "Bruno Lima", servico: X.s[0], status: "aberto", inicio: em(2, 15), fim: em(2, 15, 40) }] };
   return { d, agenda };
 }
 /**
@@ -721,7 +754,9 @@ export function retornoAnuncios(d) {
   // a receita que veio DE anúncio (negocios.receita_anuncio_mes) quando o servidor separa; sem ela, a do mês inteiro — e o texto diz qual é
   const deAnuncio = fin(n.receita_anuncio_mes);
   const receita = deAnuncio ? +n.receita_anuncio_mes : fin(n.receita_mes) ? +n.receita_mes : null;
-  if (!(gasto > 0) || !(receita > 0)) return null;
+  if (!(gasto > 0) || receita === null || receita < 0) return null;
+  // plano 1500c · IC-008: gastou e nada voltou ainda — o cartão diz isso (antes sumia, e o dono não via que o dinheiro foi sem retorno)
+  if (receita === 0) return { multiplo: 0, receita: 0, gasto, deAnuncio, semVenda: true };
   return { multiplo: receita / gasto, receita, gasto, deAnuncio };
 }
 /** plano 1500c · IC-006: custo por lead do mês — gasto em anúncios ÷ leads do mês (funil_mes.leads). null sem os dois. */
@@ -730,6 +765,24 @@ export function custoPorLead(d) {
   const gasto = r ? r.gasto : d && fin(d.gasto_anuncios_mes) ? +d.gasto_anuncios_mes : null;
   const leads = d && d.funil_mes && fin(d.funil_mes.leads) ? +d.funil_mes.leads : null;
   return gasto > 0 && leads > 0 ? gasto / leads : null;
+}
+/**
+ * plano 1500c · IC-007: a nota honesta debaixo do «cada R$ 1 virou…» — abaixo de R$ 1 o cartão não comemora, diz que o anúncio ainda não se pagou.
+ * plano 1500c · IC-008: gastou e não vendeu nada → diz isso com o valor investido. Acima de R$ 1 → null (a frase grande já basta).
+ */
+export function notaRetorno(r, brl = v => `R$ ${Math.round(v)}`) {
+  if (!r) return null;
+  if (r.semVenda) return `${brl(r.gasto)} investidos em anúncios este mês e nenhuma venda registrada ainda. Confira se as vendas estão sendo marcadas como ganhas no CRM.`;
+  if (r.multiplo < 1) return `Os anúncios ainda não se pagaram este mês: faltam ${brl(r.gasto - r.receita)} para empatar.`;
+  return null;
+}
+/** plano 1500c · IC-005: «Gerado em 25/10 às 14:05» (horário de São Paulo) — o sócio sabe de quando são os números da folha. */
+export function textoGeradoEm(agora = Date.now()) {
+  const t = new Date(agora);
+  if (!Number.isFinite(t.getTime())) return "";
+  const p = Object.fromEntries(new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
+    .formatToParts(t).map(x => [x.type, x.value]));
+  return `Gerado em ${p.day}/${p.month} às ${p.hour === "24" ? "00" : p.hour}:${p.minute}`;
 }
 /** «R$ 13,25» do «cada R$ 1 virou…»: duas casas abaixo de 10, inteiro arredondado acima (R$ 13). (plano 1500c · IC-001) */
 export function textoMultiplo(m) {
@@ -808,18 +861,24 @@ export function listaEsfriando(d, max = 5) {
       dias: fin(x.parado_dias) ? Math.max(0, Math.floor(+x.parado_dias)) : null, valor: fin(x.valor) ? +x.valor : null }))
     .sort((a, b) => (b.dias ?? -1) - (a.dias ?? -1)).slice(0, max);
   const total = Math.max(fin(s.total) ? +s.total : 0, itens.length);
-  return total > 0 ? { total, itens } : null;
+  // plano 1500c · IC-013: quanto dinheiro está parado — valor_total do servidor; sem ele, a soma dos que vieram (e «parcial» quando há mais)
+  const soma = itens.reduce((a, x) => a + (x.valor || 0), 0);
+  const valor = fin(s.valor_total) ? +s.valor_total : soma > 0 ? soma : null;
+  const parcial = !fin(s.valor_total) && total > itens.length;
+  return total > 0 ? { total, itens, valor, parcial } : null;
 }
 /**
  * plano 1500c · RC-219: a equipe no mês (nx_inicio.equipe [{conta_id, nome, ganhos, valor, tpr_media_min}]) ordenada pelo valor ganho.
  * null sem o campo ou lista vazia.
  */
-export function equipeMes(d) {
+export function equipeMes(d, contaId = null) {
   const l = d && Array.isArray(d.equipe) ? d.equipe : null;
   if (!l) return null;
   const out = l.filter(x => x && String(x.nome || "").trim()).map(x => ({ id: x.conta_id ?? x.id ?? null, nome: String(x.nome).trim(),
     ganhos: Math.max(0, Math.round(+x.ganhos || 0)), valor: fin(x.valor) ? +x.valor : 0, tpr: fin(x.tpr_media_min) ? Math.max(0, +x.tpr_media_min) : null }))
     .sort((a, b) => b.valor - a.valor || b.ganhos - a.ganhos || (a.tpr ?? Infinity) - (b.tpr ?? Infinity));
+  // plano 1500c · IC-012: a linha de quem está olhando ganha «(você)» — cada um se acha na tabela sem procurar
+  if (contaId !== null && contaId !== undefined) for (const x of out) x.eu = x.id !== null && String(x.id) === String(contaId);
   return out.length ? out : null;
 }
 /**
@@ -864,6 +923,11 @@ export function linhasResumoMes(d, { voc = {}, brl = v => `R$ ${Math.round(v)}` 
   if (r) poe("roi", "Cada R$ 1 em anúncios virou", textoMultiplo(r.multiplo));
   poe("aberto", "Em aberto no funil", fin(n.valor_aberto) ? brl(+n.valor_aberto) : null);
   return out;
+}
+/** plano 1500c · IC-003: o resumo do mês em texto para colar no WhatsApp/e-mail («*Resumo de outubro* — Empresa» + uma linha por número). */
+export function textoResumoMes(linhas, { empresa = "", mes = "", ate = "" } = {}) {
+  const cab = `*Resumo de ${mes}*${empresa ? ` — ${empresa}` : ""}${ate ? ` (até ${ate})` : ""}`;
+  return [cab, ...(Array.isArray(linhas) ? linhas : []).map(x => `• ${x.rotulo}: ${x.valor}`), "Números do Órbita."].join("\n");
 }
 /** «abril de 2026» de «2026-04». */
 export function mesPorExtenso(am) {
@@ -1028,6 +1092,9 @@ export async function montar(ctx) {
   // o checklist só cobra o que esta pessoa consegue abrir nas Configurações (a mesma régua do config.js: seção pronta, módulo do plano e papel)
   const podeSecao = L.filtroSecoesOnboarding({ temModulo: ctx.temModulo, pode: ctx.pode, configPronta: ctx.configPronta });
   const resumoOnb = onb => { const local = lerOnb(); return L.resumoOnboarding(onb, { pulados: local.pulados, dispensadoAte: local.dispensadoAte, admin, podeSecao }); };
+  // plano 1500c · UC-011 (pendência da frente sis): #/inicio?passos=1 («Comece aqui» do menu) traz o checklist de volta mesmo dispensado
+  const pedirPassos = !!(ctx.rota && ctx.rota.query && String(ctx.rota.query.passos) === "1");
+  if (pedirPassos && admin) { const p = lerOnb(); if (p.dispensadoAte) { p.dispensadoAte = 0; gravarOnb(p); } }
   // a palavra da agenda na vertical (consulta / visita / entrega), a mesma das Automações
   const palavra = L.palavraAgenda(V.vertical || (ctx.cliente && ctx.cliente.vertical));
 
@@ -1286,7 +1353,7 @@ export async function montar(ctx) {
     ultimoDado = d;
     // plano 1500c · RC-229: «Ver um exemplo» — a conta zerada vê o Início com dados de mentira (selo EXEMPLO; ações não gravam nada)
     const exemplo = verExemplo && L.inicioVazio(d);
-    if (exemplo) ({ d, agenda } = dadosExemplo(d.hoje || L.hojeSP()));
+    if (exemplo) ({ d, agenda } = dadosExemplo(d.hoje || L.hojeSP(), Date.now(), { vertical: V.vertical || (ctx.cliente && ctx.cliente.vertical) || "generico" }));     // IC-020
     soltarSparks();            // plano 1000b · RB-167: as linhas do desenho anterior saem da página agora
     const contarDepois = [];     // animações de "contar até o valor": começam quando o esqueleto sai (o elemento precisa estar na página)
     const num = (v, fmt, cls = "", chave = null) => {
@@ -1324,7 +1391,7 @@ export async function montar(ctx) {
     if (rapidas) corpo.append(rapidas);
     // plano 1500c · IC-001: o destaque de venda — «cada R$ 1 em anúncio virou R$ X» (receita ÷ gasto do mês, quando o servidor manda o gasto)
     const roi = retornoAnuncios(d);
-    if (roi && !L.inicioVazio(d)) corpo.append(cartaoRetorno(roi));
+    if (roi && !L.inicioVazio(d)) corpo.append(cartaoRetorno({ ...roi, cpl: custoPorLead(d) }));
 
     const onbRes = resumoOnb(onb);
     if (L.inicioVazio(d) && !d.exemplo) {
@@ -1335,7 +1402,7 @@ export async function montar(ctx) {
       const passosGuia = guiaPrimeiroUso({ admin, podeSecao, temModulo: ctx.temModulo, feito });
       const proximoGuia = passosGuia.find(p => !p.feito && p.rota) || null;
       corpo.append(h("div", { class: "ini-comecar rel-entra" }, ui.vazio({ tipo: "primeiro_uso", titulo: "Tudo pronto para começar.",
-        texto: admin ? `${passosGuia.length === 1 ? "Um passo" : passosGuia.length === 2 ? "Dois passos" : "Três passos"} e o Início mostra quem espera resposta, a agenda do dia e quanto cada real em anúncio trouxe.` : "Peça ao administrador da sua empresa para concluir a configuração.",
+        texto: admin ? `${textoQuantosPassos(passosGuia.length)} e o Início mostra quem espera resposta, a agenda do dia e quanto cada real em anúncio trouxe.` : "Peça ao administrador da sua empresa para concluir a configuração.",
         passos: passosGuia.map(p => ({ rotulo: p.rotulo, feito: p.feito })),
         acao: proximoGuia ? { rotulo: proximoGuia.botao, fn: () => ctx.navegar(proximoGuia.rota) } : null,
         // plano 1500c · RC-229: «Ver um exemplo» desenha o Início com números de mentira (selo EXEMPLO, nada gravado) — a demonstração não fica no vazio
@@ -1344,9 +1411,12 @@ export async function montar(ctx) {
         h("span", { class: "ini-guia-n", "aria-hidden": "true" }, p.feito ? ui.icone("check") : String(i + 1)),
         h("div", { class: "ini-guia-txt" }, h("b", null, p.rotulo), h("span", { class: "rel-nota" }, p.feito ? "Feito." : p.ajuda)),
         !p.feito && p.rota ? h("a", { class: p === proximoGuia ? "bt bt-prim bt-p" : "bt bt-sec bt-p", href: p.rota, dataset: { k: `guia-${p.id}` } }, p.botao) : null)));
-      if (passosGuia.length) corpo.append(h("section", { class: "rel-cartao ini-guia-cartao rel-entra", "aria-labelledby": "ini-gu" },
+      const prog = progressoGuia(passosGuia);     // plano 1500c · IC-010/IC-011
+      if (passosGuia.length) corpo.append(h("section", { class: ["rel-cartao", "ini-guia-cartao", "rel-entra", prog.todos && "ini-guia-pronto"], "aria-labelledby": "ini-gu" },
         h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ini-gu", class: "rel-h2" }, "Comece por aqui"),
-          h("p", { class: "rel-nota" }, `${passosGuia.filter(p => p.feito).length} de ${passosGuia.length} prontos`)), guia));
+          h("p", { class: "rel-nota", dataset: { k: "guia-prog" } }, prog.texto)),
+        h("div", { class: "ini-guia-barra", role: "progressbar", "aria-label": "Primeiros passos prontos", "aria-valuemin": "0", "aria-valuemax": String(prog.total), "aria-valuenow": String(prog.feitos), style: { "--guia-pct": `${prog.pct}%` } },
+          h("span", { class: "ini-guia-barra-f" })), guia));
       if (onbRes) corpo.append(cartaoChecklist(onbRes));
       relogio = null;
       trocar();
@@ -1562,7 +1632,7 @@ export async function montar(ctx) {
     const NOMES = { agora: "Agora", atendimento: "Atendimento", tarefas: "Tarefas", numeros: "Números de WhatsApp", vendas: "Vendas", funil: "Funil do mês", leads: "Leads", horas: "Agenda de hoje e da semana", metas: "Metas do mês",
       esfriando: `${cap(voc.negocios)} esfriando`, equipe: "Equipe no mês", desde: "Desde que você começou" };
     // plano 1500c · RC-339/RC-219/RC-325: os blocos novos só existem quando o servidor manda o campo (RPC antiga: nada inventado)
-    const esfriando = podeCrm ? listaEsfriando(d) : null, equipe = admin ? equipeMes(d) : null, desde = admin ? desdeInicio(d) : null;
+    const esfriando = podeCrm ? listaEsfriando(d) : null, equipe = admin ? equipeMes(d, contaId) : null, desde = admin ? desdeInicio(d) : null;
     const { abertos, recolhidos } = L.blocosInicio(d);
     // B5: número desconectado no aparelho abre o bloco dos números (L.blocosInicio só olha o status de cadastro)
     if ((d.canais || []).some(k => k && k.estado === "desconectado") && recolhidos.includes("numeros")) { recolhidos.splice(recolhidos.indexOf("numeros"), 1); abertos.push("numeros"); }
@@ -1721,7 +1791,9 @@ export async function montar(ctx) {
         h("p", { class: "ini-aniv-t" }, `${aniv.length === 1 ? "Faz aniversário hoje" : `${aniv.length} fazem aniversário hoje`}`),
         h("ul", { class: "ini-aniv-lista" }, aniv.slice(0, 4).map(x => h("li", null, h("span", { class: "ini-aniv-nome" }, x.nome),
           x.conversaId != null && podeConversas ? h("a", { class: "bt bt-fant bt-p", href: `#/conversas/${encodeURIComponent(x.conversaId)}`, dataset: { k: `aniv-${x.contatoId ?? x.conversaId}` }, "aria-label": `Dar parabéns a ${x.nome}` }, "Dar parabéns")
-            : x.contatoId != null && podeConversas ? h("a", { class: "bt bt-fant bt-p", href: `#/conversas?contato=${encodeURIComponent(x.contatoId)}`, dataset: { k: `aniv-${x.contatoId}` }, "aria-label": `Dar parabéns a ${x.nome}` }, "Dar parabéns") : null)))));
+            : x.contatoId != null && podeConversas ? h("a", { class: "bt bt-fant bt-p", href: `#/conversas?contato=${encodeURIComponent(x.contatoId)}`, dataset: { k: `aniv-${x.contatoId}` }, "aria-label": `Dar parabéns a ${x.nome}` }, "Dar parabéns") : null))),
+        // plano 1500c · IC-018: mais de 4 aniversariantes → «+N» com os nomes na dica (antes os outros sumiam sem aviso)
+        aniv.length > 4 ? h("p", { class: "rel-nota", dataset: { k: "aniv-mais" }, title: aniv.slice(4).map(x => x.nome).join(", ") }, `+${aniv.length - 4} ${aniv.length - 4 === 1 ? "outro" : "outros"}`) : null));
       const colAg = h("div", { class: "ini-agora-col ini-agora-ag" }, h("p", { class: "rel-olho" }, cap(palavra.varios)));
       if (agendaLendo) colAg.append(h("p", { class: "rel-nota" }, "Lendo a agenda…"));
       else if (agendaFalhou) colAg.append(h("p", { class: "rel-nota rel-txt-aten" }, "Não consegui ler a agenda agora."), botaoTentar("ag-tentar"));
@@ -1754,7 +1826,10 @@ export async function montar(ctx) {
           return h("li", { class: "ini-sempres-item" }, h("span", { class: "rel-num ini-sempres-h" }, hora), h("span", { class: "ini-sempres-nome" }, nome),
             h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { k: `pr-${it.negocio_id}` }, "aria-label": `Marcar a presença de ${nome}, às ${hora}`,
               on: { click: () => pontes.abrirNegocio(it.negocio_id, { aba: "presenca", aoMudar: () => carregar({ forcar: true }) }) } }, "Marcar presença"));
-        }))));
+        })),
+        // plano 1500c · IC-019: mais de 4 sem presença → «+N na agenda de hoje» (antes os outros sumiam)
+        semPres.length > 4 ? (podeAgenda ? h("a", { class: "rel-link", href: `#/agenda?dia=${d.hoje || L.hojeSP()}`, dataset: { k: "pr-mais" } }, `+${semPres.length - 4} na agenda de hoje`)
+          : h("p", { class: "rel-nota", dataset: { k: "pr-mais" } }, `+${semPres.length - 4} sem presença`)) : null));
       // plano 1000 (CR-217): quem está «agendado» sem data — a agenda e o lembrete não sabem dele; cada um abre o negócio para marcar
       const semData = podeCrm ? listaSemData(d) : null;
       if (semData) colAg.append(blocoSemData(semData));
@@ -1964,7 +2039,9 @@ export async function montar(ctx) {
       const sobra = es.total - es.itens.length;
       return h("section", { class: "rel-cartao ini-esfr rel-entra", "aria-labelledby": "ini-ef", style: "--i:4" },
         h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ini-ef", class: "rel-h2" }, `${cap(voc.negocios)} esfriando`),
-          h("p", { class: "rel-nota" }, `${es.total} sem mensagem nem tarefa há 7+ dias`)),
+          h("p", { class: "rel-nota" }, `${es.total} sem mensagem nem tarefa há 7+ dias`,
+            // plano 1500c · IC-013
+            es.valor ? h("b", { class: "ini-esfr-valor rel-num", dataset: { k: "ef-valor" } }, ` · ${es.parcial ? "pelo menos " : ""}${L.textoMoeda(es.valor, { centavos: false })} parados`) : null)),
         h("ol", { class: "ini-esfr-lista" }, es.itens.map(it => {
           const nome = it.nome || `${cap(voc.negocio)} sem nome`;
           return h("li", { class: "ini-esfr-item" },
@@ -1983,8 +2060,9 @@ export async function montar(ctx) {
         h("div", { class: "ini-equipe-rol" }, h("table", { class: "ini-equipe-tab" },
           h("caption", { class: "sr-only" }, "Equipe no mês: ganhos, valor e tempo médio da 1ª resposta por pessoa"),
           h("thead", null, h("tr", null, h("th", { scope: "col" }, "Pessoa"), h("th", { scope: "col", class: "num" }, "Ganhos"), h("th", { scope: "col", class: "num" }, "Valor"), h("th", { scope: "col", class: "num" }, "1ª resposta"))),
-          h("tbody", null, eq.map((x, i) => h("tr", { class: i === 0 && x.valor > 0 ? "ini-equipe-top" : null },
-            h("th", { scope: "row" }, i === 0 && x.valor > 0 ? h("span", { class: "ini-equipe-coroa", "aria-label": "1º lugar" }, "1º ") : null, x.nome),
+          h("tbody", null, eq.map((x, i) => h("tr", { class: [i === 0 && x.valor > 0 && "ini-equipe-top", x.eu && "ini-equipe-eu"] },
+            h("th", { scope: "row" }, i === 0 && x.valor > 0 ? h("span", { class: "ini-equipe-coroa", "aria-label": "1º lugar" }, "1º ") : null, x.nome,
+              x.eu ? h("span", { class: "ini-equipe-voce" }, " (você)") : null),     // plano 1500c · IC-012
             h("td", { class: "num" }, int(x.ganhos)), h("td", { class: "num" }, L.textoMoeda(x.valor, { centavos: false })),
             h("td", { class: ["num", x.tpr !== null && x.tpr === melhorTpr && "ini-equipe-rapido"] }, x.tpr === null ? "—" : duracaoCurta(x.tpr))))))));
     }
@@ -2242,14 +2320,22 @@ export async function montar(ctx) {
     const hoje = d.hoje || L.hojeSP();
     const mes = mesPorExtenso(String(hoje).slice(0, 7));
     const linhas = linhasResumoMes(d, { voc, brl: v => L.textoMoeda(v, { centavos: false }) });
-    const fechar = () => { folha.remove(); document.documentElement.classList.remove("ini-imprimindo"); if (typeof removeEventListener === "function") removeEventListener("afterprint", fechar); focarK("resumo-mes"); };
+    const texto = textoResumoMes(linhas, { empresa: ctx.cliente.nome || "", mes, ate: L.ddmmIso(hoje) });     // plano 1500c · IC-003
+    const fechar =() => { folha.remove(); document.documentElement.classList.remove("ini-imprimindo"); if (typeof removeEventListener === "function") removeEventListener("afterprint", fechar); focarK("resumo-mes"); };
     const folha = h("section", { class: "ini-resumo-folha", role: "dialog", "aria-modal": "true", "aria-labelledby": "ini-rs-t", tabindex: "-1" },
       h("header", { class: "ini-resumo-cab" }, h("p", { class: "rel-olho" }, ctx.cliente.nome || ""), h("h2", { id: "ini-rs-t", class: "ini-resumo-titulo" }, `Resumo de ${mes}`),
         h("p", { class: "rel-nota" }, `do dia 1 até ${L.ddmmIso(hoje)} · números do Órbita`)),
       h("dl", { class: "ini-resumo-lista" }, linhas.map(x => h("div", { class: ["ini-resumo-l", x.id === "roi" && "ini-resumo-destaque"] }, h("dt", null, x.rotulo), h("dd", { class: "rel-num" }, x.valor)))),
       linhas.length ? null : h("p", { class: "rel-nota" }, "Ainda não há números deste mês."),
       h("p", { class: "rel-nota ini-resumo-rod" }, "Contagens do CRM e das conversas; retorno dos anúncios só quando o gasto do mês está ligado."),
+      h("p", { class: "rel-nota ini-resumo-gerado", dataset: { k: "rs-gerado" } }, textoGeradoEm(Date.now())),     // plano 1500c · IC-005
       h("div", { class: "ini-resumo-acoes" },
+        // plano 1500c · IC-003: o mesmo resumo em texto, pronto para colar no WhatsApp do sócio
+        linhas.length ? h("button", { type: "button", class: "bt bt-sec", dataset: { k: "rs-copiar" }, on: { click: () => copiarResumo(texto) } }, "Copiar texto") : null,
+        // plano 1500c · IC-004: no celular, «Compartilhar» abre a folha de compartilhar do sistema (só aparece onde existe)
+        linhas.length && typeof navigator !== "undefined" && navigator && typeof navigator.share === "function"
+          ? h("button", { type: "button", class: "bt bt-sec", dataset: { k: "rs-compartilhar" }, on: { click: () => { try { const p = navigator.share({ title: `Resumo de ${mes}`, text: texto }); if (p && typeof p.catch === "function") p.catch(() => {}); } catch { /* cancelado */ } } } }, "Compartilhar")
+          : null,
         h("button", { type: "button", class: "bt bt-prim", dataset: { k: "rs-imprimir" }, on: { click: () => { try { if (typeof print === "function") print(); } catch { /* sem impressão */ } } } }, "Imprimir ou salvar PDF"),
         h("button", { type: "button", class: "bt bt-sec", dataset: { k: "rs-fechar" }, on: { click: fechar } }, "Fechar")));
     folha.addEventListener("keydown", ev => { if (ev.key === "Escape") { ev.preventDefault(); fechar(); } });
@@ -2258,6 +2344,30 @@ export async function montar(ctx) {
     if (typeof addEventListener === "function") addEventListener("afterprint", fechar);
     if (typeof folha.focus === "function") folha.focus();
     return folha;
+  }
+
+  /** plano 1500c · IC-003: copia o texto do resumo (ui.copiar quando existe; senão a área de transferência) e avisa. */
+  async function copiarResumo(texto) {
+    let ok = false;
+    try {
+      if (typeof ui.copiar === "function") { await ui.copiar(texto, { aviso: "Resumo copiado. É só colar no WhatsApp." }); return true; }
+      if (typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") { await navigator.clipboard.writeText(texto); ok = true; }
+    } catch { ok = false; }
+    if (typeof ui.toast === "function") ui.toast(ok ? "Resumo copiado. É só colar no WhatsApp." : "Não deu para copiar aqui. Selecione o texto da folha.", { tipo: ok ? "ok" : "erro" });
+    return ok;
+  }
+
+  /** plano 1500c · UC-011: rola até o checklist (ou os primeiros passos do cliente novo) e põe o foco no título dele. */
+  function irParaPassos() {
+    setTimeout(() => {
+      if (minha !== montagem) return;
+      const c = raiz.querySelector(".ini-onb") || raiz.querySelector(".ini-guia-cartao");
+      if (!c) return;
+      c.hidden = false;
+      try { if (typeof c.scrollIntoView === "function") c.scrollIntoView({ block: "start" }); } catch { /* ok */ }
+      const t = c.querySelector("h2");
+      if (t) { t.setAttribute("tabindex", "-1"); if (typeof t.focus === "function") t.focus(); }
+    }, 70);
   }
 
   /** plano 1500c · RC-213: «Testar» o número (nx_canal_testar) → «Enviado às 10:32» ao lado; erro volta o botão e explica. */
@@ -2287,6 +2397,10 @@ export async function montar(ctx) {
       h("h2", { id: "ini-roi-t", class: "ini-roi-frase" }, "Cada ", h("span", { class: "ini-roi-um" }, "R$ 1"), " virou ",
         h("b", { class: "ini-roi-n rel-num", dataset: { n: "negocios.receita_mes" } }, mult), " ", h("em", { class: "narr" }, frase)),
       h("p", { class: "rel-nota ini-roi-conta" }, conta),
+      // plano 1500c · IC-007/IC-008: abaixo de R$ 1 (ou sem venda nenhuma) o cartão diz a verdade em vez de comemorar
+      notaRetorno(r, brl0) ? h("p", { class: "rel-nota ini-roi-alerta", dataset: { k: "roi-nota" } }, notaRetorno(r, brl0)) : null,
+      // plano 1500c · IC-006: o custo de cada lead no mês, ao lado do retorno
+      r.cpl ? h("p", { class: "rel-nota ini-roi-cpl", dataset: { k: "roi-cpl" } }, `Cada lead custou ${L.textoMoeda(r.cpl)} este mês.`) : null,
       podeAds ? h("a", { class: "rel-link", href: "#/anuncios", dataset: { k: "roi-ads" } }, "Ver campanhas") : null);
   }
 
@@ -2362,6 +2476,8 @@ export async function montar(ctx) {
   /** plano 1500c · RC-192: «Amanhã» — grava o novo vencimento já (nx_tarefa_salvar), tira a linha da lista de hoje e «Desfazer» devolve o de antes. */
   async function adiarTarefa(tf, bt, li) {
     if (!bt || bt.disabled) return;
+    // plano 1500c · IC-014: sem internet não tenta (o erro vinha depois de esperar); avisa na hora e o botão continua lá
+    if (semRede()) { ui.toast("Sem internet: a tarefa não foi adiada. Tente de novo quando voltar.", { tipo: "erro" }); return; }
     bt.disabled = true;
     const antes = tf.vence_em || null, novo = adiarParaAmanha(antes);
     try {
@@ -2439,6 +2555,7 @@ export async function montar(ctx) {
   await carregar({ primeira: true });
   if (minha !== montagem) return;
   voltarAoLugar();
+  if (pedirPassos) irParaPassos();     // plano 1500c · UC-011
   // o shell não troca de versão no meio de uma tarefa marcada como concluída (nem com metas sendo ajustadas ou a 1ª meta digitada)
   if (typeof ctx.naoAtualizar === "function") cancelarOcupado = ctx.naoAtualizar(() => metasEditando || !!document.querySelector(".ini-tf-item.feita"));
   // B5: o shell soube que um número caiu ou voltou (nx_pulso / notificação): só a faixa é repintada, sem RPC e sem redesenhar a tela
@@ -2459,6 +2576,8 @@ export async function montar(ctx) {
   // plano 1500c · RC-211: «R» atualiza o Início (sem modificador, fora de campos e de janelas abertas) e anuncia quando terminou
   const aoTecla = ev => {
     if (minha !== montagem || !ev || ev.defaultPrevented || ev.ctrlKey || ev.metaKey || ev.altKey || ev.repeat) return;
+    // plano 1500c · IC-009: Esc sai do exemplo (como o botão «Voltar e conectar»), fora de campos e sem folha aberta por cima
+    if (ev.key === "Escape" && verExemplo && teclaLivre(ev.target, document)) { ev.preventDefault(); verExemplo = false; redesenhar(); return; }
     if (ev.key !== "r" && ev.key !== "R") return;
     if (!teclaLivre(ev.target, document)) return;
     if (btn.disabled || lendoForcado || metasEditando) return;
@@ -2469,13 +2588,17 @@ export async function montar(ctx) {
   // plano 1500c · RC-298: no celular, puxar a página para baixo no topo atualiza (com indicador; sem animação em movimento reduzido)
   const puxar = h("div", { class: "ini-puxar", "aria-hidden": "true", hidden: true }, h("span", { class: "ini-puxar-ic" }, ui.icone("reabrir")), h("span", { class: "ini-puxar-t" }, "Puxe para atualizar"));
   cab.insertBefore(puxar, cab.firstChild);     // no cabeçalho (fica entre os redesenhos do corpo)
-  let y0 = null, dist = 0;
+  let y0 = null, x0 = 0, dist = 0;
   const LIMIAR_PUXAR = 70;
-  const aoToqueIni = ev => { const t = ev.touches && ev.touches[0]; y0 = t && (typeof scrollY !== "number" || scrollY <= 0) && !lendoForcado ? t.clientY : null; dist = 0; };
+  // plano 1500c · IC-016: com uma janela aberta por cima (diálogo, resumo) ou com dois dedos, puxar não atualiza
+  const aoToqueIni = ev => { const t = ev.touches && ev.touches[0]; const livre = (ev.touches && ev.touches.length === 1) && !document.querySelector("[aria-modal='true']");
+    y0 = t && livre && (typeof scrollY !== "number" || scrollY <= 0) && !lendoForcado ? t.clientY : null; x0 = t ? t.clientX : 0; dist = 0; };
   const aoToqueMove = ev => {
     if (y0 === null) return;
     const t = ev.touches && ev.touches[0];
     dist = t ? Math.max(0, t.clientY - y0) : 0;
+    // plano 1500c · IC-016: arrastar para o lado (rolar o gráfico, os cartões) não vira «puxar para atualizar»
+    if (t && Math.abs(t.clientX - x0) > Math.max(24, dist)) { y0 = null; dist = 0; puxar.hidden = true; puxar.classList.remove("pronto"); return; }
     puxar.hidden = dist < 12;
     puxar.classList.toggle("pronto", dist >= LIMIAR_PUXAR);
     puxar.lastChild.textContent = dist >= LIMIAR_PUXAR ? "Solte para atualizar" : "Puxe para atualizar";

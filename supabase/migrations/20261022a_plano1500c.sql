@@ -30,6 +30,11 @@
 --   SC-008/RB-163 nx_inicio: atribuida_id/atribuida_nome em aguardando_lista     UCC-018/019 nx_pulso: ultima_msg_em e cliente
 --   AC-063/AC-262 nx_cfg_validar: diasFechados, agenciaNome, agenciaCidade, relSemanal
 --   Índices: SC-169/171/173/174/175/176/177/178/183/184/189/190
+--   SC-108  nx_login_ip devolve o RESUMO do IP (h + 32 hex): as chaves de limite não guardam mais o IP (bloqueios em curso zeram)
+--   SC-141/147 nx_saude_dados: tarefas do pg_cron atrasadas e 1 leitura por tarefa   SC-131/UC-024 nx_teste_avisar + cron diário
+--   Pendências das frentes: UCB-029 convites vencidos · CC-197/267 nx_buscar · RC-311 empresas valor_aberto · RC-065 previsão no cartão
+--   CC-245/324/239/240 agenda (obs, marcado_por, confirmada_em, nx_agenda_confirmar) · CC-027 SLA por departamento
+--   UCA-093 descrição da automação · UCB-091 nx_suporte_entrar · UCC-104 nx_evento_registrar
 -- Smoke: supabase/testes/34_plano1500c.sql
 -- ============================================================
 
@@ -94,6 +99,28 @@ create index if not exists nx_relatorios_criado on public.nx_relatorios (criado_
 create index if not exists nx_fila_cli_status on public.nx_envios_fila (cliente_id, status, enviar_em);     -- SC-189
 create index if not exists nx_conversas_entrada on public.nx_conversas (cliente_id, ultima_entrada_em desc)
   where ultima_entrada_em is not null;                                                                     -- UCC-018 (nx_pulso)
+
+-- CC-027: limites do SLA por departamento (minutos: atenção / atraso / crítico; o front já lê e cai em 15/30/60 sem eles)
+alter table public.nx_departamentos add column if not exists sla_aten int not null default 15;
+alter table public.nx_departamentos add column if not exists sla_atraso int not null default 30;
+alter table public.nx_departamentos add column if not exists sla_critico int not null default 60;
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'nx_departamentos_sla_check') then
+    alter table public.nx_departamentos add constraint nx_departamentos_sla_check
+      check (sla_aten between 1 and 1440 and sla_atraso between 1 and 1440 and sla_critico between 1 and 1440
+             and sla_aten < sla_atraso and sla_atraso < sla_critico);
+  end if;
+end $$;
+
+-- UCA-093: descrição da automação (até 500), salva pelo nx_automacao_salvar e devolvida no item (o front já busca nela)
+alter table public.nx_automacoes add column if not exists descricao text;
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'nx_automacoes_descricao_check') then
+    alter table public.nx_automacoes add constraint nx_automacoes_descricao_check check (descricao is null or char_length(descricao) <= 500);
+  end if;
+end $$;
 
 -- ------------------------------------------------------------
 -- 2. Auxiliar interna (antes das cópias que a usam)
@@ -464,6 +491,80 @@ begin
     'mais_antiga', (select min(f.enviar_em) from public.nx_envios_fila f where f.cliente_id = p_cliente and f.status = 'pendente'),
     'pausados', (select c.envios_pausados from public.nx_clientes c where c.id = p_cliente),
     'agora', now());
+end $$;
+
+-- plano 1500c · SC-131 / UC-024: o fim do teste não pega ninguém de surpresa — a 3 dias e no último dia, os admins/supervisores da
+-- empresa e o gestor da revenda recebem um aviso no sino (link #/config/plano), uma vez por marco. Não muda status nem apaga nada
+-- (vencido, o nx_ctx já deixa só leitura). Interna: o cron diário 'nx-teste-avisos' chama.
+create or replace function public.nx_teste_avisar()
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare c record; v_n int := 0; v_hoje date := (now() at time zone 'America/Sao_Paulo')::date; v_tit text;
+begin
+  for c in
+    select x.id, x.nome, x.teste_ate from public.nx_clientes x
+     where x.status = 'teste' and coalesce(x.ativo, true) and x.teste_ate in (v_hoje, v_hoje + 3)
+       and not exists (select 1 from public.nx_orgs o where o.id = x.org_id and o.status in ('suspenso', 'cancelado'))
+  loop
+    v_tit := case when c.teste_ate = v_hoje then 'O teste termina hoje' else 'O teste termina em 3 dias' end;
+    if exists (select 1 from public.nx_notificacoes n
+                where n.cliente_id = c.id and n.tipo = 'sistema' and n.titulo = v_tit and n.criado_em > now() - interval '5 days') then
+      continue;
+    end if;
+    v_n := v_n + public.nx_notificar(c.id, null, 'sistema', v_tit,
+      'Depois do último dia (' || to_char(c.teste_ate, 'DD/MM') || '), a conta fica só para leitura até a assinatura. Veja os planos.',
+      '#/config/plano');
+  end loop;
+  return v_n;
+end $$;
+
+-- plano 1500c · CC-240 / CC-239: «Confirmada» no detalhe da consulta — grava quando o paciente confirmou (a remarcação apaga).
+-- p_inicio = o «inicio» que o nx_agenda_dia devolveu (a consulta tem de ser essa, com 1 min de folga). Atendente ou acima.
+create or replace function public.nx_agenda_confirmar(p_token text, p_cliente uuid, p_negocio bigint, p_inicio text)
+returns json
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare v public.nx_ctx_t := public.nx_ctx(p_token, p_cliente, 'atendente'); l public.nx_leads; v_ini timestamptz; v_em timestamptz := now();
+begin
+  perform public.nx_exigir_modulo(p_cliente, 'crm');
+  begin
+    v_ini := public.nx_crm_ts(jsonb_build_object('t', p_inicio), 't');
+  exception when others then
+    raise exception 'dados_invalidos' using errcode = '22023', hint = 'inicio';
+  end;
+  select * into l from public.nx_leads x where x.id = p_negocio and x.cliente_id = p_cliente for update;
+  if l.id is null or (public.nx_crm_restrito(v) and l.dono_id is not null and l.dono_id <> v.conta_id) then
+    raise exception 'negocio_nao_encontrado' using errcode = '22023';
+  end if;
+  if v_ini is null or l.consulta_em is null or abs(extract(epoch from l.consulta_em - v_ini)) > 60 then
+    raise exception 'dados_invalidos' using errcode = '22023', hint = 'consulta_mudou';
+  end if;
+  update public.nx_leads x set campos = coalesce(x.campos, '{}'::jsonb) || jsonb_build_object('confirmada_em', v_em), atualizado_em = now()
+   where x.id = l.id;
+  insert into public.nx_notas (cliente_id, contato_id, negocio_id, autor_id, texto)
+  values (p_cliente, l.contato_id, l.id, v.conta_id, 'Consulta de ' || public.nx_agenda_rotulo(l.consulta_em) || ' confirmada.');
+  return json_build_object('ok', true, 'confirmada_em', v_em);
+end $$;
+
+-- plano 1500c · UCB-091: a equipe da plataforma/revenda diz POR QUE entrou na empresa (o nx_ctx já registra a entrada; aqui vai o
+-- motivo, até 200). Só gestor da org do cliente ou super.
+create or replace function public.nx_suporte_entrar(p_token text, p_cliente uuid, p_motivo text default null)
+returns json
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare v public.nx_ctx_t := public.nx_ctx(p_token, p_cliente, 'leitura');
+begin
+  if v.papel not in ('gestor', 'super') then raise exception 'sem_permissao' using errcode = '42501'; end if;
+  perform public.nx_auditar((select c.org_id from public.nx_clientes c where c.id = p_cliente), p_cliente, v.conta_id, 'suporte_motivo',
+                            jsonb_build_object('papel', v.papel, 'motivo', left(nullif(btrim(coalesce(p_motivo, '')), ''), 200)));
+  return json_build_object('ok', true);
 end $$;
 
 -- ------------------------------------------------------------
@@ -872,6 +973,31 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
+-- plano 1500c · SC-108 (LGPD) nx_login_ip: devolve um RESUMO do IP (h + 32 hex do sha-256) — as chaves de limite (nx_login_falhas, nx_taxa) deixam de guardar o IP
+--   (cópia da definição em vigor: 20261013b_seguranca_dados.sql)
+-- ------------------------------------------------------------
+create or replace function public.nx_login_ip()
+returns text
+language plpgsql stable
+security definer
+set search_path = ''
+as $$
+declare v_h text := nullif(current_setting('request.headers', true), ''); v text;
+begin
+  if v_h is null then return null; end if;
+  begin
+    -- plano 1000 (SV-189): o IP que a Cloudflare põe (cf-connecting-ip) vale antes do x-forwarded-for, cujo 1º valor o próprio
+    -- cliente manda (trocando-o a cada tentativa, o limite de falhas por IP nunca disparava). Sem ele, o de sempre.
+    v := nullif(btrim(coalesce(v_h::json ->> 'cf-connecting-ip', '')), '');
+    if v is null then v := nullif(btrim(split_part(coalesce(v_h::json ->> 'x-forwarded-for', ''), ',', 1)), ''); end if;
+  exception when others then
+    return null;
+  end;
+  -- plano 1500c · SC-108: só as chaves de limite usam o valor (login, cadastro, formulário, rastreio, redefinir) — o IP em si não é guardado
+  return case when v is null then null else 'h' || left(public.nx_hash(left(v, 64)), 32) end;
+end $$;
+
+-- ------------------------------------------------------------
 -- plano 1500c · SC-100 / SC-101 nx_contato_excluir: o negócio que fica (ROI) perde também campos, título e ids de anúncio; o rastreio, o telefone
 --   (cópia da definição em vigor: 20260928d_crm.sql)
 -- ------------------------------------------------------------
@@ -1237,13 +1363,14 @@ begin
 
   -- contrato 4: quem espera agora (≤ 5, a espera mais longa primeiro); canal = provedor do número
   select coalesce(json_agg(json_build_object('id', x.id, 'nome', x.nome, 'espera_min', x.espera_min, 'canal', x.canal,
-                                             'atribuida_id', x.atribuida_a, 'atribuida_nome', x.atribuida_nome)   -- plano 1500c · SC-008
+                                             'atribuida_id', x.atribuida_a, 'atribuida_nome', x.atribuida_nome,   -- plano 1500c · SC-008
+                                             'contato_id', x.contato_id)   -- plano 1500c · RC-228
                            order by x.espera_min desc, x.id), '[]'::json)
     into j_ag
     from (select cv.id, coalesce(k.nome, k.telefone) as nome,
                  floor(extract(epoch from now() - coalesce(cv.ultima_entrada_em, cv.aberta_em)) / 60)::int as espera_min,
                  coalesce(ch.provedor, 'meta') as canal,
-                 cv.atribuida_a, ac.nome as atribuida_nome   -- plano 1500c · SC-008
+                 cv.atribuida_a, ac.nome as atribuida_nome, cv.contato_id   -- plano 1500c · SC-008 / RC-228
             from public.nx_conversas cv
             left join public.nx_contatos k on k.id = cv.contato_id and k.cliente_id = p_cliente
             left join public.nx_canais ch on ch.id = cv.canal_id
@@ -1498,6 +1625,710 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
+-- plano 1500c · nx_usuarios_listar: UCB-029 convites vencidos há até 7 dias (vencido:true) · SC-004 suspenso por usuário
+--   (cópia da definição em vigor: 20261013f_entrada_contratos.sql)
+-- ------------------------------------------------------------
+create or replace function public.nx_usuarios_listar(p_token text, p_cliente uuid)
+returns json
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare v public.nx_ctx_t := public.nx_ctx(p_token, p_cliente, 'admin'); c public.nx_contas;
+begin
+  select * into c from public.nx_contas where id = v.conta_id;
+  return json_build_object(
+    'usuarios', coalesce((
+      select json_agg(json_build_object(
+               'conta_id', k.id, 'nome', k.nome, 'email', k.email, 'telefone', k.telefone, 'papel', a.papel,
+               'departamentos', a.departamentos, 'ver_todas', a.ver_todas, 'recebe_conversas', a.recebe_conversas,
+               'aprovado', k.aprovado, 'ultimo_acesso', k.ultimo_acesso,
+               'editavel', public.nx_conta_no_escopo(c, k.id, p_cliente) and k.id <> c.id,
+               'eu', k.id = c.id, 'gestor', k.papel = 'gestor',
+               'suspenso', a.suspenso_em is not null or k.suspenso_em is not null)   -- plano 1500c · SC-004
+             order by (a.papel = 'admin') desc, lower(k.nome))
+        from public.nx_acessos a join public.nx_contas k on k.id = a.conta_id
+       where a.cliente_id = p_cliente), '[]'::json),
+    'convites', coalesce((
+      -- plano 1000: os departamentos do convite (a tela mostra onde a pessoa vai atender antes de aceitar)
+      select json_agg(json_build_object('id', cv.id, 'papel', cv.papel, 'email', cv.email, 'nome', cv.nome,
+                                        'expira_em', cv.expira_em, 'criado_em', cv.criado_em, 'departamentos', cv.departamentos,
+                                        'vencido', cv.expira_em <= now()) order by cv.criado_em desc)   -- plano 1500c · UCB-029
+        from public.nx_convites cv
+       where cv.cliente_id = p_cliente and cv.usado_em is null and not cv.revogado
+         and cv.expira_em > now() - interval '7 days' and cv.tentativas < 5), '[]'::json),   -- plano 1500c · UCB-029: + vencidos há até 7 dias
+    'departamentos', coalesce((
+      select json_agg(json_build_object('id', d.id, 'nome', d.nome, 'cor', d.cor) order by d.ordem, d.nome)
+        from public.nx_departamentos d where d.cliente_id = p_cliente and d.ativo), '[]'::json),
+    'eu', json_build_object('id', c.id, 'papel', v.papel),
+    'limite', public.nx_limite(p_cliente, 'usuarios'),
+    'uso', public.nx_uso(p_cliente, 'usuarios'));
+end $$;
+
+-- ------------------------------------------------------------
+-- plano 1500c · CC-197 / CC-267 nx_buscar: o negócio traz o telefone do contato (final, para homônimos) e consulta_em
+--   (cópia da definição em vigor: 20260928d_crm_b.sql)
+-- ------------------------------------------------------------
+create or replace function public.nx_buscar(p_token text, p_cliente uuid, p_q text)
+returns json
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v public.nx_ctx_t := public.nx_ctx(p_token, p_cliente, 'leitura');
+  q text := left(btrim(coalesce(p_q, '')), 80);
+  d text; dk text; qn text; pl text; pc text; pp text; tel boolean := false;
+  r_ct json; r_ng json; r_cv json; restr boolean := public.nx_crm_restrito(v);
+begin
+  perform public.nx_exigir_modulo(p_cliente, 'crm');
+  if char_length(q) < 2 then
+    return json_build_object('contatos', '[]'::json, 'negocios', '[]'::json, 'conversas', '[]'::json);
+  end if;
+  d := regexp_replace(q, '\D', '', 'g');
+  if q ~ '^[0-9\s().+-]+$' and length(d) >= 4 then
+    tel := true;
+    dk := coalesce(public.nx_tel_chave(public.nx_tel_normalizar(d)), d);
+  end if;
+  qn := replace(replace(replace(public.nx_crm_norm(q), '\', '\\'), '%', '\%'), '_', '\_');
+  pl := '%' || qn || '%';       -- contém
+  pc := qn || '%';              -- começo
+  pp := '% ' || qn || '%';      -- início de palavra
+
+  -- contatos
+  select coalesce(json_agg(json_build_object('id', x.id, 'nome', x.nome, 'telefone', x.telefone) order by x.rk, x.nm, x.id), '[]'::json)
+    into r_ct
+    from (select k.id, k.nome, k.telefone, lower(coalesce(k.nome, '')) nm,
+                 case when tel then 0
+                      when k.busca like pc then 0 when k.busca like pp then 1 else 2 end rk
+            from public.nx_contatos k
+           where k.cliente_id = p_cliente
+             and (not restr or k.dono_id is null or k.dono_id = v.conta_id)
+             and (case when tel then (k.telefone like '%' || d || '%' or k.tel_chave like '%' || dk || '%')
+                       else k.busca like pl end)
+           order by rk, nm, k.id limit 8) x;
+
+  -- negócios (título ou nome)
+  select coalesce(json_agg(json_build_object('id', x.id, 'titulo', x.titulo, 'contato_nome', x.contato_nome,
+                                             'estagio_nome', x.estagio_nome, 'status', x.status,
+                                             'contato_telefone', x.contato_telefone, 'consulta_em', x.consulta_em)   -- plano 1500c · CC-197 / CC-267
+                           order by x.rk, x.ab desc, x.criado_em desc), '[]'::json)
+    into r_ng
+    from (select l.id, coalesce(l.titulo, l.nome) titulo, coalesce(k.nome, l.nome) contato_nome, e.nome estagio_nome,
+                 l.status, (l.status = 'aberto') ab, l.criado_em, coalesce(k.telefone, l.telefone) contato_telefone, l.consulta_em,   -- plano 1500c
+                 case when tel then 0
+                      when public.nx_crm_norm(coalesce(l.titulo, l.nome)) like pc then 0
+                      when public.nx_crm_norm(coalesce(l.titulo, '') || ' ' || coalesce(l.nome, '')) like pp then 1 else 2 end rk
+            from public.nx_leads l
+            left join public.nx_contatos k on k.id = l.contato_id
+            left join public.nx_estagios e on e.id = l.estagio_id
+           where l.cliente_id = p_cliente
+             and (not restr or l.dono_id is null or l.dono_id = v.conta_id)
+             and (case when tel then (l.telefone like '%' || d || '%' or l.telefone like '%' || dk || '%')
+                       else public.nx_crm_norm(coalesce(l.titulo, '') || ' ' || coalesce(l.nome, '')) like pl end)
+           order by rk, (l.status = 'aberto') desc, l.criado_em desc limit 8) x;
+
+  -- conversas visíveis (contato ou protocolo)
+  select coalesce(json_agg(json_build_object('id', x.id, 'contato_nome', x.contato_nome, 'protocolo', x.protocolo,
+                                             'status', x.status, 'telefone', x.telefone)
+                           order by x.rk, x.ult desc nulls last), '[]'::json)
+    into r_cv
+    from (select cv.id, coalesce(k.nome, k.telefone) contato_nome, k.telefone, cv.protocolo, cv.status, cv.ultima_msg_em ult,
+                 case when cv.protocolo is not null and lower(cv.protocolo) like lower(q) || '%' then 0
+                      when k.busca like pc then 0 when k.busca like pp then 1 else 2 end rk
+            from public.nx_conversas cv
+            join public.nx_contatos k on k.id = cv.contato_id
+           where cv.cliente_id = p_cliente
+             and ( (tel and (k.telefone like '%' || d || '%' or k.tel_chave like '%' || dk || '%'))
+                or (not tel and k.busca like pl)
+                or (cv.protocolo is not null and cv.protocolo like '%' || replace(replace(q, '%', ''), '_', '') || '%') )
+             -- regra nx_cv_visivel
+             and (not cv.oculta or public.nx_rank(v.papel) >= 2)
+             and ( public.nx_rank(v.papel) >= 3
+                or cv.atribuida_a = v.conta_id
+                or ( (cardinality(v.departamentos) = 0 or cv.departamento_id is null
+                      or cv.departamento_id = any(v.departamentos))
+                     and (public.nx_rank(v.papel) = 2 or cv.atribuida_a is null or v.ver_todas) ) )
+           order by rk, cv.ultima_msg_em desc nulls last limit 8) x;
+
+  return json_build_object('contatos', r_ct, 'negocios', r_ng, 'conversas', r_cv);
+end $$;
+
+-- ------------------------------------------------------------
+-- plano 1500c · RC-311 nx_empresas_listar: valor_aberto (soma do valor previsto dos negócios abertos, mesma visibilidade)
+--   (cópia da definição em vigor: 20260928d_crm_b.sql)
+-- ------------------------------------------------------------
+create or replace function public.nx_empresas_listar(p_token text, p_cliente uuid, p_filtro jsonb default '{}'::jsonb,
+                                                     p_pagina int default 1, p_por_pagina int default 50)
+returns json
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v public.nx_ctx_t := public.nx_ctx(p_token, p_cliente, 'leitura');
+  f jsonb := coalesce(p_filtro, '{}'::jsonb);
+  n int := least(greatest(coalesce(p_por_pagina, 50), 1), 100);
+  pg int := least(greatest(coalesce(p_pagina, 1), 1), 100000);
+  q text := btrim(coalesce(f ->> 'busca', ''));
+  pl text; v_total int; itens json; restr boolean := public.nx_crm_restrito(v);
+begin
+  perform public.nx_exigir_modulo(p_cliente, 'crm');
+  if jsonb_typeof(f) <> 'object' then raise exception 'dados_invalidos' using errcode = '22023', hint = 'filtro'; end if;
+  pl := case when q = '' then null else public.nx_crm_like(q) end;
+  select count(*) into v_total from (
+    select 1 from public.nx_empresas e where e.cliente_id = p_cliente and (pl is null or e.busca like pl) limit 100001) x;
+  -- as contagens seguem a mesma visibilidade do nx_empresa_ver (atendente/leitura restrito: só o que é dele ou sem dono)
+  select coalesce(json_agg(json_build_object(
+           'id', e.id, 'nome', e.nome, 'documento', e.documento, 'cidade', e.cidade, 'uf', e.uf,
+           'telefone', e.telefone, 'email', e.email, 'site', e.site, 'criado_em', e.criado_em,
+           'contatos', (select count(*) from public.nx_contatos k where k.empresa_id = e.id and k.cliente_id = p_cliente
+                           and (not restr or k.dono_id is null or k.dono_id = v.conta_id)),
+           'negocios_abertos', (select count(*) from public.nx_contatos k join public.nx_leads l on l.contato_id = k.id
+                                 where k.empresa_id = e.id and k.cliente_id = p_cliente and l.cliente_id = p_cliente and l.status = 'aberto'
+                                   and (not restr or l.dono_id is null or l.dono_id = v.conta_id)),
+           -- plano 1500c · RC-311
+           'valor_aberto', (select coalesce(sum(coalesce(l.valor_previsto, l.valor, 0)), 0) from public.nx_contatos k join public.nx_leads l on l.contato_id = k.id
+                             where k.empresa_id = e.id and k.cliente_id = p_cliente and l.cliente_id = p_cliente and l.status = 'aberto'
+                               and (not restr or l.dono_id is null or l.dono_id = v.conta_id)))
+         order by lower(e.nome), e.id), '[]'::json)
+    into itens
+    from (select * from public.nx_empresas e
+           where e.cliente_id = p_cliente and (pl is null or e.busca like pl)
+           order by lower(e.nome), e.id limit n offset (pg - 1) * n) e;
+  return json_build_object('itens', itens, 'total', v_total, 'pagina', pg, 'por_pagina', n, 'tem_mais', pg * n < v_total);
+end $$;
+
+-- ------------------------------------------------------------
+-- plano 1500c · RC-065 / RC-294 nx_crm_cards: previsao_fechamento no cartão do quadro
+--   (cópia da definição em vigor: 20261013d_contratos_telas.sql)
+-- ------------------------------------------------------------
+create or replace function public.nx_crm_cards(p_cliente uuid, p_ids bigint[], v public.nx_ctx_t)
+returns json
+language plpgsql stable
+security definer
+set search_path = ''
+as $$
+begin
+  if p_ids is null or cardinality(p_ids) = 0 then return '[]'::json; end if;
+  return coalesce((
+    select json_agg(json_build_object(
+      'id', l.id, 'titulo', l.titulo, 'nome', l.nome, 'telefone', l.telefone,
+      'contato', case when k.id is null then null
+                      else json_build_object('id', k.id, 'nome', k.nome, 'telefone', k.telefone) end,
+      'valor_previsto', l.valor_previsto, 'valor', l.valor, 'status', l.status,
+      'previsao_fechamento', l.previsao_fechamento,   -- plano 1500c · RC-065
+      'funil_id', l.funil_id, 'estagio_id', l.estagio_id, 'dono_id', l.dono_id,
+      'etiquetas', l.etiquetas, 'servico', l.servico, 'origem', l.origem,
+      'anuncio', (l.plataforma is not null or l.origem = 'anuncio'), 'plataforma', l.plataforma,
+      'campanha_ext', l.campanha_ext, 'anuncio_ext', l.anuncio_ext,
+      'campanha_nome', coalesce(
+        (select m.campanha_nome from public.nx_metricas_dia m
+          where m.cliente_id = p_cliente and m.plataforma = l.plataforma
+            and l.campanha_ext is not null and m.campanha_ext = l.campanha_ext
+            and m.campanha_nome is not null
+          order by m.data desc limit 1), nullif(l.rastreio ->> 'utm_campaign', '')),
+      'anuncio_nome', coalesce(
+        (select m.anuncio_nome from public.nx_metricas_dia m
+          where m.cliente_id = p_cliente and m.plataforma = l.plataforma
+            and l.anuncio_ext is not null and m.anuncio_ext = l.anuncio_ext
+            and m.anuncio_nome is not null
+          order by m.data desc limit 1), nullif(l.rastreio ->> 'utm_content', '')),
+      'rastreio', case when l.rastreio is null then null else jsonb_strip_nulls(jsonb_build_object(
+        'utm_source', l.rastreio ->> 'utm_source', 'utm_medium', l.rastreio ->> 'utm_medium',
+        'utm_campaign', l.rastreio ->> 'utm_campaign', 'utm_content', l.rastreio ->> 'utm_content',
+        'utm_term', l.rastreio ->> 'utm_term', 'pagina', l.rastreio ->> 'pagina')) end,
+      'estagio_em', l.estagio_em, 'criado_em', l.criado_em, 'fechado_em', l.fechado_em,
+      'consulta_em', l.consulta_em, 'data_consulta', l.data_consulta, 'ordem', l.ordem,
+      'tarefa', (select json_build_object('vence_em', t.vence_em, 'atrasada', coalesce(t.vence_em < now(), false))
+                   from public.nx_tarefas t
+                  where t.negocio_id = l.id and t.concluida_em is null
+                  order by t.vence_em nulls last, t.id limit 1),
+      'nao_lidas', coalesce((
+         select sum(cv.nao_lidas)::int from public.nx_conversas cv
+          where cv.contato_id = l.contato_id and cv.status <> 'resolvida' and cv.nao_lidas > 0
+            -- regra nx_cv_visivel
+            and cv.cliente_id = p_cliente
+            and (not cv.oculta or public.nx_rank(v.papel) >= 2)
+            and ( public.nx_rank(v.papel) >= 3
+               or cv.atribuida_a = v.conta_id
+               or ( (cardinality(v.departamentos) = 0 or cv.departamento_id is null
+                     or cv.departamento_id = any(v.departamentos))
+                    and (public.nx_rank(v.papel) = 2 or cv.atribuida_a is null or v.ver_todas) ) )), 0),
+      -- plano 1000 (CR-204): quem moveu de etapa por último (automação = sem autor → null)
+      'movido_por', mv.nome, 'movido_por_id', mv.autor_id, 'movido_em', mv.criado_em
+    ) order by x.o)
+    from unnest(p_ids) with ordinality x(id, o)
+    join public.nx_leads l on l.id = x.id and l.cliente_id = p_cliente
+    left join public.nx_contatos k on k.id = l.contato_id
+    left join lateral (select h.autor_id, h.criado_em, kc.nome
+                         from public.nx_historico h left join public.nx_contas kc on kc.id = h.autor_id
+                        where h.negocio_id = l.id and h.tipo = 'estagio'
+                        order by h.criado_em desc, h.id desc limit 1) mv on true), '[]'::json);
+end $$;
+
+-- ------------------------------------------------------------
+-- plano 1500c · CC-245 / CC-324 nx_agenda_marcar_core: a observação e quem marcou ('ia' ou a conta) ficam na consulta
+--   (cópia da definição em vigor: 20261008c_dados_telas.sql)
+-- ------------------------------------------------------------
+create or replace function public.nx_agenda_marcar_core(p_cliente uuid, p_negocio bigint, p_inicio timestamptz, p_servico text,
+                                                        p_remarcar boolean, p_encaixe boolean, p_quem text,
+                                                        p_obs text default null, p_conta uuid default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  l public.nx_leads; e public.nx_estagios; cfg jsonb := public.nx_agenda_cfg(p_cliente);
+  v_ini timestamptz := date_trunc('minute', p_inicio);
+  v_serv text; v_erro text; v_dur int; v_ant timestamptz; v_fut boolean; v_txt text;
+  v_hoje date := (now() at time zone 'America/Sao_Paulo')::date;
+  v_ia boolean := coalesce(p_quem, '') = 'ia';
+  v_obs text := left(nullif(btrim(coalesce(p_obs, '')), ''), 1000);
+begin
+  -- uma agenda por cliente: quem chega depois enxerga o que o primeiro gravou
+  perform pg_advisory_xact_lock(hashtextextended('nx_agenda:' || p_cliente::text, 0));
+  select * into l from public.nx_leads where id = p_negocio and cliente_id = p_cliente and status = 'aberto' for update;
+  if l.id is null then return jsonb_build_object('ok', false, 'erro', 'negocio_nao_encontrado'); end if;
+  v_serv := coalesce(left(nullif(btrim(coalesce(p_servico, '')), ''), 120), l.servico);
+  v_dur := public.nx_agenda_dur(cfg, v_serv);
+  v_ant := l.consulta_em;
+  v_fut := v_ant is not null and v_ant > now();
+
+  if v_fut and v_ini = date_trunc('minute', v_ant) and coalesce(v_serv, '') = coalesce(l.servico, '') then
+    return jsonb_build_object('ok', true, 'negocio_id', l.id, 'contato_id', l.contato_id, 'mudou', false, 'remarcada', false,
+      'consulta', jsonb_build_object('inicio', public.nx_agenda_iso(v_ant), 'rotulo', public.nx_agenda_rotulo(v_ant),
+                                     'servico', v_serv, 'duracao_min', v_dur, 'encaixe', coalesce((l.campos ->> 'encaixe')::boolean, false)));
+  end if;
+  if v_fut and not coalesce(p_remarcar, false) then
+    return jsonb_build_object('ok', false, 'erro', 'ja_agendada', 'negocio_id', l.id,
+      'consulta', jsonb_build_object('inicio', public.nx_agenda_iso(v_ant), 'rotulo', public.nx_agenda_rotulo(v_ant), 'servico', l.servico));
+  end if;
+
+  v_erro := public.nx_agenda_checar(p_cliente, v_ini, v_serv, l.id, coalesce(p_encaixe, false));
+  if v_erro is not null then
+    return jsonb_build_object('ok', false, 'erro', v_erro)
+        || case when v_erro <> 'dados_invalidos'
+                then jsonb_build_object('sugestoes', public.nx_agenda_sugestoes(p_cliente, v_ini, v_serv, l.id, 4))
+                else '{}'::jsonb end;
+  end if;
+
+  -- mesma regra do nx_negocio_mover para a etapa "agendada" (marco): etapa do funil do negócio + datas
+  select * into e from public.nx_estagios s
+   where s.cliente_id = p_cliente and s.funil_id = l.funil_id and s.marco = 'agendada' order by s.ordem limit 1;
+  update public.nx_leads x set
+    consulta_em = v_ini,
+    servico = v_serv,
+    data_agenda = coalesce(x.data_agenda, v_hoje),
+    estagio_id = coalesce(e.id, x.estagio_id),
+    ordem = case when e.id is not null and e.id is distinct from x.estagio_id then -extract(epoch from clock_timestamp()) else x.ordem end,
+    -- contrato 6: o encaixe fica gravado; a presença era da consulta anterior
+    campos = (coalesce(x.campos, '{}'::jsonb) - 'presenca' - 'agenda_obs' - 'marcado_por' - 'confirmada_em') || jsonb_build_object('encaixe', coalesce(p_encaixe, false))
+             -- plano 1500c · CC-245 / CC-324: a observação desta marcação e quem marcou (a de antes sai junto com a presença)
+             || jsonb_strip_nulls(jsonb_build_object('agenda_obs', v_obs, 'marcado_por', case when v_ia then 'ia' else p_conta::text end)),
+    atualizado_em = now()
+  where x.id = l.id;   -- o gatilho da F1 aplica etapa↔marco, status e data_consulta (São Paulo)
+
+  v_txt := case when v_fut then 'Consulta remarcada de ' || public.nx_agenda_rotulo(v_ant) || ' para ' || public.nx_agenda_rotulo(v_ini)
+                else 'Consulta marcada para ' || public.nx_agenda_rotulo(v_ini) end
+        || coalesce(' (' || v_serv || ')', '') || case when coalesce(p_encaixe, false) then ' [encaixe]' else '' end
+        || coalesce('. ' || v_obs, '');
+  insert into public.nx_notas (cliente_id, contato_id, negocio_id, autor_id, texto)
+  values (p_cliente, l.contato_id, l.id, case when v_ia then null else p_conta end,
+          left(case when v_ia then 'IA: ' else '' end || v_txt, 5000));
+  if v_ia then
+    perform public.nx_notificar(p_cliente, null, 'sistema',
+      left((case when v_fut then 'Consulta remarcada pela IA: ' else 'Consulta marcada pela IA: ' end)
+           || coalesce((select k.nome from public.nx_contatos k where k.id = l.contato_id), l.nome, 'contato'), 120),
+      public.nx_agenda_rotulo(v_ini) || coalesce(' · ' || v_serv, ''), '#/crm/negocio/' || l.id);
+  end if;
+  return jsonb_build_object('ok', true, 'negocio_id', l.id, 'contato_id', l.contato_id, 'mudou', true, 'remarcada', v_fut,
+    'consulta', jsonb_build_object('inicio', public.nx_agenda_iso(v_ini), 'rotulo', public.nx_agenda_rotulo(v_ini),
+                                   'servico', v_serv, 'duracao_min', v_dur, 'encaixe', coalesce(p_encaixe, false)),
+    'anterior', case when v_fut then jsonb_build_object('inicio', public.nx_agenda_iso(v_ant), 'rotulo', public.nx_agenda_rotulo(v_ant)) end,
+    'etapa', e.nome);
+end $$;
+
+-- ------------------------------------------------------------
+-- plano 1500c · CC-245 / CC-324 nx_agenda_dia: obs e marcado_por de cada consulta
+--   (cópia da definição em vigor: 20261015a_plano1000b.sql)
+-- ------------------------------------------------------------
+create or replace function public.nx_agenda_dia(p_token text, p_cliente uuid, p_data date default null, p_dias int default 1)
+returns json
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v public.nx_ctx_t := public.nx_ctx(p_token, p_cliente, 'leitura');
+  cfg jsonb; v_de date := coalesce(p_data, (now() at time zone 'America/Sao_Paulo')::date);
+  v_dias int := least(greatest(coalesce(p_dias, 1), 1), 31); v_ini timestamptz; v_fim timestamptz; r jsonb;
+begin
+  perform public.nx_exigir_modulo(p_cliente, 'crm');
+  cfg := public.nx_agenda_cfg(p_cliente);
+  v_ini := v_de::timestamp at time zone 'America/Sao_Paulo';
+  v_fim := (v_de + v_dias)::timestamp at time zone 'America/Sao_Paulo';
+  with base as (
+    select l.* from public.nx_leads l
+     where l.cliente_id = p_cliente and l.status in ('aberto', 'ganho')
+       and l.consulta_em >= v_ini and l.consulta_em < v_fim
+       and (not public.nx_crm_restrito(v) or l.dono_id is null or l.dono_id = v.conta_id)
+  ), camp as (
+    select c.plataforma, c.campanha_ext,
+           (select m.campanha_nome from public.nx_metricas_dia m
+             where m.cliente_id = p_cliente and m.plataforma = c.plataforma and m.campanha_ext = c.campanha_ext
+               and m.campanha_nome is not null
+             order by m.data desc limit 1) as nome
+      from (select distinct b.plataforma, b.campanha_ext from base b where b.campanha_ext is not null) c
+  ), anun as (
+    select a.plataforma, a.anuncio_ext,
+           (select m.anuncio_nome from public.nx_metricas_dia m
+             where m.cliente_id = p_cliente and m.plataforma = a.plataforma and m.anuncio_ext = a.anuncio_ext
+               and m.anuncio_nome is not null
+             order by m.data desc limit 1) as nome
+      from (select distinct b.plataforma, b.anuncio_ext from base b where b.anuncio_ext is not null) a
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'negocio_id', l.id, 'contato_id', l.contato_id, 'nome', coalesce(k.nome, l.nome), 'telefone', coalesce(k.telefone, l.telefone),
+      'inicio', public.nx_agenda_iso(l.consulta_em), 'rotulo', public.nx_agenda_rotulo(l.consulta_em),
+      'fim', public.nx_agenda_iso(l.consulta_em + make_interval(mins => public.nx_agenda_dur(cfg, l.servico))),
+      'servico', l.servico, 'status', l.status, 'etapa', s.nome, 'marco', s.marco, 'dono_id', l.dono_id, 'titulo', l.titulo,
+      'dono_nome', (select a.nome from public.nx_contas a where a.id = l.dono_id),
+      'encaixe', coalesce((l.campos ->> 'encaixe')::boolean, false),
+      'presenca', case when l.campos ->> 'presenca' in ('compareceu', 'faltou') then l.campos ->> 'presenca' end,
+      'obs', l.campos ->> 'agenda_obs', 'marcado_por', l.campos ->> 'marcado_por',   -- plano 1500c · CC-245 / CC-324
+      'confirmada_em', l.campos ->> 'confirmada_em',   -- plano 1500c · CC-239 / CC-240
+      'confirmacao', case when l.campos ? 'confirmada_em' then 'confirmada' else 'pendente' end,   -- plano 1500c · RC-202
+      'origem', l.origem, 'plataforma', l.plataforma, 'campanha_ext', l.campanha_ext, 'anuncio_ext', l.anuncio_ext,
+      'campanha_nome', coalesce(cp.nome, nullif(l.rastreio ->> 'utm_campaign', '')),
+      'anuncio_nome', coalesce(an.nome, nullif(l.rastreio ->> 'utm_content', '')),
+      'rastreio', case when l.rastreio is null then null else jsonb_strip_nulls(jsonb_build_object(
+        'utm_source', l.rastreio ->> 'utm_source', 'utm_medium', l.rastreio ->> 'utm_medium',
+        'utm_campaign', l.rastreio ->> 'utm_campaign', 'utm_content', l.rastreio ->> 'utm_content',
+        'utm_term', l.rastreio ->> 'utm_term', 'pagina', l.rastreio ->> 'pagina')) end)
+    order by l.consulta_em, l.id), '[]'::jsonb) into r
+    from base l
+    left join public.nx_contatos k on k.id = l.contato_id
+    left join public.nx_estagios s on s.id = l.estagio_id
+    left join camp cp on cp.plataforma = l.plataforma and cp.campanha_ext = l.campanha_ext
+    left join anun an on an.plataforma = l.plataforma and an.anuncio_ext = l.anuncio_ext;
+  return json_build_object('data', v_de, 'dias', v_dias, 'fuso', 'America/Sao_Paulo', 'config', cfg, 'consultas', r,
+    'bloqueios', public.nx_agenda_bloqueios_json(p_cliente, v_ini, v_fim));
+end $$;
+
+-- ------------------------------------------------------------
+-- plano 1500c · CC-027 nx_cv_json_dep: + limites do SLA
+--   (cópia da definição em vigor: 20260928e_conversas_b.sql)
+-- ------------------------------------------------------------
+create or replace function public.nx_cv_json_dep(d public.nx_departamentos)
+returns jsonb
+language plpgsql stable
+security definer
+set search_path = ''
+as $$
+begin
+  if d.id is null then return null; end if;
+  return jsonb_build_object(
+    'id', d.id, 'nome', d.nome, 'cor', d.cor, 'padrao', d.padrao, 'distribuicao', d.distribuicao,
+    'manter_atendente', d.manter_atendente, 'horario', d.horario, 'msg_fora_horario', d.msg_fora_horario,
+    'ordem', d.ordem, 'ativo', d.ativo,
+    'sla_aten', d.sla_aten, 'sla_atraso', d.sla_atraso, 'sla_critico', d.sla_critico,   -- plano 1500c · CC-027
+    'conversas_abertas', (select count(*) from public.nx_conversas cv
+                           where cv.cliente_id = d.cliente_id and cv.departamento_id = d.id
+                             and cv.status in ('aberta', 'pendente')),
+    'canais', (select count(*) from public.nx_canais k where k.cliente_id = d.cliente_id and k.departamento_id = d.id),
+    'pessoas', (select count(*) from public.nx_acessos a where a.cliente_id = d.cliente_id and d.id = any(a.departamentos)));
+end $$;
+
+-- ------------------------------------------------------------
+-- plano 1500c · CC-027 nx_cv_base: limites do SLA de cada departamento (todos os papéis)
+--   (cópia da definição em vigor: 20261015a_plano1000b.sql)
+-- ------------------------------------------------------------
+create or replace function public.nx_cv_base(p_token text, p_cliente uuid)
+returns json
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v public.nx_ctx_t := public.nx_ctx(p_token, p_cliente, 'leitura');
+  v_cfg jsonb;
+  v_iacfg jsonb;
+  v_ia boolean;
+  v_config json;
+begin
+  perform public.nx_exigir_modulo(p_cliente, 'conversas');
+  select coalesce(c.cfg -> 'cv', '{}'::jsonb),
+         case when jsonb_typeof(c.cfg -> 'ia') = 'object' then c.cfg -> 'ia' else '{}'::jsonb end
+    into v_cfg, v_iacfg
+    from public.nx_clientes c where c.id = p_cliente;
+  select coalesce(nullif(btrim(x.anthropic_api_key), ''), '') <> '' into v_ia from public.nx_config x where x.id = 1;
+  if public.nx_rank(v.papel) >= 3 then
+    v_config := json_build_object(
+      'departamentos', coalesce((select json_agg(public.nx_cv_json_dep(d) order by d.ordem, d.nome)
+                                   from public.nx_departamentos d where d.cliente_id = p_cliente), '[]'::json),
+      'ia', json_build_object(
+              'sobre', coalesce(v_iacfg ->> 'sobre', ''), 'servicos', coalesce(v_iacfg ->> 'servicos', ''),
+              'horarios', coalesce(v_iacfg ->> 'horarios', ''), 'regras', coalesce(v_iacfg ->> 'regras', ''),
+              'proibido', coalesce(v_iacfg ->> 'proibido', ''),
+              'memoria_aprovada', coalesce(v_iacfg ->> 'memoria_aprovada', ''),
+              'tom', case when v_iacfg ->> 'tom' = 'formal' then 'formal' else 'proximo' end,
+              'assistente_nome', coalesce(v_iacfg ->> 'assistente_nome', ''),
+              'endereco', coalesce(v_iacfg ->> 'endereco', ''),
+              'boas_vindas', coalesce(v_iacfg ->> 'boas_vindas', '')));
+  end if;
+  return json_build_object(
+    'eu', json_build_object('id', v.conta_id, 'nome', v.nome, 'papel', v.papel,
+                            'departamentos', to_json(v.departamentos), 'ver_todas', v.ver_todas),
+    'canais', coalesce((select json_agg(json_build_object(
+                 'id', k.id, 'nome', k.nome, 'numero_exibicao', k.numero_exibicao, 'status', k.status,
+                 'coexistencia', k.coexistencia,
+                 'tem_token', case when k.provedor = 'codewords'
+                                   then k.codewords_api_segredo is not null and k.codewords_phone_id is not null
+                                   else k.token_segredo is not null end,
+                 'provedor', k.provedor,
+                 'ia_ligada', case when k.provedor = 'codewords' then k.ia_ligada end,
+                 'ia_rota', case when k.provedor = 'codewords' then k.codewords_rota end,
+                 'departamento_id', k.departamento_id, 'app_inscrito', k.app_inscrito,
+                 'ultimo_erro', k.ultimo_erro) order by k.criado_em)
+               from public.nx_canais k where k.cliente_id = p_cliente), '[]'::json),
+    -- plano 1000: + horario (o mesmo jsonb que o nx_horario_aberto lê) para todos os papéis
+    'departamentos', coalesce((select json_agg(json_build_object(
+                 'id', d.id, 'nome', d.nome, 'cor', d.cor, 'padrao', d.padrao,
+                 'distribuicao', d.distribuicao, 'ativo', d.ativo, 'horario', d.horario,
+                 'sla_aten', d.sla_aten, 'sla_atraso', d.sla_atraso, 'sla_critico', d.sla_critico) order by d.ordem, d.nome)   -- plano 1500c · CC-027
+               from public.nx_departamentos d where d.cliente_id = p_cliente and d.ativo), '[]'::json),
+    'respostas', coalesce((select json_agg(json_build_object(
+                 'id', r.id, 'atalho', r.atalho, 'titulo', r.titulo, 'corpo', r.corpo,
+                 'departamento_id', r.departamento_id, 'usos', r.usos, 'ordem', r.ordem, 'ativo', r.ativo)
+                 order by r.ordem, r.atalho)
+               from public.nx_respostas r where r.cliente_id = p_cliente), '[]'::json),
+    'etiquetas', coalesce((select json_agg(json_build_object('id', e.id, 'nome', e.nome, 'cor', e.cor)
+                 order by lower(e.nome))
+               from public.nx_etiquetas e where e.cliente_id = p_cliente), '[]'::json),
+    'usuarios', coalesce((select json_agg(json_build_object(
+                 'id', k.id, 'nome', k.nome, 'papel', a.papel, 'departamentos', to_json(a.departamentos),
+                 'recebe_conversas', a.recebe_conversas, 'aprovado', k.aprovado) order by k.nome)
+               from public.nx_acessos a join public.nx_contas k on k.id = a.conta_id
+              where a.cliente_id = p_cliente), '[]'::json),
+    'templates', coalesce((select json_agg(json_build_object(
+                 'id', t.id, 'canal_id', t.canal_id, 'nome', t.nome, 'idioma', t.idioma,
+                 'categoria', t.categoria, 'status', t.status, 'corpo', t.corpo,
+                 'num_parametros', t.num_parametros) order by t.nome, t.idioma)
+               from public.nx_templates t where t.cliente_id = p_cliente), '[]'::json),
+    'cfg', json_build_object(
+                 'recibo_leitura', coalesce((v_cfg ->> 'recibo_leitura')::boolean, true),
+                 'assinatura', coalesce((v_cfg ->> 'assinatura')::boolean, false)),
+    'ia', json_build_object('ligada', coalesce(v_ia, false),
+                            'cota', json_build_object('usadas', public.nx_uso(p_cliente, 'ia_mes'),
+                                                      'limite', public.nx_limite(p_cliente, 'ia_mes'))),
+    -- plano 1000b · CB-203: o nome do assistente da IA para todos os papéis (antes só no config de admin)
+    'ia_assistente_nome', coalesce(v_iacfg ->> 'assistente_nome', ''),
+    'config', v_config);
+end $$;
+
+-- ------------------------------------------------------------
+-- plano 1500c · CC-027 nx_departamento_salvar: aceita sla_aten / sla_atraso / sla_critico (minutos, 1..1440, em ordem crescente)
+--   (cópia da definição em vigor: 20260928e_conversas_b.sql)
+-- ------------------------------------------------------------
+create or replace function public.nx_departamento_salvar(p_token text, p_cliente uuid, p_departamento jsonb)
+returns json
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v public.nx_ctx_t := public.nx_ctx(p_token, p_cliente, 'admin');
+  r jsonb := coalesce(p_departamento, '{}'::jsonb);
+  x public.nx_departamentos;
+  v_id uuid;
+  v_nome text; v_cor text; v_padrao boolean; v_dist text; v_manter boolean; v_hor jsonb; v_msg text;
+  v_ordem int; v_ativo boolean;
+begin
+  perform public.nx_exigir_modulo(p_cliente, 'conversas');
+  if jsonb_typeof(r) <> 'object' then
+    raise exception 'dados_invalidos' using errcode = '22023', hint = 'departamento';
+  end if;
+  begin
+    v_id := nullif(r ->> 'id', '')::uuid;
+    v_ordem := nullif(r ->> 'ordem', '')::int;
+    v_padrao := nullif(r ->> 'padrao', '')::boolean;
+    v_manter := nullif(r ->> 'manter_atendente', '')::boolean;
+    v_ativo := nullif(r ->> 'ativo', '')::boolean;
+  exception when invalid_text_representation or numeric_value_out_of_range then
+    raise exception 'dados_invalidos' using errcode = '22023', hint = 'departamento';
+  end;
+  if v_id is not null then
+    select * into x from public.nx_departamentos where id = v_id and cliente_id = p_cliente for update;
+    if x.id is null then
+      raise exception 'departamento_nao_encontrado' using errcode = '22023';
+    end if;
+  elsif (select count(*) from public.nx_departamentos where cliente_id = p_cliente) >= 30 then
+    raise exception 'dados_invalidos' using errcode = '22023', hint = 'maximo';
+  end if;
+
+  v_nome := btrim(coalesce(r ->> 'nome', x.nome, ''));
+  if char_length(v_nome) < 1 or char_length(v_nome) > 40 then
+    raise exception 'dados_invalidos' using errcode = '22023', hint = 'nome';
+  end if;
+  if exists (select 1 from public.nx_departamentos o
+              where o.cliente_id = p_cliente and lower(o.nome) = lower(v_nome) and o.id is distinct from v_id) then
+    raise exception 'dados_invalidos' using errcode = '22023', hint = 'nome_repetido';
+  end if;
+  v_cor := coalesce(nullif(btrim(r ->> 'cor'), ''), x.cor, '#6FA3CF');
+  if v_cor !~ '^#[0-9A-Fa-f]{6}$' then
+    raise exception 'dados_invalidos' using errcode = '22023', hint = 'cor';
+  end if;
+  v_cor := upper(v_cor);
+  v_dist := coalesce(nullif(btrim(r ->> 'distribuicao'), ''), x.distribuicao, 'manual');
+  if v_dist not in ('manual', 'rodizio') then
+    raise exception 'dados_invalidos' using errcode = '22023', hint = 'distribuicao';
+  end if;
+  v_padrao := coalesce(v_padrao, x.padrao, false);
+  v_manter := coalesce(v_manter, x.manter_atendente, true);
+  v_ativo := coalesce(v_ativo, x.ativo, true);
+  v_ordem := coalesce(v_ordem, x.ordem,
+                      (select coalesce(max(o.ordem), -1) + 1 from public.nx_departamentos o where o.cliente_id = p_cliente));
+  if r ? 'horario' then v_hor := public.nx_cv_horario_normalizar(r -> 'horario'); else v_hor := x.horario; end if;
+  if r ? 'msg_fora_horario' then v_msg := nullif(btrim(coalesce(r ->> 'msg_fora_horario', '')), '');
+  else v_msg := x.msg_fora_horario; end if;
+  if char_length(v_msg) > 1000 then
+    raise exception 'dados_invalidos' using errcode = '22023', hint = 'msg_fora_horario';
+  end if;
+
+  -- um só padrão: o padrão atual não deixa de ser padrão sem outro no lugar, nem fica inativo
+  if x.id is not null and x.padrao and not v_padrao then
+    raise exception 'dados_invalidos' using errcode = '22023', hint = 'padrao';
+  end if;
+  if v_padrao and not v_ativo then
+    raise exception 'dados_invalidos' using errcode = '22023', hint = 'padrao_inativo';
+  end if;
+  if v_padrao then
+    update public.nx_departamentos set padrao = false
+     where cliente_id = p_cliente and padrao and id is distinct from v_id;
+  end if;
+
+  if v_id is null then
+    insert into public.nx_departamentos (cliente_id, nome, cor, padrao, distribuicao, manter_atendente, horario,
+                                         msg_fora_horario, ordem, ativo)
+    values (p_cliente, v_nome, v_cor, v_padrao, v_dist, v_manter, v_hor, v_msg, v_ordem, v_ativo)
+    returning * into x;
+  else
+    update public.nx_departamentos
+       set nome = v_nome, cor = v_cor, padrao = v_padrao, distribuicao = v_dist, manter_atendente = v_manter,
+           horario = v_hor, msg_fora_horario = v_msg, ordem = v_ordem, ativo = v_ativo
+     where id = v_id
+    returning * into x;
+  end if;
+  -- plano 1500c · CC-027: só as chaves enviadas mudam; o CHECK da tabela garante 1..1440 e atenção < atraso < crítico
+  if r ? 'sla_aten' or r ? 'sla_atraso' or r ? 'sla_critico' then
+    begin
+      update public.nx_departamentos d
+         set sla_aten = coalesce((r ->> 'sla_aten')::int, d.sla_aten),
+             sla_atraso = coalesce((r ->> 'sla_atraso')::int, d.sla_atraso),
+             sla_critico = coalesce((r ->> 'sla_critico')::int, d.sla_critico)
+       where d.id = x.id
+      returning * into x;
+    exception when others then
+      raise exception 'dados_invalidos' using errcode = '22023', hint = 'sla';
+    end;
+  end if;
+  perform public.nx_pulso_bater(p_cliente);
+  return public.nx_cv_json_dep(x)::json;
+end $$;
+
+-- ------------------------------------------------------------
+-- plano 1500c · UCA-093 nx_auto_item: + descricao
+--   (cópia da definição em vigor: 20261015a_plano1000b.sql)
+-- ------------------------------------------------------------
+create or replace function public.nx_auto_item(a public.nx_automacoes)
+returns jsonb
+language plpgsql stable
+security definer
+set search_path = ''
+as $$
+begin
+  -- plano 1500c · UCA-093: + descricao (comentário na linha de cima: o resto da linha original continua valendo)
+  return jsonb_build_object('id', a.id, 'nome', a.nome, 'descricao', a.descricao, 'ativo', a.ativo, 'gatilho', a.gatilho, 'config', a.config,
+    'condicoes', a.condicoes, 'acoes', a.acoes, 'respeitar_horario', a.respeitar_horario,
+    'execucoes', a.execucoes, 'erros', a.erros, 'ultima_execucao_em', a.ultima_execucao_em,
+    'em_espera', (select count(*) from public.nx_auto_sequencias s
+                   where s.automacao_id = a.id and s.status in ('esperando', 'aguardando_ia')),
+    'criado_em', a.criado_em, 'atualizado_em', a.atualizado_em,
+    -- plano 1000b · UB-212: quem mudou por último («Alterada por Ana, há 2 dias»); nulo nas que ninguém mexeu desde a 20261015a
+    'atualizado_por', a.atualizado_por,
+    'atualizado_por_nome', (select k.nome from public.nx_contas k where k.id = a.atualizado_por));
+end $$;
+
+-- ------------------------------------------------------------
+-- plano 1500c · UCA-093 nx_automacao_salvar (a de 4 parâmetros, em vigor): grava a descrição quando vier (vazia apaga)
+--   (cópia da definição em vigor: 20261015a_plano1000b.sql)
+-- ------------------------------------------------------------
+create or replace function public.nx_automacao_salvar(p_token text, p_cliente uuid, p_auto jsonb, p_atualizado_em timestamptz default null)
+returns json
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v public.nx_ctx_t := public.nx_ctx(p_token, p_cliente, 'admin');
+  v_id uuid; v_ligar boolean; n jsonb; a public.nx_automacoes; v_pos bigint;
+begin
+  perform public.nx_exigir_modulo(p_cliente, 'automacoes');
+  if p_auto is null or jsonb_typeof(p_auto) <> 'object' then perform public.nx_auto_falha('dados da automação inválidos'); end if;
+  if coalesce(btrim(p_auto ->> 'id'), '') <> '' then
+    v_id := public.nx_auto_uuid(p_auto ->> 'id');
+    if v_id is null then raise exception 'automacao_nao_encontrada' using errcode = '22023'; end if;
+    select * into a from public.nx_automacoes x where x.id = v_id and x.cliente_id = p_cliente for update;
+    if a.id is null then raise exception 'automacao_nao_encontrada' using errcode = '22023'; end if;
+    -- plano 1000b · UB-211: quem editou uma versão antiga não apaga o que outra pessoa salvou depois (só confere quando vier;
+    -- milissegundos, a precisão do Date do navegador). O hint leva o atualizado_em atual (a tela oferece recarregar).
+    if p_atualizado_em is not null
+       and date_trunc('milliseconds', a.atualizado_em) <> date_trunc('milliseconds', p_atualizado_em) then
+      raise exception 'edicao_desatualizada' using errcode = '22023',
+        hint = to_char(a.atualizado_em at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+    end if;
+  end if;
+  v_ligar := case when p_auto ->> 'ativo' in ('true', 'false') then (p_auto ->> 'ativo')::boolean
+                  else coalesce(a.ativo, false) end;
+  -- alerta_whatsapp sai pelo número da Nexus para o WhatsApp do GESTOR: só a agência (gestor/super)
+  -- configura. O editor esconde a ação; aqui fecha a porta para quem chama a RPC direto.
+  if public.nx_rank(v.papel) < 4 and jsonb_typeof(p_auto -> 'acoes') = 'array' then
+    select q.o into v_pos
+      from jsonb_array_elements(p_auto -> 'acoes') with ordinality q(x, o)
+     where jsonb_typeof(q.x) = 'object' and q.x ->> 'tipo' = 'alerta_whatsapp'
+     order by q.o limit 1;
+    if v_pos is not null then
+      perform public.nx_auto_falha('ação ' || v_pos || ': o alerta no WhatsApp do gestor só pode ser configurado pela agência');
+    end if;
+  end if;
+  n := public.nx_auto_normalizar(p_cliente, p_auto, v_ligar);
+  if v_id is not null then
+    update public.nx_automacoes set
+      nome = n ->> 'nome', gatilho = n ->> 'gatilho', config = n -> 'config', condicoes = n -> 'condicoes',
+      acoes = n -> 'acoes', respeitar_horario = (n ->> 'respeitar_horario')::boolean, ativo = v_ligar, atualizado_em = now(),
+      atualizado_por = v.conta_id   -- plano 1000b · UB-212
+     where id = v_id
+    returning * into a;
+  else
+    perform public.nx_exigir_limite(p_cliente, 'automacoes');
+    insert into public.nx_automacoes (cliente_id, nome, ativo, gatilho, config, condicoes, acoes, respeitar_horario, criado_por, atualizado_por)
+    values (p_cliente, n ->> 'nome', v_ligar, n ->> 'gatilho', n -> 'config', n -> 'condicoes', n -> 'acoes',
+            (n ->> 'respeitar_horario')::boolean, v.conta_id, v.conta_id)
+    returning * into a;
+  end if;
+  -- plano 1500c · UCA-093: a descrição não passa pelo normalizar (texto livre, até 500)
+  if p_auto ? 'descricao' then
+    if char_length(coalesce(p_auto ->> 'descricao', '')) > 500 then
+      raise exception 'dados_invalidos' using errcode = '22023', hint = 'descricao';
+    end if;
+    update public.nx_automacoes set descricao = nullif(btrim(coalesce(p_auto ->> 'descricao', '')), '') where id = a.id returning * into a;
+  end if;
+  return public.nx_auto_item(a)::json;
+end $$;
+
+-- ------------------------------------------------------------
 -- plano 1500c · nx_relatorio_chamar: SC-057 um cliente com erro não para os outros · AC-055 tipo semanal (só quem ligou cfg.relSemanal)
 --   (cópia da definição em vigor: 20261013c_operacao_indices.sql)
 -- ------------------------------------------------------------
@@ -1531,7 +2362,7 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
--- plano 1500c · SC-143 / SC-145 / SC-147 nx_saude_dados: + eventos atrasados, integrações com erro e crons ausentes
+-- plano 1500c · nx_saude_dados: SC-141 tarefas do pg_cron · SC-143 eventos atrasados · SC-145 crons ausentes · SC-147 1 consulta por tarefa · integrações com erro
 --   (cópia da definição em vigor: 20261013c_operacao_indices.sql)
 -- ------------------------------------------------------------
 create or replace function public.nx_saude_dados()
@@ -1543,18 +2374,19 @@ as $$
 declare
   v_tarefas json; v_cron int := null; v_http int := null; v_fila int; v_midia int; v_ia int; v_pausa boolean; v_pausados int;
   v_prob text[] := '{}'; r record;
-  v_ev int; v_integ int; v_crons text[] := null;   -- plano 1500c
+  v_ev int; v_integ int; v_crons text[] := null; v_cron_atr text[] := null;   -- plano 1500c
 begin
   select coalesce(json_agg(json_build_object('tarefa', t.tarefa, 'ultima_ok', t.ultima_ok, 'ultima_falha', t.ultima_falha,
                                              'prazo_h', t.prazo_h, 'atrasada', t.atrasada) order by t.tarefa), '[]'::json)
     into v_tarefas
     from (select p.tarefa, p.prazo_h,
-                 (select max(e.inicio) from public.nx_execucoes e where e.tarefa = p.tarefa and e.ok) as ultima_ok,
-                 (select max(e.inicio) from public.nx_execucoes e where e.tarefa = p.tarefa and e.ok is not true
-                     and e.inicio > now() - interval '24 hours') as ultima_falha,
-                 coalesce((select max(e.inicio) from public.nx_execucoes e where e.tarefa = p.tarefa and e.ok), '-infinity'::timestamptz)
-                   < now() - make_interval(hours => p.prazo_h) as atrasada
-            from (values ('nx-ciclo', 3), ('nx-relatorio', 26)) p(tarefa, prazo_h)) t;
+                 x.ultima_ok, x.ultima_falha,
+                 coalesce(x.ultima_ok, '-infinity'::timestamptz) < now() - make_interval(hours => p.prazo_h) as atrasada
+            from (values ('nx-ciclo', 3), ('nx-relatorio', 26)) p(tarefa, prazo_h)
+            -- plano 1500c · SC-147: uma leitura por tarefa (antes três subconsultas)
+            cross join lateral (select max(e.inicio) filter (where e.ok) as ultima_ok,
+                                       max(e.inicio) filter (where e.ok is not true and e.inicio > now() - interval '24 hours') as ultima_falha
+                                  from public.nx_execucoes e where e.tarefa = p.tarefa) x) t;
   for r in select x ->> 'tarefa' as tarefa, (x ->> 'prazo_h')::int as prazo_h from json_array_elements(v_tarefas) x
             where (x ->> 'atrasada')::boolean loop
     v_prob := v_prob || format('%s sem execução boa há mais de %s h', r.tarefa, r.prazo_h);
@@ -1579,13 +2411,24 @@ begin
   select count(*)::int into v_ev from public.nx_eventos e where e.processado_em is null and e.criado_em < now() - interval '10 minutes';
   -- plano 1500c · SC-145: integrações de anúncio ligadas cuja última sincronização deu erro
   select count(*)::int into v_integ from public.nx_integracoes i where i.ativo and i.status ~* '^(erro|falha)';
-  -- plano 1500c · SC-147: os jobs do pg_cron que o sistema precisa (num banco restaurado eles somem sem ninguém ver)
+  -- plano 1500c · SC-145: os jobs do pg_cron que o sistema precisa (num banco restaurado eles somem sem ninguém ver)
   begin
     execute $q$select coalesce(array_agg(x.nome order by x.nome), '{}'::text[])
                  from unnest(array['nx-ciclo', 'nx-fila', 'nx-faxina-saas', 'nx-automacoes', 'nx-relatorio-diario', 'nx-relatorio-mensal']) x(nome)
                 where not exists (select 1 from cron.job j where j.jobname = x.nome)$q$ into v_crons;
   exception when others then v_crons := null;
   end;
+  -- plano 1500c · SC-141: as tarefas que só o pg_cron registra (fila, CodeWords, automações, faxinas): última execução boa dentro do prazo
+  begin
+    execute $q$select coalesce(array_agg(format('%s sem execução boa há mais de %s min', x.nome, x.prazo_min) order by x.nome), '{}'::text[])
+                 from (values ('nx-fila', 15), ('nx-codewords-sync', 30), ('nx-automacoes', 15), ('nx-faxina-saas', 1560), ('nx-faxina-auto', 1560)) x(nome, prazo_min)
+                where exists (select 1 from cron.job j where j.jobname = x.nome and j.active)
+                  and coalesce((select max(d.end_time) from cron.job_run_details d join cron.job j on j.jobid = d.jobid
+                                 where j.jobname = x.nome and d.status = 'succeeded'), '-infinity'::timestamptz)
+                      < now() - make_interval(mins => x.prazo_min)$q$ into v_cron_atr;
+  exception when others then v_cron_atr := null;
+  end;
+  v_prob := v_prob || coalesce(v_cron_atr, '{}'::text[]);
   if v_ev > 0 then v_prob := v_prob || format('%s eventos de automação parados há mais de 10 min', v_ev); end if;
   if v_integ > 0 then v_prob := v_prob || format('%s integrações de anúncio com erro na última sincronização', v_integ); end if;
   if cardinality(v_crons) > 0 then v_prob := v_prob || format('agendamentos ausentes no pg_cron: %s', array_to_string(v_crons, ', ')); end if;
@@ -1598,12 +2441,12 @@ begin
   return json_build_object('em', now(), 'tarefas', v_tarefas, 'cron_falhas_24h', v_cron, 'http_falhas_24h', v_http,
                            'fila_atrasada', v_fila, 'midia_presa', v_midia, 'ia_adiada', v_ia,
                            'envios_pausados', v_pausa, 'clientes_pausados', v_pausados,
-                           'eventos_atrasados', v_ev, 'integracoes_erro', v_integ, 'crons_ausentes', to_json(v_crons),   -- plano 1500c
+                           'eventos_atrasados', v_ev, 'integracoes_erro', v_integ, 'crons_ausentes', to_json(v_crons), 'crons_atrasados', to_json(v_cron_atr),   -- plano 1500c
                            'problemas', to_json(v_prob));
 end $$;
 
 -- ------------------------------------------------------------
--- plano 1500c · nx_saas_faxina: SC-190 erros do aparelho > 30 d · SC-116 notificações NÃO lidas > 180 d · SC-122 histórico do pg_cron em lotes
+-- plano 1500c · nx_saas_faxina: SC-190 erros do aparelho > 30 d · SC-118 notificações NÃO lidas > 180 d · SC-122 histórico do pg_cron em lotes
 --   (cópia da definição em vigor: 20261013e_funcoes_seguranca.sql)
 -- ------------------------------------------------------------
 create or replace function public.nx_saas_faxina()
@@ -1661,7 +2504,7 @@ begin
   n_iac := public.nx_saas_faxina_lotes('nx_ia_cache', $w$criado_em < now() - interval '1 day'$w$);
   -- SV-116: preenche a 1ª entrada das conversas antigas aos poucos
   n_pri := public.nx_conversas_primeira_preencher(20000);
-  -- plano 1500c · SC-190 / SC-116
+  -- plano 1500c · SC-190 / SC-118
   delete from public.nx_erros_front where ultimo_em < now() - interval '30 days';
   get diagnostics n_erf = row_count;
   n_nnl := public.nx_saas_faxina_lotes('nx_notificacoes', $w$lida_em is null and criado_em < now() - interval '180 days'$w$);
@@ -1814,11 +2657,15 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
--- 5. Agenda (idempotente) — AC-055: relatório semanal às segundas 8h30 (SP); só sai para quem ligou cfg.relSemanal.
+-- 5. Agenda (idempotente) — AC-055: relatório semanal às segundas 8h30 (SP), só para quem ligou cfg.relSemanal; SC-131: aviso do teste.
 --    Só cria se não existir (agenda e comando de quem já existe ficam como estão).
 -- ------------------------------------------------------------
 do $$
 begin
+  -- SC-131 / UC-024: aviso do fim do teste, todo dia às 9h (SP)
+  if not exists (select 1 from cron.job where jobname = 'nx-teste-avisos') then
+    perform cron.schedule('nx-teste-avisos', '0 12 * * *', 'select public.nx_teste_avisar()');
+  end if;
   if not exists (select 1 from cron.job where jobname = 'nx-relatorio-semanal') then
     perform cron.schedule('nx-relatorio-semanal', '30 11 * * 1', $c$select public.nx_relatorio_chamar('semanal')$c$);
   end if;
@@ -1842,7 +2689,9 @@ begin
     'public.nx_titular_localizar(text, uuid, text)',
     'public.nx_titular_exportar(text, uuid, bigint)',
     'public.nx_ia_custo_resumo(text, uuid)',
-    'public.nx_fila_resumo(text, uuid)'] loop
+    'public.nx_fila_resumo(text, uuid)',
+    'public.nx_agenda_confirmar(text, uuid, bigint, text)',
+    'public.nx_suporte_entrar(text, uuid, text)'] loop
     execute format('revoke all on function %s from public, authenticated', f);
     execute format('grant execute on function %s to anon, service_role', f);
   end loop;
@@ -1850,7 +2699,8 @@ begin
     'public.nx_senha_validar(text)',
     'public.nx_sessao_criar(uuid)',
     'public.nx_trava_estender(text, integer, text)',
-    'public.nx_ia_franquia_avisar(uuid, integer, timestamptz)'] loop
+    'public.nx_ia_franquia_avisar(uuid, integer, timestamptz)',
+    'public.nx_teste_avisar()'] loop
     execute format('revoke all on function %s from public, anon, authenticated', f);
     execute format('grant execute on function %s to service_role', f);
   end loop;

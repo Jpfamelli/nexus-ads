@@ -1643,3 +1643,537 @@ test("RC-311/312/315/331 · empresa e ficha: valor em aberto, observação neutr
     assert.ok(!t.M.cartaoEmpresa(t.k, { id: 8, nome: "Y" }).querySelector(".emp-valor"), "sem o dado, nada muda");
   } finally { D.desfazer(); }
 });
+/* ============================================================ plano 1500c · complemento (RX-*) */
+test("UC-028 · #/crm?importar=1 abre a importação, não o quadro", () => {
+  const src = ler("crm.js");
+  assert.match(src, /modulo === "crm" && r\.query && String\(r\.query\.importar\) === "1"[^\n]*tipo = "importar"/);
+});
+
+test("RX-003/004 · previsão vencida sem o dia de hoje e «(1 ano)»", () => {
+  assert.equal(L.previsaoVencida("2000-01-01"), true, "RX-003: antes lançava «fmtDiaSP is not a function»");
+  assert.equal(L.previsaoVencida("2999-01-01"), false);
+  const hoje = new Date(Date.now()).toISOString().slice(0, 10);
+  const [a, m, d] = hoje.split("-").map(Number);
+  const amanha = new Date(Date.UTC(a - 1, m - 1, d + 1)).toISOString().slice(0, 10);
+  assert.match(L.aniversario(amanha, hoje).texto, /\(1 ano\)$/);
+  const em3 = new Date(Date.UTC(a - 1, m - 1, d + 3)).toISOString().slice(0, 10);
+  assert.match(L.aniversario(em3, hoje).texto, /em 3 dias \(1 ano\)$/);
+});
+
+test("RX-005/006 · nota: CPF e data com hora não viram telefone; o «(» do DDD entra no link", () => {
+  const p = L.partesNota("CPF 123.456.789-09, retorno 2026-10-21 14:30, ligar (12) 99830-3030");
+  const tels = p.filter(x => x.tipo === "tel");
+  assert.equal(tels.length, 1);
+  assert.equal(tels[0].texto, "(12) 99830-3030");
+  assert.equal(tels[0].href, "tel:+5512998303030");
+  assert.equal(p.map(x => x.texto).join(""), "CPF 123.456.789-09, retorno 2026-10-21 14:30, ligar (12) 99830-3030");
+  assert.equal(L.partesNota("+1 212 555 1234").filter(x => x.tipo === "tel").length, 1, "com «+» vale número de fora");
+});
+
+test("RX-007 · e-mail da planilha: «Nome <email>», mailto: e ponto final", () => {
+  assert.deepEqual(L.emailDaCelula("Ana Souza <Ana@X.com>; bia@y.com"), { email: "ana@x.com", extras: ["bia@y.com"] });
+  assert.equal(L.emailDaCelula("mailto:ana@x.com").email, "ana@x.com");
+  assert.equal(L.emailDaCelula("ana@x.com.").email, "ana@x.com");
+});
+
+test("RX-008 · data da planilha com hora e AAAA/MM/DD", () => {
+  assert.equal(L.lerData("21/10/2026 14:30"), "2026-10-21");
+  assert.equal(L.lerData("21/10/2026 14:30:05"), "2026-10-21");
+  assert.equal(L.lerData("2026/10/21"), "2026-10-21");
+  assert.equal(L.lerData("1990-12-31abc"), null, "RC-004 continua");
+  assert.equal(L.lerData("2026/13/01"), null);
+});
+
+test("RX-009/010 · arredondamento antes da unidade", () => {
+  assert.equal(L.estimativaRestante(59.6 * 60000, 1, 1), "cerca de 1 h");
+  assert.equal(L.estimativaRestante(119.7 * 60000, 1, 1), "cerca de 2 h");
+  const agora = Date.now();
+  assert.equal(L.textoFaltaPrazo(new Date(agora - 0.4 * 3600000).toISOString(), 24, agora), "falta 1 dia para o prazo");
+  assert.equal(L.textoFaltaPrazo(new Date(agora).toISOString(), 5, agora), "faltam 5 h para o prazo");
+});
+
+test("RX-011/012 · cortes não partem o emoji ao meio", () => {
+  const e = "😀".repeat(40);
+  for (const t of [L.resumoTexto(e, 10), L.cortarNaPalavra(e, 10)]) {
+    assert.ok(!/[\uD800-\uDFFF](?![\uDC00-\uDFFF])/.test(t.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "")), "sem metade de par");
+    assert.equal(Array.from(t).length, 10);
+  }
+});
+
+test("RX-013/014/015 · planilha: «e» entre telefones, separador «|», menos tipográfico", () => {
+  const t = L.telefoneDaCelula("12 99830-3030 e 12 98888-1111");
+  assert.equal(t.telefone, "12 99830-3030");
+  assert.deepEqual(t.extras, ["12 98888-1111"]);
+  assert.equal(L.detectarSeparador("nome|telefone\nAna|12998303030\n"), "|");
+  assert.deepEqual(L.lerCSV("nome|telefone\nAna|12998303030\n").cabecalho, ["nome", "telefone"]);
+  assert.equal(L.detectarSeparador("a;b\n1;2"), ";");
+  assert.match(ler("crm-importar.js"), /\["\|", "Barra vertical \(\|\)"\]/);
+  assert.equal(L.lerNumero("−150"), -150);
+  assert.equal(L.lerNumero("–1.500,00"), -1500);
+});
+
+test("RX-016/017/018/019 · porcentagem, sim/não, UF e origem da planilha", () => {
+  assert.equal(L.pctInteiro(0.996), "99%");
+  assert.equal(L.pctInteiro(1), "100%");
+  assert.equal(L.lerSimNao("Yes"), true);
+  assert.equal(L.lerSimNao("X"), true);
+  assert.equal(L.lerSimNao("No"), false);
+  assert.equal(L.ufDaPlanilha("Estado de SP"), "SP");
+  assert.equal(L.ufDaPlanilha("São Paulo (SP)"), "SP");
+  assert.equal(L.ufDaPlanilha("RJ - Rio de Janeiro"), "RJ");
+  assert.equal(L.ufDaPlanilha("Rua X"), "Rua X");
+  assert.equal(L.origemDaPlanilha("Indicação da Maria"), "indicacao");
+  assert.equal(L.origemDaPlanilha("WhatsApp (loja)"), "whatsapp");
+  assert.equal(L.origemDaPlanilha("Instagram"), "Instagram", "CR-129 continua");
+});
+
+test("RX-020/021 · atalhos sem repetir o dia", () => {
+  assert.ok(!L.atalhosPrevisao("2026-10-31").some(x => x.id === "fim_mes"), "RX-020: último dia do mês");
+  assert.ok(L.atalhosPrevisao("2026-10-20").some(x => x.id === "fim_mes"));
+  for (const dia of ["2026-10-24", "2026-10-25", "2026-10-21", "2026-10-22"]) {      // sábado, domingo, quarta, quinta
+    const v = L.atalhosPrazoUnicos(dia).map(x => x.valor);
+    assert.equal(new Set(v).size, v.length, `RX-021: sem dois botões iguais (${dia})`);
+    assert.ok(new Set(L.atalhosPrazo(dia).map(x => x.valor)).size < L.atalhosPrazo(dia).length, "a lista completa repete (e o «Adiar» por id segue igual)");
+  }
+  assert.match(ler("crm-tarefas.js"), /L.atalhosPrazoUnicos/);
+});
+
+test("RX-022/023 · chips: muitas etiquetas e valores no formato brasileiro", () => {
+  assert.equal(L.textoChipEtiquetas("alguma", ["A", "B", "C", "D", "E"]), "Tem alguma de: A, B, C e mais 2");
+  assert.equal(L.textoChipEtiquetas("todas", ["A", "B"]), "Tem todas: A, B");
+  const campos = [{ chave: "retorno", rotulo: "Retorno", tipo: "data" }, { chave: "orc", rotulo: "Orçamento", tipo: "moeda" }];
+  assert.equal(L.textoFiltroCampo({ chave: "retorno", op: "maior", valor: "2026-11-05" }, campos), "Retorno maior que 05/11/2026");
+  assert.equal(L.textoFiltroCampo({ chave: "orc", op: "menor", valor: "1500" }, campos), "Orçamento menor que R$ 1.500,00");
+});
+
+test("RX-024/025 · filtro local: ids como texto e a régua do valor do cartão", () => {
+  const cards = [{ id: 1, dono_id: 7, etiquetas: [3], valor_previsto: 100, status: "aberto" },
+    { id: 2, dono_id: 8, etiquetas: [], valor_previsto: 100, valor: 5000, status: "aberto" },
+    { id: 3, dono_id: 8, etiquetas: [], valor_previsto: 100, valor: 5000, status: "ganho" }];
+  const ids = f => L.filtrar(cards, f).map(c => c.id);
+  assert.deepEqual(ids({ dono: "7" }), [1]);
+  assert.deepEqual(ids({ etiquetas: { op: "alguma", ids: ["3"] } }), [1]);
+  assert.deepEqual(ids({ valor_min: 1000 }), [3], "aberto vale o previsto (o cartão mostra R$ 100)");
+});
+
+test("RX-026 · nome da planilha numa linha só e no limite da ficha", () => {
+  const campos = [];
+  const [o] = L.montarLinhas([["  Ana \n  Souza  "]], ["nome"], campos);
+  assert.equal(o.nome, "Ana Souza");
+  const [g] = L.montarLinhas([["x".repeat(300)]], ["nome"], campos);
+  assert.equal(g.nome.length, 160);
+  assert.ok(L.checarLinha(g).some(e => /Nome cortado/.test(e)));
+});
+
+test("RX-027/028 · UC-030 · cartão: rótulo do responsável, «1 não lida» e dados pessoais marcados", async () => {
+  const D = domDeMentira();
+  try {
+    const dados = quadroDe({ s1: col("s1", [{ id: 1, titulo: "Implante", status: "aberto", estagio_id: "s1", ordem: 10, nao_lidas: 1, dono_id: "u2", contato: { id: 7, nome: "Ana Souza", telefone: "5512998303030" } }]) });
+    const t = await montarKb(D, { dados, usuario: id => (id === "u2" ? { id: "u2", nome: "Bia" } : null) });
+    const c1 = t.cartao(1);
+    assert.equal(c1.querySelector(".kc-dono").getAttribute("aria-label"), "Ver só os cartões de Bia", "RX-027");
+    assert.equal(c1.querySelector(".kc-naolidas").getAttribute("title"), "1 não lida", "RX-028");
+    assert.ok(c1.querySelector(".kc-t").classList.contains("dado-pessoal"), "UC-030");
+    const s = c1.querySelector(".kc-s");
+    if (s) assert.ok(s.classList.contains("dado-pessoal"));
+  } finally { D.desfazer(); }
+});
+
+test("RX-029 · UC-030 · gaveta: o telefone do contato liga e nome/telefone são dado pessoal", async () => {
+  const D = domDeMentira();
+  try {
+    const t = await montarGaveta(D, {});
+    await imediato(); await imediato();
+    const bloco = t.corpo().querySelector(".ng-contato");
+    assert.ok(bloco.querySelector("b").classList.contains("dado-pessoal"));
+    const a = bloco.querySelector(".ng-tel");
+    assert.equal(a.getAttribute("href"), "tel:+5512998303030");
+    assert.ok(a.parentElement.classList.contains("dado-pessoal"));
+  } finally { D.desfazer(); }
+});
+
+test("UC-030 · listas e tarefas marcam nome, telefone e e-mail como dado pessoal", () => {
+  const listas = ler("crm-listas.js"), tarefas = ler("crm-tarefas.js");
+  assert.match(listas, /h\("b", \{ class: "dado-pessoal" \}, L\.nomeContato\(c\)\)/);
+  assert.match(listas, /class: "mono dado-pessoal" \}, ui\.telBR\(c\.telefone\)/);
+  assert.match(listas, /chave: "email", rotulo: "E-mail", render: c => c\.email \? h\("span", \{ class: "dado-pessoal" \}/);
+  assert.match(listas, /class: "fx-nome dado-pessoal"/);
+  assert.match(listas, /class: "ct-nome dado-pessoal"/);
+  assert.match(tarefas, /h\("span", \{ class: "dado-pessoal" \}, t\.contato\.nome/);
+});
+
+test("RX-031/032 · editar tarefa sem prazo não inventa amanhã; o responsável vem do dono_id", async () => {
+  const D = domDeMentira();
+  try {
+    let corpo = null, donoValor;
+    const k = kTarefas(D, { uix: { modal: async o => { corpo = o.corpo; return null; },
+      seletorPessoa: o => { donoValor = o.valor; return D.h("select"); },
+      campo: o => D.h("label", { class: "campo" }, o.rotulo || "", D.h(o.tipo === "select" ? "select" : "input", { name: o.nome, value: o.valor ?? "" })) } });
+    const { formTarefa } = await import("../web/app/crm-tarefas.js");
+    await formTarefa(k, { id: 9, titulo: "Ligar", tipo: "ligacao", vence_em: null, dono_id: "u7" }, {});
+    assert.equal(corpo.querySelector("[name=vence_em]").value, "", "RX-031: antes vinha «amanhã 9h»");
+    assert.equal(donoValor, "u7", "RX-032");
+    await formTarefa(k, null, {});
+    assert.match(corpo.querySelector("[name=vence_em]").value, /T09:00$/, "tarefa nova continua com amanhã 9h");
+  } finally { D.desfazer(); }
+});
+
+test("RX-030 · todas as buscas do CRM com enterkeyhint=search", () => {
+  for (const f of ["crm-kanban.js", "crm-listas.js", "crm-negocio.js", "crm-tarefas.js", "crm-config.js", "crm-visoes.js"]) {
+    const src = ler(f);
+    const buscas = src.match(/h\("input", \{ type: "search",[^\n]*/g) || [];
+    assert.ok(buscas.length, f);
+    for (const b of buscas) assert.match(b, /enterkeyhint: "search"/, `${f}: ${b.slice(0, 60)}`);
+  }
+});
+
+test("RX-033/034 · gaveta: responsável desativado aparece e os outros negócios com centavos só quando há", async () => {
+  const D = domDeMentira();
+  try {
+    const t = await montarGaveta(D, { negocio: { dono_id: "u9", dono_nome: "Caio" },
+      ver: { outros: [{ id: 2, titulo: "Clareamento", status: "aberto", estagio_id: "s1", valor_previsto: 1500 }, { id: 3, titulo: "Limpeza", status: "aberto", estagio_id: "s1", valor_previsto: 99.5 }] } });
+    await imediato(); await imediato();
+    const sel = t.corpo().querySelectorAll(".ng-kv select").find(s => s.querySelectorAll("option").some(o => /Sem responsável/.test(o.textContent)));
+    assert.ok(sel.querySelectorAll("option").some(o => o.textContent === "Caio (desativado)"), "RX-033");
+    const minis = t.corpo().querySelectorAll(".ng-mini b").map(b => b.textContent);
+    if (minis.length) {
+      assert.ok(minis.every(x => !/,00$/.test(x)), `RX-034: ${minis.join(" | ")}`);
+    }
+    assert.match(ler("crm-negocio.js"), /ui\.brl\(L\.valorCard\(o\), \{ centavos: L\.temCentavos\(L\.valorCard\(o\)\) \}\)/);
+  } finally { D.desfazer(); }
+});
+
+test("RX-035/036/038 · ficha: telefone recusado na hora, negócios na régua do cartão e o «+N» das etiquetas diz quais", async () => {
+  const D = domDeMentira();
+  try {
+    const t = await montarCt(D, { rpc: nome => (nome === "nx_contato_ver" ? { contato: { id: 501, nome: "Ana", telefone: "5512998303030" }, rfm: {}, tarefas: [], notas: [], tempo: [], conversas: [],
+      negocios: [{ id: 1, titulo: "Implante", status: "ganho", valor: null, valor_previsto: 1200 }, { id: 2, titulo: "Limpeza", status: "aberto", valor_previsto: null }] } : undefined) });
+    Object.assign(t.k, { nomes: () => ({}), motivosPorId: () => ({}), estagio: () => null, funil: () => null });
+    const el = h0(D, "div", { class: "crm" });
+    await t.M.montarFicha(t.k, el, 501, {});
+    const minis = el.querySelectorAll(".ng-outros .ng-mini");
+    assert.equal(minis[0].querySelector("b").textContent, "R$ 1200", "RX-036: ganho sem valor final usa o previsto (antes «—»)");
+    assert.equal(minis[1].querySelector(".sem").textContent, "Sem valor");
+    const src = ler("crm-listas.js");
+    assert.ok(src.includes("!L.normalizarTelefone(x.value) ? L.textoTelefoneInvalido(x.value) : null"), "RX-035");
+    assert.ok(src.includes("class: \"kc-mais-etq\", title: e.slice(3)"), "RX-038");
+  } finally { D.desfazer(); }
+});
+
+test("RX-037/039 · empresas: sem total não escreve «NaN»; telefone ruim da empresa barrado antes do servidor", async () => {
+  const D = domDeMentira();
+  try {
+    const t = await montarCt(D, { lista: { itens: [{ id: 1, nome: "Frota X" }, { id: 2, nome: "Frota Y" }], tem_mais: true } });
+    const el = h0(D, "div", { class: "crm" });
+    await t.M.montarEmpresas(t.k, el, { query: {} });
+    await imediato();
+    const txt = el.textContent;
+    assert.doesNotMatch(txt, /NaN/);
+    assert.match(txt, /2\+ empresas/);
+    assert.ok(ler("crm-listas.js").includes("!L.normalizarTelefone(dados.telefone)) { ui.marcarErro(form, \"telefone\", L.textoTelefoneInvalido(dados.telefone))"), "RX-039");
+  } finally { D.desfazer(); }
+});
+
+test("RX-042/043/044 · seleção: tirar etiqueta, busca na lista longa e quem ficou de fora", async () => {
+  const D = domDeMentira();
+  try {
+    const respostas = [];
+    const etqs = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, nome: i === 2 ? "Urgência" : `E${i + 1}` }));
+    const t = await montarKb(D, { dados: quadroDe({ s1: col("s1", cartoes(2, "s1", 1, { etiquetas: [3, 4] })) }), uix: { modal: modalFila(respostas) },
+      base: { etiquetas: etqs, usuarios: [] }, etiqueta: id => etqs.find(e => e.id === id) || null });
+    for (const id of [1, 2]) t.cartao(id).dispara("click", { shiftKey: true, target: t.cartao(id) });
+    let corpoEtq = null;
+    respostas.push((o, api) => { corpoEtq = o.corpo; api.fechar(null); });
+    t.tela.querySelector(".crm-sel-etq").clique(); await varias(6);
+    const campo = corpoEtq.querySelector(".kb-mover-busca");
+    assert.ok(campo, "RX-044: mais de 8 etiquetas → busca");
+    campo.value = "urgencia"; campo.dispara("input");
+    assert.deepEqual(corpoEtq.querySelectorAll("li").filter(li => !li.hidden).map(li => li.textContent), ["Urgência"]);
+    let opcoesTirar = null;
+    respostas.push((o, api) => { opcoesTirar = o.corpo.querySelectorAll(".kb-mover-nome").map(x => x.textContent); api.fechar(3); });
+    t.tela.querySelector(".crm-sel-tirar-etq").clique(); await varias(10);
+    assert.deepEqual(opcoesTirar, ["Urgência", "E4"], "RX-043: só as etiquetas que os selecionados têm");
+    assert.deepEqual(t.chamadas("nx_negocio_salvar").map(c => c.p.p_negocio), [{ id: 1, etiquetas: [4] }, { id: 2, etiquetas: [4] }]);
+    assert.match(t.reg.toasts.at(-1), /Etiqueta «Urgência» tirada de 2 cartões/);
+    assert.match(ler("crm-kanban.js"), /ficaram"\} de fora \(ainda salvando\)/, "RX-042");
+    t.api.desmontar();
+  } finally { D.desfazer(); }
+});
+
+test("RX-040/041 · tela cheia: Esc sai sem a API do navegador e sair do quadro solta a tela cheia", async () => {
+  const D = domDeMentira();
+  try {
+    const t = await montarKb(D, { dados: kbVazio() });
+    const bt = t.tela.querySelector(".crm-apresentar");
+    bt.clique();
+    assert.ok(t.tela.classList.contains("kb-apresentacao"));
+    D.documento("keydown", { key: "Escape", target: D.doc.body });
+    assert.ok(!t.tela.classList.contains("kb-apresentacao"), "RX-041: antes ficava preso (sem fullscreenchange)");
+    assert.equal(bt.getAttribute("aria-pressed"), "false");
+    let saiu = 0;
+    bt.clique();
+    D.doc.fullscreenElement = t.tela; D.doc.exitFullscreen = () => { saiu++; return Promise.resolve(); };
+    t.api.desmontar();
+    assert.equal(saiu, 1, "RX-040");
+  } finally { D.desfazer(); }
+});
+
+test("RX-045/046/047/048 · filtros do quadro: Enter aplica, valor volta formatado, tirar chip devolve o foco", async () => {
+  const D = domDeMentira();
+  try {
+    const t = await montarKb(D, { dados: quadroDe({ s1: col("s1", cartoes(1, "s1")) }) });
+    const btF = t.tela.querySelector(".crm-filtro-bt");
+    btF.clique();
+    let corpo = t.reg.flut.conteudo;
+    const vMin = corpo.querySelectorAll("input").find(x => x.attrs["aria-label"] === "Valor mínimo");
+    vMin.value = "1.500";
+    vMin.dispara("keydown", { key: "Enter" });
+    await varias(6);
+    assert.equal(t.reg.flut.api.fechado, true, "RX-047: Enter aplicou e fechou");
+    const chip = t.tela.querySelector(".crm-chip");
+    assert.ok(chip && /1500|1\.500/.test(chip.textContent));
+    btF.clique();
+    corpo = t.reg.flut.conteudo;
+    const vMin2 = corpo.querySelectorAll("input").find(x => x.attrs["aria-label"] === "Valor mínimo");
+    assert.equal(vMin2.value, "1.500", "RX-048");
+    t.reg.flut.api.fechar();
+    await varias(4);
+    const avisos0 = (t.reg.avisos || []).length;
+    t.tela.querySelector(".crm-chip button").clique();
+    await varias(8);
+    assert.equal(D.ativo(), btF, "RX-045: sem chips, o foco vai para «Filtros»");
+    assert.ok((t.reg.avisos || []).slice(avisos0).some(a => /Filtro tirado/.test(a)));
+    assert.match(ler("crm-kanban.js"), /ui\.anunciar\("Filtros limpos\."\)/, "RX-046");
+    t.api.desmontar();
+  } finally { D.desfazer(); }
+});
+
+test("UC-028 · crm.js monta a importação em #/crm?importar=1 (o link do Início e da ajuda)", async () => {
+  const D = domDeMentira();
+  try {
+    const CRM = await import("../web/app/crm.js");
+    const ctx = ctxCrm(D, { rota: { modulo: "crm", partes: [], query: { importar: "1" } }, cli: "c-uc028",
+      rpc: n => (n === "nx_crm_base" ? { funis: [{ id: "f1", nome: "Pacientes", padrao: true, ativo: true, estagios: ETAPAS_KB }], usuarios: [], etiquetas: [], motivos: [], campos: [], ticket: {} } : {}) });
+    ctx.ui.corOk = c => c || null;
+    await CRM.montar(ctx);
+    const tela = ctx.alvo.querySelector(".crm");
+    assert.equal(tela && tela.dataset.tela, "importar", "antes: abria o quadro");
+    CRM.desmontar();
+  } finally { D.desfazer(); }
+});
+
+test("RX-049/050/051 · importação: colado com «|», arquivo vazio e «1 linha encontrada»", async () => {
+  assert.equal(L.contagemColado("nome|tel\nAna|12998303030\n"), "1 linha · 2 colunas");
+  assert.equal(L.contagemColado("nome,\"obs; x\",tel\nAna,a,1\n"), "1 linha · 3 colunas", "o «;» dentro das aspas não conta");
+  const D = domDeMentira();
+  try {
+    const t = await montarImp(D);
+    const entrada = t.tela.querySelector('input[type="file"]');
+    entrada.files = [{ name: "vazio.csv", size: 0, type: "text/csv", arrayBuffer: async () => new ArrayBuffer(0) }];
+    entrada.dispara("change"); await varias(4);
+    assert.match(t.reg.toasts.at(-1), /«vazio\.csv» está vazio/, "RX-050");
+    const bytes = new TextEncoder().encode("Nome;Telefone\nAna;(12) 99830-3030\n");
+    entrada.files = [{ name: "base.csv", size: bytes.length, type: "text/csv", slice: () => ({ arrayBuffer: async () => bytes.slice(0, 2).buffer }), arrayBuffer: async () => bytes.buffer }];
+    entrada.dispara("change"); await varias(4); await esperar(160);
+    assert.ok((t.reg.avisos || []).includes("1 linha encontrada."), "RX-051");
+  } finally { D.desfazer(); }
+});
+
+test("RX-052/053/054 · filtros salvos: seletor some sem filtros, limite pela constante e opção removida não muda o filtro", async () => {
+  const D = domDeMentira();
+  try {
+    const ui = uiDeMentira(D.h, {});
+    const k = { ui, h: D.h, L, ctx: { cliente: { id: "cli-v" } }, eu: () => "u1", base: { campos: [{ chave: "conv", rotulo: "Convênio", tipo: "opcao", entidade: "contato", opcoes: ["Unimed", "Amil"] }] } };
+    const c = VisReal.controlesVisoes(k, { tipo: "contatos", obterDados: () => ({ filtro: {}, ordem: "nome" }), aplicar: async () => {} });
+    assert.equal(c.el.querySelector(".crm-visoes-select").hidden, true, "RX-053");
+    D.storage.set(L.chaveVisoesCRM("cli-v", "u1", "contatos"), JSON.stringify([{ id: "v1", nome: "Só Amil", dados: { filtro: { origem: ["manual"] }, ordem: "nome" } }]));
+    const c2 = VisReal.controlesVisoes(k, { tipo: "contatos", obterDados: () => ({ filtro: {}, ordem: "nome" }), aplicar: async () => {} });
+    assert.equal(c2.el.querySelector(".crm-visoes-select").hidden, false);
+    // RX-054 (o select do DOM de mentira não deriva o value da opção marcada): confere a montagem da opção extra no código
+    assert.ok(ler("crm-visoes.js").includes("v0 && !(c.opcoes || []).includes(v0) ? [h(\"option\", { value: v0, selected: true }, `${v0} (não existe mais)`)] : []"), "RX-054");
+    assert.ok(ler("crm-visoes.js").includes("${L.LIMITE_VISOES_CRM || 12} filtros salvos"), "RX-052");
+  } finally { D.desfazer(); }
+});
+
+test("RX-055/057 · motivos de perda: sugeridos que já existiam avisam; nome repetido barrado sem ir ao servidor", async () => {
+  const D = domDeMentira();
+  try {
+    const { h } = D;
+    const ui = uiDeMentira(h, {});
+    const toasts = [], erros = [];
+    let acoesModal = null;
+    ui.toast = (t, o = {}) => { toasts.push({ t, ...o }); return { fechar() {} }; };
+    ui.campo = o => h("label", { class: "campo" }, h("input", { name: o.nome }));
+    ui.modal = async o => { acoesModal = o.acoes; return null; };
+    ui.lerForm = () => ({ nome: "  achou CARO " });
+    ui.marcarErro = (f, campo, txt) => { if (campo) erros.push(txt); };
+    const chamadas = [];
+    const base = { funis: [], etiquetas: [], motivos: [], campos: [] };
+    const k = { ui, h, L, base, v: V, cor: () => null, erro: e => String(e && e.codigo), pode: () => true, recarregarBase: async () => base,
+      api: { rpcC: async (n, p) => { chamadas.push(n); if (n === "nx_motivo_salvar") throw Object.assign(new Error("x"), { hint: "nome_em_uso" }); return {}; } } };
+    const ctx = { ui: { carregarCss() {} }, carregar: async () => ({ kit: async () => k }), paleta: [] };
+    const { secoesConfig } = await import("../web/app/crm-config.js");
+    const aM = h0(D, "div");
+    await secoesConfig.find(s => s.id === "motivos").montar(ctx, aM);
+    aM.querySelectorAll("button").find(b => b.textContent === "Usar motivos sugeridos").clique(); await varias(10);
+    assert.ok(toasts.some(x => /^Nada novo: os motivos sugeridos já existiam/.test(x.t)), "RX-055: antes nenhum aviso");
+    base.motivos.push({ id: 9, nome: "Achou caro" });
+    aM.querySelectorAll("button").find(b => b.textContent === "Motivo").clique(); await varias();
+    const n0 = chamadas.length;
+    const r = await acoesModal.find(a => a.tipo === "primario").fn({ erro() {} });
+    assert.equal(r, false);
+    assert.deepEqual(erros, ["Já existe o motivo «Achou caro»."], "RX-057");
+    assert.equal(chamadas.length, n0, "sem ida ao servidor");
+  } finally { D.desfazer(); }
+});
+
+test("RX-056 · iniciais sem pronome de tratamento e sem partir emoji", () => {
+  assert.equal(L.iniciais("Dr. João Silva"), "JS");
+  assert.equal(L.iniciais("Dra Ana"), "AN");
+  assert.equal(L.iniciais("Dr."), "DR", "só o título: usa ele mesmo");
+  assert.equal(L.iniciais("😀 Feliz"), "😀F");
+  assert.equal(L.iniciais(""), "?");
+});
+
+test("RX-058/059/060/061/062 · CSS: foco do «×», link de ligar, «Sem valor», dica do «+N» e faixa da seleção no celular", () => {
+  const css = ler("crm.css");
+  assert.match(css, /\.crm-chip button:focus-visible \{ outline: 2px solid var\(--c-foco\)/);
+  assert.match(css, /\.ng-contato \.ng-tel \{ color: inherit;/);
+  assert.match(css, /@media \(pointer: coarse\) \{ \.ng-contato \.ng-tel \{ min-height: 44px; \} \}/);
+  assert.match(css, /\.ng-mini \.sem \{[^}]*color: var\(--c-texto-2\)/);
+  assert.match(css, /\.kc-mais-etq\[title\] \{ cursor: help; \}/);
+  assert.match(css, /@media \(max-width: 760px\) \{ \.crm-sel > \.bt \{ flex: 1 1 calc\(50% - \.5rem\); min-height: 44px; \}/);
+});
+
+test("RX-063/065/066 · linha da tarefa: rótulos curtos, responsável pelo dono_id e «Você»", async () => {
+  const D = domDeMentira();
+  try {
+    const k = kTarefas(D);
+    k.usuario = id => (id === "u2" ? { id: "u2", nome: "Bia" } : id === "u1" ? { id: "u1", nome: "Eu Mesmo" } : null);
+    const { itemTarefa } = await import("../web/app/crm-tarefas.js");
+    const longo = "Ligar para confirmar ".repeat(8).trim();
+    const li = itemTarefa(k, { id: 1, titulo: longo, tipo: "ligacao", vence_em: null, concluida_em: null, dono_id: "u2" }, {});
+    const rot = li.querySelector('input[type="checkbox"]').attrs["aria-label"];
+    assert.ok(rot.length < 100 && /…, sem prazo$/.test(rot), `RX-063: ${rot}`);
+    const ed = li.querySelectorAll("button").find(b => /^Editar a tarefa/.test(b.attrs["aria-label"] || ""));
+    assert.ok(/…$/.test(ed.attrs["aria-label"]));
+    assert.equal(li.querySelector(".tf-dono").textContent, "Bia", "RX-065: antes sumia sem o objeto dono");
+    const meu = itemTarefa(k, { id: 2, titulo: "X", tipo: "tarefa", vence_em: null, concluida_em: null, dono: { id: "u1", nome: "Eu Mesmo" } }, {});
+    assert.equal(meu.querySelector(".tf-dono").textContent, "Você", "RX-066");
+    assert.equal(meu.querySelector(".tf-dono").getAttribute("title"), "Responsável: Eu Mesmo");
+  } finally { D.desfazer(); }
+});
+
+test("RX-067/068 · textos: busca com filtros e números com milhar", () => {
+  assert.equal(L.textoSemResultado({ busca: "ana", origem: ["manual"] }), "Nada encontrado para «ana» com esses filtros.");
+  assert.equal(L.textoSemResultado({ busca: "ana" }), "Nada encontrado para «ana».");
+  assert.equal(L.textoResumoImportacao({ criados: 12345, atualizados: 1, ignorados: 0, erros: [] }), "12.345 criados · 1 atualizado · 0 ignorados · 0 erros");
+});
+
+test("RX-064 · #/crm/negocio/abc avisa que o link não vale", async () => {
+  const D = domDeMentira();
+  try {
+    const CRM = await import("../web/app/crm.js");
+    const toasts = [];
+    const ctx = ctxCrm(D, { rota: { modulo: "crm", partes: ["negocio", "abc"], query: {} }, cli: "c-rx064",
+      rpc: n => (n === "nx_crm_base" ? { funis: [{ id: "f1", nome: "Pacientes", padrao: true, ativo: true, estagios: ETAPAS_KB }], usuarios: [], etiquetas: [], motivos: [], campos: [], ticket: {} }
+        : n === "nx_negocios_kanban" ? quadroDe() : {}) });
+    ctx.ui.corOk = c => c || null;
+    ctx.ui.toast = (t, o = {}) => { toasts.push({ t, ...o }); return { fechar() {} }; };
+    await CRM.montar(ctx);
+    assert.ok(toasts.some(x => x.t === "Esse link não aponta para uma oportunidade válida." && x.tipo === "erro"), JSON.stringify(toasts));
+    CRM.desmontar();
+  } finally { D.desfazer(); }
+});
+
+test("RX-069/070 · nome do CSV de erros com a planilha e o dia; nascimento antes de 1900 avisa", () => {
+  assert.equal(L.nomeArquivoImportacao("erros", "Clientes Maio.csv", "2026-10-25"), "erros-clientes-maio-2026-10-25.csv");
+  assert.equal(L.nomeArquivoImportacao("problemas", "Colado do Excel", "2026-10-25"), "problemas-colado-do-excel-2026-10-25.csv");
+  assert.equal(L.nomeArquivoImportacao("erros", null, ""), "erros.csv");
+  const imp = ler("crm-importar.js");
+  assert.ok(imp.includes("L.nomeArquivoImportacao(\"erros\", S.arquivo && S.arquivo.nome") && imp.includes("L.nomeArquivoImportacao(\"problemas\""));
+  assert.ok(ler("crm-listas.js").includes("x.value < \"1900-01-01\" ? \"Confira o ano do nascimento (antes de 1900).\""), "RX-070");
+});
+
+test("RX-071/073 · gaveta: valor negativo não grava; serviço acha o ticket sem olhar maiúscula", async () => {
+  assert.equal(L.erroDinheiro("-150"), "O valor não pode ser negativo.");
+  assert.equal(L.erroDinheiro("abc"), "Valor inválido. Use só números, por exemplo 1.500,00.");
+  assert.equal(L.erroDinheiro(""), null);
+  assert.equal(L.ticketDoServico({ Implante: "3500" }, "  implante "), 3500);
+  assert.equal(L.ticketDoServico({ Implante: "3500" }, "Clareamento"), null);
+  const D = domDeMentira();
+  try {
+    const t = await montarGaveta(D, {});
+    await imediato(); await imediato();
+    const inp = t.corpo().querySelectorAll(".ng-kv input").find(x => x.attrs.placeholder === "0,00");
+    const n0 = t.reg.chamadas.length;
+    inp.value = "-100"; inp.dispara("change"); inp.dispara("blur"); await varias(6);
+    assert.ok(!t.reg.chamadas.slice(n0).some(c => /negocio_salvar/.test(c.nome)), "não foi ao servidor");
+    const erro = t.corpo().querySelectorAll(".ed-erro").find(e => !e.hidden);
+    assert.equal(erro && erro.textContent, "O valor não pode ser negativo.");
+  } finally { D.desfazer(); }
+});
+
+test("RX-074 · lista longa do lote: Enter com uma opção só escolhe", async () => {
+  const D = domDeMentira();
+  try {
+    const respostas = [];
+    const etqs = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, nome: i === 6 ? "Retorno" : `E${i + 1}` }));
+    const t = await montarKb(D, { dados: quadroDe({ s1: col("s1", cartoes(1, "s1", 1, { etiquetas: [] })) }), uix: { modal: modalFila(respostas) },
+      base: { etiquetas: etqs, usuarios: [] }, etiqueta: id => etqs.find(e => e.id === id) || null });
+    t.cartao(1).dispara("click", { shiftKey: true, target: t.cartao(1) });
+    respostas.push((o, api) => {
+      const campo = o.corpo.querySelector(".kb-mover-busca");
+      campo.value = "retor"; campo.dispara("input");
+      campo.dispara("keydown", { key: "Enter" });
+    });
+    t.tela.querySelector(".crm-sel-etq").clique(); await varias(10);
+    assert.deepEqual(t.chamadas("nx_negocio_salvar").map(c => c.p.p_negocio), [{ id: 1, etiquetas: [7] }]);
+    assert.match(ler("crm-kanban.js"), /RX-074: Enter com UMA etapa sobrando escolhe ela/);
+    t.api.desmontar();
+  } finally { D.desfazer(); }
+});
+
+test("RX-072/075 · tarefas: detalhes com link e telefone clicáveis; painel com milhar", async () => {
+  const D = domDeMentira();
+  try {
+    const k = kTarefas(D);
+    const { itemTarefa } = await import("../web/app/crm-tarefas.js");
+    const li = itemTarefa(k, { id: 3, titulo: "Retorno", tipo: "tarefa", vence_em: null, concluida_em: null, descricao: "Ver https://exemplo.com.br/orc e ligar (12) 99830-3030" }, {});
+    const links = li.querySelectorAll(".tf-desc a");
+    assert.deepEqual(links.map(a => a.getAttribute("href")), ["https://exemplo.com.br/orc", "tel:+5512998303030"]);
+    assert.equal(li.querySelector(".tf-desc").textContent, "Ver https://exemplo.com.br/orc e ligar (12) 99830-3030");
+    assert.ok(ler("crm-tarefas.js").includes("painelNums[id].textContent = ui.num ? ui.num(n) : String(n);"), "RX-072");
+  } finally { D.desfazer(); }
+});
+
+test("RX-076/077/078/079 · e-mail em minúsculas, WhatsApp direto sem Conversas, site com domínio minúsculo e CSS dos detalhes", async () => {
+  assert.equal(L.normalizarSite("HTTPS://WWW.Exemplo.com.br/Promo"), "https://www.exemplo.com.br/Promo", "RX-079");
+  assert.equal(L.normalizarSite("WWW.Empresa.COM"), "https://www.empresa.com");
+  const listas = ler("crm-listas.js");
+  assert.ok(listas.includes("ler: x => x.value.trim().toLowerCase() || null, salvar: v => salvar({ email: v })") && listas.includes("if (dados.email) dados.email = String(dados.email).trim().toLowerCase();"), "RX-077");
+  const css = ler("crm.css");
+  assert.match(css, /\.tf-desc \{ overflow-wrap: anywhere; \}/, "RX-076");
+  const D = domDeMentira();
+  try {
+    const t = await montarGaveta(D, {});
+    await imediato(); await imediato();
+    const wa = t.corpo().querySelector(".ng-wa");
+    assert.equal(wa && wa.getAttribute("href"), "https://wa.me/5512998303030", "RX-078: sem Conversas, o WhatsApp direto");
+    const t2 = await montarGaveta(D, { kx: { ctx: { temModulo: () => true } } });
+    await imediato(); await imediato();
+    assert.equal(t2.corpo().querySelector(".ng-wa"), null, "com Conversas, fica o «Abrir conversa»");
+  } finally { D.desfazer(); }
+});
+
+test("RX-080/081/082 · título longo pela régua dos caracteres, menos no fim e sugestão de e-mail", () => {
+  assert.equal(L.lerNumero("1.500,00-"), -1500);
+  assert.equal(L.lerNumero("150-"), -150);
+  assert.equal(L.lerNumero("15-0"), null);
+  assert.equal(L.sugestaoEmail("Ana@Gmail.con"), "ana@gmail.com");
+  assert.equal(L.sugestaoEmail("bia@hotmal.com"), "bia@hotmail.com");
+  assert.equal(L.sugestaoEmail("caio@empresa.com.br"), null);
+  assert.equal(L.sugestaoEmail("sem-arroba"), null);
+  assert.ok(ler("crm-listas.js").includes("return s ? `Quis dizer ${s}?` : null;"), "RX-082 na ficha");
+  assert.ok(ler("crm-kanban.js").includes("title: Array.from(titulo).length > 48 ? titulo : null"), "RX-080");
+});

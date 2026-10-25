@@ -232,7 +232,7 @@ const esperar = ms => new Promise(r => setTimeout(r, ms));
  * ctx de mentira com as RPCs desta rodada: nx_cv_atribuir (resp.atribuir: função, Error ou promessa pendente), nx_tarefa_concluir, e o
  * `ctx.canais` do shell (contrato A4) com caidos()/assinar()/verNumero() — `canais.mudar(lista)` faz o papel do pulso do shell.
  */
-async function montarTela(d, { dom, agenda = AGENDA, papel = "admin", conta = ID_CONTA, semCanais = false, inicioLento = null, esperarMontar = true, onb = null, semPulso = false, versao = "T" } = {}) {
+async function montarTela(d, { dom, agenda = AGENDA, papel = "admin", conta = ID_CONTA, semCanais = false, inicioLento = null, esperarMontar = true, onb = null, semPulso = false, versao = "T", rota = { query: {} } } = {}) {
   const U = await import(pathToFileURL(join(APP, "ui.js")).href);
   const ui = { ...U };
   const chamadas = [], navegou = [], toasts = [];
@@ -242,7 +242,7 @@ async function montarTela(d, { dom, agenda = AGENDA, papel = "admin", conta = ID
     mudar(l) { canais.lista = l; for (const fn of [...canais.fns]) fn(l.slice()); } };
   ui.toast = (t, o = {}) => { toasts.push({ texto: t, tipo: o.tipo, desfazer: o.desfazer || null }); return { fechar() {}, el: null }; };
   const ctx = {
-    alvo: dom.doc.body.appendChild(dom.doc.createElement("main")), versao, rota: { query: {} },
+    alvo: dom.doc.body.appendChild(dom.doc.createElement("main")), versao, rota,
     sessao: { conta: { id: conta, nome: "Helena Souza" }, org: {} },
     cliente: { id: ID_CLI, slug: "demo", nome: "Clínica Demo", vertical: "odonto", modulos: ["conversas", "crm", "ads", "relatorios"] },
     papel, pode: p => (p === "admin" ? papel === "admin" : true), temModulo: () => true, pronto: () => true, configPronta: () => true,
@@ -1215,4 +1215,237 @@ test("plano 1500c (CSS): só tokens nas peças novas, alvos de 44 px no toque, i
   assert.match(novo, /@media print \{[\s\S]*html\.ini-imprimindo body > \*:not\(\.ini-resumo-folha\) \{ display: none !important; \}/);
   assert.match(novo, /\.ini-tf-adiar, \.ini-guia-item \.bt[\s\S]*?\{ min-height: 44px; \}/);
   assert.match(novo, /\.ini-bv-n0 \{/); assert.match(novo, /\.ini-roi-n \{[^}]*var\(--fs-num-xl\)/);
+});
+
+test("UC-011 (pendência da frente sis): #/inicio?passos=1 traz o checklist de volta mesmo dispensado, rola até ele e foca o título", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    dom.mem.set(`nx-onb:${ID_CLI}:${ID_CONTA}`, JSON.stringify({ pulados: [], dispensadoAte: AGORA + 5 * 86400000 }));
+    const t0 = await montarTela(NOVO(), { dom, onb: ONB_PENDENTE() });
+    assert.equal(t0.raiz.querySelector(".ini-onb"), null, "dispensado: sem o cartão");
+    I.desmontar();
+    const t = await montarTela(NOVO(), { dom, onb: ONB_PENDENTE(), rota: { query: { passos: "1" } } });
+    assert.ok(t.raiz.querySelector(".ini-onb"), "o cartão voltou");
+    assert.equal(JSON.parse(dom.mem.get(`nx-onb:${ID_CLI}:${ID_CONTA}`)).dispensadoAte, 0);
+    await esperar(100);
+    assert.equal(dom.doc.activeElement && dom.doc.activeElement.id, "ini-ob", "o foco no título do checklist");
+  } finally { dom.fim(); }
+});
+
+/* ---------- melhorias novas IC-003.. ---------- */
+const comNavegadorX = (extra, fn) => {
+  const antes = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { value: { onLine: true, ...extra }, configurable: true, writable: true });
+  const volta = () => { if (antes) Object.defineProperty(globalThis, "navigator", antes); else delete globalThis.navigator; };
+  return Promise.resolve().then(fn).finally(volta);
+};
+
+test("IC-003 + IC-005: textoResumoMes — cabeçalho com empresa e data, uma linha por número; «Gerado em dd/mm às HH:MM» no fuso de SP", () => {
+  const txt = I.textoResumoMes([{ rotulo: "Receita do mês", valor: "R$ 28.400" }, { rotulo: "Leads no mês", valor: "23" }], { empresa: "Clínica Demo", mes: "outubro de 2026", ate: "04/10" });
+  assert.equal(txt, "*Resumo de outubro de 2026* — Clínica Demo (até 04/10)\n• Receita do mês: R$ 28.400\n• Leads no mês: 23\nNúmeros do Órbita.");
+  assert.equal(I.textoResumoMes([], { mes: "maio" }), "*Resumo de maio*\nNúmeros do Órbita.");
+  assert.equal(I.textoGeradoEm(Date.parse("2026-10-25T14:05:00-03:00")), "Gerado em 25/10 às 14:05");
+  assert.equal(I.textoGeradoEm(Date.parse("2026-10-25T02:30:00Z")), "Gerado em 24/10 às 23:30", "a hora de SP, não a UTC");
+  assert.equal(I.textoGeradoEm(NaN), "");
+});
+
+test("IC-003 + IC-004 + IC-005 (DOM): o resumo do mês copia o texto, compartilha onde o sistema deixa e diz quando foi gerado", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const t = await montarTela(NOVO(), { dom });
+    const copiados = []; t.ctx.ui.copiar = async (x, o) => { copiados.push([x, o && o.aviso]); };
+    botao(t.raiz, "resumo-mes").click();
+    let folha = dom.doc.body.querySelector(".ini-resumo-folha");
+    assert.match(texto(folha.querySelector('[data-k="rs-gerado"]')), /^Gerado em 04\/10 às 10:20$/);
+    assert.equal(folha.querySelector('[data-k="rs-compartilhar"]'), null, "sem navigator.share: sem o botão");
+    folha.querySelector('[data-k="rs-copiar"]').click(); await tick();
+    assert.equal(copiados.length, 1);
+    assert.match(copiados[0][0], /^\*Resumo de outubro de 2026\* — Clínica Demo \(até 04\/10\)\n• Receita do mês: R\$\s28\.400/);
+    assert.match(copiados[0][1], /Resumo copiado/);
+    folha.querySelector('[data-k="rs-fechar"]').click();
+    const partilhas = [];
+    await comNavegadorX({ share: async o => { partilhas.push(o); } }, async () => {
+      botao(t.raiz, "resumo-mes").click();
+      folha = dom.doc.body.querySelector(".ini-resumo-folha");
+      folha.querySelector('[data-k="rs-compartilhar"]').click(); await tick();
+    });
+    assert.equal(partilhas.length, 1); assert.equal(partilhas[0].title, "Resumo de outubro de 2026"); assert.match(partilhas[0].text, /Receita do mês/);
+    folha.querySelector('[data-k="rs-fechar"]').click();
+  } finally { dom.fim(); }
+});
+
+test("IC-006 + IC-007 + IC-008: custo por lead; abaixo de R$ 1 a nota diz quanto falta para empatar; gasto sem venda aparece (antes sumia)", () => {
+  const d = NOVO(); d.gasto_anuncios_mes = 2000;
+  assert.ok(Math.abs(I.custoPorLead(d) - 2000 / 23) < 1e-9);
+  assert.equal(I.custoPorLead(NOVO()), null, "sem gasto: nada estimado");
+  const brl = v => `R$ ${Math.round(v)}`;
+  assert.equal(I.notaRetorno(I.retornoAnuncios(d), brl), null, "acima de R$ 1 a frase grande basta");
+  d.negocios.receita_anuncio_mes = 1200;
+  assert.equal(I.notaRetorno(I.retornoAnuncios(d), brl), "Os anúncios ainda não se pagaram este mês: faltam R$ 800 para empatar.");
+  d.negocios.receita_anuncio_mes = 0;
+  const r = I.retornoAnuncios(d);
+  assert.deepEqual(r, { multiplo: 0, receita: 0, gasto: 2000, deAnuncio: true, semVenda: true });
+  assert.match(I.notaRetorno(r, brl), /^R\$ 2000 investidos em anúncios este mês e nenhuma venda registrada ainda/);
+});
+
+test("IC-006 + IC-007 + IC-008 (DOM): o cartão do retorno mostra o custo por lead e, abaixo de R$ 1, a nota em vez de comemorar", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const d = NOVO(); d.gasto_anuncios_mes = 2000;
+    const t = await montarTela(d, { dom });
+    assert.match(texto(botao(t.raiz, "roi-cpl")), /^Cada lead custou R\$\s86,96 este mês\.$/);
+    assert.equal(botao(t.raiz, "roi-nota"), null);
+    I.desmontar();
+    const d2 = NOVO(); d2.gasto_anuncios_mes = 2000; d2.negocios.receita_anuncio_mes = 0;
+    const t2 = await montarTela(d2, { dom });
+    const roi = t2.raiz.querySelector(".ini-roi");
+    assert.ok(roi, "gastou sem vender: o cartão aparece");
+    assert.ok(roi.classList.contains("ini-roi-baixo"));
+    assert.match(texto(botao(t2.raiz, "roi-nota")), /nenhuma venda registrada ainda/);
+  } finally { dom.fim(); }
+});
+
+test("IC-009: Esc sai do exemplo (fora de campos)", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const t = await montarTela(ZERADO(), { dom, agenda: agendaDe([]) });
+    t.raiz.querySelectorAll("button").find(b => b.textContent === "Ver um exemplo").click(); await tick();
+    assert.ok(t.raiz.querySelector(".ini-exemplo-faixa"));
+    const campo = dom.doc.body.appendChild(dom.doc.createElement("input"));
+    dom.ev(dom.doc, "keydown", { key: "Escape", target: campo }); await tick();
+    assert.ok(t.raiz.querySelector(".ini-exemplo-faixa"), "Esc num campo é do campo");
+    dom.ev(dom.doc, "keydown", { key: "Escape", target: dom.doc.body }); await tick();
+    assert.equal(t.raiz.querySelector(".ini-exemplo-faixa"), null);
+    assert.ok(t.raiz.querySelector(".vazio-primeiro"), "volta aos primeiros passos");
+  } finally { dom.fim(); }
+});
+
+test("IC-010 + IC-011 + IC-015: progresso dos primeiros passos (barra e frase); todos prontos diz o que falta; nunca «Três passos» sem passo", () => {
+  assert.deepEqual(I.progressoGuia([{ feito: true }, { feito: false }, { feito: false }]), { feitos: 1, total: 3, pct: 33, todos: false, texto: "1 de 3 prontos" });
+  const tudo = I.progressoGuia([{ feito: true }, { feito: true }]);
+  assert.equal(tudo.todos, true); assert.equal(tudo.pct, 100); assert.match(tudo.texto, /^Tudo ligado\. Os números aparecem aqui assim que chegar a primeira conversa ou venda\.$/);
+  assert.equal(I.progressoGuia([]).todos, false);
+  assert.equal(I.textoQuantosPassos(1), "Um passo"); assert.equal(I.textoQuantosPassos(3), "Três passos"); assert.equal(I.textoQuantosPassos(0), "Alguns ajustes");
+});
+
+test("IC-010 + IC-011 (DOM): a barra de progresso dos primeiros passos com o valor para o leitor de tela; tudo ligado muda a frase", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const onb = { total: 3, feitos: 1, obrigatorios: 3, obrigatorios_feitos: 1, pct: 33, completo: false, itens: [{ id: "chave_codewords", feito: true }, { id: "aparelho_pareado", feito: true }, { id: "recebimento", feito: true }, { id: "anuncios_ligados", feito: false }, { id: "agenda_faixas", feito: false }] };
+    const t = await montarTela(ZERADO(), { dom, agenda: agendaDe([]), onb });
+    const barra = t.raiz.querySelector(".ini-guia-barra");
+    assert.equal(barra.getAttribute("role"), "progressbar"); assert.equal(barra.getAttribute("aria-valuenow"), "1"); assert.equal(barra.getAttribute("aria-valuemax"), "3");
+    assert.equal(barra.style.getPropertyValue("--guia-pct"), "33%");
+    assert.equal(texto(botao(t.raiz, "guia-prog")), "1 de 3 prontos");
+    I.desmontar();
+    const tudo = { ...onb, itens: onb.itens.map(i => ({ ...i, feito: true })) };
+    const t2 = await montarTela(ZERADO(), { dom, agenda: agendaDe([]), onb: tudo });
+    assert.match(texto(botao(t2.raiz, "guia-prog")), /^Tudo ligado/);
+    assert.ok(t2.raiz.querySelector(".ini-guia-cartao").classList.contains("ini-guia-pronto"));
+  } finally { dom.fim(); }
+});
+
+test("IC-012 + IC-013: equipe marca «você»; esfriando soma o dinheiro parado (valor_total do servidor ou «pelo menos» a soma dos que vieram)", () => {
+  const d = { equipe: [{ conta_id: "a", nome: "Ana", ganhos: 1, valor: 10 }, { conta_id: 7, nome: "Bia", ganhos: 2, valor: 20 }] };
+  assert.deepEqual(I.equipeMes(d, "7").map(x => [x.nome, x.eu]), [["Bia", true], ["Ana", false]]);
+  assert.equal(I.equipeMes(d)[0].eu, undefined, "sem conta: ninguém marcado");
+  const es = { esfriando: { total: 5, itens: [{ id: 1, valor: 1000, parado_dias: 9 }, { id: 2, valor: 500, parado_dias: 8 }] } };
+  assert.deepEqual([I.listaEsfriando(es).valor, I.listaEsfriando(es).parcial], [1500, true]);
+  es.esfriando.valor_total = 9000;
+  assert.deepEqual([I.listaEsfriando(es).valor, I.listaEsfriando(es).parcial], [9000, false]);
+  assert.equal(I.listaEsfriando({ esfriando: { total: 1, itens: [{ id: 1 }] } }).valor, null, "sem valor: nada");
+});
+
+test("IC-012 + IC-013 + IC-018 + IC-019 (DOM): «(você)» na equipe, R$ parado no esfriando, «+N» nos aniversariantes e nos sem presença", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const d = NOVO();
+    d.equipe = [{ conta_id: ID_CONTA, nome: "Helena", ganhos: 2, valor: 3000 }, { conta_id: "b", nome: "Bia", ganhos: 5, valor: 9000 }];
+    d.esfriando = { total: 7, itens: [{ id: 41, contato_nome: "Rui", parado_dias: 12, valor: 1800 }] };
+    d.aniversariantes = ["Ana", "Bia", "Caio", "Davi", "Eva", "Fábio"].map((nome, i) => ({ contato_id: i + 1, nome }));
+    const passou = h => ({ negocio_id: 900 + h, nome: `P${h}`, inicio: SP(HOJE, `0${h}`), fim: SP(HOJE, `0${h}`, "30"), status: "aberto" });
+    const ag = agendaDe([1, 2, 3, 4, 5, 6].map(passou));
+    const t = await montarTela(d, { dom, agenda: ag });
+    const eu = t.raiz.querySelector(".ini-equipe-eu");
+    assert.ok(eu); assert.match(texto(eu.querySelector("th")), /Helena \(você\)/);
+    assert.match(texto(botao(t.raiz, "ef-valor")), /pelo menos R\$\s1\.800 parados/);
+    const mais = botao(t.raiz, "aniv-mais");
+    assert.equal(texto(mais), "+2 outros"); assert.equal(mais.getAttribute("title"), "Eva, Fábio");
+    const pr = botao(t.raiz, "pr-mais");
+    assert.equal(texto(pr), "+2 na agenda de hoje"); assert.equal(pr.getAttribute("href"), `#/agenda?dia=${HOJE}`);
+  } finally { dom.fim(); }
+});
+
+test("IC-014: sem internet, «Amanhã» não chama o servidor e avisa na hora", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const d = ANTIGO();
+    d.tarefas.proximas = [{ id: 81, titulo: "Ligar fornecedor", vence_em: SP(HOJE, "17"), atrasada: false }];
+    const t = await montarTela(d, { dom });
+    await comNavegadorX({ onLine: false }, async () => { botao(t.raiz, "tfd-81").click(); await tick(); });
+    assert.equal(t.chamadas.filter(c => c.nome === "nx_tarefa_salvar").length, 0);
+    assert.ok(t.toasts.some(x => /Sem internet: a tarefa não foi adiada/.test(x.texto)));
+    assert.equal(botao(t.raiz, "tfd-81").disabled, false, "o botão continua para tentar de novo");
+  } finally { dom.fim(); }
+});
+
+test("IC-016: arrastar para o lado ou puxar com uma janela aberta por cima não atualiza", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const t = await montarTela(NOVO(), { dom });
+    const n = () => t.chamadas.filter(c => c.nome === "nx_inicio").length, n0 = n();
+    const sec = t.raiz.querySelector("section.ini"), puxar = t.raiz.querySelector(".ini-puxar");
+    dom.ev(sec, "touchstart", { touches: [{ clientY: 10, clientX: 10 }] });
+    dom.ev(sec, "touchmove", { touches: [{ clientY: 90, clientX: 200 }] });
+    assert.equal(puxar.hidden, true);
+    dom.ev(sec, "touchend", {}); await tick();
+    assert.equal(n(), n0, "arrasto de lado");
+    const dlg = dom.doc.body.appendChild(dom.doc.createElement("div")); dlg.setAttribute("aria-modal", "true");
+    dom.ev(sec, "touchstart", { touches: [{ clientY: 10, clientX: 10 }] });
+    dom.ev(sec, "touchmove", { touches: [{ clientY: 100, clientX: 12 }] });
+    dom.ev(sec, "touchend", {}); await tick();
+    assert.equal(n(), n0, "com diálogo aberto");
+    dlg.remove();
+    dom.ev(sec, "touchstart", { touches: [{ clientY: 10, clientX: 10 }] });
+    dom.ev(sec, "touchmove", { touches: [{ clientY: 100, clientX: 14 }] });
+    dom.ev(sec, "touchend", {}); await tick(); await tick();
+    assert.equal(n(), n0 + 1, "o puxão normal continua valendo");
+  } finally { dom.fim(); }
+});
+
+test("IC-017: o nome da etapa do funil que é link diz quantos abre («Abrir Ganhas: 9»)", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const t = await montarTela(NOVO(), { dom });
+    const links = t.raiz.querySelectorAll(".ini-funil a.g-flink");
+    assert.ok(links.length >= 2);
+    assert.match(links[0].getAttribute("aria-label"), /^Abrir .+: 23$/);
+    assert.match(links[links.length - 1].getAttribute("aria-label"), /: 9$/);
+  } finally { dom.fim(); }
+});
+
+test("IC-020 + IC-021: o exemplo fala a língua do negócio e mostra também esfriando, equipe, desde o começo e aniversários", () => {
+  const of = I.dadosExemplo(HOJE, AGORA, { vertical: "oficina" });
+  assert.deepEqual(of.agenda.consultas.map(c => c.servico).slice(0, 2), ["Revisão", "Troca de pastilhas"]);
+  assert.equal(of.d.tarefas.proximas[0].titulo, "Ligar para aprovar o orçamento");
+  assert.equal(I.dadosExemplo(HOJE, AGORA).agenda.consultas[0].servico, "Avaliação", "padrão: clínica, como antes");
+  assert.equal(I.dadosExemplo(HOJE, AGORA, { vertical: "xyz" }).agenda.consultas[0].servico, "Reunião", "vertical desconhecida: genérico");
+  const { d } = I.dadosExemplo(HOJE, AGORA);
+  assert.ok(I.listaEsfriando(d)); assert.ok(I.equipeMes(d)); assert.ok(I.aniversariantesHoje(d));
+  const ds = I.desdeInicio(d);
+  assert.ok(ds); assert.equal(ds.atual.mes, "2026-10"); assert.equal(ds.primeiro.mes, "2026-05");
+});
+
+test("IC-022: o prazo de resposta vindo torto do servidor fica entre 5 min e 24 h", () => {
+  assert.equal(I.prazoResposta({ prazo_min: 1 }), 5); assert.equal(I.limiteEspera({ prazo_min: 2 }), 5);
+  assert.equal(I.prazoResposta({ prazo_min: 5000 }), 1440); assert.equal(I.prazoResposta({ prazo_min: 20 }), 20);
+  assert.equal(I.prazoResposta({}), 15); assert.equal(I.limiteEspera(null), 30);
+});
+
+test("plano 1500c (CSS IC): barra dos passos com token de duração e sem animação em movimento reduzido", () => {
+  const css = ler("inicio.css");
+  const bloco = css.slice(css.indexOf("plano 1500c · IC-007/IC-008/IC-006"));
+  assert.ok(bloco.length > 100);
+  assert.doesNotMatch(bloco, /#[0-9a-fA-F]{3,8}\b/); assert.doesNotMatch(bloco, /\b\d+m?s\b/); assert.doesNotMatch(bloco, /cubic-bezier/);
+  assert.match(bloco, /prefers-reduced-motion: reduce\) \{ \.ini-guia-barra-f \{ transition: none; \} \}/);
 });

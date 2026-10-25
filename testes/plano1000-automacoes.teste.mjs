@@ -679,7 +679,7 @@ test("AS-035 + AS-036 + AS-037 passo «Enviar mensagem»: aviso de variável err
     const e = await abrirEditor(d, { partes: ["a1"] });
     const passo = e.raiz.querySelector(".au-passo-enviar_mensagem");
     const ta = passo.querySelector("textarea");
-    assert.equal(textoDe(passo.querySelector(".au-msg-previa .au-bolha")), "Olá, Maria!");
+    assert.equal(textoDe(passo.querySelector(".au-msg-previa .au-bolha")), "Olá, Alex!");   // plano 2000d · DU-038: nome de exemplo neutro
     assert.equal(textoDe(passo.querySelector(".au-cont")), "21 / 4.096");
     digitar(d, ta, "Oi {primeironome}, tudo bem?");
     assert.match(textoDe(passo.querySelector(".au-passo-aviso")), /variável desconhecida \{primeironome\} \(use \{primeiro_nome\}\)/);
@@ -1091,10 +1091,11 @@ test("AS-029 / AS-030 / AS-014: frase sem passos, promessa de «Pronta» por gat
 });
 
 test("AS-018 / AS-071 / AS-072 / AS-017: por onde sai o WhatsApp, dado pessoal no pedido, pedidos recentes e ajuste das regras fixas", () => {
-  assert.match(L.viaWhatsApp([{ provedor: "meta" }]), /API oficial da Meta/);
+  // plano 2000d · DU-025: sem nome de fornecedor (o cliente da revenda lê esta frase)
+  assert.match(L.viaWhatsApp([{ provedor: "meta" }]), /pelo número oficial/);
   assert.doesNotMatch(L.viaWhatsApp([{ provedor: "meta" }]), /CodeWords/);
-  assert.match(L.viaWhatsApp([{ provedor: "codewords" }]), /\(pelo CodeWords\)$/);
-  assert.match(L.viaWhatsApp([{ provedor: "codewords" }, { provedor: "meta" }]), /CodeWords ou pela API oficial/);
+  assert.match(L.viaWhatsApp([{ provedor: "codewords" }]), /\(pelo número conectado por aparelho\)$/);
+  assert.match(L.viaWhatsApp([{ provedor: "codewords" }, { provedor: "meta" }]), /aparelho ou pelo número oficial/);
   assert.match(L.viaWhatsApp([]), /assim que houver um número conectado/);
   assert.equal(L.viaWhatsApp([{ id: 1 }]), "manda mensagem pelo WhatsApp");
   assert.deepEqual(L.dadosPessoaisNoPedido("Lembrar a Maria (12) 99830-3030 e maria@x.com.br").map(x => x.tipo), ["e-mail", "telefone"]);
@@ -1230,7 +1231,7 @@ test("AS-014 + AS-018 + AS-020: os números do topo dizem o período; o subtítu
     const ajudas = [textoDe(resumo), ...resumo.querySelectorAll("[data-dica], [aria-label], [title]").map(e => `${e.getAttribute("data-dica") || ""} ${e.getAttribute("aria-label") || ""} ${e.getAttribute("title") || ""}`)].join(" ");
     assert.match(ajudas, /rodaram desde a criação de cada uma/);
     const sub = textoDe(raiz.querySelector(".au-cab .sub"));
-    assert.match(sub, /pela API oficial da Meta/);
+    assert.match(sub, /pelo número oficial/);   // plano 2000d · DU-025
     assert.doesNotMatch(sub, /CodeWords/);
     const pil = cartao(raiz, "a3").querySelectorAll(".pilula").find(p => /WhatsApp/.test(p.textContent));
     assert.ok(pil);
@@ -1335,7 +1336,7 @@ test("AS-071 + AS-072 + AS-073 Criar com IA: dado pessoal pergunta antes; o pedi
     assert.ok(parar);
     parar.dispatchEvent(new d.Evento("click")); await tique(6);
     assert.equal(area.readOnly, false, "a caixa volta");
-    assert.match(textoDe(raiz.querySelector(".au-ia-desistiu")), /pode ter usado 1 montagem da cota/);
+    assert.match(textoDe(raiz.querySelector(".au-ia-desistiu")), /pode ter gastado 1 uso da IA/);
     assert.equal(raiz.querySelector(".au-ia-bt").disabled, false);
     pendentes[0]({ automacao: { nome: "Tarde demais" } }); await tique(4);
     assert.doesNotMatch(textoDe(raiz), /Tarde demais/, "a resposta que chega depois é ignorada");
@@ -2403,7 +2404,7 @@ test("AS-270 + AS-232 simulação conta o que sairia; aviso lateral sem a Meta q
     dados.base = { ...BASE, canais: [{ id: U(61), nome: "Recepção", provedor: "codewords" }] };
     const e = await abrirEditor(d, { partes: ["a3"], dados, rpcExtra: { nx_auto_simular: async () => ({ amostra: [{ titulo: "Maria", passos: [{ tipo: "enviar_mensagem", resultado: "faria" }] }] }) } });
     assert.doesNotMatch(textoDe(e.raiz.querySelector(".au-avisos")), /24 h/);
-    assert.match(textoDe(e.raiz.querySelector(".au-avisos")), /CodeWords \(texto livre a qualquer hora\)/);
+    assert.match(textoDe(e.raiz.querySelector(".au-avisos")), /conectado por aparelho \(texto livre a qualquer hora\)/);
     clicar(d, e.raiz.querySelectorAll("button").find(b => /Testar agora/.test(b.textContent))); await tique(10);
     assert.equal(textoDe(e.raiz.querySelector(".au-sim-saidas")), "Agora sairiam: 1 mensagem de WhatsApp.");
     e.A.desmontar();

@@ -300,7 +300,7 @@ export function pecas(ui, L) {
    * Enter/Espaço) que chama aoFocar(no) — o editor leva o foco até o bloco certo. `nos` vem de L.nosDoDiagrama; o texto
    * alternativo (L.textoDiagrama) vai no <title> e no aria-label do grupo.
    */
-  function diagrama({ nos, aoFocar, largura = 300 }) {
+  function diagrama({ nos, aoFocar, largura = 300, tl = null }) {
     const lista = Array.isArray(nos) ? nos : [];
     const W = Math.max(220, Math.round(largura));
     const ALT = 44, GAP = 16, PX = 6, TRILHO = 22;     // altura do nó, vão entre nós, margem lateral, x da linha-tronco
@@ -316,7 +316,8 @@ export function pecas(ui, L) {
       const y = PX + i * (ALT + GAP);
       const g = s("g", { class: ["au-dg-no", `au-dg-${no.tipo}`, `au-dg-tom-${no.tom}`, no.inalcancavel && "au-dg-nunca"].filter(Boolean).join(" "),
         // plano 1000b · UB-042: roving tabindex — só o 1º nó entra no Tab; setas ↑↓ (Home/End) andam entre os nós; Enter leva ao bloco
-        role: "button", tabindex: i === 0 ? "0" : "-1", "aria-label": `${no.tipo === "mais" ? "" : no.tipo === "gatilho" ? "Gatilho: " : no.tipo === "condicao" ? `Condição ${no.n}: ` : `Passo ${no.n || ""}: `.replace(" :", ":")}${no.rotulo}${no.sub ? `. ${no.sub}` : ""}. Ir até este bloco.`,
+        // plano 2000d · DU-317: o nome acessível diz também quando o passo roda («Passo 3: Enviar mensagem, depois de 2 dias»)
+        role: "button", tabindex: i === 0 ? "0" : "-1", "aria-label": `${L.rotuloNoDiagrama(no, tl)}. Ir até este bloco.`,
         "data-id": no.id, "data-onde": no.onde, "data-indice": no.indice == null ? "" : String(no.indice) });
       g.append(s("rect", { class: "au-dg-ret", x: PX, y, width: W - 2 * PX, height: ALT, rx: no.tipo === "condicao" ? 8 : 12 }));
       g.append(s("rect", { class: "au-dg-faixa", x: PX, y, width: 4, height: ALT, rx: 2 }));

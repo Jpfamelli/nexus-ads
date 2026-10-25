@@ -71,6 +71,8 @@
       <symbol id="i-lua" viewBox="0 0 24 24"><path d="M19.7 15.2A8.4 8.4 0 0 1 8.8 4.3a8.5 8.5 0 1 0 10.9 10.9z"/><path d="M16.5 3.5v3m-1.5-1.5h3"/></symbol>
       <symbol id="i-busca" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m20.5 20.5-4.8-4.8"/></symbol>
       <symbol id="i-mais" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <!-- plano 2000d · DU-258: o botão Compartilhar do Safari (passo a passo de instalar no iPhone) -->
+      <symbol id="i-compartilhar" viewBox="0 0 24 24"><path d="M12 3v12M8 7l4-4 4 4M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></symbol>
       <symbol id="i-fechar" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
       <symbol id="i-clipe" viewBox="0 0 24 24"><path d="M20.5 11.5 12.4 19.6a5 5 0 0 1-7-7l8.1-8.1a3.3 3.3 0 0 1 4.7 4.7l-8.1 8.1a1.7 1.7 0 0 1-2.4-2.4l7.4-7.4"/></symbol>
       <symbol id="i-microfone" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M8.5 21h7"/></symbol>
@@ -135,6 +137,8 @@
   <!-- atalhos de região da tela ativa (M22): aparecem ao receber o foco, na ordem do Tab, antes do «Pular para o conteúdo» -->
   <nav class="pular-regioes" id="pular-regioes" aria-label="Atalhos desta tela"></nav>
   <a class="pular" href="#vista">Pular para o conteúdo</a>
+  <!-- plano 2000d · DU-282: também direto para o menu -->
+  <a class="pular pular-menu" href="#lateral">Ir para o menu</a>
 
   <!-- palco noturno: dois brilhos estáticos + grão (sem canvas: a inbox fica aberta o dia inteiro) -->
   <div class="palco" aria-hidden="true"><i class="brilho-a"></i><i class="brilho-b"></i><i class="grao"></i></div>
@@ -156,7 +160,7 @@
 
   <!-- o app -->
   <div class="app" id="app" hidden>
-    <aside class="lateral" id="lateral" aria-label="Menu principal">
+    <aside class="lateral" id="lateral" aria-label="Menu principal" tabindex="-1">
       <div class="lat-marca">
         <a class="lat-home" id="lat-home" href="#/">
           <span class="lat-logo" id="lat-logo"><svg viewBox="0 0 48 48" aria-hidden="true"><use href="#marca-orbita"/></svg></span>

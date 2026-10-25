@@ -1444,3 +1444,21 @@ fieldset.crm-filtros-grupo > legend.rotulo { padding: 0; margin-bottom: .45rem; 
 .crm-filtros-link { justify-self: start; min-height: 44px; }
 /* plano 1500c · RC-294: a tabela «Previsão por mês» usa o mesmo desenho da «Por pessoa» */
 .crm-fr-meses { margin-top: .75rem; }
+/* plano 1500c · RX-058: o «×» do chip de filtro mostra o foco do teclado (antes só mudava no hover) */
+.crm-chip button:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 1px; background: var(--c-tinta); color: var(--c-texto); }
+/* plano 1500c · RX-059: telefone da gaveta é link de ligar (cor do texto, sublinhado ao passar; alvo de toque com altura) */
+.ng-contato .ng-tel { color: inherit; text-decoration: none; display: inline-flex; align-items: center; min-height: 32px; }
+.ng-contato .ng-tel:hover { text-decoration: underline; }
+.ng-contato .ng-tel:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; border-radius: 4px; }
+@media (pointer: coarse) { .ng-contato .ng-tel { min-height: 44px; } }
+/* plano 1500c · RX-060: «Sem valor» nas mini-listas (ficha e gaveta) no mesmo tom fraco do cartão */
+.ng-mini .sem { flex: none; color: var(--c-texto-2); font-size: var(--fs-13); font-weight: 500; }
+/* plano 1500c · RX-061: o «+2» das etiquetas tem dica (title) — o cursor diz que dá para passar o mouse */
+.kc-mais-etq[title] { cursor: help; }
+/* plano 1500c · RX-062: a faixa da seleção ganhou «Tirar etiqueta…» — no celular os botões da faixa dividem a linha sem estourar 360 px */
+@media (max-width: 760px) { .crm-sel > .bt { flex: 1 1 calc(50% - .5rem); min-height: 44px; } .crm-sel-n { flex-basis: 100%; } }
+/* plano 1500c · RX-076: detalhes da tarefa com link longo não estouram a linha no celular; o link tem cara de link */
+.tf-desc { overflow-wrap: anywhere; }
+.tf-desc a { color: inherit; text-decoration: underline; }
+/* plano 1500c · RX-078: «WhatsApp» da gaveta (sem o módulo Conversas) do tamanho dos outros botões */
+.ng-contato .ng-wa { flex: none; min-height: 44px; }

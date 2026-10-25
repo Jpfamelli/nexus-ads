@@ -192,6 +192,21 @@ export const OPERADORES = Object.freeze([
   { id: "menor", rotulo: "menor que", frase: "for menor que" },
   { id: "vazio", rotulo: "está vazio", frase: "estiver vazio", semValor: true },
   { id: "preenchido", rotulo: "está preenchido", frase: "estiver preenchido", semValor: true },
+  // plano 2000d · DU-031: só para a data marcada (campo consulta_em, quando o servidor anunciar o recurso)
+  { id: "hoje", rotulo: "é hoje", frase: "for hoje", semValor: true },
+  { id: "amanha", rotulo: "é amanhã", frase: "for amanhã", semValor: true },
+]);
+
+/**
+ * plano 2000d · DU-006/DU-014/DU-031/DU-032/DU-017: campos de condição que dependem do servidor. Só aparecem no editor (e só passam na
+ * validação com a base carregada) quando `base.recursos` do nx_automacoes_listar traz o `recurso`. Sem o recurso, o servidor de hoje
+ * recusaria («escolha o campo»). `ops` = os operadores aceitos.
+ */
+export const CAMPOS_CONDICAO_NOVOS = Object.freeze([
+  { id: "consulta_em", rotulo: "Data marcada", valor: "data_marcada", recurso: "cond_consulta_em", ops: ["vazio", "preenchido", "hoje", "amanha"] },
+  { id: "ganhos_contato", rotulo: "Compras fechadas do contato", valor: "numero", recurso: "cond_ganhos_contato", ops: ["maior", "menor", "igual"] },
+  { id: "telefone_valido", rotulo: "Tem WhatsApp válido", valor: "sim_nao", recurso: "cond_telefone_valido", ops: ["igual"] },
+  { id: "fora_do_horario", rotulo: "Fora do horário de atendimento", valor: "sim_nao", recurso: "cond_fora_do_horario", ops: ["igual"] },
 ]);
 
 /** Grupos da paleta «Adicionar passo» do editor (ordem de exibição). */
@@ -237,7 +252,8 @@ export const ACOES = Object.freeze([
     // plano 1000b · UB-031: descrição neutra (quem só tem número da Meta não lê «CodeWords»); a paleta completa por onde sai
     descricao: "Manda um texto pelo WhatsApp.",
     campos: [{ nome: "texto", tipo: "texto_longo", rotulo: "Mensagem", obrigatorio: true, max: 4096, variaveis: true,
-      ajuda: "No WhatsApp oficial (Meta), só sai dentro da janela de 24 h desde a última mensagem do cliente; fora dela, use um modelo aprovado. No WhatsApp por aparelho (CodeWords), o texto livre sai a qualquer hora." }] },
+      // plano 2000d · DU-024/DU-088: sem nome de fornecedor; o editor troca esta ajuda pela dos números da empresa (L.ajudaMensagem)
+      ajuda: "No número oficial, só sai dentro da janela de 24 h desde a última mensagem do cliente; fora dela, use um modelo aprovado. No número conectado por aparelho, o texto livre sai a qualquer hora." }] },
   { id: "enviar_template", grupo: "Mensagens", icone: "whatsapp", mensagem: true, rotulo: () => "Enviar modelo aprovado",
     descricao: "Manda um modelo aprovado pela Meta (WhatsApp oficial).",
     campos: [
@@ -313,4 +329,16 @@ export const VARIAVEIS = Object.freeze([
   ["primeiro_nome", "Primeiro nome"], ["nome", "Nome completo"], ["empresa", "Nome da empresa"],
   ["protocolo", "Protocolo do atendimento"], ["etapa", "Etapa"], ["valor", "Valor"], ["atendente", "Atendente"],
   ["data_consulta", "Data marcada (29/09)"], ["hora_consulta", "Hora marcada (14:30)"],
+]);
+
+/**
+ * plano 2000d · DU-017/DU-034/DU-035/DU-036: variáveis que o motor do servidor ainda não troca. [chave, rótulo, recurso]. Só valem (e só
+ * aparecem nos chips) quando `base.recursos` traz o recurso — sem ele, a variável chegaria crua ao cliente. «{campo:placa}» usa o recurso
+ * `var_campo` e o campo precisa existir em Configurações → Campos.
+ */
+export const VARIAVEIS_NOVAS = Object.freeze([
+  ["dia_semana_consulta", "Dia da semana marcado (segunda-feira)", "var_dia_semana"],
+  ["profissional", "Profissional da agenda", "var_profissional"],
+  ["link_avaliacao", "Link de avaliação no Google", "var_link_avaliacao"],
+  ["proxima_abertura", "Próxima abertura (amanhã às 08:00)", "var_proxima_abertura"],
 ]);

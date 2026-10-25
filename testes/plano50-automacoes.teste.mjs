@@ -166,7 +166,8 @@ test("filtrarModelos: sem acento, por título/texto/tipo de passo; vazio devolve
 test("exemplosIA: 5 pedidos, no vocabulário da vertical", () => {
   const od = L.exemplosIA(VOCAB), of = L.exemplosIA({ vertical: "oficina" });
   assert.equal(od.length, 5);
-  assert.ok(od.some(t => /consulta/.test(t)) && of.some(t => /visita/.test(t)));
+  // plano 2000d · DU-022: a oficina tem exemplos próprios (carro pronto, revisão) — não «visita/consulta»
+  assert.ok(od.some(t => /consulta/.test(t)) && of.some(t => /carro/.test(t)) && !of.some(t => /consulta/.test(t)));
   assert.ok(od.every(t => t.length >= 12 && t.length <= L.LIMITES.descricao_ia));
 });
 

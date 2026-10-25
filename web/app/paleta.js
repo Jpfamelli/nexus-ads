@@ -80,7 +80,7 @@ export function abrir(amb) {
   }
 
   const aAcao = c => ({ icone: c.icone, l1: c.rotulo, atalho: c.atalho, fazer: c.fazer, id: c.id });
-  const aDestino = d => ({ icone: d.icone, l1: d.rotulo, l2: d.emConstrucao ? "em obra" : "", hash: d.hash, id: d.id });
+  const aDestino = d => ({ icone: d.icone, l1: d.rotulo, l2: d.emConstrucao ? "em obra" : "", hash: d.hash, id: d.id, atalho: d.atalho || "" });   // plano 2000d · DU-410: «G C» ao lado
   const aRecente = r => ({ icone: C.TIPOS_RECENTE[r.tipo] ? C.TIPOS_RECENTE[r.tipo].icone : "contato", l1: r.titulo, l2: r.sub, hash: r.hash, tipo: r.tipo });
 
   /* plano 50 · 59: «>» sem texto mostra as ações por grupo (Nesta tela · Criar · Ir e ver · …) em vez de uma lista corrida;
@@ -102,7 +102,10 @@ export function abrir(amb) {
       const ult = ultimaBusca();
       if (ult) grupos.push(["Continuar", [{ icone: "busca", l1: `Continuar: ${ult}`, manter: true, fazer: () => { campo.value = ult; aoDigitar(); try { campo.focus(); } catch { /* ok */ } } }]]);
       const rec = amb.recentes();
-      if (rec.length) grupos.push(["Recentes", rec.map(aRecente)]);
+      // plano 2000d · DU-275: «Limpar recentes» (aparelho compartilhado: os pacientes vistos por outra pessoa saem daqui)
+      const limparRec = rec.length && typeof amb.limparRecentes === "function"
+        ? [{ icone: "lixo", l1: "Limpar recentes", l2: "só neste aparelho", manter: true, id: "limpar-recentes", fazer: () => { amb.limparRecentes(); aoDigitar(); try { campo.focus(); } catch { /* ok */ } } }] : [];
+      if (rec.length) grupos.push(["Recentes", [...rec.map(aRecente), ...limparRec]]);
       const usados = typeof C.ultimosUsados === "function" ? C.ultimosUsados(todas, ultimos(), 4) : [];
       if (usados.length) grupos.push(["Usados por último", usados.map(aAcao)]);
       // a mesma ação não aparece duas vezes (as setas passariam por ela de novo): o que já está em «Usados por último» sai de «Nesta tela»
@@ -123,6 +126,13 @@ export function abrir(amb) {
       let em = [];
       try { em = typeof amb.empresas === "function" ? amb.empresas(termo) || [] : []; } catch { em = []; }
       if (em.length) grupos.push(["Empresas", em.map(e => ({ icone: "empresa", l1: `Trocar para ${e.nome}`, l2: "empresa", fazer: e.fazer }))]);
+      // plano 2000d · DU-270: automações pelo nome — «Abrir» e «Ligar/Desligar» (desligar pergunta antes, no shell)
+      let au = [];
+      try { au = typeof amb.automacoes === "function" ? amb.automacoes(termo) || [] : []; } catch { au = []; }
+      if (au.length) grupos.push(["Automações", au.flatMap(a => [
+        { icone: "raio", l1: a.nome, l2: a.ativo ? "automação ligada" : "automação desligada", hash: a.hash || null, fazer: a.abrir || null, id: `auto-abrir-${a.id}` },
+        { icone: a.ativo ? "pausa" : "raio", l1: `${a.ativo ? "Desligar" : "Ligar"} «${a.nome}»`, fazer: a.alternar, id: `auto-alternar-${a.id}` },
+      ])]);
     }
     for (const [titulo, lista] of grupos) {
       const ls = lista.map(d => linha(d, termo));

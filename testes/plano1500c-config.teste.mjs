@@ -303,7 +303,8 @@ test("UCB-001 + UCB-002 + UCB-003 + UCB-004 + UCB-005 + UCB-008 + UCB-009 + UCB-
   const csv = ADM.csvClientes([{ nome: "X", slug: "x", status: "ativo", ativo: false, comercial: { pacote: "ultra" } }], id => id, { superConta: false });
   assert.doesNotMatch(csv, /Nexus/);
   assert.doesNotMatch(csv, /PLANO ULTRA|Pacote comercial/, "a revenda não exporta o pacote da plataforma");
-  assert.match(ADM.csvClientes([], id => id), /Pausado pela Nexus/, "a plataforma continua vendo");
+  // plano 2000d: DU-195 — o CSV da plataforma também sai sem a marca (é repassado à revenda)
+  assert.match(ADM.csvClientes([], id => id), /Pausado pela plataforma/);
   assert.equal(ADM.testeNoPassado("teste", "2026-10-01", "2026-10-21"), true);
   assert.equal(ADM.testeNoPassado("teste", "2026-10-21", "2026-10-21"), false);
   assert.equal(ADM.testeNoPassado("ativo", "2026-10-01", "2026-10-21"), false);
@@ -344,7 +345,7 @@ test("UCB-084 + UCB-085 + UCB-086 + UCB-087 + UCB-097 + UCB-098 + UCB-127 + UC-0
   assert.match(ADM.mensagemFollowupTeste({ nome: "Clínica", teste_ate: isoDias(-1), uso: { contatos: 40 } }, hoje, "Conecta"), /terminou.*40 contatos/);
   const passos = ADM.passosRevenda({ cores: { primaria: "#111111" } }, [], []);
   assert.equal(passos.filter(p => !p.opcional && p.feito).length, 0, "revenda nova: 0 de 4");
-  assert.equal(passos.length, 5);
+  assert.equal(passos.length, 6);      // plano 2000d: DU-202 — o passo opcional «Teste grátis pelo seu site»
   assert.equal(ADM.passosRevenda({ logo: "data:x", cores: { primaria: "#111111" }, suporte_wa: "5512999998888" }, [{ uso: { usuarios: 1 } }], []).filter(p => p.feito).length, 4);
 });
 

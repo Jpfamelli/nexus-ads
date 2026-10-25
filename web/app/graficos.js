@@ -538,7 +538,7 @@ export function funil(alvo, o) {
       btDica.addEventListener("click", ev => { if (ev && ev.preventDefault) ev.preventDefault(); const abrir = textoDica.hidden; textoDica.hidden = !abrir; btDica.setAttribute("aria-expanded", String(abrir)); });
     }
     const li = h("li", { class: `g-fetapa g-f-${e.tipo || "aberto"}${href ? " g-fetapa-link" : ""}`, style: { "--i": n } },
-      h("span", { class: "g-fnome" }, h("i", { class: "g-fcor", style: cor ? { "--cor": cor } : {} }), href ? h("a", { class: "g-flink", href }, nomeEl) : nomeEl),
+      h("span", { class: "g-fnome" }, h("i", { class: "g-fcor", style: cor ? { "--cor": cor } : {} }), href ? h("a", { class: "g-flink", href, "aria-label": `Abrir ${e.nome}: ${typeof o.fmtQtd === "function" ? o.fmtQtd(e.qtd || 0) : fmtInteiro(e.qtd || 0)}` }, nomeEl) : nomeEl),     // plano 1500c · IC-017: o link diz quantos abre
       h("span", { class: "g-ftrilho" }, h("span", { class: "g-fbarra", style: { "--w": `${pct.toFixed(2)}%`, ...(cor ? { "--cor": cor } : {}) } }),
         // plano 1500c · RC-241: «1.500», não «1500» (o.fmtQtd quando a tela quiser outro formato)
         h("span", { class: "g-fqtd", texto: typeof o.fmtQtd === "function" ? o.fmtQtd(e.qtd || 0) : fmtInteiro(e.qtd || 0) })),

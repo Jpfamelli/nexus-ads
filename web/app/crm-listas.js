@@ -87,7 +87,7 @@ export async function montarContatos(k, el, rota) {
 
   const sub = h("span");      // a contagem «12 pacientes» entra no subtítulo do ui.cabecalho
   // plano 1000b · RB-037: maxlength 120 (a visão já corta em 120)
-  const busca = h("input", { type: "search", maxlength: "120", placeholder: pequena() ? `Buscar ${k.v.min("contatos")}` : "Buscar por nome, telefone, e-mail ou documento", "aria-label": `Buscar ${k.v.min("contatos")}`, value: S.filtro.busca || "" });
+  const busca = h("input", { type: "search", enterkeyhint: "search", maxlength: "120", placeholder: pequena() ? `Buscar ${k.v.min("contatos")}` : "Buscar por nome, telefone, e-mail ou documento", "aria-label": `Buscar ${k.v.min("contatos")}`, value: S.filtro.busca || "" });      // plano 1500c · RX-030
   const aoBuscar = ui.debounce(() => { const q = busca.value.trim(); if (q) S.filtro.busca = q; else delete S.filtro.busca; S.pagina = 1; gravar(); carregar(); }, 320);
   busca.addEventListener("input", aoBuscar);
   const nF = h("span", { class: "crm-filtro-n", hidden: true });
@@ -143,17 +143,17 @@ export async function montarContatos(k, el, rota) {
   const colunas = [
     // plano 1000 (CR-280): o nome é um link de verdade (Ctrl+clique / botão do meio abrem em nova aba); a linha continua clicável
     { chave: "nome", rotulo: "Nome", principal: true, render: c => h("div", { class: "cel-nome" }, ui.avatar(c.nome || c.telefone, c.id),
-      h("div", null, h("a", { class: "ct-nome-link", href: `#/contatos/${c.id}`, on: { click: ev => { if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1) { if (ev.stopPropagation) ev.stopPropagation(); return; } lembrarLista(); } } }, h("b", null, L.nomeContato(c))),
+      h("div", null, h("a", { class: "ct-nome-link", href: `#/contatos/${c.id}`, on: { click: ev => { if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1) { if (ev.stopPropagation) ev.stopPropagation(); return; } lembrarLista(); } } }, h("b", { class: "dado-pessoal" }, L.nomeContato(c))),      // plano 1500c · UC-030
         // plano 1000b · RB-096: embaixo do nome só a cidade (a origem tem coluna própria); «Não quer marketing» vira pílula à parte
         c.cidade ? h("small", null, c.cidade) : null,
         c.optin_marketing === false ? ui.pilula("Não quer marketing", "aten", { class: "ct-optin", tamanho: "p" }) : null)) },
-    { chave: "telefone", rotulo: "Telefone", render: c => c.telefone ? h("span", { class: "mono" }, ui.telBR(c.telefone)) : null },
-    { chave: "email", rotulo: "E-mail" },
+    { chave: "telefone", rotulo: "Telefone", render: c => c.telefone ? h("span", { class: "mono dado-pessoal" }, ui.telBR(c.telefone)) : null },
+    { chave: "email", rotulo: "E-mail", render: c => c.email ? h("span", { class: "dado-pessoal" }, c.email) : null },      // plano 1500c · UC-030: borrados no modo apresentação
     // plano 1000 (CR-085): nome longo de empresa em no máximo 2 linhas (o nome inteiro na dica)
     { chave: "empresa", rotulo: "Empresa", render: c => c.empresa ? h("span", { class: "ct-emp", title: c.empresa.nome }, c.empresa.nome) : null },
     { chave: "etiquetas", rotulo: "Etiquetas", render: c => {
       const e = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean);
-      return e.length ? h("div", { class: "ct-etqs" }, e.slice(0, 3).map(x => ui.etiqueta(x)), e.length > 3 ? h("span", { class: "kc-mais-etq" }, `+${e.length - 3}`) : null) : null;
+      return e.length ? h("div", { class: "ct-etqs" }, e.slice(0, 3).map(x => ui.etiqueta(x)), e.length > 3 ? h("span", { class: "kc-mais-etq", title: e.slice(3).map(x => x.nome).join(", "), "aria-label": `mais ${e.length - 3}: ${e.slice(3).map(x => x.nome).join(", ")}` }, `+${e.length - 3}`) : null) : null;      // plano 1500c · RX-038: o «+2» diz quais são
     } },
     // C4: a origem com a pílula padrão (anúncio com a plataforma; site, orgânico, WhatsApp, manual…)
     { chave: "origem", rotulo: "Origem", render: c => { const o = L.origemPilula(c); return o ? ui.pilula(null, o.chave, { variante: "origem", plataforma: o.plataforma, tamanho: "p" }) : (c.origem || null); } },
@@ -384,7 +384,7 @@ export async function montarContatos(k, el, rota) {
     const erroData = h("small", { class: "ed-erro crm-filtros-erro", role: "alert", id: `crm-fd-${Math.random().toString(36).slice(2, 8)}`, hidden: true });     // plano 1500c · RC-323
     // empresa (busca no servidor; escolhe uma)
     let empresa = f.empresa_id ? { id: f.empresa_id, nome: f.empresa_nome } : null;
-    const empBusca = h("input", { type: "search", placeholder: "Buscar empresa", "aria-label": "Buscar empresa", autocomplete: "off" });
+    const empBusca = h("input", { type: "search", enterkeyhint: "search", placeholder: "Buscar empresa", "aria-label": "Buscar empresa", autocomplete: "off" });
     const empRes = h("div", { class: "crm-busca-res", role: "group", "aria-label": "Empresas encontradas" });   // plano 1000b · RB-052: grupo de botões comuns (Tab entre eles) — era listbox sem setas nem aria-selected
     const empEsc = h("div", { class: "crm-escolhido" });
     function desenharEmp() {
@@ -628,7 +628,7 @@ export function listaCompacta(k, { aoMudar, aoAbrir, textoVazio = null }) {
     mais.addEventListener("click", () => ui.menu(mais, A.menu.map(id => ({ rotulo: ROT[id][0], icone: ROT[id][1], fn: () => executar(id, c) }))));
     const frente = h("div", { class: "ct-linha" },
       h("a", { class: "ct-abrir", href: `#/contatos/${c.id}` }, ui.avatar(c.nome || c.telefone, c.id),
-        h("span", { class: "ct-txt" }, h("b", { class: "ct-nome" }, nome), sub ? h("small", { class: "ct-sub" }, sub) : null, pil, pilOptin)),
+        h("span", { class: "ct-txt" }, h("b", { class: "ct-nome dado-pessoal" }, nome), sub ? h("small", { class: "ct-sub dado-pessoal" }, sub) : null, pil, pilOptin)),
       h("div", { class: "ct-bts" },
         A.botoes.includes("ligar") ? h("a", { class: "bt-icone ct-bt", href: L.hrefTel(c.telefone), "aria-label": `Ligar para ${nome}`, title: "Ligar" }, ui.icone("telefone")) : null,
         A.botoes.includes("conversa") ? h("a", { class: "bt-icone ct-bt", href: `#/conversas?contato=${c.id}`, "aria-label": `Abrir conversa com ${nome}`, title: "Abrir conversa" }, ui.icone("whatsapp"))
@@ -805,7 +805,7 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
           return;
         }
         if (!pode) { dd.append(h("span", { class: "fraco" }, "Sem empresa")); return; }
-        const busca = h("input", { type: "search", class: "ed fx-emp-busca", placeholder: "Buscar empresa para ligar", "aria-label": "Buscar empresa para ligar", autocomplete: "off" });
+        const busca = h("input", { type: "search", enterkeyhint: "search", class: "ed fx-emp-busca", placeholder: "Buscar empresa para ligar", "aria-label": "Buscar empresa para ligar", autocomplete: "off" });
         const res = h("div", { class: "crm-busca-res", role: "group", "aria-label": "Empresas encontradas" });   // plano 1000b · RB-052: grupo de botões comuns (Tab entre eles) — era listbox sem setas nem aria-selected
         let seqE = 0;
         busca.addEventListener("input", ui.debounce(async () => {
@@ -831,7 +831,7 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
     const hojeFx = ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10);
     const aniv = c.nascimento && L.aniversario ? L.aniversario(c.nascimento, hojeFx) : null;
     const idade = c.nascimento && L.idadeEm ? L.idadeEm(c.nascimento, hojeFx) : null;
-    const nomeH = h(gaveta ? "h2" : "h1", { class: "fx-nome" }, L.nomeContato(c));      // plano 1000b · RB-208: na gaveta é h2 (ela já tem título)
+    const nomeH = h(gaveta ? "h2" : "h1", { class: "fx-nome dado-pessoal" }, L.nomeContato(c));      // plano 1500c · UC-030      // plano 1000b · RB-208: na gaveta é h2 (ela já tem título)
     const menuBt = h("button", { type: "button", class: "bt-icone", "aria-label": "Mais ações" }, ui.icone("opcoes"));
     const novoNeg = () => N.novoNegocio(k, { contato_id: c.id }, { aoCriar: () => carregar({ silencioso: true }) });
     const novaTar = async () => { const t = await T.formTarefa(k, null, { contato_id: c.id, ...(c.dono_id != null ? { dono_id: c.dono_id } : {}) /* plano 1500c · RC-240 */ }); if (t) { ui.toast("Tarefa criada.", { tipo: "ok" }); carregar({ silencioso: true }); } };
@@ -861,9 +861,9 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
         // plano 1500c · RC-103/104/118: telefone liga (tel:) e e-mail escreve (mailto:) com um toque; ícones decorativos e rótulo para o leitor
         h("p", null,
           c.telefone ? h("span", null, h("span", { "aria-hidden": "true" }, ui.icone("telefone")), h("span", { class: "sr-only" }, "Telefone: "),
-            L.hrefTel(c.telefone) ? h("a", { class: "mono fx-tel", href: L.hrefTel(c.telefone), "aria-label": `Ligar para ${ui.telBR(c.telefone)}` }, ui.telBR(c.telefone)) : h("span", { class: "mono" }, ui.telBR(c.telefone))) : null,
+            L.hrefTel(c.telefone) ? h("a", { class: "mono fx-tel dado-pessoal", href: L.hrefTel(c.telefone), "aria-label": `Ligar para ${ui.telBR(c.telefone)}` }, ui.telBR(c.telefone)) : h("span", { class: "mono dado-pessoal" }, ui.telBR(c.telefone))) : null,
           c.email ? h("span", null, h("span", { "aria-hidden": "true" }, ui.icone("enviar")), h("span", { class: "sr-only" }, "E-mail: "),
-            h("a", { class: "fx-email", href: `mailto:${c.email}`, "aria-label": `Escrever para ${c.email}` }, c.email)) : null,
+            h("a", { class: "fx-email dado-pessoal", href: `mailto:${c.email}`, "aria-label": `Escrever para ${c.email}` }, c.email)) : null,
           c.cidade ? h("span", null, h("span", { "aria-hidden": "true" }, ui.icone("globo")), h("span", { class: "sr-only" }, "Cidade: "), `${c.cidade}${c.uf ? `/${c.uf}` : ""}`) : null),
         h("div", { class: "linha", style: { gap: ".35rem" } },
           // plano 1000 (CR-101): a mesma pílula de origem da lista e do quadro («Anúncio · Google», «WhatsApp»…)
@@ -898,6 +898,8 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
         salvar: async v => { await salvar({ nome: v }); nomeH.textContent = L.nomeContato(c); } }),
       ...N.linhaEd(k, { rotulo: "Telefone", desabilitado: !pode, controle: inp("tel", c.telefone ? ui.telBR(c.telefone) : "", { placeholder: "(12) 99830-3030" }),
         ler: x => { const dg = x.value.replace(/\D/g, ""); return dg ? (x.value.trim().startsWith("+") ? "+" : "") + dg : null; },
+        // plano 1500c · RX-035: número que o servidor recusaria é avisado aqui, com a frase do número de outro país (sem ida e volta)
+        validar: x => (x.value.replace(/\D/g, "") && !L.normalizarTelefone(x.value) ? L.textoTelefoneInvalido(x.value) : null),
         // plano 1000 (CR-097): apagar o telefone de quem tem conversa corta o WhatsApp — pergunta antes
         salvar: async v => {
           if (!v && c.telefone && (d.conversas || []).length) {
@@ -912,7 +914,9 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
           }
         } }),
       // plano 1000 (CR-098): e-mail e UF conferidos aqui, com a mesma regra do servidor — sem ida e volta e com a frase certa
-      ...N.linhaEd(k, { rotulo: "E-mail", desabilitado: !pode, controle: inp("email", c.email), ler: x => x.value.trim() || null, salvar: v => salvar({ email: v }),
+      ...N.linhaEd(k, { rotulo: "E-mail", desabilitado: !pode, controle: inp("email", c.email), ler: x => x.value.trim().toLowerCase() || null, salvar: v => salvar({ email: v }),
+        // plano 1500c · RX-082: «gmail.con» ganha a sugestão (aviso que não bloqueia)
+        aviso: x => { const s = L.sugestaoEmail ? L.sugestaoEmail(x.value) : null; return s ? `Quis dizer ${s}?` : null; },      // plano 1500c · RX-077: e-mail em minúsculas (como a importação: «Ana@X.com» e «ana@x.com» são a mesma pessoa)
         validar: x => (x.value.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x.value.trim()) ? "E-mail inválido. Confira, por exemplo: ana@exemplo.com.br." : null) }),
       // plano 1000 (CR-111): máscara de CPF/CNPJ ao sair do campo e aviso (sem bloquear) quando o dígito verificador não confere
       ...N.linhaEd(k, { rotulo: "CPF / CNPJ", desabilitado: !pode, controle: (() => { const x = inp("text", L.formatarDoc(c.documento || ""), { maxlength: 40, inputmode: "text", autocapitalize: "characters" });   // plano 1000b · RB-093: CNPJ alfanumérico tem letras
@@ -921,7 +925,9 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
       // plano 1000 (CR-099): nascimento no futuro não é gravado (o calendário também para em hoje)
       // plano 1000 (CR-226): a idade ao lado («Nascimento (34 anos)»)
       ...N.linhaEd(k, { rotulo: idade != null ? `Nascimento (${idade} ${idade === 1 ? "ano" : "anos"})` : "Nascimento", desabilitado: !pode, controle: inp("date", c.nascimento, { max: ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10) }), ler: x => x.value || null,
-        validar: x => (x.value && x.value > (ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10)) ? "A data de nascimento não pode ser no futuro." : null),
+        // plano 1500c · RX-070: ano antes de 1900 é quase sempre digitado errado («0199-…» no teclado do celular) — avisa antes de gravar
+        validar: x => (x.value && x.value > (ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10)) ? "A data de nascimento não pode ser no futuro."
+          : x.value && x.value < "1900-01-01" ? "Confira o ano do nascimento (antes de 1900)." : null),
         salvar: v => salvar({ nascimento: v }) }),
       ...N.linhaEd(k, { rotulo: "Cidade", desabilitado: !pode, controle: inp("text", c.cidade, { maxlength: 80 }), ler: x => x.value.trim() || null, salvar: v => salvar({ cidade: v }) }),
       // plano 1500c · RC-109: UF num select das 27 siglas (no celular digitar errava); a validação continua (valor antigo fora da lista aparece)
@@ -1024,7 +1030,8 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
         on: { click: () => N.abrirNegocio(k, n.id, { aoMudar: () => carregar({ silencioso: true }) }) } },
         h("i", { "aria-hidden": "true" }),
         h("span", null, `${L.tituloCard(n)} · ${e ? e.nome : "—"}${f ? ` · ${f.nome}` : ""}`),
-        h("b", null, (n.status === "ganho" ? n.valor : n.valor_previsto) != null ? ui.brl(n.status === "ganho" ? n.valor : n.valor_previsto, { centavos: false }) : "—")));
+        // plano 1500c · RX-036: a régua do cartão (ganho sem valor final usa o previsto) e «Sem valor» em vez de «—»
+        (n.status === "ganho" ? (n.valor ?? n.valor_previsto) : n.valor_previsto) != null ? h("b", null, ui.brl(L.valorCard(n), { centavos: L.temCentavos(L.valorCard(n)) })) : h("span", { class: "sem" }, "Sem valor")));
     }
     if (!(d.negocios || []).length) listaNeg.appendChild(h("p", { class: "fraco crm-vazio-txt" }   /* plano 1000b · RB-100 */, `${k.v.nenhum("negocio")} ainda.`));
     const blocoNeg = h("section", { class: "ng-bloco", "aria-label": k.v.negocios },
@@ -1186,7 +1193,7 @@ export async function montarEmpresas(k, el) {
   const { ui, h, ctx, L } = k;
   ctx.titulo("Empresas");
   const S = { busca: "", pagina: 1, seq: 0 };
-  const busca = h("input", { type: "search", placeholder: "Buscar empresa", "aria-label": "Buscar empresa" });
+  const busca = h("input", { type: "search", enterkeyhint: "search", placeholder: "Buscar empresa", "aria-label": "Buscar empresa" });
   const corpo = h("div", { class: "pilha" });
   const pag = h("nav", { class: "ct-pag", "aria-label": "Páginas" });
   busca.addEventListener("input", ui.debounce(() => { S.busca = busca.value.trim(); S.pagina = 1; carregar(); }, 300));
@@ -1224,7 +1231,9 @@ export async function montarEmpresas(k, el) {
       // plano 1500c · RC-124: «Página 2 de 7» (o tamanho da página vem do servidor ou da 1ª página cheia)
       if (r.por_pagina) S.porPagina = Number(r.por_pagina); else if (S.pagina === 1 && r.tem_mais && r.itens.length) S.porPagina = r.itens.length;
       const nPag = L.paginasDe(r.total, S.porPagina);
-      pag.append(h("span", null, `${ui.num(r.total)} empresa${r.total === 1 ? "" : "s"}${nPag > 1 ? ` · página ${ui.num(S.pagina)} de ${ui.num(nPag)}` : ""}`), h("div", { class: "linha" },
+      // plano 1500c · RX-037: sem total do servidor, a contagem é da página («12+ empresas»), nunca «NaN empresas»
+      const totEmp = r.total != null && Number.isFinite(Number(r.total)) ? ui.num(Number(r.total)) : `${ui.num((S.pagina - 1) * (S.porPagina || r.itens.length) + r.itens.length)}${r.tem_mais ? "+" : ""}`;
+      pag.append(h("span", null, `${totEmp} empresa${Number(r.total) === 1 || (r.total == null && r.itens.length === 1 && !r.tem_mais) ? "" : "s"}${nPag > 1 ? ` · página ${ui.num(S.pagina)} de ${ui.num(nPag)}` : ""}`), h("div", { class: "linha" },
         h("button", { type: "button", class: "bt bt-sec bt-p", disabled: S.pagina <= 1, on: { click: () => { S.pagina--; carregar(); } } }, ui.icone("seta-esq"), "Anterior"),
         h("button", { type: "button", class: "bt bt-sec bt-p", disabled: !r.tem_mais, on: { click: () => { S.pagina++; carregar(); } } }, "Próxima", ui.icone("seta-dir"))));
     } catch (e) { if (minha === S.seq) { ui.limpar(corpo); corpo.appendChild(ui.erroCartao(e, carregar)); } }
@@ -1267,7 +1276,10 @@ export async function formEmpresa(k, emp) {     // plano 1000 (CR-189): também 
       const dados = Object.fromEntries(Object.entries(d).filter(([kk]) => !kk.startsWith("campo__")));
       // plano 1000b · RB-055: e-mail e UF conferidos aqui (sem ida ao servidor); a resposta do servidor continua tratada abaixo
       if (dados.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(dados.email).trim())) { ui.marcarErro(form, "email", "E-mail inválido."); return false; }
+      if (dados.email) dados.email = String(dados.email).trim().toLowerCase();      // plano 1500c · RX-077
       if (dados.uf && !L.ufValida(dados.uf)) { ui.marcarErro(form, "uf", "UF inválida: use a sigla do estado (ex.: SP)."); return false; }
+      // plano 1500c · RX-039: telefone da empresa conferido aqui (mesma regra do servidor) — antes o erro só voltava depois da ida ao servidor
+      if (dados.telefone && String(dados.telefone).replace(/\D/g, "") && !L.normalizarTelefone(dados.telefone)) { ui.marcarErro(form, "telefone", L.textoTelefoneInvalido(dados.telefone)); return false; }
       // plano 1000 (CR-111/112): documento com máscara (o dígito que não confere avisa sem bloquear) e site com https://
       if (dados.documento) dados.documento = L.formatarDoc(dados.documento);
       if (dados.site) dados.site = L.normalizarSite(dados.site);
@@ -1287,7 +1299,7 @@ export async function montarEmpresa(k, el, id, rota = {}) {
   let focarNegocios = !!(rota && rota.query && rota.query.sec === "negocios");   // veio de «Ver negócios» do cartão: abre já na seção
   /** plano 1000 (CR-096): busca um contato e liga à empresa. */
   async function ligarContato(emp) {
-    const busca = h("input", { type: "search", placeholder: "Nome ou telefone", "aria-label": `Buscar ${k.v.min("contato")}`, autocomplete: "off" });
+    const busca = h("input", { type: "search", enterkeyhint: "search", placeholder: "Nome ou telefone", "aria-label": `Buscar ${k.v.min("contato")}`, autocomplete: "off" });
     const res = h("div", { class: "crm-busca-res", role: "group", "aria-label": "Resultados" });   // plano 1000b · RB-052: grupo de botões comuns (Tab entre eles) — era listbox sem setas nem aria-selected
     let apiM = null, seq = 0;
     busca.addEventListener("input", ui.debounce(async () => {

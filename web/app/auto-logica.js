@@ -30,8 +30,20 @@ export const ACOES = CAT.ACOES;
 export const ACAO = CAT.ACAO;
 export const VARIAVEIS = CAT.VARIAVEIS;
 export const PLATAFORMAS = CAT.PLATAFORMAS;     // plano 1500c · UCA-001
+export const CAMPOS_CONDICAO_NOVOS = CAT.CAMPOS_CONDICAO_NOVOS || [];   // plano 2000d · DU-031
+export const VARIAVEIS_NOVAS = CAT.VARIAVEIS_NOVAS || [];                // plano 2000d · DU-035
 
-const CAMPO_CONDICAO = Object.fromEntries(CAMPOS_CONDICAO.map(c => [c.id, c]));
+const CAMPO_CONDICAO = Object.fromEntries(CAMPOS_CONDICAO.concat(CAMPOS_CONDICAO_NOVOS).map(c => [c.id, c]));
+
+/**
+ * plano 2000d · DU-006/DU-016/DU-031/DU-034: o servidor anuncia o que já sabe fazer em `base.recursos` (lista de nomes ou objeto
+ * {nome:true}). Sem o anúncio, o front age como hoje: não oferece o campo, a variável nem a receita que dependem dele.
+ */
+export function recursoServidor(base, nome) {
+  const r = base && base.recursos;
+  if (Array.isArray(r)) return r.includes(nome);
+  return !!(r && typeof r === "object" && r[nome] === true);
+}
 const OPERADOR = Object.fromEntries(OPERADORES.map(o => [o.id, o]));
 
 /* ------------------------------------------------------------------ vocabulário
@@ -167,6 +179,8 @@ export function frasePeriodo(dias) {
 
 /** Operadores que fazem sentido para cada tipo de valor. */
 export function operadoresDe(campo) {
+  const novo = CAMPOS_CONDICAO_NOVOS.find(c => c.id === campo);   // plano 2000d · DU-031
+  if (novo) return novo.ops.slice();
   const t = tipoValorCondicao(campo);
   if (t === "numero") return ["igual", "diferente", "maior", "menor", "vazio", "preenchido"];
   if (t === "texto") return ["contem", "nao_contem", "igual", "diferente", "vazio", "preenchido"];
@@ -214,6 +228,7 @@ function indexarBaseNovo(base) {
     departamentos: m(b.departamentos), canais: m(b.canais), templates: m(b.templates),
     campos: new Map((b.campos || []).map(c => [c.chave, c])),
     camposAtualizar: camposAtualizaveis(b),
+    recursos: b,      // plano 2000d · DU-031: recursoServidor(ix.recursos, nome)
     temBase: !!base,
   };
 }
@@ -289,8 +304,13 @@ export function problemas(auto, opcoes = {}) {
     // plano 1000 · AS-035: variável digitada errada ({primeironome}) chegaria crua ao cliente — salva desligada, mas não liga
     if (ligar && opcoes.base) for (const x of etapasDeFunilDesligado(a, opcoes.base)) if (x.onde === "entao" && !out.some(y => y.onde === "entao" && y.indice === x.indice))
       falha(`ação ${x.indice + 1}: a etapa «${x.etapa}» é do funil «${x.funil}», que está desligado`, "entao", x.indice);
-    if (ligar) for (const v of variaveisDosPassos(a)) if (!out.some(x => x.onde === "entao" && x.indice === v.indice))
+    if (ligar) for (const v of variaveisDosPassos(a, opcoes.base || null)) if (!out.some(x => x.onde === "entao" && x.indice === v.indice))
       falha(`ação ${v.indice + 1}: ${fraseVariaveis(v)}`, "entao", v.indice);
+    // plano 2000d · DU-364: o trecho a trocar da receita ([[link da ficha]]) nunca sai para o cliente
+    if (ligar) acoes.forEach((ac, i) => {
+      const m = ac && ac.tipo === "enviar_mensagem" ? /\[\[([^\]]{1,60})\]\]/.exec(texto(ac.texto)) : null;
+      if (m && !out.some(x => x.onde === "entao" && x.indice === i)) falha(`ação ${i + 1}: troque o trecho «[[${m[1]}]]» pelo da sua empresa`, "entao", i);
+    });
   }
   return out;
 }
@@ -389,12 +409,26 @@ function validarCondicao(cd, n, ix) {
   if (!tipo || (tipo === "campo" && !/^contato\.[a-z][a-z0-9_]{0,39}$/.test(campo))) return `condição ${n}: escolha o campo`;
   const op = OPERADOR[cd.op];
   if (!op) return `condição ${n}: escolha a comparação`;
+  // plano 2000d · DU-031: campo novo só com o servidor que o anuncia; os operadores são os da lista dele
+  const novo = CAMPOS_CONDICAO_NOVOS.find(c => c.id === campo);
+  if (novo) {
+    if (ix && ix.temBase && !recursoServidor(ix.recursos, novo.recurso)) return `condição ${n}: «${novo.rotulo}» ainda não está disponível nesta versão do servidor`;
+    if (!novo.ops.includes(cd.op)) return `condição ${n}: escolha a comparação`;
+    if (op.semValor) return null;
+    if (novo.valor === "sim_nao") return typeof cd.valor === "boolean" || cd.valor === "true" || cd.valor === "false" ? null : `condição ${n}: escolha sim ou não`;
+    if (novo.valor === "numero" && numeroBR(cd.valor) == null) return `condição ${n}: o valor precisa ser um número`;
+    return null;
+  }
+  if (cd.op === "hoje" || cd.op === "amanha") return `condição ${n}: «${op.rotulo}» vale só para a data marcada`;
   if ((cd.op === "maior" || cd.op === "menor") && !["numero", "campo"].includes(tipo))
     return `condição ${n}: «maior» e «menor» valem só para valor e campos`;
   // plano 1500c · UCA-001: as frases do servidor (20261015a, UB-216)
   if (tipo === "campanha" && (cd.op === "igual" || cd.op === "diferente")) return `condição ${n}: para a campanha use «contém» ou «não contém»`;
   if (tipo === "plataforma" && (cd.op === "contem" || cd.op === "nao_contem")) return `condição ${n}: para a plataforma use «é» ou «não é»`;
   if (op.semValor) return null;
+  // plano 2000d · DU-007: a receita sem a etapa no funil deixa a condição pendente — a frase diz as duas saídas
+  if (vazio(cd.valor) && tipo === "estagio") return `condição ${n}: escolha a etapa (ou tire a condição para valer para todos)`;
+  if (vazio(cd.valor) && tipo === "etiqueta") return `condição ${n}: escolha a etiqueta`;
   if (vazio(cd.valor)) return `condição ${n}: preencha o valor`;
   if (tipo === "numero" && numeroBR(cd.valor) == null)      // plano 1000b · UB-061: «1.500,00» é número
     return `condição ${n}: o valor precisa ser um número`;
@@ -578,8 +612,8 @@ export const duracaoTotal = acoes => linhaDoTempo(acoes).reduce((s, x) => (x.ina
 export const temSequencia = auto => (auto && auto.acoes || []).some(a => a && (a.tipo === "esperar" || a.tipo === "parar"));
 
 /** Avisos que não impedem de salvar (o editor mostra no resumo). Lista de frases (os detalhes, com o passo, em avisosEstruturaDetalhados). */
-export function avisosEstrutura(auto, vocab = null) {
-  return avisosEstruturaDetalhados(auto, vocab).map(x => x.texto);
+export function avisosEstrutura(auto, vocab = null, opcoes = {}) {
+  return avisosEstruturaDetalhados(auto, vocab, opcoes).map(x => x.texto);
 }
 
 /** plano 1500c · UCA-022: passos que só agem numa conversa aberta com o contato. */
@@ -595,7 +629,8 @@ const ehMensagem = a => !!a && !!(ACAO[a.tipo] || {}).mensagem;
  * plano 1500c · UCA-017/018/022/111/112: toda mensagem, disparo diário em massa, passo de conversa sem conversa, esperas seguidas
  * (quais passos e quanto somam) e espera que não para quando o cliente responde antes de uma mensagem.
  */
-export function avisosEstruturaDetalhados(auto, vocab = null) {
+// plano 2000d · DU-018: opcoes.iaAtendimentoLigada = a IA de atendimento das Conversas responde sozinha (as duas responderiam juntas)
+export function avisosEstruturaDetalhados(auto, vocab = null, opcoes = {}) {
   const a = auto || {};
   const acoes = Array.isArray(a.acoes) ? a.acoes : [];
   const conds = Array.isArray(a.condicoes) ? a.condicoes : [];
@@ -621,7 +656,7 @@ export function avisosEstruturaDetalhados(auto, vocab = null) {
   const paraCliente = acoes.some(x => x && x.tipo === "esperar" && x.cancelar_se_cliente_responder);
   if (paraCliente && ["tarefa_vencida", "agendado"].includes(a.gatilho))
     add("«Parar se o cliente responder» só vale quando existe uma conversa com o cliente.", null, "parar_cliente");
-  if (acoes.some(x => x && x.tipo === "ia_decidir")) add("Cada passo da IA usa uma sugestão da cota de IA do mês. Use condições para ela não rodar à toa.", null, "ia");
+  if (acoes.some(x => x && x.tipo === "ia_decidir")) add("Cada passo da IA gasta 1 uso da IA do mês. Use condições para ela não rodar à toa.", null, "ia");   // plano 2000d · DU-069
   const iMsg = acoes.findIndex(ehMensagem);
   // plano 1500c · UCA-017: «Chegou uma mensagem» sem palavras nem condição + mensagem = resposta automática a cada «ok», «obrigado»
   if (a.gatilho === "mensagem_recebida" && iMsg >= 0 && !palavrasUnicas(c.palavras).length && !conds.length)
@@ -644,6 +679,23 @@ export function avisosEstruturaDetalhados(auto, vocab = null) {
     if (cd && cd.campo === "texto" && a.gatilho && !GATILHOS_COM_TEXTO.includes(a.gatilho))
       add(`Condição ${i + 1}: o texto da mensagem só existe quando o gatilho é uma mensagem; com este gatilho ela nunca vale.`, null, "texto_sem_mensagem");
   });
+  // plano 2000d · DU-005: «amanhã»/«hoje» no texto com o lembrete em outra antecedência que não 24 h (ou 2 h no mesmo dia)
+  if (a.gatilho === "antes_da_data") {
+    const h = inteiro(c.horas);
+    acoes.forEach((x, i) => {
+      if (!ehMensagem(x)) return;
+      const t = normalizar([x.texto].concat(Array.isArray(x.parametros) ? x.parametros : []).filter(v => typeof v === "string").join(" "));
+      const amanha = /\bamanha\b/.test(t), hoje = /\bhoje\b/.test(t);
+      if (h != null && ((amanha && h !== 24) || (hoje && h > 12)))
+        add(`A mensagem do passo ${i + 1} diz «${amanha ? "amanhã" : "hoje"}», mas o lembrete sai ${formatarHoras(h)} antes. Use «no dia {data_consulta}» para o texto valer em qualquer antecedência.`, i, "palavra_de_tempo");
+    });
+  }
+  // plano 2000d · DU-018: resposta automática a conversa/mensagem com a IA de atendimento ligada = duas respostas seguidas
+  if (opcoes && opcoes.iaAtendimentoLigada && GATILHOS_COM_TEXTO.includes(a.gatilho) && iMsg >= 0)
+    add("A IA de atendimento também responde as conversas: o cliente receberia duas respostas seguidas. Desligue a IA nesse número ou use uma condição (palavras, departamento).", iMsg, "conflito_ia");
+  // plano 2000d · DU-032: gatilho de CRM + mensagem: quem não tem WhatsApp no cadastro é pulado (e conta como erro na execução)
+  if (iMsg >= 0 && GATILHOS_SEM_CONVERSA.includes(a.gatilho) && !conds.some(cd => cd && cd.campo === "telefone_valido"))
+    add("Quem não tiver WhatsApp no cadastro não recebe a mensagem (a execução aparece com erro). Confira os telefones antes de ligar.", iMsg, "sem_telefone");
   // plano 1500c · UCA-019: condições que nunca valem juntas
   for (const x of condicoesContraditorias(conds)) add(`As condições ${x.i + 1} e ${x.j + 1} nunca valem juntas (${x.motivo}): a automação não vai rodar.`, null, "contraditorias");
   return avisos;
@@ -880,7 +932,11 @@ function fraseCondicao(cd, ix) {
     if (!c) return null;
     rot = { origem: "a origem", funil_id: "o funil", estagio_id: "a etapa", canal_id: "o número", departamento_id: "o departamento",
       etiqueta: "a etiqueta", texto: "o texto", valor: "o valor", dono_id: "o responsável",
-      campanha: "a campanha", plataforma: "a plataforma" }[cd.campo];      // plano 1500c · UCA-001
+      campanha: "a campanha", plataforma: "a plataforma",      // plano 1500c · UCA-001
+      consulta_em: "a data marcada", ganhos_contato: "o número de compras fechadas do contato" }[cd.campo];   // plano 2000d · DU-031/DU-014
+    // plano 2000d · DU-032/DU-017: sim/não vira frase direta
+    if (cd.campo === "telefone_valido") return String(cd.valor) === "false" ? "o contato não tiver WhatsApp válido" : "o contato tiver WhatsApp válido";
+    if (cd.campo === "fora_do_horario") return String(cd.valor) === "false" ? "estiver no horário de atendimento" : "estiver fora do horário de atendimento";
   }
   if (op.semValor) {
     if (cd.campo === "etiqueta") return cd.op === "vazio" ? "não tiver etiqueta" : "tiver alguma etiqueta";
@@ -1025,20 +1081,64 @@ export function aplicarVariaveis(txt, dados = {}) {
       data = `${p.day}/${p.month}`; hora = `${p.hour === "24" ? "00" : p.hour}:${p.minute}`;
     }
   }
+  // plano 2000d · DU-035: o dia da semana por extenso da data marcada (fuso de São Paulo)
+  let diaSemana = "";
+  if (d.consulta_em) { const dt = new Date(d.consulta_em); if (!isNaN(dt)) diaSemana = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", weekday: "long" }).format(dt); }
   const mapa = {
     primeiro_nome: nome.split(/\s+/)[0] || "", nome, empresa: texto(d.empresa), protocolo: texto(d.protocolo),
     etapa: texto(d.etapa), valor: d.valor == null || d.valor === "" ? "" : brl(d.valor), atendente: texto(d.atendente),
     data_consulta: data, hora_consulta: hora,
+    // plano 2000d · DU-017/DU-035/DU-036: as variáveis novas (o servidor troca quando anunciar o recurso)
+    dia_semana_consulta: diaSemana, profissional: texto(d.profissional), link_avaliacao: texto(d.link_avaliacao), proxima_abertura: texto(d.proxima_abertura),
   };
-  return texto(txt).replace(/\{([a-z_]+)\}/g, (m, k) => (k in mapa ? mapa[k] : m));
+  const campos = d.campos && typeof d.campos === "object" ? d.campos : {};
+  // plano 2000d · DU-034: {campo:placa} → o valor do campo personalizado (no exemplo, o que a prévia tiver)
+  return texto(txt).replace(/\{([a-z_]+)(?::([a-z][a-z0-9_]{0,39}))?\}/g, (m, k, c) => (c ? (k === "campo" && c in campos ? texto(campos[c]) : m) : (k in mapa ? mapa[k] : m)));
+}
+
+/** plano 2000d · DU-034/DU-035: as chaves de variável que valem nesta base (as fixas + as novas que o servidor anuncia). */
+export function variaveisAceitas(base = null) {
+  return VARIAVEIS.concat(VARIAVEIS_NOVAS.filter(v => recursoServidor(base, v[2])).map(v => [v[0], v[1]]));
+}
+
+/** plano 2000d · DU-037: o chip da variável — {chave}, o valor de exemplo («→ Alex») e o rótulo para o leitor de tela. */
+export function rotuloChipVariavel(k, rot, exemplo = null) {
+  const v = exemplo ? cortar(aplicarVariaveis(`{${k}}`, exemplo), 24) : "";
+  const ex = v && v !== `{${k}}` ? v : "";
+  return { chave: `{${k}}`, exemplo: ex ? `→ ${ex}` : "", aria: ex ? `Inserir ${rot} (exemplo: ${ex})` : `Inserir ${rot}` };
+}
+
+/** plano 2000d · DU-034: os campos personalizados (contato e oportunidade) que viram {campo:chave} — [chave, rótulo]; vazio sem o recurso. */
+export function variaveisDeCampo(base = null) {
+  if (!recursoServidor(base, "var_campo")) return [];
+  const vistos = new Set();
+  const out = [];
+  for (const c of [].concat((base && base.campos) || [], (base && base.campos_negocio) || [])) {
+    if (!c || !c.chave || vistos.has(c.chave)) continue;
+    vistos.add(c.chave); out.push([`campo:${c.chave}`, texto(c.rotulo) || c.chave]);
+  }
+  return out;
 }
 
 /** Variáveis desconhecidas usadas no texto (o editor avisa). */
 // plano 1500c · UCA-007: qualquer {…} curto conta ({Primeiro_Nome}, { nome }, {primeiro nome}) — o motor só troca {a_z} exato, o resto
 // chegaria cru ao cliente. Os {{1}} dos modelos da Meta não entram (chave dupla).
-export function variaveisDesconhecidas(txt) {
-  const ok = new Set(VARIAVEIS.map(([k]) => k));
+// plano 2000d · DU-034/DU-035: com a base, valem também as variáveis novas anunciadas e os {campo:chave} de campos que existem
+export function variaveisDesconhecidas(txt, base = null) {
+  const ok = new Set(variaveisAceitas(base).map(([k]) => k).concat(variaveisDeCampo(base).map(([k]) => k)));
   return [...new Set([...texto(txt).matchAll(/(?<!\{)\{(?!\{)([^{}\n]{1,40})\}(?!\})/g)].map(m => m[1]).filter(k => !ok.has(k)))];
+}
+
+/**
+ * plano 2000d · DU-036: variável que sairia vazia porque a empresa não configurou o dado → frase com o caminho; null quando está tudo certo.
+ */
+export function avisoVariavelVazia(txt, base) {
+  const t = texto(txt);
+  if (/\{link_avaliacao\}/.test(t) && !texto(base && base.link_avaliacao).trim())
+    return "O link de avaliação ainda não foi cadastrado: preencha em Configurações → Empresa → Link de avaliação no Google, senão a mensagem sai sem ele.";
+  if (/\{profissional\}/.test(t) && base && Array.isArray(base.usuarios) && !base.usuarios.length)
+    return "Ninguém da equipe aparece como profissional da agenda: a variável {profissional} sairia vazia.";
+  return null;
 }
 
 /* ------------------------------------------------------------------ receitas prontas (T12 + PLANO-NOITE) */
@@ -1064,6 +1164,8 @@ function orcamentoDaVertical(vertical) {
 }
 
 const ETAPA_ORC = v => orcamentoDaVertical(v).etapa;
+/** plano 2000d · DU-418: as mensagens das receitas assinam com o nome da empresa (o cliente sabe quem escreveu). */
+const ASSINA = t => `${t} — {empresa}`;
 
 /**
  * Receitas. `categoria`: whatsapp | equipe | ia. `destaque`: verticais em que a receita vem primeiro.
@@ -1072,31 +1174,55 @@ const ETAPA_ORC = v => orcamentoDaVertical(v).etapa;
  * Nascem DESLIGADAS (aplicarModelo força ativo=false).
  */
 export const MODELOS = Object.freeze([
-  // ---- WhatsApp (sai pelo CodeWords: texto livre, sem modelo da Meta)
+  // ---- WhatsApp (sai pelo número conectado por aparelho: texto livre, sem modelo da Meta)
   { id: "lembrete_consulta_texto", categoria: "whatsapp", icone: "relogio", destaque: ["odonto", "oficina"], ocultar: [],
     titulo: vv => `Lembrete 24 h antes da ${palavraConsulta(vv.vertical)} → mensagem de texto`,
-    texto: vv => `Manda uma mensagem de texto 24 h antes da ${palavraConsulta(vv.vertical)} marcada, pelo WhatsApp conectado por aparelho (CodeWords). Não precisa de modelo da Meta nem da janela de 24 h.`,
+    texto: vv => `Manda uma mensagem de texto 24 h antes da ${palavraConsulta(vv.vertical)} marcada, pelo número de WhatsApp conectado por aparelho. Não precisa de modelo da Meta nem da janela de 24 h.`,   // plano 2000d · DU-024
     aviso: "No WhatsApp oficial (Meta) esta mensagem só sai se o cliente escreveu nas últimas 24 h; nesse caso use o modelo de confirmação aprovado.",
     auto: { nome: "Lembrete 24 h antes da consulta (texto)", gatilho: "antes_da_data", config: { campo: "consulta", horas: 24 }, condicoes: [],
-      acoes: [{ tipo: "enviar_mensagem", texto: "Olá, {primeiro_nome}! Passando para lembrar da sua consulta amanhã, {data_consulta}, às {hora_consulta}. Responda SIM para confirmar ou nos avise se precisar remarcar." }],
+      acoes: [{ tipo: "enviar_mensagem", // plano 2000d · DU-005: «no dia 29/09» em vez de «amanhã» — o texto continua certo se trocarem para 2 h ou 48 h antes
+      texto: ASSINA("Olá, {primeiro_nome}! Passando para lembrar da sua consulta no dia {data_consulta}, às {hora_consulta}. Responda SIM para confirmar ou nos avise se precisar remarcar.") }],
       respeitar_horario: false } },
-  { id: "confirmacao_agendamento", categoria: "whatsapp", icone: "check", destaque: ["odonto", "oficina"], ocultar: [],
+  { id: "confirmacao_agendamento", categoria: "whatsapp", icone: "check", destaque: ["odonto"], ocultar: [], pedeEtapa: true,   // plano 2000d · DU-052: loja sem etapa agendada escolhe a etapa   // plano 2000d · DU-008: na oficina o destaque é «Carro pronto»
     titulo: vv => `${vv.v.negocio} agendad${vv.art("negocio")} → confirmação por mensagem de texto`,
-    texto: vv => `Assim que ${vv.art("negocio")} ${vv.min("negocio")} entra em «Agendada» (pela IA ou pela equipe), o cliente recebe a confirmação do dia e da hora, pelo WhatsApp por aparelho (CodeWords).`,
+    texto: vv => `Assim que ${vv.art("negocio")} ${vv.min("negocio")} entra em «Agendada» (pela IA ou pela equipe), o cliente recebe a confirmação do dia e da hora, pelo número de WhatsApp conectado por aparelho.`,   // plano 2000d · DU-024
     aviso: "No WhatsApp oficial (Meta) a mensagem só sai se o cliente escreveu nas últimas 24 h.",
     auto: { nome: "Confirmação ao agendar", gatilho: "negocio_estagio", config: { estagio_marco: "agendada" }, condicoes: [],
-      acoes: [{ tipo: "enviar_mensagem", texto: "Olá, {primeiro_nome}! Sua consulta está confirmada para {data_consulta}, às {hora_consulta}. Se precisar remarcar, é só responder aqui." }],
+      acoes: [{ tipo: "enviar_mensagem", texto: ASSINA("Olá, {primeiro_nome}! Sua consulta está confirmada para {data_consulta}, às {hora_consulta}. Se precisar remarcar, é só responder aqui.") }],
       respeitar_horario: false } },
-  { id: "followup_orcamento", categoria: "whatsapp", icone: "relogio", destaque: ["odonto", "oficina", "loja", "generico"], ocultar: [],   // plano 1500c · UCA-066
+  // plano 2000d · DU-001: o «SIM» do lembrete vira etapa — a recepção não confere uma a uma
+  { id: "confirmou_sim", categoria: "equipe", icone: "check", destaque: ["odonto", "oficina"], ocultar: ["loja"], pedeEtapa: true,
+    titulo: vv => `Respondeu «SIM» ao lembrete → ${palavraConsulta(vv.vertical)} confirmada`,
+    texto: vv => `Quem está em «Agendada» e responde «sim», «confirmo» ou «ok» passa para a etapa de confirmados e ganha uma nota no histórico. Se o funil não tiver a etapa «Confirmada», escolha para onde vai.`,
+    aviso: "Funciona junto com o lembrete que pede «Responda SIM para confirmar».",
+    auto: { nome: "Confirmou pelo WhatsApp", gatilho: "mensagem_recebida", config: { palavras: ["sim", "confirmo", "confirmado", "ok", "pode ser"] },
+      condicoes: [{ campo: "estagio_id", op: "igual", valor_marco: "agendada" }],
+      acoes: [
+        { tipo: "mover_estagio", estagio_nome: "confirm" },
+        { tipo: "nota", texto: "Confirmou a consulta pelo WhatsApp." },
+      ],
+      respeitar_horario: false } },
+  // plano 2000d · DU-008: o momento mais importante da oficina — o carro ficou pronto
+  { id: "carro_pronto", categoria: "whatsapp", icone: "check", destaque: ["oficina"], ocultar: ["odonto", "loja"], pedeEtapa: true,
+    titulo: () => "Carro pronto → avisar o cliente para retirar",
+    texto: () => "Quando o carro entra na etapa de pronto/retirada, o cliente recebe a mensagem para buscar e o responsável ganha a tarefa de cobrar e entregar. Se o funil não tiver essa etapa, escolha qual é.",
+    aviso: "As mensagens respeitam o horário de funcionamento. Revise o texto antes de ligar.",
+    auto: { nome: "Carro pronto: avisar para retirar", gatilho: "negocio_estagio", config: { estagio_nome: "pront|retirad" }, condicoes: [],
+      acoes: [
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Seu carro está pronto para retirada. Pode vir buscar no nosso horário de funcionamento; qualquer dúvida, é só responder aqui.") },
+        { tipo: "criar_tarefa", titulo: "Cobrar e entregar o carro de {primeiro_nome}", tipo_tarefa: "tarefa", vence_em_horas: 4, dono: "responsavel" },
+      ],
+      respeitar_horario: true } },
+  { id: "followup_orcamento", categoria: "whatsapp", icone: "relogio", destaque: ["oficina", "loja", "generico"], ocultar: [],   // plano 1500c · UCA-066 · plano 2000d · DU-001: na clínica o destaque passou para «Respondeu SIM»
     titulo: vv => `${orcamentoDaVertical(vv.vertical).cap} sem resposta → 2 mensagens de acompanhamento (1 dia e 3 dias)`,
     texto: vv => `Quando ${vv.art("negocio")} ${vv.min("negocio")} chega em «${ETAPA_ORC(vv.vertical)}», espera 1 dia e manda uma mensagem; sem resposta, manda outra no 3º dia e deixa uma tarefa de ligação. Se o cliente responder, a sequência para sozinha.`,
     aviso: "As mensagens respeitam o horário de funcionamento. Revise o texto antes de ligar.",
     auto: { nome: "Acompanhar orçamento sem resposta", gatilho: "negocio_estagio", config: { estagio_marco: "orcamento" }, condicoes: [],
       acoes: [
         { tipo: "esperar", minutos: 1440, cancelar_se_cliente_responder: true },
-        { tipo: "enviar_mensagem", texto: "Oi, {primeiro_nome}, tudo bem? Passando para saber se ficou alguma dúvida sobre o orçamento. Posso ajudar?" },
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}, tudo bem? Passando para saber se ficou alguma dúvida sobre o orçamento. Posso ajudar?") },
         { tipo: "esperar", minutos: 2880, cancelar_se_cliente_responder: true },
-        { tipo: "enviar_mensagem", texto: "Oi, {primeiro_nome}! Não quero te incomodar, só avisar que o orçamento continua de pé. Se quiser, já deixo um horário reservado para você." },
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Não quero te incomodar, só avisar que o orçamento continua de pé. Se quiser, já deixo um horário reservado para você.") },
         { tipo: "criar_tarefa", titulo: "Ligar para {primeiro_nome}: orçamento sem resposta", tipo_tarefa: "ligacao", vence_em_horas: 0, dono: "responsavel" },
       ],
       respeitar_horario: true } },
@@ -1107,7 +1233,7 @@ export const MODELOS = Object.freeze([
     auto: { nome: "Faltou → remarcar", gatilho: "apos_data", config: { campo: "consulta", horas: 2 },
       condicoes: [{ campo: "estagio_id", op: "igual", valor_marco: "faltou" }],
       acoes: [
-        { tipo: "enviar_mensagem", texto: "Oi, {primeiro_nome}! Sentimos sua falta na consulta de hoje. Aconteceu alguma coisa? Me diga o melhor dia e horário que a gente remarca para você." },
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Sentimos sua falta na consulta de hoje. Aconteceu alguma coisa? Me diga o melhor dia e horário que a gente remarca para você.") },
         { tipo: "criar_tarefa", titulo: "Remarcar consulta de {primeiro_nome}", tipo_tarefa: "whatsapp", vence_em_horas: 24, dono: "responsavel" },
       ],
       respeitar_horario: true } },
@@ -1115,8 +1241,9 @@ export const MODELOS = Object.freeze([
     titulo: vv => `Depois da ${palavraConsulta(vv.vertical)} → pedir uma avaliação`,
     texto: vv => `No dia seguinte à ${palavraConsulta(vv.vertical)}, o cliente recebe uma mensagem perguntando como foi e pedindo uma avaliação. Quem faltou não recebe.`,
     auto: { nome: "Pós-consulta: avaliação", gatilho: "apos_data", config: { campo: "consulta", horas: 24 },
-      condicoes: [{ campo: "estagio_id", op: "diferente", valor_marco: "faltou", opcional: true }],
-      acoes: [{ tipo: "enviar_mensagem", texto: "Oi, {primeiro_nome}! Como foi sua consulta? Se puder, conte para a gente em uma frase, sua opinião ajuda muito. Obrigado pela confiança!" }],
+      // plano 2000d · DU-007: sem a etapa «Faltou» no funil, a condição fica pendente (escolher a etapa ou tirar a condição) — não some calada
+      condicoes: [{ campo: "estagio_id", op: "diferente", valor_marco: "faltou", opcionalEm: ["loja"] }],   // loja não tem «faltou»
+      acoes: [{ tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Como foi sua consulta? Se puder, conte para a gente em uma frase, sua opinião ajuda muito. Obrigado pela confiança!") }],
       respeitar_horario: true } },
   { id: "reativar_30_dias", categoria: "whatsapp", icone: "relogio", destaque: [], ocultar: [],
     titulo: () => "30 dias parado → mensagem para reativar",
@@ -1124,7 +1251,7 @@ export const MODELOS = Object.freeze([
     aviso: "Escolhida a etapa «orçamento» por padrão; troque pela etapa em que seus clientes costumam parar.",
     auto: { nome: "Reativar quem parou há 30 dias", gatilho: "tempo_no_estagio", config: { estagio_marco: "orcamento", horas: 720 }, condicoes: [],
       acoes: [
-        { tipo: "enviar_mensagem", texto: "Oi, {primeiro_nome}, tudo bem? Faz um tempinho que conversamos por aqui. Ainda posso te ajudar com isso? É só responder esta mensagem." },
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}, tudo bem? Faz um tempinho que conversamos por aqui. Ainda posso te ajudar com isso? É só responder esta mensagem.") },
         { tipo: "criar_tarefa", titulo: "Reativar {primeiro_nome} (30 dias parado)", tipo_tarefa: "whatsapp", vence_em_horas: 48, dono: "responsavel" },
       ],
       respeitar_horario: true } },
@@ -1158,7 +1285,7 @@ export const MODELOS = Object.freeze([
   { id: "lembrete_equipe_consulta", categoria: "equipe", icone: "calendario", destaque: [], ocultar: [],
     titulo: vv => `${palavraConsulta(vv.vertical).charAt(0).toUpperCase()}${palavraConsulta(vv.vertical).slice(1)} marcada → lembrar a equipe 24 h antes`,
     texto: vv => `24 h antes da ${palavraConsulta(vv.vertical)} marcada, o responsável ganha uma tarefa para confirmar com o cliente. Nada sai sozinho para o cliente.`,
-    aviso: "Para o cliente receber o lembrete sozinho, use «Lembrete 24 h antes» (texto pelo CodeWords ou, no WhatsApp oficial, um modelo aprovado na Meta).",
+    aviso: "Para o cliente receber o lembrete sozinho, use «Lembrete 24 h antes» (texto pelo número conectado por aparelho ou, no WhatsApp oficial, um modelo aprovado na Meta).",   // plano 2000d · DU-024
     auto: { nome: "Lembrar a equipe 24 h antes da consulta", gatilho: "antes_da_data", config: { campo: "consulta", horas: 24 }, condicoes: [],
       acoes: [{ tipo: "criar_tarefa", titulo: "Confirmar a consulta de {primeiro_nome}: {data_consulta} às {hora_consulta}", tipo_tarefa: "whatsapp", vence_em_horas: 2, dono: "responsavel" }],
       respeitar_horario: false } },
@@ -1185,7 +1312,7 @@ export const MODELOS = Object.freeze([
   { id: "ia_classificar_etapa", categoria: "ia", icone: "ia", destaque: [], ocultar: [], cotaIA: true,
     titulo: () => "Cliente escreveu → a IA escolhe a etapa do funil",
     texto: () => "A IA lê o que o cliente disse e move para a etapa que combina, sempre entre as etapas do seu funil. Só roda enquanto o contato está na primeira etapa, para poupar a cota de IA.",
-    aviso: "Cada execução usa uma sugestão da cota de IA do mês.",
+    aviso: "Cada execução gasta 1 uso da IA do mês.",   // plano 2000d · DU-069
     auto: { nome: "IA classifica a etapa", gatilho: "mensagem_recebida", config: {},
       condicoes: [{ campo: "estagio_id", op: "igual", valor_marco: "nova" }],
       acoes: [{ tipo: "ia_decidir", tarefa: "classificar_etapa" }],
@@ -1193,7 +1320,7 @@ export const MODELOS = Object.freeze([
   { id: "ia_resumo_conversa", categoria: "ia", icone: "ia", destaque: [], ocultar: [], cotaIA: true,
     titulo: () => "Conversa resolvida → a IA resume numa nota",
     texto: () => "Quando o atendimento é resolvido, a IA escreve um resumo curto da conversa na nota do histórico, para qualquer pessoa da equipe entender em segundos.",
-    aviso: "Cada execução usa uma sugestão da cota de IA do mês.",
+    aviso: "Cada execução gasta 1 uso da IA do mês.",   // plano 2000d · DU-069
     auto: { nome: "Resumo da conversa ao resolver", gatilho: "conversa_resolvida", config: {}, condicoes: [],
       acoes: [{ tipo: "ia_decidir", tarefa: "resumir_nota" }],
       respeitar_horario: false } },
@@ -1205,7 +1332,7 @@ export const MODELOS = Object.freeze([
     auto: { nome: "Reengajar quem não fechou (30 dias)", gatilho: "negocio_perdido", config: {}, condicoes: [],
       acoes: [
         { tipo: "esperar", minutos: 43200, cancelar_se_cliente_responder: true },
-        { tipo: "enviar_mensagem", texto: "Oi, {primeiro_nome}, tudo bem? Faz um mês que conversamos e queria saber se ainda posso te ajudar. Se fizer sentido agora, é só responder aqui." },
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}, tudo bem? Faz um mês que conversamos e queria saber se ainda posso te ajudar. Se fizer sentido agora, é só responder aqui.") },
         { tipo: "criar_tarefa", titulo: "Ligar para {primeiro_nome}: retomar o contato", tipo_tarefa: "ligacao", vence_em_horas: 48, dono: "responsavel" },
       ],
       respeitar_horario: true } },
@@ -1215,11 +1342,11 @@ export const MODELOS = Object.freeze([
     aviso: "A mensagem sai também fora do horário de atendimento; se preferir, ligue «Respeitar horário» e ajuste o texto.",
     auto: { nome: "Boas-vindas e rodízio", gatilho: "conversa_nova", config: {}, condicoes: [],
       acoes: [
-        { tipo: "enviar_mensagem", texto: "Oi, {primeiro_nome}! Recebemos sua mensagem e já vamos te atender." },
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Recebemos sua mensagem e já vamos te atender.") },
         { tipo: "atribuir", dono: "rodizio" },
       ],
       respeitar_horario: false } },
-  { id: "valor_alto", categoria: "equipe", icone: "sino", destaque: ["loja", "oficina"], ocultar: [],
+  { id: "valor_alto", categoria: "equipe", icone: "sino", destaque: ["loja"], ocultar: [],   // plano 2000d · DU-008: na oficina, os 4 destaques são lembrete, SIM, carro pronto e orçamento
     titulo: vv => `${vv.v.negocio} de valor alto → avisar o gestor`,
     texto: vv => `Quando entra ${vv.um("negocio")} ${vv.min("negocio")} acima de R$ 5.000, os administradores recebem um aviso e o responsável ganha uma tarefa para dar atenção especial.`,
     aviso: "Troque o valor da condição pelo que é «alto» para a sua empresa.",
@@ -1255,8 +1382,203 @@ export const MODELOS = Object.freeze([
     auto: { nome: "Agradecer e pedir indicação", gatilho: "negocio_ganho", config: {}, condicoes: [],
       acoes: [
         { tipo: "esperar", minutos: 1440, cancelar_se_cliente_responder: true },
-        { tipo: "enviar_mensagem", texto: "Oi, {primeiro_nome}! Obrigado pela confiança. Se conhecer alguém que também precise, pode indicar a gente? Ficaremos felizes em ajudar." },
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Obrigado pela confiança. Se conhecer alguém que também precise, pode indicar a gente? Ficaremos felizes em ajudar.") },
       ],
+      respeitar_horario: true } },
+  // ---- plano 2000d · receitas por vertical (DU-002..DU-020, DU-361..DU-371). Todas usam só gatilhos e passos que o servidor de hoje
+  // aceita; as que dependem de recurso novo trazem `requer` e só aparecem quando o servidor anuncia (modelosDaVertical(v, base)).
+  // `pedeEtapa`: a etapa vem pelo NOME (estagio_nome = trecho) — sem ela no funil, o editor pede para escolher.
+  { id: "lembrete_2h", categoria: "whatsapp", icone: "relogio", destaque: [], ocultar: ["loja"],   // plano 2000d · DU-004
+    titulo: vv => `Lembrete 2 h antes da ${palavraConsulta(vv.vertical)} → segundo toque no mesmo dia`,
+    texto: vv => `Duas horas antes do horário marcado, o cliente recebe um lembrete curto. Junto com o de 24 h, reduz as faltas de última hora. Quem já está em «Faltou» não recebe.`,
+    auto: { nome: "Lembrete 2 h antes", gatilho: "antes_da_data", config: { campo: "consulta", horas: 2 },
+      condicoes: [{ campo: "estagio_id", op: "diferente", valor_marco: "faltou", opcional: true }],
+      acoes: [{ tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Te esperamos hoje às {hora_consulta}. Se tiver algum imprevisto, é só responder aqui.") }],
+      respeitar_horario: false } },
+  { id: "cuidados_pos", categoria: "whatsapp", icone: "check", destaque: [], ocultar: ["oficina", "loja"],   // plano 2000d · DU-003
+    titulo: () => "Depois do atendimento → orientações de cuidado no mesmo dia",
+    texto: () => "Duas horas depois do horário marcado, o paciente recebe orientações gerais de cuidado (edite para o seu caso) e o convite para chamar se sentir dor. Quem faltou não recebe.",
+    aviso: "Revise as orientações antes de ligar: o texto é genérico.",
+    auto: { nome: "Cuidados depois do atendimento", gatilho: "apos_data", config: { campo: "consulta", horas: 2 },
+      condicoes: [{ campo: "estagio_id", op: "diferente", valor_marco: "faltou", opcional: true }],
+      acoes: [{ tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Obrigado pela visita hoje. Nas próximas horas, evite alimentos muito quentes ou duros e siga as orientações que passamos no consultório. Sentiu dor ou algo diferente? É só responder aqui.") }],
+      respeitar_horario: true } },
+  { id: "retorno_6_meses", categoria: "equipe", icone: "calendario", destaque: [], ocultar: ["oficina", "loja"],   // plano 2000d · DU-002
+    titulo: vv => `${vv.v.negocio} marcad${vv.art("negocio")} como «${vv.v.ganhar}» → chamar para o retorno em 6 meses`,
+    texto: () => "Depois do tratamento, a sequência espera 4 meses e deixa uma tarefa com prazo no 6º mês para chamar o paciente para a limpeza/retorno. Nada sai sozinho para o paciente.",
+    auto: { nome: "Retorno em 6 meses", gatilho: "negocio_ganho", config: {},
+      condicoes: [{ campo: "etiqueta", op: "igual", valor_etiqueta: "Limpeza", opcional: true }],
+      acoes: [
+        { tipo: "esperar", minutos: 43200, cancelar_se_cliente_responder: false }, { tipo: "esperar", minutos: 43200, cancelar_se_cliente_responder: false },
+        { tipo: "esperar", minutos: 43200, cancelar_se_cliente_responder: false }, { tipo: "esperar", minutos: 43200, cancelar_se_cliente_responder: false },
+        { tipo: "criar_tarefa", titulo: "Chamar {primeiro_nome} para o retorno", tipo_tarefa: "whatsapp", vence_em_horas: 1440, dono: "responsavel" },
+      ],
+      respeitar_horario: false } },
+  { id: "manutencao_mensal", categoria: "whatsapp", icone: "calendario", destaque: [], ocultar: ["oficina", "loja"], pedeEscolha: true,   // plano 2000d · DU-361
+    titulo: () => "Ortodontia → lembrar da manutenção 28 dias depois",
+    texto: () => "28 dias depois da consulta, quem tem a etiqueta «Ortodontia» recebe o lembrete para marcar a manutenção do aparelho.",
+    aviso: "Precisa da etiqueta «Ortodontia» nos pacientes de aparelho; sem ela, escolha a etiqueta no editor.",
+    auto: { nome: "Manutenção mensal do aparelho", gatilho: "apos_data", config: { campo: "consulta", horas: 672 },
+      condicoes: [{ campo: "etiqueta", op: "igual", valor_etiqueta: "Ortodontia" }],
+      acoes: [{ tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Já está na hora da manutenção do seu aparelho. Me diga o melhor dia e horário que a gente marca para você.") }],
+      respeitar_horario: true } },
+  { id: "ficha_primeira_vez", categoria: "whatsapp", icone: "nota", destaque: [], ocultar: ["oficina", "loja"], pedeEscolha: true,   // plano 2000d · DU-364
+    titulo: () => "Primeira consulta → mandar a ficha 2 dias antes",
+    texto: () => "Dois dias antes da primeira consulta (etiqueta «Primeira vez»), o paciente recebe o link da ficha/anamnese para preencher antes de chegar.",
+    aviso: "Troque o trecho [[link da ficha]] pelo link do seu formulário: enquanto ele estiver no texto, a automação não liga.",
+    auto: { nome: "Ficha antes da primeira consulta", gatilho: "antes_da_data", config: { campo: "consulta", horas: 48 },
+      condicoes: [{ campo: "etiqueta", op: "igual", valor_etiqueta: "Primeira vez" }],
+      acoes: [{ tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Para agilizar sua primeira consulta, preencha a ficha neste link: [[link da ficha]]. Leva 3 minutos.") }],
+      respeitar_horario: true } },
+  { id: "revisao_6_meses", categoria: "equipe", icone: "calendario", destaque: [], ocultar: ["odonto", "loja"],   // plano 2000d · DU-009
+    titulo: () => "Serviço entregue → oferecer revisão em 6 meses",
+    texto: () => "Depois do serviço, a sequência espera 4 meses e deixa uma tarefa com prazo no 6º mês para oferecer a revisão ao cliente, com uma nota no histórico.",
+    auto: { nome: "Revisão em 6 meses", gatilho: "negocio_ganho", config: {}, condicoes: [],
+      acoes: [
+        { tipo: "nota", texto: "Revisão sugerida para daqui a 6 meses." },
+        { tipo: "esperar", minutos: 43200, cancelar_se_cliente_responder: false }, { tipo: "esperar", minutos: 43200, cancelar_se_cliente_responder: false },
+        { tipo: "esperar", minutos: 43200, cancelar_se_cliente_responder: false }, { tipo: "esperar", minutos: 43200, cancelar_se_cliente_responder: false },
+        { tipo: "criar_tarefa", titulo: "Oferecer revisão a {primeiro_nome}", tipo_tarefa: "whatsapp", vence_em_horas: 1440, dono: "responsavel" },
+      ],
+      respeitar_horario: false } },
+  { id: "orcamento_aprovado", categoria: "equipe", icone: "tarefa", destaque: [], ocultar: ["odonto", "loja", "generico"], pedeEtapa: true,   // plano 2000d · DU-010
+    titulo: () => "Orçamento aprovado → tarefa de pedir as peças",
+    texto: () => "Quando o cliente aprova o orçamento, o responsável recebe um aviso e a tarefa de pedir as peças em 2 h (e reservar o box).",
+    auto: { nome: "Orçamento aprovado: pedir peças", gatilho: "negocio_estagio", config: { estagio_nome: "aprov" }, condicoes: [],
+      acoes: [
+        { tipo: "criar_tarefa", titulo: "Pedir peças: {primeiro_nome}", tipo_tarefa: "tarefa", vence_em_horas: 2, dono: "responsavel" },
+        { tipo: "notificar", para: "responsavel", titulo: "Orçamento aprovado: {nome}", texto: "Peça as peças e reserve o box." },
+      ],
+      respeitar_horario: false } },
+  { id: "orcamento_24h_oficina", categoria: "whatsapp", icone: "relogio", destaque: [], ocultar: ["odonto", "loja", "generico"],   // plano 2000d · DU-365
+    titulo: () => "Orçamento sem aprovação em 24 h → perguntar se pode seguir",
+    texto: () => "O carro ocupa o box: 24 h depois do orçamento enviado sem resposta, o cliente recebe «Posso seguir com o serviço?» e o mecânico responsável ganha a tarefa de ligar.",
+    aviso: "As mensagens respeitam o horário de funcionamento.",
+    auto: { nome: "Orçamento parado 24 h (oficina)", gatilho: "tempo_no_estagio", config: { estagio_marco: "orcamento", horas: 24 }, condicoes: [],
+      acoes: [
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Conseguiu ver o orçamento? Posso seguir com o serviço? Se tiver dúvida, é só responder aqui.") },
+        { tipo: "criar_tarefa", titulo: "Ligar para {primeiro_nome}: orçamento parado no box", tipo_tarefa: "ligacao", vence_em_horas: 2, dono: "responsavel" },
+      ],
+      respeitar_horario: true } },
+  { id: "patio_parado", categoria: "equipe", icone: "sino", destaque: [], ocultar: ["odonto", "loja"], pedeEtapa: true,   // plano 2000d · DU-011
+    titulo: () => "Carro parado no pátio há 5 dias → avisar o gestor",
+    texto: () => "Carro pronto e ninguém buscou em 5 dias? Os administradores recebem um aviso para ligar para o cliente. Nada sai sozinho para o cliente.",
+    auto: { nome: "Carro esquecido no pátio", gatilho: "tempo_no_estagio", config: { estagio_nome: "pront|retirad", horas: 120 }, condicoes: [],
+      acoes: [{ tipo: "notificar", para: "admins", titulo: "Carro parado no pátio: {nome}", texto: "Pronto há 5 dias e ninguém buscou. Vale ligar para o cliente." }],
+      respeitar_horario: false } },
+  { id: "garantia_90", categoria: "whatsapp", icone: "check", destaque: [], ocultar: ["odonto", "loja"],   // plano 2000d · DU-366
+    titulo: () => "Garantia do serviço acabando → oferecer revisão",
+    texto: () => "80 dias depois do serviço (a garantia costuma ser de 90), o cliente recebe um aviso de que a garantia está terminando, com a oferta de uma revisão.",
+    aviso: "Ajuste o texto ao prazo de garantia que a sua oficina dá.",
+    auto: { nome: "Fim da garantia (80 dias)", gatilho: "negocio_ganho", config: {}, condicoes: [],
+      acoes: [
+        { tipo: "esperar", minutos: 43200, cancelar_se_cliente_responder: false }, { tipo: "esperar", minutos: 43200, cancelar_se_cliente_responder: false },
+        { tipo: "esperar", minutos: 28800, cancelar_se_cliente_responder: false },
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! A garantia do serviço que fizemos no seu carro termina nos próximos dias. Quer aproveitar para uma revisão rápida? É só responder aqui.") },
+      ],
+      respeitar_horario: true } },
+  { id: "pedido_enviado", categoria: "whatsapp", icone: "enviar", destaque: [], ocultar: ["odonto", "oficina"], pedeEtapa: true,   // plano 2000d · DU-012
+    titulo: () => "Pedido enviado → avisar o cliente",
+    texto: () => "Quando o pedido entra na etapa de enviado, o cliente recebe o aviso (com o código de rastreio, quando o campo «rastreio» existir e o servidor trocar a variável) e fica uma nota no histórico.",
+    auto: { nome: "Pedido enviado: avisar", gatilho: "negocio_estagio", config: { estagio_nome: "^(enviad|envio)|despach" }, condicoes: [],
+      acoes: [
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Seu pedido saiu para entrega. Qualquer dúvida sobre o envio, é só responder aqui.") },
+        { tipo: "nota", texto: "Cliente avisado do envio pelo WhatsApp." },
+      ],
+      respeitar_horario: true } },
+  { id: "recompra_30", categoria: "whatsapp", icone: "relogio", destaque: [], ocultar: ["odonto", "oficina"],   // plano 2000d · DU-013
+    titulo: vv => `${vv.v.negocio} marcad${vv.art("negocio")} como «${vv.v.ganhar}» → convite de recompra em 30 dias`,
+    texto: () => "30 dias depois da venda, o cliente recebe uma mensagem com as novidades e ganha a etiqueta Recompra. Se responder antes, a sequência para.",
+    aviso: "As mensagens respeitam o horário de funcionamento. Revise o texto antes de ligar.",
+    auto: { nome: "Recompra em 30 dias", gatilho: "negocio_ganho", config: {}, condicoes: [],
+      acoes: [
+        { tipo: "esperar", minutos: 43200, cancelar_se_cliente_responder: true },
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Chegaram novidades que combinam com a sua última compra. Quer que eu te mostre? É só responder aqui.") },
+        { tipo: "etiquetar", etiqueta_nome: "Recompra", alvo: "contato" },
+      ],
+      respeitar_horario: true } },
+  { id: "troca_7_dias", categoria: "whatsapp", icone: "calendario", destaque: [], ocultar: ["odonto", "oficina"],   // plano 2000d · DU-369
+    titulo: () => "5 dias depois da venda → lembrar do prazo de troca",
+    texto: () => "5 dias depois da venda, o cliente recebe «Tudo certo com o produto?» com o lembrete de que o prazo de troca termina em 2 dias.",
+    auto: { nome: "Prazo de troca acabando", gatilho: "negocio_ganho", config: {}, condicoes: [],
+      acoes: [
+        { tipo: "esperar", minutos: 7200, cancelar_se_cliente_responder: false },
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Tudo certo com o produto? Se precisar trocar, o prazo vai até daqui a 2 dias: é só responder aqui.") },
+      ],
+      respeitar_horario: true } },
+  { id: "retirada_pendente", categoria: "whatsapp", icone: "relogio", destaque: [], ocultar: ["odonto", "oficina"], pedeEtapa: true,   // plano 2000d · DU-015
+    titulo: () => "Pedido separado há 3 dias → lembrar da retirada",
+    texto: () => "Pedido parado 3 dias na etapa de retirada: o cliente recebe um lembrete com o horário da loja e o responsável ganha uma tarefa de ligação.",
+    auto: { nome: "Retirada pendente há 3 dias", gatilho: "tempo_no_estagio", config: { estagio_nome: "retirad|separad", horas: 72 }, condicoes: [],
+      acoes: [
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Seu pedido está separado esperando você. Pode retirar no nosso horário de funcionamento.") },
+        { tipo: "criar_tarefa", titulo: "Ligar para {primeiro_nome}: retirada pendente", tipo_tarefa: "ligacao", vence_em_horas: 24, dono: "responsavel" },
+      ],
+      respeitar_horario: true } },
+  { id: "produto_chegou", categoria: "whatsapp", icone: "check", destaque: [], ocultar: ["odonto", "oficina"], pedeEtapa: true,   // plano 2000d · DU-368
+    titulo: () => "Produto chegou → avisar quem pediu",
+    texto: () => "Quando o pedido entra na etapa «Chegou», o cliente que pediu recebe o aviso de que o produto está reservado por 24 h.",
+    auto: { nome: "Produto chegou: avisar", gatilho: "negocio_estagio", config: { estagio_nome: "cheg" }, condicoes: [],
+      acoes: [{ tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! O produto que você pediu chegou e está reservado para você por 24 h. Quer que eu separe?") }],
+      respeitar_horario: true } },
+  { id: "lead_frio_2d", categoria: "whatsapp", icone: "relogio", destaque: [], ocultar: [],   // plano 2000d · DU-019
+    titulo: () => "Lead de anúncio sem resposta em 2 dias → nova tentativa",
+    texto: () => "Quem chegou pelo anúncio e não respondeu em 2 dias recebe uma mensagem curta e o responsável ganha uma tarefa de ligação. Se o cliente responder antes, a sequência para.",
+    auto: { nome: "Lead de anúncio: 2ª tentativa", gatilho: "negocio_criado", config: {},
+      condicoes: [{ campo: "origem", op: "igual", valor: "anuncio" }],
+      acoes: [
+        { tipo: "esperar", minutos: 2880, cancelar_se_cliente_responder: true },
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Vi que você se interessou pelo nosso anúncio. Ainda posso te ajudar? É só responder aqui.") },
+        { tipo: "criar_tarefa", titulo: "Ligar para {primeiro_nome} (lead de anúncio sem resposta)", tipo_tarefa: "ligacao", vence_em_horas: 4, dono: "responsavel" },
+      ],
+      respeitar_horario: true } },
+  { id: "nps", categoria: "whatsapp", icone: "check", destaque: [], ocultar: [],   // plano 2000d · DU-020
+    titulo: vv => `Depois da ${palavraConsulta(vv.vertical)} → pesquisa de 0 a 10`,
+    texto: () => "No dia seguinte, o cliente recebe a pergunta «De 0 a 10, quanto você nos recomendaria?» e ganha a etiqueta «Pesquisa NPS». Use junto com «Nota baixa na pesquisa» para tratar quem deu de 0 a 6.",
+    auto: { nome: "Pesquisa de 0 a 10", gatilho: "apos_data", config: { campo: "consulta", horas: 24 },
+      condicoes: [{ campo: "estagio_id", op: "diferente", valor_marco: "faltou", opcional: true }],
+      acoes: [
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! De 0 a 10, quanto você recomendaria a gente para um amigo? Responda só com o número.") },
+        { tipo: "etiquetar", etiqueta_nome: "Pesquisa NPS", alvo: "contato" },
+      ],
+      respeitar_horario: true } },
+  { id: "nps_detrator", categoria: "equipe", icone: "alerta", destaque: [], ocultar: [], pedeEscolha: true,   // plano 2000d · DU-020
+    titulo: () => "Nota baixa na pesquisa (0 a 6) → avisar o gestor",
+    texto: () => "Quem tem a etiqueta «Pesquisa NPS» e responde com uma nota de 0 a 6 ganha a etiqueta «Detrator» e os administradores recebem um aviso para ligar.",
+    aviso: "Só vale para quem recebeu a pesquisa (etiqueta «Pesquisa NPS»); ligue a receita «Depois da consulta → pesquisa de 0 a 10» antes.",
+    auto: { nome: "Nota baixa na pesquisa", gatilho: "mensagem_recebida", config: { palavras: ["0", "1", "2", "3", "4", "5", "6"] },
+      condicoes: [{ campo: "etiqueta", op: "igual", valor_etiqueta: "Pesquisa NPS" }],
+      acoes: [
+        { tipo: "etiquetar", etiqueta_nome: "Detrator", alvo: "contato" },
+        { tipo: "notificar", para: "admins", titulo: "Nota baixa na pesquisa: {nome}", texto: "Respondeu a pesquisa com nota de 0 a 6. Vale ligar hoje." },
+      ],
+      respeitar_horario: false } },
+  // ---- dependem do servidor (aparecem só quando ele anuncia o recurso)
+  { id: "cliente_vip", categoria: "equipe", icone: "etiqueta", destaque: [], ocultar: [], requer: { recurso: "cond_ganhos_contato" },   // plano 2000d · DU-014
+    titulo: () => "3ª compra → etiqueta VIP e aviso ao gestor",
+    texto: () => "Quando o cliente fecha a 3ª compra, ganha a etiqueta VIP e os administradores recebem um aviso.",
+    auto: { nome: "Cliente VIP (3ª compra)", gatilho: "negocio_ganho", config: {},
+      condicoes: [{ campo: "ganhos_contato", op: "maior", valor: 2 }],
+      acoes: [
+        { tipo: "etiquetar", etiqueta_nome: "VIP", alvo: "contato" },
+        { tipo: "notificar", para: "admins", titulo: "Cliente VIP: {nome}", texto: "Fechou a 3ª compra." },
+      ],
+      respeitar_horario: false } },
+  { id: "fora_do_horario", categoria: "whatsapp", icone: "relogio", destaque: [], ocultar: [], requer: { recurso: "cond_fora_do_horario", variavel: "var_proxima_abertura" },   // plano 2000d · DU-017
+    titulo: () => "Conversa nova fora do horário → resposta com o horário de abertura",
+    texto: () => "Quem escreve com a empresa fechada recebe na hora uma resposta dizendo quando voltamos e ganha a etiqueta «Retornar».",
+    auto: { nome: "Fora do horário: avisar quando abre", gatilho: "conversa_nova", config: {},
+      condicoes: [{ campo: "fora_do_horario", op: "igual", valor: true }],
+      acoes: [
+        { tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Recebemos sua mensagem. Agora estamos fechados; voltamos {proxima_abertura} e te respondemos em seguida.") },
+        { tipo: "etiquetar", etiqueta_nome: "Retornar", alvo: "contato" },
+      ],
+      respeitar_horario: false } },
+  { id: "aniversario", categoria: "whatsapp", icone: "calendario", destaque: [], ocultar: [], requer: { gatilho: "aniversario" },   // plano 2000d · DU-016
+    titulo: () => "Aniversário do cliente → mensagem às 9h",
+    texto: () => "No dia do aniversário, às 9h, o cliente recebe uma mensagem de parabéns (uma vez por ano).",
+    auto: { nome: "Parabéns no aniversário", gatilho: "aniversario", config: { horario: "09:00" }, condicoes: [],
+      acoes: [{ tipo: "enviar_mensagem", texto: ASSINA("Feliz aniversário, {primeiro_nome}! Desejamos um dia incrível para você.") }],
       respeitar_horario: true } },
   // ---- WhatsApp oficial (modelo aprovado pela Meta)
   { id: "lembrete_consulta", categoria: "whatsapp", icone: "relogio", destaque: [], ocultar: [],
@@ -1271,8 +1593,18 @@ export const MODELOS = Object.freeze([
 export const CATEGORIAS_MODELO = Object.freeze([["todas", "Todas"], ["whatsapp", "WhatsApp"], ["equipe", "Equipe e CRM"], ["ia", "Inteligência artificial"]]);
 
 /** Modelos na ordem da vertical: os de destaque primeiro; os que não fazem sentido na vertical somem. */
-export function modelosDaVertical(vertical) {
-  const visiveis = MODELOS.filter(m => !(m.ocultar || []).includes(vertical));
+// plano 2000d · DU-014/DU-016/DU-017: com `base`, a receita que depende de recurso novo só aparece quando o servidor anuncia (sem base = o
+// catálogo puro, sem as que dependem do servidor)
+export function receitaDisponivel(m, base = null) {
+  const r = m && m.requer;
+  if (!r) return true;
+  if (r.gatilho && !GATILHO[r.gatilho]) return false;
+  if (r.recurso && !recursoServidor(base, r.recurso)) return false;
+  if (r.variavel && !recursoServidor(base, r.variavel)) return false;
+  return true;
+}
+export function modelosDaVertical(vertical, base = null) {
+  const visiveis = MODELOS.filter(m => !(m.ocultar || []).includes(vertical) && receitaDisponivel(m, base));
   const d = visiveis.filter(m => m.destaque.includes(vertical));
   return d.concat(visiveis.filter(m => !m.destaque.includes(vertical)));
 }
@@ -1302,7 +1634,8 @@ function trocarPalavras(a, vertical) {
  * Monta a automação de uma receita com os ids do cliente (etapa pelo marco no funil padrão,
  * etiqueta e modelo da WABA pelo nome). O que não achar fica para a pessoa escolher.
  */
-export function aplicarModelo(modelo, base, vocab) {
+// plano 2000d · DU-419: opcoes.tom = "formal" deixa as mensagens no tom de consultório premium (o padrão é o próximo)
+export function aplicarModelo(modelo, base, vocab, opcoes = {}) {
   const m = typeof modelo === "string" ? MODELOS.find(x => x.id === modelo) : modelo;
   if (!m) return null;
   const vv = voc(vocab);
@@ -1332,19 +1665,45 @@ export function aplicarModelo(modelo, base, vocab) {
   const funis = b.funis || [];
   const padrao = funis.find(f => f.padrao) || funis[0];
   const etapaDoMarco = marco => padrao && (padrao.estagios || []).find(s => s.marco === marco);
+  // plano 2000d · DU-001/DU-008/DU-012: etapas sem marco (Confirmada, Pronto, Enviado…) vêm pelo nome no funil padrão; sem ela, fica vazia
+  const etapaDoNome = trecho => { let re; try { re = new RegExp(trecho, "i"); } catch { return null; } return padrao && (padrao.estagios || []).find(s => re.test(normalizar(s.nome))) || null; };
   if (a.config && a.config.estagio_marco) {
     const e = etapaDoMarco(a.config.estagio_marco);
     delete a.config.estagio_marco;
     if (e) a.config.estagio_id = e.id;
   }
+  if (a.config && a.config.estagio_nome) {
+    const e = etapaDoNome(a.config.estagio_nome);
+    delete a.config.estagio_nome;
+    a.config.estagio_id = e ? e.id : "";
+  }
+  const etiquetaDoNome = nome => (b.etiquetas || []).find(x => normalizar(x.nome) === normalizar(nome)) || null;
   a.condicoes = (a.condicoes || []).flatMap(cd => {
+    // plano 2000d · DU-002/DU-361: condição de etiqueta pelo nome (a etiqueta desta empresa); sem ela: some (opcional) ou fica a escolher
+    if (cd.valor_etiqueta) {
+      const t = etiquetaDoNome(cd.valor_etiqueta);
+      const { valor_etiqueta, opcional, ...resto } = cd;
+      if (t) return [{ ...resto, valor: t.id }];
+      return opcional ? [] : [{ ...resto, valor: "" }];
+    }
     if (!cd.valor_marco) return [cd];
     const e = etapaDoMarco(cd.valor_marco);
-    const { valor_marco, opcional, ...resto } = cd;
+    const { valor_marco, opcional, opcionalEm, ...resto } = cd;
     if (e) return [{ ...resto, valor: e.id }];
-    return opcional ? [] : [{ ...resto, valor: "" }];
+    return opcional || (opcionalEm || []).includes(vv.vertical) ? [] : [{ ...resto, valor: "" }];
   });
+  // plano 2000d · DU-006: a confirmação ao agendar só sai para quem tem data marcada — quando o servidor já entende a condição
+  if (m.id === "confirmacao_agendamento" && recursoServidor(b, "cond_consulta_em")) a.condicoes.push({ campo: "consulta_em", op: "preenchido" });
+  // plano 2000d · DU-023: as palavras de preço de cada vertical
+  if (m.id === "preco" && a.config) {
+    const extra = { oficina: ["orçamento", "quanto fica"], loja: ["tem", "estoque", "frete"] }[vv.vertical] || [];
+    a.config.palavras = palavrasUnicas((a.config.palavras || []).concat(extra));
+  }
+  // plano 2000d · DU-012: com o campo «rastreio» e o servidor trocando {campo:…}, o aviso de envio leva o código
+  if (m.id === "pedido_enviado" && recursoServidor(b, "var_campo") && [].concat(b.campos || [], b.campos_negocio || []).some(c => c && c.chave === "rastreio"))
+    a.acoes[0].texto = a.acoes[0].texto.replace("Seu pedido saiu para entrega.", "Seu pedido saiu para entrega. Código de rastreio: {campo:rastreio}.");
   for (const ac of a.acoes) {
+    if (ac.tipo === "mover_estagio" && ac.estagio_nome) { const e = etapaDoNome(ac.estagio_nome); delete ac.estagio_nome; ac.estagio_id = e ? e.id : ""; }
     if ((ac.tipo === "etiquetar" || ac.tipo === "etiqueta_adicionar") && ac.etiqueta_nome) {
       const t = (b.etiquetas || []).find(x => normalizar(x.nome) === normalizar(ac.etiqueta_nome));
       if (t) { ac.etiqueta_id = t.id; delete ac.etiqueta_nome; }
@@ -1361,7 +1720,18 @@ export function aplicarModelo(modelo, base, vocab) {
       }
     }
   }
+  if (opcoes && opcoes.tom === "formal") for (const ac of a.acoes) if (ac.tipo === "enviar_mensagem" && typeof ac.texto === "string") ac.texto = tomFormal(ac.texto);
   return a;
+}
+
+/** plano 2000d · DU-419: os dois tons das receitas. [id, rótulo] */
+export const TONS_RECEITA = Object.freeze([["proximo", "Próximo"], ["formal", "Formal"]]);
+/** plano 2000d · DU-419: o texto da receita no tom formal (sem gíria, tratamento por «você» mantido). */
+export function tomFormal(txt) {
+  return texto(txt)
+    .replace(/^Oi, /, "Olá, ").replace(/^Oi /, "Olá ")
+    .replace(/, tudo bem[?]/g, ", como vai?").replace(/um tempinho/g, "algum tempo")
+    .replace(/Te esperamos/g, "Aguardamos você").replace(/para a gente/g, "para nós").replace(/indicar a gente/g, "nos indicar").replace(/que a gente/g, "que nós").replace(/É só responder/g, "Basta responder").replace(/é só responder/g, "basta responder");
 }
 
 /* ---------- rascunho do editor: o que ainda não foi salvo fica guardado na aba (sessionStorage) ---------- */
@@ -1563,8 +1933,9 @@ export function normalizarSimulacao(r, auto, base, vocab, { horario, agora = Dat
       titulo: cortar(q.rotulo || q.titulo || q.nome || q.contato || q.descricao || `Exemplo ${i + 1}`, 120),
       detalhe: cortar(q.detalhe || q.etapa || q.subtitulo || "", 160),
       link: linkSeguro(q.link),
-      ignorado: naoCasa || naoPassa,
-      motivoIgnorado: naoCasa ? "Este registro ainda não bate com o gatilho; só rodaria quando bater." : naoPassa ? "Este registro não passa nas condições, então nada seria feito." : "",
+      ignorado: naoCasa || naoPassa || !!motivoRegistro(q, auto, base),
+      // plano 2000d · DU-006/DU-064: o servidor diz POR QUE o registro ficou de fora (sem data marcada, outra etapa) — a frase cita o motivo
+      motivoIgnorado: motivoRegistro(q, auto, base) || (naoCasa ? "Este registro ainda não bate com o gatilho; só rodaria quando bater." : naoPassa ? "Este registro não passa nas condições, então nada seria feito." : ""),
       erro: cortar(q.erro || "", 300),
       parou: q.parou === true,
       passos: passos.slice(0, 12).map(rotuloPasso),
@@ -1578,10 +1949,25 @@ export function normalizarSimulacao(r, auto, base, vocab, { horario, agora = Dat
     .map(x => cortar(typeof x === "string" ? x : (x && (x.texto || x.mensagem)) || "", 240)).filter(Boolean);
   return {
     total, alvos, avisos, ehAmostra,
-    motivo: cortar(src.motivo || src.mensagem || "", 300),
+    motivo: cortar(src.motivo || src.mensagem || (alvos.length ? "" : motivoRegistro(src, auto, base)) || "", 300),   // plano 2000d · DU-064
     porEvento: src.por_evento === true || src.tipo === "evento",
     plano: passosEmFrases(auto, base, vocab),
   };
+}
+
+/** plano 2000d · DU-006/DU-064: motivo_registro do servidor («sem_data», «etapa») → a frase para a pessoa; "" sem motivo conhecido. */
+function motivoRegistro(q, auto, base) {
+  const m = normalizar(q && q.motivo_registro);
+  if (m === "sem_data") return "Pulado: sem data marcada.";
+  if (m === "etapa") {
+    const e = auto && auto.config && auto.config.estagio_id ? indexarBase(base).estagios.get(auto.config.estagio_id) : null;
+    return e ? `Este registro não está em «${e.nome}» (o gatilho pede essa etapa).` : "Este registro não está na etapa que o gatilho pede.";
+  }
+  return "";
+}
+/** plano 2000d · DU-064: com um registro escolhido e nenhum alvo, a frase do motivo que o servidor mandou (resposta sem alvos). */
+export function motivoSemAlvo(resp, auto, base) {
+  return motivoRegistro(resp || {}, auto, base);
 }
 
 function rotuloAcaoSimples(tipo) { const d = ACAO[tipo]; return d ? d.rotulo(voc({})) : "Passo"; }
@@ -1776,6 +2162,7 @@ export function seloModelo(m, vertical) {
 // plano 1500c · UCA-020: com o gatilho, «Texto da mensagem» só aparece nos gatilhos de mensagem (`atual` = o campo já escolhido, que nunca some)
 export function camposCondicao(base, vocab = null, gatilho = null, atual = null) {
   const fixos = CAMPOS_CONDICAO.filter(c => c.id !== "texto" || !gatilho || GATILHOS_COM_TEXTO.includes(gatilho) || atual === "texto")
+    .concat(CAMPOS_CONDICAO_NOVOS.filter(c => recursoServidor(base, c.recurso) || atual === c.id))   // plano 2000d · DU-031: só com o servidor que anuncia
     .map(c => ({ valor: c.id, rotulo: c.id === "valor" ? rotuloValorNegocio(vocab) : c.rotulo }));
   const extras = ((base && base.campos) || []).map(c => ({ valor: `contato.${c.chave}`, rotulo: `Campo: ${c.rotulo}` }));
   return fixos.concat(extras);
@@ -1788,7 +2175,23 @@ export function rotuloCampoData(c, vertical) {
 }
 
 /** Dados de exemplo para a prévia das mensagens (consulta amanhã às 14:30 em São Paulo). */
-export function exemploVariaveis({ empresa = "Sua empresa", atendente = "Ana", agora = new Date(), base = null } = {}) {
+// plano 2000d · DU-038: nome neutro («Alex Souza», sem «Obrigada/Obrigado» errado) e o valor típico da vertical (orçamento de oficina não é R$ 1.500)
+const VALOR_EXEMPLO = Object.freeze({ odonto: 800, oficina: 1250, loja: 349.9, generico: 1500 });
+export function exemploVariaveis({ empresa = "Sua empresa", atendente = "Ana", agora = new Date(), base = null, vertical = null } = {}) {
+  const r = exemploVariaveisBase({ empresa, atendente, agora, base });
+  const v = vertical || (base && base.vertical) || "generico";
+  r.nome = "Alex Souza";
+  r.valor = VALOR_EXEMPLO[v] ?? VALOR_EXEMPLO.generico;
+  // plano 2000d · DU-017/DU-034/DU-035/DU-036: as variáveis novas também têm exemplo (a prévia nunca mostra «{campo:placa}» cru)
+  r.profissional = "Dra. Paula";
+  r.link_avaliacao = texto(base && base.link_avaliacao) || "https://g.page/r/sua-empresa/review";
+  r.proxima_abertura = "amanhã às 08:00";
+  const campos = { placa: "ABC1D23", rastreio: "BR123456789BR", modelo: "Onix 2020", dentista: "Dra. Paula" };
+  for (const c of [].concat((base && base.campos) || [], (base && base.campos_negocio) || [])) if (c && c.chave && !(c.chave in campos)) campos[c.chave] = texto(c.exemplo) || texto(c.rotulo) || c.chave;
+  r.campos = campos;
+  return r;
+}
+function exemploVariaveisBase({ empresa = "Sua empresa", atendente = "Ana", agora = new Date(), base = null } = {}) {
   const amanha = new Date(agora.getTime() + 24 * 3600 * 1000);
   const dia = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(amanha);
   // plano 1000b · UB-073: a etapa do exemplo é a 1ª do funil padrão DESTA empresa (oficina e loja não têm «Avaliou / orçamento»)
@@ -2035,8 +2438,33 @@ export function filtrarModelos(modelos, termo, vocab) {
 }
 
 /** Exemplos clicáveis da caixa «Criar com IA» (frases do dia a dia, no vocabulário da vertical quando faz diferença). */
+// plano 2000d · DU-022: cada vertical vê as situações do dia a dia dela (oficina: carro pronto, revisão; loja: pedido enviado, recompra)
+const EXEMPLOS_IA_VERTICAL = Object.freeze({
+  odonto: [
+    "Quando o paciente responder SIM ao lembrete, move para Confirmada e anota no histórico",
+    "Seis meses depois do tratamento, cria uma tarefa para chamar o paciente para o retorno da limpeza",
+    "Quando o paciente faltar à consulta, pede para remarcar e avisa a recepção",
+    "Quando chegar mensagem com a palavra preço, põe a etiqueta Orçamento e avisa a equipe",
+    "No dia seguinte à consulta, manda uma mensagem pedindo uma avaliação",
+  ],
+  oficina: [
+    "Quando o carro entrar na etapa Pronto, avisa o cliente para buscar e cria uma tarefa de cobrança",
+    "Seis meses depois do serviço, cria uma tarefa para oferecer a revisão ao cliente",
+    "Quando o orçamento ficar 24 horas sem resposta, pergunta se pode seguir com o serviço",
+    "Quando o cliente aprovar o orçamento, cria a tarefa de pedir as peças em 2 horas",
+    "Quando o carro ficar 5 dias parado no pátio depois de pronto, avisa o gestor",
+  ],
+  loja: [
+    "Quando o pedido entrar na etapa Enviado, avisa o cliente e anota no histórico",
+    "Trinta dias depois da venda, manda uma mensagem de recompra e põe a etiqueta Recompra",
+    "Quando a proposta ficar 2 dias sem resposta, manda uma mensagem e avisa o responsável",
+    "Quando o pedido ficar 3 dias separado sem retirada, lembra o cliente do horário da loja",
+    "Quando chegar mensagem perguntando frete ou estoque, põe a etiqueta Orçamento",
+  ],
+});
 export function exemplosIA(vocab) {
   const vv = voc(vocab);
+  if (EXEMPLOS_IA_VERTICAL[vv.vertical]) return EXEMPLOS_IA_VERTICAL[vv.vertical].slice();
   const c = palavraConsulta(vv.vertical);
   return [
     "Quando um orçamento ficar 2 dias sem resposta, manda uma mensagem e avisa o responsável",
@@ -2231,14 +2659,15 @@ export function sugestaoVariavel(nome) {
 }
 
 /** AS-035: por passo, as variáveis que não existem nos textos com variáveis (mensagem, título, nota, parâmetros do modelo). */
-export function variaveisDosPassos(auto) {
+// plano 2000d · DU-034: com a base, {campo:chave} de campo existente e as variáveis anunciadas não são «desconhecidas»
+export function variaveisDosPassos(auto, base = null) {
   const out = [];
   ((auto && auto.acoes) || []).forEach((ac, indice) => {
     const d = ac && ACAO[ac.tipo];
     if (!d) return;
     const textos = d.campos.filter(f => f.variaveis).map(f => ac[f.nome]);
     if (ac.tipo === "enviar_template") textos.push(...(Array.isArray(ac.parametros) ? ac.parametros : []));
-    const desconhecidas = variaveisDesconhecidas(textos.filter(x => typeof x === "string").join("\n"));
+    const desconhecidas = variaveisDesconhecidas(textos.filter(x => typeof x === "string").join("\n"), base);
     if (desconhecidas.length) out.push({ indice, desconhecidas, sugestoes: desconhecidas.map(sugestaoVariavel) });
   });
   return out;
@@ -2383,6 +2812,29 @@ export function avisoDesligarEspera(item) {
     : `${n} pessoas estão no meio da sequência e não vão receber os próximos passos.`;
 }
 
+/**
+ * plano 2000d · DU-040: ligar uma automação de TEMPO (ou diária) que manda mensagem pega de uma vez todo o atraso acumulado — antes de
+ * confirmar, o app conta quem recebe (nx_auto_simular). Gatilhos de evento só pegam o que acontecer depois: não precisam contar.
+ */
+export const LIMITE_DIGITAR_AO_LIGAR = 50;
+export function contarAoLigar(auto) {
+  const a = auto || {};
+  return enviaMensagem(a) && (GATILHOS_TEMPO.includes(a.gatilho) || a.gatilho === "agendado");
+}
+/** plano 2000d · DU-040: a frase do diálogo de ligar com o total simulado + se é preciso digitar o número (acima de 50). null sem total. */
+export function fraseQuemRecebe(total) {
+  const n = Number(total);
+  if (!Number.isFinite(n) || n < 0) return null;
+  const t = n === 0 ? "Agora ninguém se encaixa: só quem entrar na situação daqui para frente vai receber."
+    : `Ao ligar, ${n === 1 ? "1 pessoa recebe" : `${n.toLocaleString("pt-BR")} pessoas recebem`} a mensagem nos próximos 15 minutos.`;
+  return { texto: t, digitar: n > LIMITE_DIGITAR_AO_LIGAR ? String(n) : null, massa: n > LIMITE_DIGITAR_AO_LIGAR };
+}
+/** plano 2000d · DU-018: a IA de atendimento das Conversas está ligada? (o servidor manda base.ia_atendimento_ligada ou base.ia.atendimento_ligada). */
+export function iaAtendimentoLigada(dados) {
+  const b = (dados && dados.base) || dados || {};
+  return !!(b.ia_atendimento_ligada === true || (b.ia && b.ia.atendimento_ligada === true));
+}
+
 /** AS-016: as automações LIGADAS que mandam mensagem ao cliente (o botão de emergência desliga só essas). */
 export const ligadasQueEnviam = itens => (Array.isArray(itens) ? itens : []).filter(x => x && x.ativo && enviaMensagem(x));
 
@@ -2396,10 +2848,25 @@ export function linhaCotaIA(cota) {
 }
 
 /** AS-037: contador do texto do passo — «1.234 / 4.096», amarelo a partir de 90 % e vermelho acima do teto. */
-export function contadorTexto(valor, max) {
-  const n = texto(valor).length, m = nat(max);
+// plano 2000d · DU-039: com a assinatura configurada (do atendente ou da empresa), o contador soma o que vai junto no envio
+export function contadorTexto(valor, max, { assinatura = "" } = {}) {
+  const extra = texto(assinatura).trim() ? texto(assinatura).trim().length + 2 : 0;
+  const n = texto(valor).length + extra, m = nat(max);
   const fmt = x => x.toLocaleString("pt-BR");
-  return { n, texto: `${fmt(n)} / ${fmt(m)}`, tom: m && n > m ? "ruim" : m && n >= m * 0.9 ? "aten" : "neutra" };
+  return { n, texto: `${fmt(n)} / ${fmt(m)}${extra ? " (com a assinatura)" : ""}`, tom: m && n > m ? "ruim" : m && n >= m * 0.9 ? "aten" : "neutra" };
+}
+
+/** plano 2000d · DU-048: ««A», «B», «C» e mais 7» — até `max` nomes, o resto em número (toast de lote legível). */
+export function listaNomesCurta(nomes, max = 3) {
+  const l = (Array.isArray(nomes) ? nomes : []).map(x => `«${texto(x)}»`);
+  if (l.length <= max) return listaFrase(l);
+  return `${l.slice(0, max).join(", ")} e mais ${l.length - max}`;
+}
+
+/** plano 2000d · DU-356: «1 automação» / «3 automações» (0 também no plural). */
+export function plural(n, um, varios) {
+  const k = Number(n) || 0;
+  return `${k.toLocaleString("pt-BR")} ${k === 1 ? um : varios}`;
 }
 
 /** AS-038: horas ↔ {n, un: "horas"|"dias"} (dias quando é múltiplo de 24). */
@@ -2437,9 +2904,10 @@ export function viaWhatsApp(canais) {
   const l = Array.isArray(canais) ? canais : [];
   if (!l.length) return "manda mensagem pelo WhatsApp (assim que houver um número conectado)";
   const p = new Set(l.map(c => c && c.provedor).filter(Boolean));
-  if (p.has("codewords") && p.has("meta")) return "manda mensagem pelo WhatsApp (pelo CodeWords ou pela API oficial da Meta, com modelo aprovado)";
-  if (p.has("codewords")) return "manda mensagem pelo WhatsApp (pelo CodeWords)";
-  if (p.has("meta")) return "manda mensagem pelo WhatsApp (pela API oficial da Meta, com modelo aprovado)";
+  // plano 2000d · DU-025: sem nome de fornecedor (o cliente da revenda lê esta frase no topo)
+  if (p.has("codewords") && p.has("meta")) return "manda mensagem pelo WhatsApp (pelo número conectado por aparelho ou pelo número oficial, com modelo aprovado)";
+  if (p.has("codewords")) return "manda mensagem pelo WhatsApp (pelo número conectado por aparelho)";
+  if (p.has("meta")) return "manda mensagem pelo WhatsApp (pelo número oficial, com modelo aprovado)";
   return "manda mensagem pelo WhatsApp";
 }
 
@@ -2526,7 +2994,7 @@ export function nomeRepetido(nome, itens, idProprio = null) {
 
 /** AS-015: busca por nome (sem acento) e ordem da lista. ordem: "criacao" | "nome" | "recente" | "erros". */
 export const ORDENS_AUTOMACAO = Object.freeze([["criacao", "Ordem de criação"], ["recente", "Rodou por último"], ["erros", "Com erro primeiro"], ["nome", "Nome (A–Z)"],
-  ["gatilho", "Por gatilho"]]);     // plano 1500c · UCA-070
+  ["gatilho", "Por gatilho"], ["objetivo", "Por objetivo"]]);     // plano 1500c · UCA-070 · plano 2000d · DU-082: «Por objetivo»
 /**
  * plano 1000b · UB-044: a lista do servidor tem automação que a tela não tem (criada por outra pessoa) ou falta uma que a tela mostra
  * (excluída por outra pessoa). `ignorar` = ids no meio do «Desfazer» desta tela (o servidor ainda as tem). Sem a lista nova → false.
@@ -2553,6 +3021,7 @@ export function listaAutomacoes(itens, { termo = "", ordem = "criacao", frase = 
   // plano 1500c · UCA-026: «Com erro primeiro» na régua do resumo (30 dias quando o servidor manda) — 5 erros de 6 meses atrás não passam na frente
   if (ordem === "erros") { const per = periodoDoResumo(itens); const er = x => (per === "30d" ? taxaSucesso(x, { periodo: per }).erros : nat(x && x.erros)); return [...l].sort((a, b) => er(b) - er(a) || quando(b) - quando(a)); }
   // plano 1500c · UCA-070: por gatilho, na ordem do catálogo (Conversas, CRM, Agenda); dentro do grupo, a ordem de criação
+  if (ordem === "objetivo") { const pos = x => OBJETIVOS.indexOf(objetivoDe(x)); return [...l].sort((a, b) => pos(a) - pos(b)); }   // plano 2000d · DU-082
   if (ordem === "gatilho") { const pos = x => { const k = GATILHOS.findIndex(g => g.id === (x && x.gatilho)); return k < 0 ? 999 : k; }; return [...l].sort((a, b) => pos(a) - pos(b)); }
   return l;
 }
@@ -2680,8 +3149,8 @@ export function casaPalavras(frase, palavras, { inteira = false } = {}) {
 }
 
 /** AS-270: o que sairia AGORA na simulação (passos «Faria»), por tipo → {mensagens, tarefas, outros, texto}. */
-export function resumoSaidasSimulacao(sim) {
-  const r = { mensagens: 0, tarefas: 0, outros: 0 };
+export function resumoSaidasSimulacao(sim, cota = null) {
+  const r = { mensagens: 0, tarefas: 0, outros: 0, ia: 0 };
   for (const a of (sim && Array.isArray(sim.alvos) ? sim.alvos : [])) {
     if (a.ignorado) continue;
     for (const p of a.passos || []) {
@@ -2689,6 +3158,7 @@ export function resumoSaidasSimulacao(sim) {
       if (p.tipo && (ACAO[p.tipo] || {}).mensagem) r.mensagens++;
       else if (p.tipo === "criar_tarefa") r.tarefas++;
       else r.outros++;
+      if (p.tipo === "ia_decidir") r.ia++;   // plano 2000d · DU-051
     }
   }
   const partes = [];
@@ -2698,6 +3168,12 @@ export function resumoSaidasSimulacao(sim) {
   const mostrados = sim && sim.alvos ? sim.alvos.length : 0;
   const parcial = sim && !sim.ehAmostra && sim.total > mostrados ? ` (nos ${mostrados} mostrados)` : "";
   r.texto = partes.length ? `Agora sairiam: ${partes.join(", ").replace(/, ([^,]*)$/, " e $1")}${parcial}.` : "";
+  // plano 2000d · DU-051: quanto da cota de IA o teste gastaria de verdade (com o que resta, quando a cota é conhecida)
+  if (r.ia) {
+    const c = cota && cota.limite != null && Number.isFinite(Number(cota.limite)) ? Math.max(0, nat(cota.limite) - nat(cota.usadas)) : null;
+    r.textoIA = `Usaria ${r.ia} da cota de IA${c != null ? ` (restam ${c})` : ""}.`;
+    r.texto = r.texto ? `${r.texto} ${r.textoIA}` : r.textoIA;
+  }
   return r;
 }
 
@@ -2814,10 +3290,19 @@ export function viaTextoLivre(canais) {
   const l = Array.isArray(canais) ? canais : [];
   const p = new Set(l.map(c => c && c.provedor).filter(Boolean));
   if (!l.length || !p.size) return "";
-  if (p.has("codewords") && p.has("meta")) return "Sai pelo número conectado por aparelho (CodeWords); no número oficial (Meta), só até 24 h da última mensagem do cliente.";
-  if (p.has("codewords")) return "Sai pelo número conectado por aparelho (CodeWords), a qualquer hora.";
-  if (p.has("meta")) return "No número oficial (Meta), só sai até 24 h da última mensagem do cliente; fora disso, use um modelo aprovado.";
+  // plano 2000d · DU-025: sem nome de fornecedor
+  if (p.has("codewords") && p.has("meta")) return "Sai pelo número conectado por aparelho; no número oficial, só até 24 h da última mensagem do cliente.";
+  if (p.has("codewords")) return "Sai pelo número conectado por aparelho, a qualquer hora.";
+  if (p.has("meta")) return "No número oficial, só sai até 24 h da última mensagem do cliente; fora disso, use um modelo aprovado.";
   return "";
+}
+
+/**
+ * plano 2000d · DU-088: a ajuda do campo «Mensagem» do passo «Enviar mensagem», pelos números DESTA empresa (só aparelho: nada de janela da
+ * Meta). Sem saber os números, a ajuda neutra do catálogo.
+ */
+export function ajudaMensagem(canais) {
+  return viaTextoLivre(canais) || (ACAO.enviar_mensagem.campos[0].ajuda || "");
 }
 
 /**
@@ -2869,7 +3354,9 @@ export function filtrarExecucoes(lista, { situacao = null, dia = null, passo = n
   const p = passo == null || passo === "" ? null : inteiro(passo);
   return (Array.isArray(lista) ? lista : []).filter(x => {
     if (!x) return false;
-    if (situacao && situacao !== "todas" && situacaoExecucao(x) !== situacao) return false;
+    // plano 2000d · DU-066: «envio» = erro no envio pelo WhatsApp (subconjunto de «erro»)
+    if (situacao === "envio") { if (!ehFalhaDeEnvio(x)) return false; }
+    else if (situacao && situacao !== "todas" && situacaoExecucao(x) !== situacao) return false;
     if (dia && diaDaExecucao(x) !== dia) return false;
     if (p != null && inteiro(x.passo ?? x.acao_indice) !== p) return false;
     return true;
@@ -2960,12 +3447,16 @@ export function receitaSugerida(respostas, vertical = "generico") {
   if (r.objetivo === "lembrar") id = r.quem === "equipe" ? ok("lembrete_equipe_consulta") : r.canal === "meta" ? ok("lembrete_consulta") : ok("lembrete_consulta_texto");
   else if (r.objetivo === "pos_venda") id = r.quem === "equipe" ? ok("pos_venda") : (vertical === "odonto" || vertical === "oficina") ? ok("pos_atendimento") : ok("agradecer_indicar");
   else if (r.objetivo === "lead") id = r.quem === "cliente" ? ok("boas_vindas") : ok("lead_anuncio");
+  // plano 2000d · DU-021: cobrar orçamento parado e trazer de volta quem sumiu
+  else if (r.objetivo === "orcamento") id = r.quem === "equipe" ? ok("orcamento") : ok("followup_orcamento");
+  else if (r.objetivo === "sumiu") id = r.quem === "equipe" ? ok("reengajar_perdido") : ok("reativar_30_dias");
   return id || (modelosDaVertical(vertical)[0] || {}).id || null;
 }
 
 /** plano 1500c · UCA-058: as perguntas do assistente da primeira automação (texto curto, celular primeiro). */
 export const PERGUNTAS_PRIMEIRA = Object.freeze([
-  { id: "objetivo", pergunta: "O que você quer resolver primeiro?", opcoes: [["lead", "Não perder cliente novo"], ["lembrar", "Lembrar do horário marcado"], ["pos_venda", "Cuidar do pós-venda"]] },
+  { id: "objetivo", pergunta: "O que você quer resolver primeiro?", opcoes: [["lead", "Não perder cliente novo"], ["lembrar", "Lembrar do horário marcado"], ["pos_venda", "Cuidar do pós-venda"],
+    ["orcamento", "Cobrar orçamento parado"], ["sumiu", "Trazer de volta quem sumiu"]] },   // plano 2000d · DU-021
   { id: "quem", pergunta: "Quem recebe?", opcoes: [["cliente", "O cliente, no WhatsApp"], ["equipe", "A minha equipe, no sistema"]] },
   { id: "canal", pergunta: "Seu WhatsApp é…", opcoes: [["texto", "Conectado por aparelho"], ["meta", "O oficial da Meta"]] },
 ]);
@@ -3061,7 +3552,7 @@ const CAMPOS_ID = { estagio_id: "estagios", funil_id: "funis", etiqueta_id: "eti
 const CAMPOS_ID_COND = { estagio_id: "estagios", funil_id: "funis", etiqueta: "etiquetas", canal_id: "canais", departamento_id: "departamentos", dono_id: "usuarios" };
 const ROTULO_TIPO_ID = { estagios: "a etapa", funis: "o funil", etiquetas: "a etiqueta", canais: "o número", departamentos: "o departamento", usuarios: "a pessoa", templates: "o modelo" };
 
-export function exportarAutomacao(auto, base) {
+export function exportarAutomacao(auto, base, vocab = null) {
   const ix = indexarBase(base);
   const l = limpar(Object.assign({}, auto || {}, { ativo: false }));
   delete l.id;
@@ -3080,14 +3571,16 @@ export function exportarAutomacao(auto, base) {
     if (ehUuid(ac.dono)) ac.dono = ref("usuarios", ac.dono);
     if (ehUuid(ac.para)) ac.para = ref("usuarios", ac.para);
   }
-  return { formato: "orbita-automacao", versao: 1, auto: l };
+  // plano 2000d · DU-060: formato neutro (sem a marca); DU-056: leva a vertical de origem para trocar «consulta» por «visita» na colagem
+  return { formato: FORMATO_AUTOMACAO, versao: 1, auto: l, vertical: voc(vocab).vertical };
 }
 
 /** Importa o que exportarAutomacao gerou (objeto ou texto JSON): {auto, pendencias:[frases]} — nasce desligada; o que não existe aqui fica para escolher. */
-export function importarAutomacao(json, base) {
+export function importarAutomacao(json, base, vocab = null) {
   let src = json;
   if (typeof src === "string") { try { src = JSON.parse(src); } catch { return { auto: null, pendencias: ["o texto colado não é uma automação exportada"] }; } }
-  if (!src || src.formato !== "orbita-automacao" || !src.auto || typeof src.auto !== "object") return { auto: null, pendencias: ["o texto colado não é uma automação exportada"] };
+  // plano 2000d · DU-060: o formato neutro e o antigo
+  if (!src || !FORMATOS_UMA.includes(src.formato) || !src.auto || typeof src.auto !== "object") return { auto: null, pendencias: ["o texto colado não é uma automação exportada"] };
   const b = base || {};
   const listas = { funis: b.funis || [], etiquetas: b.etiquetas || [], usuarios: b.usuarios || [], departamentos: b.departamentos || [], canais: b.canais || [], templates: b.templates || [] };
   const pendencias = [];
@@ -3115,6 +3608,26 @@ export function importarAutomacao(json, base) {
     aplicar(x, [...Object.keys(CAMPOS_ID), "dono", "para"]);
     return x;
   });
+  // plano 2000d · DU-058: gatilho que esta versão não conhece
+  if (!GATILHO[a.gatilho]) { pendencias.push(`o gatilho «${texto(a.gatilho) || "?"}» não existe nesta versão: escolha outro`); a.gatilho = ""; }
+  // plano 2000d · DU-057: campo personalizado que não existe aqui (passo «preencher campo» e condição «Campo: …»)
+  const chaves = new Set([].concat(b.campos || [], b.campos_negocio || []).map(c => c && c.chave).filter(Boolean).concat([CAMPO_SCORE.chave]));
+  for (const ac of a.acoes) if (ac && ac.tipo === "campo_atualizar" && ac.campo && !chaves.has(ac.campo)) { pendencias.push(`o campo «${ac.campo}» não existe aqui: crie em Configurações → Campos ou escolha outro`); delete ac.campo; }
+  a.condicoes = a.condicoes.filter(cd => {
+    const k = cd && typeof cd.campo === "string" && cd.campo.startsWith("contato.") ? cd.campo.slice(8) : null;
+    if (k && !chaves.has(k)) { pendencias.push(`o campo «${k}» da condição não existe aqui: a condição saiu`); return false; }
+    return true;
+  });
+  // plano 2000d · DU-056: colada noutra vertical — «consulta» vira «visita»/«entrega» nos textos (as variáveis não mudam)
+  const de = palavraConsulta(src.vertical || "generico"), para = palavraConsulta(voc(vocab).vertical);
+  if (src.vertical && vocab && de !== para) {
+    const reDe = new RegExp(`${de}(?!})`, "g"), reDeM = new RegExp(`${de.charAt(0).toUpperCase()}${de.slice(1)}(?!})`, "g");
+    const troca = t => texto(t).replace(reDe, para).replace(reDeM, para.charAt(0).toUpperCase() + para.slice(1));
+    let trocou = false;
+    for (const ac of a.acoes) for (const k of ["texto", "titulo", "instrucao"]) if (typeof ac[k] === "string" && ac[k] !== troca(ac[k])) { ac[k] = troca(ac[k]); trocou = true; }
+    if (typeof a.nome === "string" && a.nome !== troca(a.nome)) { a.nome = troca(a.nome); trocou = true; }
+    if (trocou) pendencias.push(`trocamos «${de}» por «${para}» nos textos: confira antes de ligar`);
+  }
   delete a.id;
   a.ativo = false;
   return { auto: a, pendencias };
@@ -3149,4 +3662,290 @@ export function estimativaDiaria(serie, { unidade = "mensagens" } = {}) {
   const pico = Math.max(...l);
   if (!pico) return { media: 0, pico: 0, texto: "" };
   return { media, pico, texto: `cerca de ${media} ${unidade} por dia (pico de ${pico})` };
+}
+
+/* ================================================================== plano 2000d · frente auto (lotes d2 e d3) */
+
+/** plano 2000d · DU-060: o formato neutro do texto copiado (o antigo «orbita-automacao» continua aceito na colagem). */
+export const FORMATO_AUTOMACAO = "automacao-v1";
+export const FORMATO_AUTOMACOES = "automacoes-v1";
+const FORMATOS_UMA = ["automacao-v1", "orbita-automacao"];
+const FORMATOS_VARIAS = ["automacoes-v1", "orbita-automacoes"];
+
+/** plano 2000d · DU-059: várias automações num texto só → {formato, versao, itens:[{auto}]} (cada uma pelos nomes, desligada). */
+export function exportarAutomacoes(itens, base, vocab = null) {
+  return { formato: FORMATO_AUTOMACOES, versao: 1, itens: (Array.isArray(itens) ? itens : []).map(x => ({ auto: exportarAutomacao(x, base, vocab).auto })), vertical: voc(vocab).vertical };
+}
+
+/**
+ * plano 2000d · DU-059: lê o texto colado com UMA ou VÁRIAS automações → [{auto, pendencias}] (vazio quando o texto não serve).
+ * Cada uma passa pelo importarAutomacao (nomes → ids desta empresa, desligada, palavras da vertical).
+ */
+export function importarAutomacoes(json, base, vocab = null) {
+  let src = json;
+  if (typeof src === "string") { try { src = JSON.parse(src); } catch { return []; } }
+  if (!src || typeof src !== "object") return [];
+  if (FORMATOS_VARIAS.includes(src.formato) && Array.isArray(src.itens))
+    return src.itens.slice(0, 50).map(x => importarAutomacao({ formato: FORMATO_AUTOMACAO, versao: 1, auto: x && x.auto, vertical: src.vertical }, base, vocab)).filter(r => r.auto);
+  const r = importarAutomacao(src, base, vocab);
+  return r.auto ? [r] : [];
+}
+
+/** plano 2000d · DU-061: TODAS as outras automações no mesmo gatilho (ligadas e desligadas), com o que fazem — a pessoa vê a ordem. */
+export function outrasNoGatilho(auto, itens, base = null, vocab = null) {
+  const a = auto || {};
+  if (!a.gatilho) return [];
+  return (Array.isArray(itens) ? itens : []).filter(o => o && o.gatilho === a.gatilho && !(a.id != null && o.id === a.id))
+    .map(o => { let f = ""; try { f = descrever(o, base, vocab); } catch { f = ""; } return { id: o.id, nome: texto(o.nome) || "Automação sem nome", ativo: !!o.ativo, frase: cortar(f, 140) }; });
+}
+
+/** plano 2000d · DU-062: a pílula do passo no resultado do teste — ícone + prefixo por estado (não só a cor). */
+export function pilulaEstadoPasso(estado) {
+  return { faria: { icone: "check", texto: "Faria", tom: "ok" }, pularia: { icone: "seta-dir", texto: "Pularia", tom: "neutra" },
+    espera: { icone: "relogio", texto: "Esperaria", tom: "info" }, erro: { icone: "alerta", texto: "Daria erro", tom: "ruim" } }[estado]
+    || { icone: "info", texto: "Faria", tom: "neutra" };
+}
+
+/** plano 2000d · DU-063: telefone no meio do texto vira «(12) 9••••-••30» (para mandar o resultado do teste a quem não é da empresa). */
+export function mascararTelefone(t) {
+  return texto(t).replace(/(\(?\d{2}\)?\s?)(9?\d{4})[-\s]?(\d{2})(\d{2})\b/g, (m, ddd, a, b, c) => `${ddd}${a.charAt(0)}${"•".repeat(Math.max(0, a.length - 1))}-••${c}`);
+}
+/** plano 2000d · DU-063: o resultado do teste em texto simples (nomes só com o primeiro nome, telefones mascarados, os passos). */
+export function textoDoTeste(sim, auto = null) {
+  const s = sim || {};
+  const nl = String.fromCharCode(10);
+  const linhas = [`${texto(auto && auto.nome).trim() || "Automação"} — teste sem enviar nada`, `Quem se encaixa agora: ${nat(s.total)}`];
+  for (const a of (Array.isArray(s.alvos) ? s.alvos : []).slice(0, 25)) {
+    const nome = mascararTelefone(texto(a.titulo).trim().split(/\s+/).slice(0, 1).join(" ") + (/\s/.test(texto(a.titulo).trim()) ? " …" : ""));
+    linhas.push("", `• ${nome}${a.ignorado && a.motivoIgnorado ? ` (${a.motivoIgnorado})` : ""}`);
+    for (const p of a.passos || []) linhas.push(`   ${pilulaEstadoPasso(p.estado).texto}: ${mascararTelefone(p.rotulo)}${p.quando ? ` (${p.quando})` : ""}`);
+  }
+  return linhas.join(nl);
+}
+
+/** plano 2000d · DU-066: a execução falhou no ENVIO (número banido, fora da janela, aparelho desconectado) — e não numa regra. */
+const CODIGOS_ENVIO = /\b(envio_falhou|fora_da_janela|aparelho_desconectado|codewords_sem_aparelho|numero_invalido|sem_whatsapp|bloqueado)\b/;
+export function ehFalhaDeEnvio(x) {
+  if (!x || situacaoExecucao(x) !== "erro") return false;
+  const cod = [x.erro, x.codigo, x.detalhe, x.detalhe && typeof x.detalhe === "object" ? x.detalhe.erro : ""].map(v => (typeof v === "string" ? v : "")).join(" ");
+  return CODIGOS_ENVIO.test(normalizar(cod).replace(/ /g, " "));
+}
+/** plano 2000d · DU-066: a dica para a falha de envio. */
+export const DICA_FALHA_ENVIO = "A mensagem não saiu pelo WhatsApp: confira se o número está conectado, se o contato tem WhatsApp e, no número oficial, se a janela de 24 h estava aberta.";
+
+/** plano 2000d · DU-067: ligada há 7 dias ou mais sem rodar (gatilho diário ou de tempo) — o cartão avisa «Sem rodar há N dias». null quando está normal. */
+export function semRodarHa(item, agora = Date.now()) {
+  const x = item || {};
+  if (!x.ativo || !(x.gatilho === "agendado" || GATILHOS_TEMPO.includes(x.gatilho))) return null;
+  const ref = Date.parse(x.ultima_execucao_em || x.ativado_em || x.atualizado_em || x.criado_em || "");
+  if (!Number.isFinite(ref)) return null;
+  const dias = Math.floor((Number(agora) - ref) / 86400000);
+  return dias >= 7 ? { dias, texto: `Sem rodar há ${dias} dias` } : null;
+}
+
+/** plano 2000d · DU-068: execuções da última semana × a anterior (série de 14 dias, a mais antiga primeiro) → {atual, anterior, pct, texto}. */
+export function tendencia(serie) {
+  const l = (Array.isArray(serie) ? serie : []).map(p => (typeof p === "number" ? p : nat(p && p.total)));
+  if (l.length < 14) return null;
+  const ult = l.slice(-7).reduce((s, n) => s + n, 0), ant = l.slice(-14, -7).reduce((s, n) => s + n, 0);
+  if (!ant && !ult) return { atual: 0, anterior: 0, pct: null, texto: "" };
+  if (!ant) return { atual: ult, anterior: 0, pct: null, texto: `${ult} execuções nesta semana (na anterior, nenhuma)` };
+  const pct = Math.round(((ult - ant) / ant) * 100);
+  return { atual: ult, anterior: ant, pct, texto: pct === 0 ? "O mesmo número de execuções da semana anterior" : `${pct > 0 ? "+" : "−"}${Math.abs(pct)} % de execuções vs. a semana anterior` };
+}
+
+/** plano 2000d · DU-070: a frase da cota esgotada com a data de renovação do servidor (ia.renova_em); sem ela, «dia 1º do próximo mês». */
+export function textoCotaEsgotada(ia) {
+  const r = ia && ia.renova_em ? new Date(ia.renova_em) : null;
+  const quando = r && !isNaN(r) ? `em ${new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit" }).format(r)}` : "no dia 1º do próximo mês";
+  return `A cota de IA deste mês acabou. As receitas prontas e o editor continuam funcionando; a cota volta ${quando} (ou fale com o suporte da plataforma para ampliar).`;
+}
+
+/** plano 2000d · DU-071: o teste da empresa acabou (ou ela está suspensa) — nada sai, mesmo com a automação «Ligada». */
+export function empresaBloqueada(cliente) {
+  const c = cliente || {};
+  const st = normalizar(c.status);
+  if (["suspenso", "suspensa", "cancelado", "bloqueado", "bloqueada", "vencido", "teste_vencido", "inativo"].includes(st)) return true;
+  if (st === "teste" && c.teste_ate && Date.parse(c.teste_ate) < Date.now()) return true;
+  return c.somente_leitura === true;
+}
+/** plano 2000d · DU-071: o estado que o cartão mostra (Ligada / Desligada / Parada (teste terminou)). */
+export function estadoExibido(item, cliente) {
+  if (!item || !item.ativo) return "Desligada";
+  return empresaBloqueada(cliente) ? "Parada (teste terminou)" : "Ligada";
+}
+
+/** plano 2000d · DU-072: feriados nacionais fixos (AAAA ignorado: MM-DD); a empresa pode mandar os dela em base.feriados (AAAA-MM-DD ou MM-DD). */
+export const FERIADOS_FIXOS = Object.freeze(["01-01", "04-21", "05-01", "09-07", "10-12", "11-02", "11-15", "11-20", "12-25"]);
+const _fmtDiaSP = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" });
+export function ehFeriado(t, feriados = FERIADOS_FIXOS) {
+  const d = _fmtDiaSP.format(new Date(t));
+  return (Array.isArray(feriados) ? feriados : []).some(f => texto(f) === d || texto(f) === d.slice(5));
+}
+/** plano 2000d · DU-072: aberto considerando também os feriados (fechado o dia inteiro). */
+export function abertoNoHorarioComFeriados(horario, t, { feriados = FERIADOS_FIXOS } = {}) {
+  if (horario !== null && horario !== undefined && ehFeriado(t, feriados)) return false;
+  return abertoNoHorario(horario, t);
+}
+
+/** plano 2000d · DU-076: «3 selecionadas (1 fora do filtro)». */
+export function textoSelecao(marcadas, visiveis) {
+  const ids = new Set((Array.isArray(visiveis) ? visiveis : []).map(String));
+  const l = [...(marcadas || [])].map(String);
+  const n = l.length, fora = l.filter(id => !ids.has(id)).length;
+  if (!n) return "Nenhuma selecionada";
+  return `${n === 1 ? "1 selecionada" : `${n} selecionadas`}${fora ? ` (${fora} fora do filtro)` : ""}`;
+}
+
+/** plano 2000d · DU-082: objetivo da automação (pela receita de origem; senão pelo gatilho e pelos passos). */
+const OBJETIVO_RECEITA = { lembrete_consulta_texto: "Lembretes", lembrete_consulta: "Lembretes", lembrete_2h: "Lembretes", lembrete_equipe_consulta: "Lembretes", confirmacao_agendamento: "Lembretes",
+  confirmou_sim: "Lembretes", faltou_remarcar: "Lembretes", followup_orcamento: "Vendas", orcamento: "Vendas", orcamento_24h_oficina: "Vendas", lead_anuncio: "Vendas", lead_frio_2d: "Vendas",
+  reativar_30_dias: "Vendas", reengajar_perdido: "Vendas", recompra_30: "Vendas", valor_alto: "Vendas", pos_atendimento: "Relacionamento", agradecer_indicar: "Relacionamento",
+  nps: "Relacionamento", pos_venda: "Relacionamento", retorno_6_meses: "Relacionamento", revisao_6_meses: "Relacionamento", garantia_90: "Relacionamento", aniversario: "Relacionamento" };
+export const OBJETIVOS = Object.freeze(["Lembretes", "Vendas", "Relacionamento", "Equipe"]);
+export function objetivoDe(x) {
+  if (x && x.modelo && OBJETIVO_RECEITA[x.modelo]) return OBJETIVO_RECEITA[x.modelo];
+  const g = x && x.gatilho;
+  if (g === "antes_da_data") return "Lembretes";
+  if (["negocio_criado", "negocio_perdido", "tempo_no_estagio"].includes(g) && enviaMensagem(x)) return "Vendas";
+  if (["negocio_ganho", "apos_data"].includes(g)) return "Relacionamento";
+  return "Equipe";
+}
+/** plano 2000d · DU-082: a lista em grupos por objetivo, na ordem de OBJETIVOS: [{grupo, itens}]. */
+export function agruparPorObjetivo(itens) {
+  const mapa = new Map(OBJETIVOS.map(o => [o, []]));
+  for (const x of Array.isArray(itens) ? itens : []) mapa.get(objetivoDe(x)).push(x);
+  return OBJETIVOS.filter(o => mapa.get(o).length).map(o => ({ grupo: o, itens: mapa.get(o) }));
+}
+
+/** plano 2000d · DU-085: as receitas que a empresa já usa (automação criada a partir dela: auto.modelo) → Map(id da receita → item). */
+export function receitasEmUso(itens) {
+  const m = new Map();
+  for (const x of Array.isArray(itens) ? itens : []) if (x && x.modelo && !m.has(x.modelo)) m.set(x.modelo, x);
+  return m;
+}
+
+/** plano 2000d · DU-086: o kit inicial da vertical — as 3 primeiras receitas em destaque que já valem nesta base (nascem desligadas). */
+export function kitInicial(vertical, base, vocab = null) {
+  const out = [];
+  for (const m of modelosDaVertical(vertical, base)) {
+    if (out.length >= 3) break;
+    if (!m.destaque.includes(vertical)) continue;
+    const a = aplicarModelo(m, base, vocab);
+    if (a && validar(a, { base, ligar: false }).ok) out.push(a);
+  }
+  return out;
+}
+
+/** plano 2000d · DU-087: a automação manda WhatsApp e todos os números estão desconectados → «parado». null quando não se sabe ou está ok. */
+const caido = c => !!c && (normalizar(c.estado) === "desconectado" || normalizar(c.status) === "erro" || c.conectado === false);
+export function estadoEnvio(item, canais) {
+  if (!item || !item.ativo || !enviaMensagem(item)) return null;
+  const cs = Array.isArray(canais) ? canais.filter(Boolean) : [];
+  if (!cs.length || !cs.some(c => "estado" in c || "status" in c || "conectado" in c)) return null;
+  return cs.every(caido) ? "parado" : "ok";
+}
+
+/** plano 2000d · DU-090: estimativa de usos da IA por mês pelo volume do gatilho nos últimos 30 dias (base.volume_30d[gatilho]); null sem o dado. */
+export function estimativaUsosIA(m, base, cota = null) {
+  const g = m && m.auto && m.auto.gatilho;
+  const v = base && base.volume_30d && Number(base.volume_30d[g]);
+  if (!usaIA(m) || !Number.isFinite(v)) return null;
+  return `≈ ${Math.round(v).toLocaleString("pt-BR")} usos da IA por mês${cota && cota.limite != null ? ` de ${nat(cota.limite).toLocaleString("pt-BR")}` : ""}`;
+}
+
+/** plano 2000d · DU-093: os 3 passos mais usados com cada gatilho (topo da paleta «Adicionar passo»). */
+const SUGERIDAS = { antes_da_data: ["enviar_mensagem", "enviar_template", "criar_tarefa"], apos_data: ["enviar_mensagem", "criar_tarefa", "nota"],
+  conversa_nova: ["enviar_mensagem", "atribuir", "etiqueta_adicionar"], mensagem_recebida: ["etiqueta_adicionar", "ia_decidir", "notificar"],
+  conversa_resolvida: ["ia_decidir", "enviar_mensagem", "criar_tarefa"], sem_resposta: ["notificar", "atribuir", "criar_tarefa"],
+  negocio_criado: ["notificar", "criar_tarefa", "enviar_mensagem"], negocio_estagio: ["enviar_mensagem", "criar_tarefa", "notificar"],
+  tempo_no_estagio: ["criar_tarefa", "enviar_mensagem", "notificar"], negocio_ganho: ["enviar_mensagem", "criar_tarefa", "esperar"],
+  negocio_perdido: ["esperar", "enviar_mensagem", "criar_tarefa"], etiqueta_adicionada: ["criar_tarefa", "notificar", "enviar_mensagem"],
+  tarefa_vencida: ["notificar", "criar_tarefa", "nota"], agendado: ["criar_tarefa", "notificar", "enviar_mensagem"] };
+export function acoesSugeridas(gatilho) {
+  return (SUGERIDAS[gatilho] || []).filter(id => ACAO[id] && ACAO[id].disponivel !== false && ACAO[id].menu !== false);
+}
+
+/** plano 2000d · DU-100: o rótulo «Ver execuções» no mesmo período do cartão (30 dias quando o servidor manda). */
+export function rotuloVerExecucoes(item) {
+  const x = item || {};
+  if (x.ok_30d != null && x.erro_30d != null) { const n = nat(x.ok_30d) + nat(x.erro_30d); return n ? `Ver execuções (${n.toLocaleString("pt-BR")} em 30 dias)` : "Ver execuções"; }
+  const n = taxaSucesso(x).total;
+  return n ? `Ver execuções (${n.toLocaleString("pt-BR")})` : "Ver execuções";
+}
+
+/** plano 2000d · DU-104: a condição que barrou a execução (o servidor manda condicao_falhou = índice 0-based) → «Barrada por: …». */
+export function fraseBarrada(x, auto, base) {
+  const i = inteiro(x && x.condicao_falhou);
+  const cd = i != null && auto && Array.isArray(auto.condicoes) ? auto.condicoes[i] : null;
+  const f = cd ? fraseCondicao(cd, indexarBase(base)) : null;
+  if (!f) return "";
+  const era = x && x.valor_encontrado != null && texto(x.valor_encontrado).trim() ? ` (era ${cortar(x.valor_encontrado, 40)})` : "";
+  return `Barrada por: ${f}${era}.`;
+}
+
+/** plano 2000d · DU-106: a oferta do rascunho de uma automação NOVA resume o que ela tem («gatilho X, 3 passos»). */
+export function resumoRascunhoNova(auto, vocab = null) {
+  const a = auto || {};
+  const n = Array.isArray(a.acoes) ? a.acoes.length : 0;
+  const g = GATILHO[a.gatilho] ? rotuloGatilho(a.gatilho, vocab) : "sem gatilho";
+  return `${texto(a.nome).trim() ? `«${texto(a.nome).trim()}»: ` : ""}gatilho «${g}», ${n === 1 ? "1 passo" : `${n} passos`}`;
+}
+
+/** plano 2000d · DU-107: volta ao texto da receita de origem, mantendo id, nome e o ligado/desligado da que está aberta. null sem receita. */
+export function restaurarReceita(auto, base, vocab = null) {
+  const a = auto || {};
+  if (!a.modelo || !MODELOS.some(m => m.id === a.modelo)) return null;
+  const r = aplicarModelo(a.modelo, base, vocab);
+  if (a.id != null) r.id = a.id;
+  if (texto(a.nome).trim()) r.nome = a.nome;
+  r.ativo = !!a.ativo;
+  return r;
+}
+
+/** plano 2000d · DU-317: o nome acessível de cada nó do diagrama («Passo 3: Enviar mensagem, depois de 2 dias»). */
+export function rotuloNoDiagrama(no, tl = null) {
+  if (!no) return "";
+  if (no.tipo === "gatilho") return `Quando: ${no.rotulo}${no.sub ? `, ${no.sub}` : ""}`;
+  if (no.tipo === "condicao") return `Condição ${no.n}: ${no.rotulo}`;
+  if (no.tipo === "mais") return "Adicionar passo";
+  const quando = tl && no.indice != null && tl[no.indice] && tl[no.indice].antes > 0 ? `, depois de ${formatarDuracao(tl[no.indice].antes)}` : "";
+  return no.n ? `Passo ${no.n}: ${no.rotulo}${quando}${no.inalcancavel ? " (nunca roda)" : ""}` : no.rotulo;
+}
+
+/** plano 2000d · DU-355: a descrição do gatilho no vocabulário da vertical («Assim que um paciente escreve…»). */
+export function descricaoGatilho(id, vocab = null) {
+  const g = GATILHO[id];
+  if (!g) return "";
+  const vv = voc(vocab);
+  const c = vv.min("contato");
+  return texto(g.descricao).replace(/\bum contato\b/g, `${vv.um("contato")} ${c}`).replace(/\bcontato\b/g, c);
+}
+
+/** plano 2000d · DU-357: o estado vazio das Automações com um caso concreto do segmento e a receita que resolve. */
+export function textoVazio(vertical) {
+  const v = { odonto: ["Lembre o paciente da consulta no dia anterior.", "lembrete_consulta_texto"], oficina: ["Avise o cliente quando o carro ficar pronto.", "carro_pronto"],
+    loja: ["Avise o cliente quando o pedido sair para entrega.", "pedido_enviado"] }[vertical] || ["Cobre o orçamento parado sem precisar lembrar.", "followup_orcamento"];
+  return { texto: v[0], receita: v[1] };
+}
+
+/**
+ * plano 2000d · DU-416: o mapa dos {{n}} do modelo da Meta para variáveis, pelo texto em volta («Olá, {{1}}» → nome; «em {{2}}» → data;
+ * «às {{3}}» → hora). [{n, trecho, sugestao}] — o editor oferece «Preencher com o sugerido».
+ */
+export function montarParametrosTemplate(corpo) {
+  const t = texto(corpo);
+  const out = [];
+  for (const m of t.matchAll(/\{\{(\d{1,2})\}\}/g)) {
+    const n = Number(m[1]);
+    if (out.some(x => x.n === n)) continue;
+    const antes = normalizar(t.slice(Math.max(0, m.index - 24), m.index));
+    const sug = /(ola|oi|bom dia|boa tarde|caro|cara|prezad[oa]),?\s*$/.test(antes) ? "{primeiro_nome}"
+      : /\b(as|a partir das)\s*$/.test(antes) ? "{hora_consulta}"
+      : /\b(em|dia|para|no dia|data)\s*$/.test(antes) ? "{data_consulta}"
+      : /\b(protocolo|atendimento)\s*$/.test(antes) ? "{protocolo}"
+      : /\b(r\$|valor|total)\s*$/.test(antes) ? "{valor}" : "";
+    out.push({ n, trecho: trechoParametro(t, n), sugestao: sug });
+  }
+  return out.sort((a, b) => a.n - b.n);
 }

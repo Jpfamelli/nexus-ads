@@ -53,9 +53,11 @@ export function atalhosPrevisao(hojeIso) {
   const [a, m, d] = String(hojeIso || "").slice(0, 10).split("-").map(Number);
   if (!a || !m || !d) return [];
   const iso = x => x.toISOString().slice(0, 10);
+  const fimMes = iso(new Date(Date.UTC(a, m, 0)));
   return [
     { id: "15d", rotulo: "Em 15 dias", valor: iso(new Date(Date.UTC(a, m - 1, d + 15))) },
-    { id: "fim_mes", rotulo: "Fim do mês", valor: iso(new Date(Date.UTC(a, m, 0))) },
+    // plano 1500c · RX-020: no último dia do mês «Fim do mês» seria hoje (a previsão já nasceria vencendo) — sai
+    ...(fimMes > String(hojeIso).slice(0, 10) ? [{ id: "fim_mes", rotulo: "Fim do mês", valor: fimMes }] : []),
     { id: "fim_prox", rotulo: "Fim do próximo mês", valor: iso(new Date(Date.UTC(a, m + 1, 0))) },
   ];
 }
@@ -139,9 +141,13 @@ export function tarefaAtrasada(t, agora = Date.now()) {
 
 /** "Ana Maria Souza" → "AS"; "" → "?" */
 export function iniciais(nome) {
-  const p = String(nome || "").trim().split(/\s+/).filter(Boolean);
+  // plano 1500c · RX-056: «Dr. João Silva» → «JS» (pronome de tratamento não vira inicial) e emoji/acento composto não é partido ao meio
+  const todas = String(nome || "").trim().split(/\s+/).filter(Boolean);
+  const semTitulo = todas.filter(x => !/^(dr|dra|sr|sra|srta|prof|profa|dom|dona)\.?$/i.test(x));
+  const p = semTitulo.length ? semTitulo : todas;
   if (!p.length) return "?";
-  return ((p[0][0] || "") + (p.length > 1 ? p[p.length - 1][0] : (p[0][1] || ""))).toUpperCase();
+  const c = s => Array.from(s);
+  return ((c(p[0])[0] || "") + (p.length > 1 ? c(p[p.length - 1])[0] : (c(p[0])[1] || ""))).toUpperCase();
 }
 
 /* ------------------------------------------------------------ telefone */
@@ -523,6 +529,7 @@ export function montarLinhas(linhas, mapa, campos = null) {
 
 /** plano 1500c · RC-046: limite da observação que vai ao servidor (a linha não falha inteira por um texto longo). */
 export const LIMITE_OBS_IMPORTACAO = 2000;
+export const LIMITE_NOME_IMPORTACAO = 160;      // plano 1500c · RX-026: o mesmo maxlength do nome na ficha
 const RE_EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 /**
  * plano 1500c · RC-037/039/040: o telefone da célula sem o ramal e, com vários números na mesma célula («12 99999-0000 / 12 98888-1111»),
@@ -553,6 +560,11 @@ function arrumarLinhaPlanilha(o) {
   const obsExtra = [];
   // plano 1500c · RC-007: «Nome» + «Sobrenome» em colunas separadas viram o nome inteiro
   if (o.sobrenome !== undefined) { o.nome = [o.nome, o.sobrenome].filter(Boolean).join(" "); delete o.sobrenome; }
+  // plano 1500c · RX-026: nome com espaços repetidos/quebra de linha vira uma linha só; mais de 160 caracteres (o limite da ficha) é cortado com aviso
+  if (typeof o.nome === "string") {
+    o.nome = o.nome.replace(/\s+/g, " ").trim();
+    if ([...o.nome].length > LIMITE_NOME_IMPORTACAO) { o.nome = [...o.nome].slice(0, LIMITE_NOME_IMPORTACAO).join("").trimEnd(); avisos.push(`Nome cortado em ${LIMITE_NOME_IMPORTACAO} caracteres`); }
+  }
   if (o.telefone) {
     const t = telefoneDaCelula(o.telefone);
     o.telefone = t.telefone;
@@ -604,7 +616,10 @@ const ORIGEM_POR_TEXTO = Object.freeze({ anuncio: "anuncio", "anuncio pago": "an
 export function origemDaPlanilha(v) {
   const t = String(v ?? "").trim();
   const n = semAcento(t).replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
-  return ORIGEM_POR_TEXTO[n] || t;
+  if (ORIGEM_POR_TEXTO[n]) return ORIGEM_POR_TEXTO[n];
+  // plano 1500c · RX-019: «Indicação da Maria», «Indicação - Dr. João», «WhatsApp (loja)» — o começo já diz a origem
+  const ini = Object.keys(ORIGEM_POR_TEXTO).filter(x => n.startsWith(`${x} `)).sort((a, b) => b.length - a.length)[0];
+  return ini && ORIGEM_POR_TEXTO[ini] !== "importacao" ? ORIGEM_POR_TEXTO[ini] : t;
 }
 
 /** plano 1000b · RB-087: a frase da linha vazia é uma constante (a prévia conta por ela, não por /ignorada/ no texto). */
@@ -657,6 +672,8 @@ export function lerNumero(s) {
   let negativo = false;
   const par = /^\((.*)\)$/.exec(t);
   if (par) { negativo = true; t = par[1]; }
+  // plano 1500c · RX-081: o menos no FIM («1.500,00-», exportação de ERP/contábil) também é negativo
+  else if (/^\d[\d.,]*-$/.test(t)) { negativo = true; t = t.slice(0, -1); }
   // plano 1000 (CR-114): com vírgula E ponto, o separador decimal é o ÚLTIMO dos dois — «1.234,56» (Brasil) e «1,234.56» (planilha em inglês) = 1234,56
   const ultVirgula = t.lastIndexOf(","), ultPonto = t.lastIndexOf(".");
   if (ultVirgula >= 0 && ultPonto >= 0) t = ultVirgula > ultPonto ? t.replace(/\./g, "").replace(",", ".") : t.replace(/,/g, "");
@@ -670,6 +687,37 @@ export function lerNumero(s) {
   return negativo ? -Math.abs(n) : n;
 }
 
+/**
+ * plano 1500c · RX-082: erro de digitação comum no domínio do e-mail («gmail.con», «hotmal.com», «gmial.com») → o e-mail sugerido | null.
+ * Só sugere (aviso que não bloqueia): domínio próprio parecido continua valendo.
+ */
+const DOMINIOS_COMUNS = Object.freeze({ "gmail.com": ["gmail.con", "gmail.co", "gmail.cm", "gmial.com", "gmai.com", "gamil.com", "gnail.com", "gmail.com.br", "gmal.com", "gmeil.com"],
+  "hotmail.com": ["hotmail.con", "hotmal.com", "hotmial.com", "hotmai.com", "homail.com", "hotmail.co", "hotmeil.com"],
+  "outlook.com": ["outlook.con", "outlok.com", "outloo.com", "outlook.co"], "yahoo.com.br": ["yahoo.com.bt", "yaho.com.br", "yahoo.combr"],
+  "icloud.com": ["icloud.con", "iclod.com", "icoud.com"], "uol.com.br": ["uol.com.bt", "uol.combr"], "bol.com.br": ["bol.com.bt", "bol.combr"] });
+export function sugestaoEmail(email) {
+  const m = /^([^@\s]+)@([^@\s]+)$/.exec(String(email ?? "").trim().toLowerCase());
+  if (!m) return null;
+  for (const [certo, erros] of Object.entries(DOMINIOS_COMUNS)) if (erros.includes(m[2])) return `${m[1]}@${certo}`;
+  return null;
+}
+/** plano 1500c · RX-071: a frase do campo de dinheiro da gaveta — texto que não vira número OU valor negativo; vazio = «sem valor» (ok). */
+export function erroDinheiro(s) {
+  if (dinheiroInvalido(s)) return "Valor inválido. Use só números, por exemplo 1.500,00.";
+  const n = lerNumero(String(s ?? "").trim());
+  return n !== null && n < 0 ? "O valor não pode ser negativo." : null;
+}
+/**
+ * plano 1500c · RX-073: o ticket médio do serviço sem olhar maiúscula/acento/espaços («implante » acha «Implante») → número | null.
+ */
+export function ticketDoServico(ticket, servico) {
+  if (!ticket || typeof ticket !== "object" || !servico) return null;
+  const alvo = semAcento(String(servico).replace(/\s+/g, " ").trim());
+  for (const [nome, v] of Object.entries(ticket)) {
+    if (semAcento(String(nome).replace(/\s+/g, " ").trim()) === alvo) { const n = Number(v); return Number.isFinite(n) ? n : null; }
+  }
+  return null;
+}
 /** O texto de um campo de dinheiro tem algo escrito que NÃO vira número («abc»)? Vazio não é inválido: é «sem valor». */
 export function dinheiroInvalido(s) {
   const t = String(s ?? "").trim();
@@ -1452,10 +1500,11 @@ export function filtrar(cards, filtro = {}, { eu } = {}) {
     }
     if (f.dono === "eu") { if (c.dono_id !== eu) return false; }
     else if (f.dono === "sem") { if (c.dono_id) return false; }
-    else if (f.dono) { if (c.dono_id !== f.dono) return false; }
+    // plano 1500c · RX-024: o id do responsável e das etiquetas vem do link/visão salva como texto («7») e do servidor como número (7) — compara como texto
+    else if (f.dono) { if (String(c.dono_id ?? "") !== String(f.dono)) return false; }
     if (ids.length) {
-      const tem = new Set(c.etiquetas || []);
-      const n = ids.filter(i => tem.has(i)).length;
+      const tem = new Set((c.etiquetas || []).map(String));
+      const n = ids.filter(i => tem.has(String(i))).length;
       if (op === "alguma" && n === 0) return false;
       if (op === "todas" && n !== ids.length) return false;
       if (op === "nenhuma" && n > 0) return false;
@@ -1463,7 +1512,7 @@ export function filtrar(cards, filtro = {}, { eu } = {}) {
     // plano 1000b · RB-082: a mesma regra do servidor — veio de anúncio quem tem plataforma (Meta/Google), mesmo com origem «whatsapp»
     if (Array.isArray(f.origem) && f.origem.length && !f.origem.includes(c.origem) && !(c.plataforma && f.origem.includes("anuncio"))) return false;
     if (f.status && f.status !== "todos" && c.status !== f.status) return false;
-    const v = Number(c.valor ?? c.valor_previsto ?? 0);
+    const v = valorCard(c);      // plano 1500c · RX-025: a mesma régua do valor mostrado no cartão (aberto = previsto; ganho = final ?? previsto)
     if (f.valor_min !== undefined && f.valor_min !== null && f.valor_min !== "" && v < Number(f.valor_min)) return false;
     if (f.valor_max !== undefined && f.valor_max !== null && f.valor_max !== "" && v > Number(f.valor_max)) return false;
     return true;
@@ -1607,7 +1656,11 @@ export function textoFiltroCampo(c, campos = []) {
   const rot = def ? def.rotulo : c.chave;
   if (c.op === "vazio") return `${rot}: vazio`;
   if (c.op === "preenchido") return `${rot}: preenchido`;
-  const v = def && def.tipo === "sim_nao" ? (c.valor === "true" ? "sim" : "não") : c.valor;
+  // plano 1500c · RX-023: data no chip em DD/MM/AAAA e moeda em reais («Retorno maior que 05/11/2026», «Orçamento menor que R$ 1.500,00»)
+  const dataBR = x => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(x || "")); return m ? `${m[3]}/${m[2]}/${m[1]}` : x; };
+  const v = def && def.tipo === "sim_nao" ? (c.valor === "true" ? "sim" : "não")
+    : def && def.tipo === "data" ? dataBR(c.valor)
+    : def && def.tipo === "moeda" && Number.isFinite(Number(c.valor)) && c.valor !== "" ? fmtBRL.format(Number(c.valor)).replace(/ /g, " ") : c.valor;
   if (c.op === "igual" && def && def.tipo === "multi") return `${rot} inclui ${v}`;      // plano 1000b · RB-197
   if (c.op === "igual") return `${rot}: ${v}`;
   return `${rot} ${OPS_FILTRO_CAMPO[c.op]} ${v}`;
@@ -1891,7 +1944,9 @@ export function nomesEtiquetasChip(ids, etiquetaDe) {
   return nomes;
 }
 export function textoChipEtiquetas(op, nomes) {
-  const lista = (nomes || []).filter(Boolean).join(", ");
+  // plano 1500c · RX-022: com muitas etiquetas o chip não estoura a linha — «A, B, C e mais 4»
+  const todos = (nomes || []).filter(Boolean);
+  const lista = todos.length > 3 ? `${todos.slice(0, 3).join(", ")} e mais ${todos.length - 3}` : todos.join(", ");
   if (op === "todas") return `Tem todas: ${lista}`;
   if (op === "nenhuma") return `Sem nenhuma de: ${lista}`;
   return `Tem alguma de: ${lista}`;
@@ -1926,7 +1981,8 @@ export function textoSemResultado(filtro) {
   const f = { ...(filtro || {}) };
   const q = typeof f.busca === "string" ? f.busca.trim() : "";
   delete f.busca;
-  return q && filtroVazio(f) ? `Nada encontrado para «${q}».` : "Nada encontrado com esses filtros.";
+  // plano 1500c · RX-067: com busca E filtros, diz as duas coisas («para «ana» com esses filtros») — a pessoa sabe o que tirar
+  return q && filtroVazio(f) ? `Nada encontrado para «${q}».` : q ? `Nada encontrado para «${q}» com esses filtros.` : "Nada encontrado com esses filtros.";
 }
 
 /**
@@ -2181,7 +2237,8 @@ export function somarImportacao(acc, r) {
 
 /** Texto curto do resumo final ("120 criados · 30 atualizados · 5 ignorados · 2 erros"). */
 export function textoResumoImportacao(s) {
-  const p = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
+  // plano 1500c · RX-068: número com ponto de milhar («12.345 criados»), como o resto da tela
+  const p = (n, um, varios) => `${Number(n || 0).toLocaleString("pt-BR")} ${n === 1 ? um : varios}`;
   return [p(s.criados, "criado", "criados"), p(s.atualizados, "atualizado", "atualizados"), p(s.ignorados, "ignorado", "ignorados"),
     p(s.erros.length, "erro", "erros")].join(" · ");
 }
@@ -2424,8 +2481,9 @@ export function marcoProgresso(antes, depois, total) {
 export function contagemColado(texto) {
   const linhas = String(texto || "").split(/\r?\n/).filter(l => l.trim());
   if (!linhas.length) return "";
-  const sep = linhas[0].includes("\t") ? "\t" : linhas[0].includes(";") ? ";" : ",";
-  const cols = linhas[0].split(sep).length;
+  // plano 1500c · RX-049: o mesmo separador da leitura (barra vertical, vírgula com «;» dentro de aspas…) e colunas contadas fora das aspas
+  const sep = linhas[0].includes("\t") ? "\t" : detectarSeparador(texto);
+  const cols = contarFora(linhas[0], sep) + 1;
   const n = Math.max(0, linhas.length - 1);
   return `${n} ${n === 1 ? "linha" : "linhas"} · ${cols} ${cols === 1 ? "coluna" : "colunas"}`;
 }
@@ -2863,6 +2921,15 @@ export function dadosTitular(d, { geradoEm = null, vocab = null, brl = v => `R$ 
 }
 
 /** plano 1500c · RC-320: «dados-titular-ana-souza-2026-10-21.json» — o nome da pessoa (sem acento) ajuda a achar o arquivo; sem nome, o id. */
+/**
+ * plano 1500c · RX-069: nome do CSV baixado na importação — leva a planilha de origem e o dia («erros-clientes-maio-2026-10-25.csv»), então
+ * baixar de duas importações não vira «erros-da-importacao (1).csv» sem saber de qual era.
+ */
+export function nomeArquivoImportacao(prefixo, nomeArquivo, dia) {
+  const base = semAcento(String(nomeArquivo || "").replace(/\.[a-z0-9]{1,5}$/i, "")).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(dia || "")) ? String(dia) : "";
+  return `${[prefixo, base, d].filter(Boolean).join("-")}.csv`;
+}
 export function nomeArquivoTitular(cadastro, dia) {
   const c = cadastro || {};
   const slug = semAcento(c.nome || "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
@@ -2934,6 +3001,14 @@ export function atalhosPrazo(hojeIso, { agora = null, pularFimDeSemana = true } 
   lista.push({ id: "tres", rotulo: tres === 3 ? "Em 3 dias" : `Em 3 dias (${SEMANA[dowDe(tres)].toLowerCase()})`, valor: `${dia(tres)}T09:00` });
   lista.push({ id: "segunda", rotulo: "Próx. segunda", valor: `${dia(ateSegunda)}T09:00` });
   return lista;
+}
+/**
+ * plano 1500c · RX-021: os atalhos para MOSTRAR — no fim de semana «Seg 9h» e «Próx. segunda» (e na quarta/quinta «Em 3 dias (seg)») caem no mesmo
+ * instante: fica só o primeiro (o atalho por id continua igual para o «Adiar»).
+ */
+export function atalhosPrazoUnicos(hojeIso, o = {}) {
+  const vistos = new Set();
+  return atalhosPrazo(hojeIso, o).filter(x => !vistos.has(x.valor) && vistos.add(x.valor));
 }
 /** plano 1500c · RC-027: o atalho pelo id (a posição muda quando «Hoje» some à noite). */
 export function atalhoPrazo(hojeIso, id, o = {}) { return atalhosPrazo(hojeIso, o).find(x => x.id === id) || null; }
@@ -3008,10 +3083,12 @@ export function avisoDoc(v) {
 export function normalizarSite(v) {
   const t = String(v ?? "").trim();
   if (!t) return null;
-  if (/^https?:\/\//i.test(t)) return t;
+  // plano 1500c · RX-079: esquema e domínio em minúsculas («HTTPS://WWW.Exemplo.com.br/Promo» → «https://www.exemplo.com.br/Promo»; o caminho fica como veio)
+  const minus = u => u.replace(/^(https?:\/\/)([^/?#]*)/i, (_, e, host) => `${e.toLowerCase()}${host.toLowerCase()}`);
+  if (/^https?:\/\//i.test(t)) return minus(t);
   // javascript:, mailto: … não viram link. plano 1000b · RB-077: «site.com.br:8080» (ponto ANTES dos dois-pontos) é host com porta, não esquema
   if (/^[a-z][a-z0-9+-]*:/i.test(t)) return null;
-  return `https://${t.replace(/^\/+/, "")}`;
+  return minus(`https://${t.replace(/^\/+/, "")}`);
 }
 /** plano 1000b · RB-105: o endereço só vira link quando parece um site de verdade (host com ponto, sem espaço) — «não tenho» fica texto. */
 export function linkDeSite(v) {

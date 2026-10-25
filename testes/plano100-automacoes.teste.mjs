@@ -435,7 +435,7 @@ test("G4 «Criar com IA»: avisos viram perguntas com chips; responder e «Monta
     const livre = itens[1].querySelector(".au-ia-resp");
     livre.value = "Só em dias úteis"; livre.dispatchEvent(new d.Evento("input"));
     assert.equal(bt.disabled, false);
-    assert.match(textoDe(ctx.alvo.querySelector(".au-ia-perg-nota")), /2 respostas.*cota/);
+    assert.match(textoDe(ctx.alvo.querySelector(".au-ia-perg-nota")), /2 respostas.*uso da IA/);   // plano 2000d · DU-069
     bt.dispatchEvent(new d.Evento("click"));
     await tique(8);
     assert.equal(pedidos.length, 2, "a IA foi chamada de novo");
@@ -810,7 +810,7 @@ test("G5 Admin → cliente: interruptor «Cliente ativo» (só plataforma), avis
     const t = ctxAdmin(ui, { partes: ["clientes", "c2"], rpc });
     await adm.montar(t.ctx); await tique(6);
     assert.match(textoDe(t.alvo.querySelector(".adm-sem-pacote")), /não tem pacote comercial registrado/);
-    assert.match(textoDe(t.alvo.querySelector(".cartao-cab")), /Pausado pela Nexus/);
+    assert.match(textoDe(t.alvo.querySelector(".cartao-cab")), /Pausado pela plataforma/);      // plano 2000d: DU-195 — sem a marca nem para a plataforma
     const sw = t.alvo.querySelector(".adm-ativo input[name=ativo]");
     assert.ok(sw, "a plataforma vê o interruptor");
     assert.equal(sw.checked, false);

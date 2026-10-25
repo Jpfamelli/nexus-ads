@@ -69,20 +69,21 @@ export const MENSAGENS = {
   valor_obrigatorio: "Informe o valor para marcar como ganho.",
   motivo_obrigatorio: "Escolha o motivo da perda.",
   campo_obrigatorio: "Preencha os campos obrigatórios antes de continuar.",
-  estagio_com_negocios: "Essa etapa tem negócios. Escolha para onde eles vão.",
+  estagio_com_negocios: "Essa etapa tem {negocios}. Escolha para onde eles vão.",   // plano 2000d · DU-157: {negocios} pelo vocabulário da vertical
   conversa_resolvida: "Atendimento resolvido. Reabra para responder.",
   ja_existe_aberta: "Já existe um atendimento aberto com esse contato.",
   fora_da_janela: "Mais de 24 h desde a última mensagem do cliente. Envie um modelo aprovado.",
   canal_sem_token: "Este número ainda não tem o token da Meta. Configure em Números de WhatsApp.",
-  codewords_sem_credencial: "Este canal está sem a chave de API reutilizável. Configure CodeWords em Números de WhatsApp.",
-  codewords_sem_aparelho: "Este número ainda não foi pareado no CodeWords, então nada pode ser enviado. Faça o pareamento em Configurações › Números de WhatsApp.",
-  codewords_falhou: "O CodeWords não concluiu o pedido. Tente de novo em instantes.",
-  aparelho_nao_encontrado: "Este número ainda não foi pareado no CodeWords. Use «Parear» em Configurações › Números de WhatsApp e digite o código no celular.",
+  // plano 2000d · DU-156: nada de nome de fornecedor (CodeWords) para o cliente da revenda — o código continua o mesmo
+  codewords_sem_credencial: "Este número está sem a chave de conexão do aparelho. Configure em Configurações › Números de WhatsApp.",
+  codewords_sem_aparelho: "Este número ainda não foi pareado com o celular, então nada pode ser enviado. Faça o pareamento em Configurações › Números de WhatsApp.",
+  codewords_falhou: "A conexão do aparelho não concluiu o pedido. Tente de novo em instantes.",
+  aparelho_nao_encontrado: "Este número ainda não foi pareado com o celular. Use «Parear» em Configurações › Números de WhatsApp e digite o código no celular.",
   numero_diferente: "O aparelho pareado não é o número deste canal. Nada foi enviado; refaça o pareamento em Configurações › Números de WhatsApp.",
-  aparelho_desconectado: "O WhatsApp deste número está desconectado do CodeWords. Termine o pareamento no celular e tente de novo.",
+  aparelho_desconectado: "O WhatsApp deste número está desconectado do aparelho. Termine o pareamento no celular e tente de novo.",
   metodo_invalido: "O servidor não aceitou esse pedido. Atualize a página e tente de novo.",
   erro_interno: "O servidor falhou ao concluir o pedido. Tente de novo em instantes; se continuar, fale com o suporte.",
-  codewords_tipo_nao_suportado: "Este número, conectado pelo CodeWords, não envia esse tipo de mensagem. Modelos aprovados só existem em número da Meta.",
+  codewords_tipo_nao_suportado: "Este número, conectado por aparelho, não envia esse tipo de mensagem. Modelos aprovados só existem em número da Meta.",
   use_testar_codewords: "Confira o estado do aparelho em Configurações → Números de WhatsApp.",
   envio_falhou: "O canal não aceitou a mensagem.",
   template_invalido: "Esse modelo não está aprovado ou faltam parâmetros.",
@@ -90,8 +91,9 @@ export const MENSAGENS = {
   midia_tipo: "Tipo de arquivo não aceito pelo WhatsApp.",
   ia_indisponivel: "A IA não está disponível agora.",
   ia_cota: "A cota de IA do mês acabou. Ela volta no começo do próximo mês; para usar mais agora, fale com o suporte.",
-  sem_chave: "A IA ainda não foi ligada nesta plataforma: falta a chave da Anthropic. Avise a equipe da Nexus para ativar.",
-  ia_desligada: "A IA está desligada nesta plataforma. Avise a equipe da Nexus para ativar.",
+  // plano 2000d · DU-155: frases neutras (sem «Nexus» nem «Anthropic») — o cliente da revenda fala com quem fornece o sistema
+  sem_chave: "A IA ainda não foi ligada nesta conta. Peça a quem fornece o sistema para ativar.",
+  ia_desligada: "A IA está desligada nesta conta. Peça a quem fornece o sistema para ativar.",
   ia_resposta_invalida: "A IA respondeu de um jeito que não deu para usar. Tente descrever com outras palavras.",
   ia_invalida: "A IA respondeu de um jeito que não deu para usar. Tente descrever com outras palavras.",
   descricao_invalida: "Descreva o que você quer automatizar (de 12 a 1.500 caracteres).",
@@ -124,7 +126,7 @@ export const MENSAGENS = {
   antecedencia: "Esse horário está muito em cima da hora. Escolha um horário mais à frente.",
   fora_do_horario: "Esse horário está fora do funcionamento da agenda. Escolha outro horário.",
   passado: "Esse horário já passou. Escolha uma data e hora à frente.",
-  consulta_nao_encontrada: "Não encontramos essa consulta. Ela pode ter sido desmarcada.",
+  consulta_nao_encontrada: "Não encontramos essa {compromisso}. Ela pode ter sido desmarcada.",   // plano 2000d · DU-157: consulta · visita · entrega
   // erros de servidor/rede (M15): o texto técnico (http_503, servico_indisponivel) nunca chega à tela
   servico_indisponivel: "O servidor está fora do ar neste momento. Tentamos de novo sozinhos; se continuar, avise o suporte.",
   http_429: "Muitos pedidos de uma vez. Espere um instante e tente de novo.",
@@ -199,8 +201,36 @@ export function minutosDoHint(hint) {
   return Number.isFinite(n) && n > 0 ? Math.ceil(n) : null;
 }
 
-/** Texto para o usuário a partir de um erro da API (usa .codigo, .hint e .detalhe quando o Apêndice B pede). */
-export function mensagemErro(e) {
+/** plano 2000d · DU-157: o shell informa o vocabulário da vertical (fn() → vocab.js) para {negocios}/{compromisso} das frases. */
+let _vocabMensagens = null;
+export function definirVocabDasMensagens(fn) { _vocabMensagens = typeof fn === "function" ? fn : null; }
+const PALAVRA_PADRAO = { negocio: "negócio", negocios: "negócios", compromisso: "consulta", compromissos: "consultas", contato: "contato", contatos: "contatos" };
+function palavraDoVocab(v, k) {
+  try {
+    if (v && typeof v.min === "function") { const p = v.min(k); if (p) return String(p); }
+    if (v && v[k]) return String(v[k]).toLowerCase();
+  } catch { /* vocab estranho: palavra padrão */ }
+  return PALAVRA_PADRAO[k] || k;
+}
+function comVocab(txt, v) {
+  if (typeof txt !== "string" || txt.indexOf("{") < 0) return txt;
+  let voc = v;
+  if (!voc) { try { voc = _vocabMensagens ? _vocabMensagens() : null; } catch { voc = null; } }
+  return txt.replace(/\{(negocios?|compromissos?|contatos?)\}/g, (_, k) => palavraDoVocab(voc, k));
+}
+/** plano 2000d · DU-155/DU-156: texto que veio do servidor (detalhe) não cita o fornecedor do aparelho nem a IA por nome. */
+export function semFornecedor(txt) {
+  return String(txt ?? "").replace(/\b(?:o|O) CodeWords\b/g, m => (m[0] === "O" ? "A conexão do aparelho" : "a conexão do aparelho"))
+    .replace(/\b(?:no|do|pelo) CodeWords\b/g, "no aparelho").replace(/\bCodeWords\b/g, "aparelho")
+    .replace(/\bAnthropic\b/g, "IA").replace(/(?:a )?equipe da Nexus/g, "quem fornece o sistema");
+}
+
+/** Texto para o usuário a partir de um erro da API (usa .codigo, .hint e .detalhe quando o Apêndice B pede).
+    plano 2000d · DU-157: `vocab` (opcional; sem ele, o do shell) troca {negocios}/{compromisso} pela palavra da vertical. */
+export function mensagemErro(e, vocab = null) {
+  return comVocab(mensagemErroBase(e, vocab), vocab);
+}
+function mensagemErroBase(e, vocab) {
   const c = e && (e.codigo || e.message);
   const hint = e && e.hint != null ? String(e.hint) : "";
   if (e && e.contexto) { const m = mensagemDeContexto(c, e.contexto); if (m) return m; }
@@ -232,7 +262,7 @@ export function mensagemErro(e) {
       if (hint) return `Preencha o campo "${hint}" antes de continuar.`;
       break;
     case "estagio_com_negocios":
-      if (/^\d+$/.test(hint)) return `Essa etapa tem ${hint} negócio${hint === "1" ? "" : "s"}. Escolha para onde ${hint === "1" ? "ele vai" : "eles vão"}.`;
+      if (/^\d+$/.test(hint)) return `Essa etapa tem ${hint} {negocio${hint === "1" ? "" : "s"}}. Escolha para onde ${hint === "1" ? "ele vai" : "eles vão"}.`;   // plano 2000d · DU-157
       break;
     case "envio_falhou": {
       const d = e && (e.detalhe_texto || (typeof e.detalhe === "string" ? e.detalhe : ""));
@@ -241,7 +271,7 @@ export function mensagemErro(e) {
     }
     case "codewords_falhou": {   // o servidor já devolve o motivo em português (não repete o código)
       const d = e && (e.detalhe_texto || (typeof e.detalhe === "string" ? e.detalhe : ""));
-      if (d) return String(d).slice(0, 240);
+      if (d) return semFornecedor(String(d).slice(0, 240));   // plano 2000d · DU-156: o motivo do servidor sem o nome do fornecedor
       break;
     }
     case "automacao_invalida":
@@ -639,6 +669,8 @@ export function criarApi(o) {
   const querCache = (nome, opcoes) => !!(o.cache && opcoes && opcoes.cache && o.cache.cacheavel(nome));
   /** {keepalive: true}: a página está saindo (pagehide, aba oculta); o fetch sai com keepalive, uma tentativa só. */
   const saindo = opcoes => !!(opcoes && opcoes.keepalive === true);
+  /** RC-262 (plano 1500c) · plano 2000d: o AbortSignal de quem chama ({sinal} ou {signal}); outra coisa → null. */
+  const sinalDe = opcoes => { const s = opcoes && (opcoes.sinal || opcoes.signal); return s && typeof s === "object" && "aborted" in s ? s : null; };
 
   /** {req:true} ou p_req já nos parâmetros: a escrita ganha um uuid por INTENÇÃO (o mesmo em todas as repetições) e pode repetir sem duplicar. */
   function prepararReq(params, opcoes) {
@@ -655,7 +687,8 @@ export function criarApi(o) {
     rpc(nome, params = {}, opcoes = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
       const { params: p, req } = prepararReq(params, opcoes);
-      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, ...p }), prazoRpc, { leitura: ehLeitura(nome), req, keepalive: saindo(opcoes), nome });
+      // RC-262 (plano 1500c) · plano 2000d: {sinal} (ou {signal}) de quem chama cancela também uma RPC (a tela fechou, a busca mudou)
+      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, ...p }), prazoRpc, { leitura: ehLeitura(nome), req, keepalive: saindo(opcoes), sinal: sinalDe(opcoes), nome });
       return querCache(nome, opcoes) ? comCache(nome, params, opcoes, executar) : executar();
     },
     /** RPC com p_token e p_cliente (empresa ativa). opcoes: {req:true|uuid}, {cache:true, aoCache} e {keepalive:true}, como em rpc. */
@@ -664,7 +697,7 @@ export function criarApi(o) {
       const { params: p, req } = prepararReq(params, opcoes);
       // a empresa é lida UMA vez: uma repetição (M15) depois de a pessoa trocar de empresa não busca os dados da outra nem os guarda na chave desta
       const cli = o.cliente ? o.cliente() : null;
-      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, p_cliente: cli, ...p }), prazoRpc, { leitura: ehLeitura(nome), req, keepalive: saindo(opcoes), nome });
+      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, p_cliente: cli, ...p }), prazoRpc, { leitura: ehLeitura(nome), req, keepalive: saindo(opcoes), sinal: sinalDe(opcoes), nome });   // RC-262
       return querCache(nome, opcoes) ? comCache(nome, params, opcoes, executar, cli) : executar();
     },
     /** RPC pública (sem token): nx_marca_publica, nx_convite_ver, nx_convite_aceitar, nx_senha_redefinir, nx_entrar. */

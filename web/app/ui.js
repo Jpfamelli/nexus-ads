@@ -228,10 +228,12 @@ function caixaToasts() {
 export const MAX_TOASTS = 3;
 /** plano 1500c · UCC-141: aviso comprido fica mais tempo — piso de 4,5 s (7 s com botão) + ~60 ms por letra além das 60 primeiras (leitura
     lenta de ~200 palavras por minuto), no máximo 10 s. O erro continua com 12 s fixos (AS-211). */
+/** plano 2000d · DU-319: tempo para LER — no mínimo 6 s (8 s com botão: o «Desfazer» precisa de tempo para ser achado) + 1 s a cada 20 caracteres,
+    até 15 s. O hover e o foco continuam pausando. */
 export function duracaoToast(texto, { comBotao = false } = {}) {
-  const base = comBotao ? 7000 : 4500;
-  const extra = Math.max(0, String(texto ?? "").length - 60) * 60;
-  return Math.min(10000, base + extra);
+  const base = comBotao ? 8000 : 6000;
+  const extra = Math.ceil(String(texto ?? "").length / 20) * 1000;
+  return Math.min(15000, base + extra);
 }
 export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, fixo = false, aoFechar = null } = {}) {
   // plano 1000 (AS-296): com a faixa de conexão à vista, o erro «sem internet»/«servidor demorou» de cada tela não vira um toast a mais (o shell decide)
@@ -294,7 +296,16 @@ export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, 
     el.addEventListener("focusout", ev => { if (ev && ev.relatedTarget && el.contains(ev.relatedTarget)) return; foco = false; retomar(); });
   }
   anunciar(String(texto), { urgente: tipo === "erro" });
-  return { fechar: (motivo = "fechado") => fechar(typeof motivo === "string" && motivo ? motivo : "fechado"), el };
+  // RC-054 (plano 1500c) · plano 2000d: o texto do aviso à vista pode mudar («já foi gravado» quando a aba volta) sem abrir outro
+  const atualizarTexto = t => {
+    if (fechado) return false;
+    const p = el.querySelector("p");
+    const no = p && [...p.childNodes].find(n => n.nodeType === 3);
+    if (no) no.nodeValue = String(t); else if (p) p.insertBefore(document.createTextNode(String(t)), p.firstChild);
+    anunciar(String(t));
+    return true;
+  };
+  return { fechar: (motivo = "fechado") => fechar(typeof motivo === "string" && motivo ? motivo : "fechado"), el, atualizarTexto };
 }
 
 /** plano 1500c · UCC-007: o aviso de um erro da API com o caminho dele — erro de plano (teste vencido, módulo desligado, limite) traz e.acao
@@ -599,6 +610,13 @@ export async function confirmar({ titulo = "Confirmar", texto = "", perigo = fal
 
 /** gaveta({titulo, corpo, largura:'m'|'g', aoFechar, acoes:Node, protegerTexto = true}) → {el, corpo, fechar, trocarTitulo, estaSujo, zerar}
     Esc e clique fora com texto digitado pedem confirmação; fechar() (botões, código) fecha direto. */
+/** RC-266 (plano 1500c) · plano 2000d: o gesto que fecha a gaveta no celular — arrastar ≥ 80 px para a direita (gaveta lateral) ou para baixo
+    (folha de baixo), mais no eixo do gesto que no outro. */
+export const GESTO_FECHAR_PX = 80;
+export function gestoFechaGaveta(dx, dy, { folha = false } = {}) {
+  const x = Number(dx) || 0, y = Number(dy) || 0;
+  return folha ? y >= GESTO_FECHAR_PX && y > Math.abs(x) * 1.5 : x >= GESTO_FECHAR_PX && x > Math.abs(y) * 1.5;
+}
 export function gaveta({ titulo = "", corpo, largura = "m", aoFechar, acoes, protegerTexto = true } = {}) {
   const anterior = document.activeElement;
   const idT = novoId("gav-t");
@@ -614,6 +632,7 @@ export function gaveta({ titulo = "", corpo, largura = "m", aoFechar, acoes, pro
     zerar() { prot.zerar(); faixa.el.hidden = true; },
     fechar() {
       if (fechada) return; fechada = true;
+      if (camada) { camada.liberar(); camada = null; }   // RC-266: a entrada do histórico da gaveta sai junto
       dlg.classList.add("saindo");
       setTimeout(() => {
         try { dlg.close(); } catch { /* ok */ }
@@ -645,9 +664,29 @@ export function gaveta({ titulo = "", corpo, largura = "m", aoFechar, acoes, pro
   dlg.addEventListener("cancel", ev => { ev.preventDefault(); tentarFechar(); });
   dlg.addEventListener("mousedown", ev => { if (ev.target === dlg) dlg.dataset.fora = "1"; });
   dlg.addEventListener("click", ev => { if (ev.target === dlg && dlg.dataset.fora === "1") tentarFechar(); delete dlg.dataset.fora; });
+  // RC-266 (plano 1500c) · plano 2000d: no celular, arrastar o cabeçalho para a direita (ou para baixo, na folha) fecha — pela mesma proteção do X
+  let toque0 = null;
+  const cab = dlg.querySelector(".gaveta-cab");
+  cab.addEventListener("touchstart", ev => { const t = ev.touches && ev.touches[0]; toque0 = t ? { x: t.clientX, y: t.clientY } : null; }, { passive: true });
+  cab.addEventListener("touchend", ev => {
+    const t = ev.changedTouches && ev.changedTouches[0];
+    if (!toque0 || !t) return;
+    const folha = typeof matchMedia === "function" && matchMedia("(max-width: 640px)").matches;
+    if (gestoFechaGaveta(t.clientX - toque0.x, t.clientY - toque0.y, { folha })) tentarFechar();
+    toque0 = null;
+  }, { passive: true });
+  // RC-266: o Voltar do Android/navegador fecha a gaveta (com texto digitado, pergunta e recoloca a entrada), não a tela de baixo
+  let camada = null;
+  const abrirCamada = () => camadas.abrir(() => {
+    if (fechada) return;
+    camada = null;
+    if (prot.sujo()) { tentarFechar(); setTimeout(() => { if (!fechada) camada = abrirCamada(); }, 0); }
+    else g.fechar();
+  });
   if (toqueGrosso()) dlg.setAttribute("autofocus", "");
   document.body.appendChild(dlg);
   dlg.showModal();
+  camada = abrirCamada();
   if (toqueGrosso()) focoInicial(dlg, null); else setTimeout(() => focarPrimeiro(corpoEl), 30);
   return g;
 }
@@ -672,6 +711,8 @@ export function menu(ancora, itens) {
   const pop = h("div", { class: "menu-pop", role: "menu", popover: "manual" });
   for (const it of itens.filter(Boolean)) {
     if (it === "-") { pop.appendChild(h("hr", { class: "menu-sep" })); continue; }
+    // CC-139 (plano 1500c) · plano 2000d: { titulo } separa grupos com nome («Atendimento», «Conversa») — não é item: as setas pulam
+    if (typeof it === "object" && it.titulo && !it.rotulo) { pop.appendChild(h("p", { class: "menu-titulo", role: "presentation" }, String(it.titulo))); continue; }
     // plano 1000 · AS-288: item desligado com `motivo` mostra o porquê (linha pequena + nome acessível), em vez de só ficar cinza
     const motivo = it.desabilitado && it.motivo ? String(it.motivo) : "";
     const b = h("button", { type: "button", role: "menuitem", class: ["menu-item", it.perigo && "perigo"], disabled: !!it.desabilitado, tabindex: "-1",
@@ -2347,7 +2388,11 @@ export async function acaoComDesfazer({ texto, aplicar, reverter, firmar, ms = 7
   // aoCriar({firmarAgora}): quem chama pode encerrar o prazo antes (ex.: a gaveta que mostrava o movimento fechou) — firma na hora e o
   // aviso «Desfazer» sai, como quando a página sai (nunca fica um «Desfazer» à vista de algo que já valeu)
   if (typeof aoCriar === "function") {
-    try { aoCriar({ firmarAgora: () => { if (item.fim) return; manterItem(item); if (item.t) try { item.t.fechar(); } catch { /* ok */ } } }); } catch { /* ok */ }
+    try {
+      aoCriar({ firmarAgora: () => { if (item.fim) return; manterItem(item); if (item.t) try { item.t.fechar(); } catch { /* ok */ } },
+        // RC-054 (plano 1500c) · plano 2000d: troca o texto do aviso «Desfazer» à vista
+        atualizarTexto: t => !item.fim && !!(item.t && typeof item.t.atualizarTexto === "function" && item.t.atualizarTexto(t)) });
+    } catch { /* ok */ }
   }
   return fim;
 }

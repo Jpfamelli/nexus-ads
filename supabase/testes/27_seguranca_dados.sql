@@ -52,9 +52,10 @@ begin
 
   -- ---------------------------------------------------------- SV-189 IP
   perform set_config('request.headers', json_build_object('cf-connecting-ip', ip1, 'x-forwarded-for', 'forjado, 10.0.0.1')::text, true);
-  perform pg_temp.ok(public.nx_login_ip() = ip1, 'cf-connecting-ip vale antes do 1º x-forwarded-for (que o cliente forja)');
+  perform pg_temp.ok(public.nx_login_ip() = 'h' || left(public.nx_hash(ip1), 32),   -- plano 1500c: SC-108 as chaves de limite levam o RESUMO do IP (nx_login_ip devolve h + 32 hex), não o IP
+                     'cf-connecting-ip vale antes do 1º x-forwarded-for (que o cliente forja)');
   perform set_config('request.headers', json_build_object('x-forwarded-for', ip2 || ', 10.0.0.1')::text, true);
-  perform pg_temp.ok(public.nx_login_ip() = ip2, 'sem ele, o 1º do x-forwarded-for (como antes)');
+  perform pg_temp.ok(public.nx_login_ip() = 'h' || left(public.nx_hash(ip2), 32), 'sem ele, o 1º do x-forwarded-for (como antes)');
   perform set_config('request.headers', '', true);
 
   -- ---------------------------------------------------------- SV-127 cliente pausado

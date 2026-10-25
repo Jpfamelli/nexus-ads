@@ -97,9 +97,11 @@ export const DDD_CANAL = /^(1[1-9]|2[12478]|3[1-578]|4[1-9]|5[13-5]|6[1-9]|7[13-
  * → {ok, numero: "+55 12 99999-9999" | "+351…", erro}
  */
 export function normalizarNumeroCanal(v) {
-  const bruto = String(v ?? "").trim();
+  // plano 1500c · CX-045: «00 55 12…» (prefixo internacional discado) vale como «+»; «012 99999-9999» (zero de tronco) perde o zero
+  const bruto = String(v ?? "").trim().replace(/^00(?=\s*[1-9])/, "+");
   let d = bruto.replace(/\D/g, "");
   const comMais = bruto.startsWith("+");
+  if (!comMais && d[0] === "0" && d[1] !== "0" && (d.length === 11 || d.length === 12)) d = d.slice(1);
   const ERRO = "Informe o número com DDI e DDD, ex.: +55 12 99999-9999";
   const ddd = x => DDD_CANAL.test(x);   // plano 1000b · CB-100: só DDD que existe (20, 23, 26… recusados), como o erroTelefone da central
   if (!comMais && (d.length === 10 || d.length === 11)) d = `55${d}`;
@@ -182,6 +184,8 @@ export function qualidadeMeta(q) {
     YELLOW: ["Atenção", "aten", "Muitos clientes bloquearam ou denunciaram mensagens recentes. Mande só para quem pediu e responda rápido, ou o limite de envios cai."],
     RED: ["Baixa", "ruim", "A Meta está prestes a limitar este número: bloqueios e denúncias demais. Pause campanhas e envie só respostas a quem escreveu."],
   }[k];
+  // plano 1500c · CX-046: número novo ainda sem nota da Meta («UNKNOWN»/«NA») aparecia como «Unknown»
+  if (/^(UNKNOWN|NA|N\/A|NONE)$/.test(k)) return { rotulo: "Sem avaliação ainda", tom: "neutra", explicacao: "A Meta só dá a nota depois que o número manda mensagens por alguns dias." };
   if (!t) return k ? { rotulo: k.charAt(0) + k.slice(1).toLowerCase(), tom: "neutra", explicacao: "Situação informada pela Meta." } : null;
   return { rotulo: t[0], tom: t[1], explicacao: t[2] };
 }
@@ -1303,13 +1307,15 @@ export function exportarRespostas(respostas) {
 /** plano 1000 · AS-240: lê o arquivo importado → {novas, repetidas (atalhos que já existem), invalidas} ou {erro}. */
 export function lerImportacaoRespostas(texto, existentes = []) {
   let j;
-  try { j = JSON.parse(String(texto || "")); } catch { return { erro: "O arquivo não é um JSON válido." }; }
+  // plano 1500c · CX-043: arquivo salvo pelo Bloco de Notas/Excel começa com a marca BOM (U+FEFF) — antes «não é um JSON válido»
+  try { j = JSON.parse(String(texto || "").replace(/^\ufeff/, "")); } catch { return { erro: "O arquivo não é um JSON válido." }; }
   const lista = Array.isArray(j) ? j : j && Array.isArray(j.respostas) ? j.respostas : null;
   if (!lista) return { erro: "O arquivo não tem a lista de respostas exportada pelo Órbita." };
   const novas = [], repetidas = [], vistos = new Set();
   let invalidas = 0;
   for (const r of lista.slice(0, 500)) {
-    const atalho = String((r && r.atalho) || "").replace(/^\/+/, "").trim().toLowerCase();
+    // plano 1500c · CX-044: atalho com acento ou espaço («Olá Maria», vindo de outra ferramenta) vira «ola-maria» em vez de ser descartado
+    const atalho = String((r && r.atalho) || "").replace(/^\/+/, "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, "-");
     const titulo = String((r && r.titulo) || "").trim().slice(0, 60), corpo = String((r && r.corpo) || "").trim();
     if (!/^[a-z0-9_-]{1,30}$/.test(atalho) || !titulo || !corpo || corpo.length > 4096) { invalidas++; continue; }
     if (vistos.has(atalho) || atalhoRepetido(existentes, atalho)) { repetidas.push(atalho); continue; }

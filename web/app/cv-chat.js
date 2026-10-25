@@ -111,6 +111,8 @@ export function criarChat(A) {
     if (recusa) { ui.toast(recusa, { tipo: "info" }); return; }
     const arquivos = ev.dataTransfer.files ? [...ev.dataTransfer.files] : [];
     const f = arquivos[0];
+    // plano 1500c · CX-055: várias FOTOS soltas de uma vez vão juntas (o fluxo de várias fotos, como ao colar); o resto continua um por vez
+    if (arquivos.length > 1 && typeof A.composer.anexarVarios === "function" && arquivos.every(x => L.ehFoto(x))) { A.composer.anexarVarios(arquivos); return; }
     // CA-012: vários arquivos soltos de uma vez — um envio por vez (cada um com a sua prévia); a pessoa sabe que os outros ficaram
     if (arquivos.length > 1) ui.toast(`${arquivos.length} arquivos soltos: enviando o primeiro (${f.name}). Solte os outros depois, um por vez.`, { tipo: "info", ms: 8000 });
     if (f) A.composer.anexar(f);
@@ -767,7 +769,7 @@ export function criarChat(A) {
       h("div", { class: "cv-lb-palco" }, btAnt, fig, btProx), falha,
       // plano 1000b · CB-074: no toque só «Deslize para trocar»; com teclado, só as teclas
       L.aparelhoDeToque() ? h("p", { class: "cv-lb-dica" }, "Deslize para trocar")
-        : h("p", { class: "cv-lb-dica" }, kbd("←"), " ", kbd("→"), " trocam · ", kbd("Esc"), " fecha"));
+        : h("p", { class: "cv-lb-dica" }, kbd("←"), " ", kbd("→"), " trocam · ", kbd("R"), " gira · ", kbd("Z"), " amplia · ", kbd("Esc"), " fecha"));   // CX-026
     let fechado = false, timer = null, camada = null, desligarSwipe = null;
     // plano 1000b · CB-031: no máximo ~20 tentativas (7 s) esperando a URL; depois o aviso com «Tentar de novo» (antes: para sempre)
     const MAX_TENT = 20;
@@ -795,6 +797,7 @@ export function criarChat(A) {
         img.src = r.url; img.alt = it.legenda || it.nome || (it.direcao === "in" ? "Foto recebida" : "Foto enviada");
         btBaixar.href = r.url; btBaixar.setAttribute("download", it.nome || ""); btBaixar.hidden = false;
         dlg.dataset.carregando = "0";
+        preCarregarVizinha(i + 1); preCarregarVizinha(i - 1);
       } else {
         img.removeAttribute("src"); img.alt = r.estado === "erro" ? "Não foi possível abrir esta foto agora." : "Carregando a foto…";
         btBaixar.hidden = true;
@@ -802,6 +805,16 @@ export function criarChat(A) {
         if (r.estado !== "erro" && tentativas < MAX_TENT) { tentativas++; timer = setTimeout(() => { if (!fechado) mostrar(); }, 350); }   // a URL assinada ainda está vindo
         else { dlg.dataset.carregando = "erro"; img.alt = "Não foi possível abrir esta foto agora."; falha.hidden = false; }   // plano 1000b · CB-032: erro também oferece «Tentar de novo»
       }
+    }
+    // plano 1500c · CX-027: a foto vizinha já vem baixando — trocar com a seta não mostra «Carregando…» toda vez (rede do celular)
+    const preCarregadas = new Set();
+    function preCarregarVizinha(k) {
+      const viz = itens[k];
+      if (!viz || preCarregadas.has(k) || typeof globalThis.Image !== "function") return;
+      const rv = resolverUrl(viz);
+      if (!rv.url) return;
+      preCarregadas.add(k);
+      try { const im = new globalThis.Image(); im.decoding = "async"; im.src = rv.url; } catch { /* sem pré-carga */ }
     }
     const ir = d => { const j = i + d; if (j < 0 || j >= itens.length) return; i = j; mostrar(); };
     const fechar = () => {
@@ -830,6 +843,9 @@ export function criarChat(A) {
       else if (ev.key === "Home") { ev.preventDefault(); i = 0; mostrar(); }
       else if (ev.key === "End") { ev.preventDefault(); i = itens.length - 1; mostrar(); }
       else if (ev.key === "Escape") { ev.preventDefault(); fechar(); }
+      // plano 1500c · CX-026: R gira e Z amplia pelo teclado (antes só com o mouse nos botões do topo)
+      else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && (ev.key === "r" || ev.key === "R")) { ev.preventDefault(); btGirar.click(); }
+      else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && (ev.key === "z" || ev.key === "Z" || ev.key === "+")) { ev.preventDefault(); btZoom.click(); }
       else if (ev.key === "Tab") {       // foco preso dentro do visualizador (o <dialog> modal já isola o resto; isto fecha o ciclo nos extremos)
         const focaveis = [...dlg.querySelectorAll("button, a[href]")].filter(x => !x.disabled && !x.hidden);
         if (!focaveis.length) return;
@@ -907,7 +923,17 @@ export function criarChat(A) {
     });
     audio.addEventListener("play", () => { if (audioTocando && audioTocando !== audio) { try { audioTocando.pause(); } catch { /* ok */ } } audioTocando = audio; estado(true); });
     audio.addEventListener("pause", () => { if (audioTocando === audio) audioTocando = null; estado(false); });
-    audio.addEventListener("ended", () => { estado(false); try { audio.currentTime = 0; } catch { /* ok */ } pintar(); });
+    audio.addEventListener("ended", () => { estado(false); try { audio.currentTime = 0; } catch { /* ok */ } pintar(); tocarSeguinte(); });
+    // plano 1500c · CX-028: áudios em sequência (o cliente mandou 3 seguidos) tocam um depois do outro, como no WhatsApp
+    const tocarSeguinte = () => {
+      try {
+        const bolhas = [...trilho.querySelectorAll(".cv-msg")];
+        const minha = caixa.closest ? caixa.closest(".cv-msg") : null;
+        const viz = minha ? bolhas[bolhas.indexOf(minha) + 1] : null;
+        const bt = viz && viz.querySelector(".cv-audio .cv-au-play");
+        if (bt && !bt.disabled) bt.click();
+      } catch { /* sem sequência */ }
+    };
     audio.addEventListener("timeupdate", pintar);
     audio.addEventListener("loadedmetadata", pintar);
     audio.addEventListener("durationchange", pintar);
@@ -1200,12 +1226,17 @@ export function criarChat(A) {
     // plano 1500c · CC-153: rota pelo Waze também (motoboy, cliente que manda a localização para a visita)
     const waze = `https://waze.com/ul?ll=${encodeURIComponent(`${loc.lat},${loc.lng}`)}&navigate=yes`;
     return h("div", { class: "cv-msg-extra" }, h("a", { class: "bt bt-sec bt-p cv-mapa", href: url, target: "_blank", rel: "noopener noreferrer", "aria-label": `Abrir no mapa${loc.nome ? `: ${loc.nome}` : ""}` }, ui.icone("globo"), "Abrir no mapa"),
-      h("a", { class: "bt bt-fant bt-p cv-waze", href: waze, target: "_blank", rel: "noopener noreferrer", "aria-label": `Rota no Waze${loc.nome ? `: ${loc.nome}` : ""}` }, ui.icone("seta-dir"), "Rota no Waze"));
+      h("a", { class: "bt bt-fant bt-p cv-waze", href: waze, target: "_blank", rel: "noopener noreferrer", "aria-label": `Rota no Waze${loc.nome ? `: ${loc.nome}` : ""}` }, ui.icone("seta-dir"), "Rota no Waze"),
+      // plano 1500c · CX-057: copiar o endereço com o link do mapa (para a ficha, a agenda da visita ou mandar ao motoboy)
+      h("button", { type: "button", class: "bt bt-fant bt-p cv-loc-copiar", "aria-label": `Copiar a localização${loc.nome ? `: ${loc.nome}` : ""}`,
+        on: { click: () => ui.copiar(`${loc.nome ? `${loc.nome} — ` : ""}${url}`, { aviso: "Localização copiada." }) } }, ui.icone("copiar"), "Copiar"));
   }
   function blocoContatos(m) {
     const lista = L.contatosDe(m.corpo);
     if (!lista.length) return null;
-    return h("div", { class: "cv-msg-extra" }, lista.slice(0, 3).map(c => h("div", { class: "cv-contato-rec" },
+    // plano 1500c · CX-029: com mais de 3 contatos, diz quantos ficaram de fora (antes sumiam calados)
+    const sobra = lista.length - 3;
+    return h("div", { class: "cv-msg-extra" }, sobra > 0 ? h("p", { class: "sub cv-contato-mais" }, `+${sobra} ${sobra === 1 ? "contato" : "contatos"} no texto da mensagem`) : null, lista.slice(0, 3).map(c => h("div", { class: "cv-contato-rec" },
       h("span", { class: "cv-contato-rec-nome dado-pessoal" }, c.nome || ui.telBR(c.telefone)),   // plano 1500c · CX-001
       h("button", { type: "button", class: "bt bt-fant bt-p", "aria-label": `Copiar o telefone de ${c.nome || "contato"}`, on: { click: () => ui.copiar(L.telefoneInternacional(c.telefone), { aviso: `Telefone copiado: ${L.telefoneInternacional(c.telefone)}` }) } }, ui.icone("copiar"), "Copiar telefone"),
       A.podeEscrever ? h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.novaConversa({ telefone: c.telefone, nome: c.nome }) } }, ui.icone("chat"), "Nova conversa") : null)));
@@ -1274,7 +1305,8 @@ export function criarChat(A) {
     // CA-143: «veja no celular» só vale no CodeWords (aparelho); na Meta não há celular — o texto diz o que fazer
     const texto = m.tipo === "desconhecido" ? textoNaoSuportada(m.corpo) : m.corpo;
     if (texto) {
-      const t = h("div", { class: ["cv-texto", m.tipo === "desconhecido" && "cv-texto-fraco"] }, textoFormatado(texto));
+      // plano 1500c · CX-030: só emoji (até 3) aparece grande, como no WhatsApp
+      const t = h("div", { class: ["cv-texto", m.tipo === "desconhecido" && "cv-texto-fraco", m.tipo === "texto" && L.soEmoji(texto) && "cv-texto-emoji"] }, textoFormatado(texto));
       bolha.appendChild(t);
     }
     // CA-142: localização com «Abrir no mapa»; contato com «Copiar telefone» e «Nova conversa»
@@ -1590,6 +1622,9 @@ export function criarChat(A) {
     if (!alvo) { ui.toast("Não achamos essa mensagem nas mais recentes. Ela pode ser de um atendimento antigo deste contato.", { tipo: "info" }); return; }
     alvo.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     alvo.dataset.destaque = "1";
+    // plano 1500c · CX-071: o foco vai junto para a mensagem citada (teclado e leitor de tela continuam dali, não do botão da citação)
+    if (!alvo.hasAttribute("tabindex")) alvo.setAttribute("tabindex", "-1");
+    try { alvo.focus({ preventScroll: true }); } catch { /* ok */ }
     setTimeout(() => { delete alvo.dataset.destaque; }, 1600);
   }
 

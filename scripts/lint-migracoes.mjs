@@ -17,6 +17,8 @@
      versao        insert into public.nx_versao_banco com o nome do arquivo (sem .sql)
      notify        o último comando é notify pgrst, 'reload schema'
      permissoes    quem cria função tem bloco de permissões: revoke … from public/anon/authenticated ou nx_revogar_authenticated()
+   Por função (plano 1500c · SC-039/040/041): search_path em toda security definer, nenhum grant a authenticated e toda
+   função NOVA citada num revoke/grant do próprio arquivo (ver lintPorFuncao).
    Exceção: comentário «-- lint:permitido <motivo>» na mesma linha ou na linha de cima (regras de linha); para as regras do
    arquivo inteiro (versao, notify, permissoes), «-- lint:permitido <regra>: <motivo>» em qualquer linha. */
 import { readFileSync, readdirSync } from "node:fs";
@@ -79,7 +81,7 @@ const PERMITIDO = /--\s*lint:permitido\s+\S/i;
 const permitidoArquivo = (linhas, regra) => linhas.some(l => new RegExp(`--\\s*lint:permitido\\s+${regra}\\s*:\\s*\\S`, "i").test(l));
 
 /** Confere uma migração. Devolve [{regra, linha, msg, trecho}] (vazio = limpa). `nome` é o nome do arquivo (com ou sem .sql). */
-export function lintMigracao(nome, sql) {
+export function lintMigracao(nome, sql, anteriores = null) {
   const original = String(sql).replace(/\r\n?/g, "\n");
   const linhas = original.split("\n");
   const m = mascarar(original);
@@ -103,7 +105,64 @@ export function lintMigracao(nome, sql) {
   const temPermissoes = /\brevoke\b[\s\S]*?\bfrom\b[^;]*\b(public|anon|authenticated)\b/i.test(limpo) || /\bnx_revogar_authenticated\s*\(/i.test(limpo);
   if (criaFuncao && !temPermissoes && !permitidoArquivo(linhas, "permissoes"))
     viol.push({ regra: "permissoes", linha: 0, msg: "cria função mas não tem bloco de permissões (revoke … from public, anon, authenticated / nx_revogar_authenticated())", trecho: "" });
+  viol.push(...lintPorFuncao(original, m, linhas, anteriores));
   return viol.sort((a, b) => a.linha - b.linha);
+}
+
+/** plano 1500c · SC-039 / SC-040 / SC-041: regras por FUNÇÃO (não só por arquivo).
+     search_path      toda função security definer declara «set search_path» (sem ele, um objeto com o mesmo nome em outro schema
+                      do caminho é chamado com os direitos do dono)
+     grant_authenticated  nenhum grant … to authenticated (o painel usa anon + p_token; authenticated não tem sessão nossa)
+     permissao_funcao função NOVA (nome que nenhuma migração anterior define) aparece num revoke/grant do arquivo — o bloco
+                      genérico do arquivo não basta: função interna esquecida fica executável por anon (o default do Postgres é
+                      execute para public). Só confere com `anteriores` (Set de nomes já definidos); sem ele, pula. */
+function lintPorFuncao(original, m, linhas, anteriores) {
+  const viol = [];
+  const permitido = linha => PERMITIDO.test(linhas[linha - 1] || "") || PERMITIDO.test(linhas[linha - 2] || "");
+  // corpos de função (posições iguais no original e no mascarado: mascarar só troca caracteres por espaços)
+  const corpos = [], defs = [];
+  for (const x of m.matchAll(/\bcreate\s+(?:or\s+replace\s+)?function\s+public\.([a-z_][a-z0-9_]*)\s*\(/gi)) {
+    const d = /\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(m.slice(x.index));
+    if (!d) continue;
+    const iniCorpo = x.index + d.index + d[0].length;
+    const fimCorpo = m.indexOf(d[0], iniCorpo);
+    corpos.push([iniCorpo, fimCorpo < 0 ? m.length : fimCorpo]);
+    const linha = linhaDe(m, x.index);
+    defs.push({ nome: x[1].toLowerCase(), linha, cabecalho: m.slice(x.index, x.index + d.index) });
+  }
+  for (const f of defs) {
+    if (/\bsecurity\s+definer\b/i.test(f.cabecalho) && !/\bset\s+search_path\b/i.test(f.cabecalho) && !permitido(f.linha))
+      viol.push({ regra: "search_path", linha: f.linha, msg: `${f.nome}: security definer sem set search_path = ''`, trecho: (linhas[f.linha - 1] || "").trim().slice(0, 160) });
+  }
+  // fora dos corpos de função e sem comentários (as strings ficam: os blocos de permissão usam execute format('grant …'))
+  let fora = "";
+  let p = 0;
+  for (const [a, b] of corpos) { fora += original.slice(p, a) + original.slice(a, b).replace(/[^\n]/g, " "); p = b; }
+  fora += original.slice(p);
+  fora = fora.replace(/--[^\n]*/g, t => " ".repeat(t.length));
+  for (const x of fora.matchAll(/\bgrant\b[^;]*?\bto\b[^;]*?\bauthenticated\b/gi)) {
+    const linha = linhaDe(fora, x.index);
+    if (!permitido(linha)) viol.push({ regra: "grant_authenticated", linha, msg: "grant para authenticated recusado (anon + service_role)", trecho: (linhas[linha - 1] || "").trim().slice(0, 160) });
+  }
+  if (anteriores && /\b(revoke|grant)\b/i.test(fora)) {
+    const vistos = new Set();
+    for (const f of defs) {
+      if (anteriores.has(f.nome) || vistos.has(f.nome)) continue;
+      vistos.add(f.nome);
+      const citada = [...fora.matchAll(new RegExp(`public\\.${f.nome}\\s*\\(`, "gi"))].some(x => linhaDe(fora, x.index) !== f.linha);
+      if (!citada && !permitido(f.linha))
+        viol.push({ regra: "permissao_funcao", linha: f.linha, msg: `${f.nome}: função nova sem revoke/grant próprio (fica executável por anon)`, trecho: "" });
+    }
+  }
+  return viol;
+}
+
+/** Nomes de função public.* definidos nos arquivos de migração ANTERIORES a `arquivo` (para a regra permissao_funcao). */
+export function funcoesAnteriores(arquivo, dir = MIGRACOES) {
+  const nomes = new Set();
+  for (const f of readdirSync(dir).filter(x => x.endsWith(".sql") && x < basename(arquivo)).sort())
+    for (const d of definicoesFuncoes(readFileSync(join(dir, f), "utf8"))) nomes.add(d.nome);
+  return nomes;
 }
 
 /** Divide a lista de parâmetros nas vírgulas de nível zero (fora de parênteses e de strings). */
@@ -162,7 +221,9 @@ function principal(argv) {
   const alvos = argv.length ? argv.map(a => resolve(a)) : arquivosConferidos(readdirSync(MIGRACOES)).map(f => join(MIGRACOES, f));
   let total = 0;
   for (const arq of alvos) {
-    const v = lintMigracao(basename(arq), readFileSync(arq, "utf8"));
+    // plano 1500c · SC-041: só as migrações do diretório conferem a permissão por função nova (precisam das anteriores)
+    const ant = dirname(arq) === MIGRACOES ? funcoesAnteriores(arq) : null;
+    const v = lintMigracao(basename(arq), readFileSync(arq, "utf8"), ant);
     total += v.length;
     for (const x of v) console.error(`${basename(arq)}${x.linha ? `:${x.linha}` : ""} · ${x.regra} · ${x.msg}${x.trecho ? ` · ${x.trecho}` : ""}`);
     if (!v.length) console.log(`ok  ${basename(arq)}`);

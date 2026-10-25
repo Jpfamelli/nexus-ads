@@ -282,7 +282,8 @@ test("UCA-017 + UCA-018 + UCA-022 + UCA-111 + UCA-112 avisos de estrutura dizem 
   assert.ok(tipos({ gatilho: "agendado", config: { horario: "09:00" }, condicoes: [], acoes: [{ tipo: "enviar_mensagem", texto: "oi" }] }).includes("massa_diaria"));
   assert.deepEqual(L.avisosEstrutura(naEtapa({ acoes: [{ tipo: "resolver_conversa" }] })), ["O passo 1 só funciona quando existe conversa aberta com o contato; sem ela, é pulado."]);
   assert.deepEqual(L.avisosEstrutura(naEtapa({ acoes: [{ tipo: "esperar", minutos: 60 }, { tipo: "esperar", minutos: 60 }, tarefa()] })), ["Os passos 1 e 2 são esperas seguidas (somam 2 h): o tempo delas se soma."]);
-  assert.deepEqual(L.avisosEstrutura(naEtapa({ acoes: [{ tipo: "esperar", minutos: 60, cancelar_se_cliente_responder: false }, { tipo: "enviar_mensagem", texto: "x" }] })),
+  // plano 2000d · DU-032: gatilho de CRM com mensagem também avisa de quem não tem WhatsApp no cadastro (conferido em plano2000d-auto)
+  assert.deepEqual(L.avisosEstrutura(naEtapa({ acoes: [{ tipo: "esperar", minutos: 60, cancelar_se_cliente_responder: false }, { tipo: "enviar_mensagem", texto: "x" }] })).filter(t => !/WhatsApp no cadastro/.test(t)),
     ["A espera do passo 1 não para quando o cliente responde: quem responder ainda vai receber a mensagem do passo 2."]);
 });
 
@@ -416,7 +417,7 @@ test("UCA-100 + UCA-101 dado pessoal (CNPJ, nascimento) e recentes que expiram",
 test("UCA-103 exportar/importar entre clientes pelo nome", () => {
   const a = { nome: "A", gatilho: "etiqueta_adicionada", config: { etiqueta_id: U(31) }, condicoes: [], acoes: [{ tipo: "criar_tarefa", titulo: "t", dono: U(41) }] };
   const x = L.exportarAutomacao(a, BASE);
-  assert.equal(x.formato, "orbita-automacao");
+  assert.equal(x.formato, "automacao-v1");   // plano 2000d · DU-060: formato neutro (o antigo continua aceito na colagem)
   assert.deepEqual(x.auto.config.etiqueta_id, { $tipo: "etiquetas", $nome: "Orçamento" });
   const ok = L.importarAutomacao(JSON.stringify(x), { ...BASE, etiquetas: [{ id: "zz", nome: "orçamento" }] });
   assert.equal(ok.auto.config.etiqueta_id, "zz");
@@ -761,8 +762,9 @@ test("UCA-030 + UCA-031 receitas: mini linha do tempo no vocabulário e o modelo
   const src = ler("web/app/automacoes.js");
   assert.match(src, /miniTempo\(ui, m, vv\)/, "UCA-030");
   assert.match(src, /L\.rotuloAcao\(ac\.tipo, vv \|\| \{\}\)/, "UCA-030");
-  assert.match(src, /cacheReceitas\.has\(m\.id\)/, "UCA-031: cache por receita");
-  assert.equal((src.match(/L\.aplicarModelo\(m, dados\.base, vv\)/g) || []).length, 1, "UCA-031: uma chamada só, dentro do cache");
+  // plano 2000d: DU-419 — o cache é por receita E tom (chaveR = «id|tom»); aplicarModelo recebe o tom
+  assert.match(src, /cacheReceitas\.has\(chaveR\)/, "UCA-031: cache por receita");
+  assert.equal((src.match(/L\.aplicarModelo\(m, dados\.base, vv, \{ tom \}\)/g) || []).length, 1, "UCA-031: uma chamada só, dentro do cache");
 });
 
 test("UCA-074 gráfico de execuções no celular: 7 dias (alvos maiores)", async () => {

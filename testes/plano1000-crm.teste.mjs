@@ -1350,10 +1350,12 @@ test("CR-144/052 tarefa (DOM): atalhos de prazo preenchem o campo; prazo no pass
     const vence = corpo.querySelector('[name="vence_em"]');
     const atalhos = corpo.querySelectorAll(".tf-atalho");
     // plano 1500c: RC-025/026 — os rótulos dependem da hora (sem «Hoje» à noite) e do dia da semana; confere contra a própria lógica, pelo id
-    const esperados = L.atalhosPrazo(ui.hojeSP(), { agora: Date.now() });
+    // plano 1500c: RX-021 — a tela mostra os atalhos SEM repetir o mesmo instante (fim de semana: «Seg 9h» = «Próx. segunda»)
+    const esperados = L.atalhosPrazoUnicos(ui.hojeSP(), { agora: Date.now() });
     assert.deepEqual(atalhos.map(b => b.textContent), esperados.map(a => a.rotulo));
-    atalhos.find(b => b.dataset.valor === L.atalhoPrazo(ui.hojeSP(), "tres", { agora: Date.now() }).valor).clique();
-    assert.equal(vence.value, L.atalhoPrazo(ui.hojeSP(), "tres").valor);
+    const alvo = esperados.find(a => a.id === "tres") || esperados.find(a => a.id === "amanha");
+    atalhos.find(b => b.dataset.valor === alvo.valor).clique();
+    assert.equal(vence.value, alvo.valor);
     vence.value = "2020-01-01T09:00"; vence.dispara("change");
     const av = corpo.querySelector(".tf-prazo .ed-aviso");
     assert.ok(!av.hidden && /^Essa data já passou/.test(av.textContent));

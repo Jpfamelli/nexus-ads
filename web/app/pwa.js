@@ -179,7 +179,10 @@ export function aplicarOuRecarregar(v, recarregar) {
   return p.catch(() => { recarregar(); return false; });
 }
 
-/** Faixa «Nova versão do Órbita pronta · Atualizar» (DOM só com ui.h). */
+/** Faixa «Nova versão do sistema pronta · Atualizar» (DOM só com ui.h).
+    plano 2000d · DU-155: sem o nome do produto (marca ainda não chegou) diz «do sistema» — nunca o nome da plataforma numa revenda.
+    plano 2000d · DU-257: o «o que mudou» fica atrás de «Ver novidades» (aria-expanded) — a faixa não ocupa 4 linhas no celular. */
+let seqFaixaVersao = 0;
 export function criarFaixaVersao(ui, produto, aoAtualizar, { notas = null, aoDepois = null } = {}) {
   const bt = ui.h("button", { type: "button", class: "bt bt-sec" }, "Atualizar");
   bt.addEventListener("click", () => aoAtualizar());
@@ -187,8 +190,21 @@ export function criarFaixaVersao(ui, produto, aoAtualizar, { notas = null, aoDep
   const lista = Array.isArray(notas) ? notas.filter(Boolean).slice(0, 3) : [];
   const depois = typeof aoDepois === "function" ? ui.h("button", { type: "button", class: "bt bt-fant" }, "Depois") : null;
   if (depois) depois.addEventListener("click", () => aoDepois());
-  const txt = [ui.h("p", null, `Nova versão do ${produto || "Órbita"} pronta.`)];
-  if (lista.length) txt.push(ui.h("ul", { class: "faixa-versao-notas" }, ...lista.map(t => ui.h("li", null, t))));
+  const nome = String(produto || "").trim();
+  const txt = [ui.h("p", null, nome ? `Nova versão do ${nome} pronta.` : "Nova versão do sistema pronta.")];
+  let ver = null;
+  if (lista.length) {
+    const id = `faixa-versao-notas-${++seqFaixaVersao}`;
+    const ul = ui.h("ul", { class: "faixa-versao-notas", id, hidden: true }, ...lista.map(t => ui.h("li", null, t)));
+    ver = ui.h("button", { type: "button", class: "link faixa-versao-ver", "aria-expanded": "false", "aria-controls": id }, "Ver novidades");
+    ver.addEventListener("click", () => {
+      const abrir = ul.hidden;
+      ul.hidden = !abrir;
+      ver.setAttribute("aria-expanded", String(abrir));
+      ver.textContent = abrir ? "Esconder novidades" : "Ver novidades";
+    });
+    txt.push(ver, ul);
+  }
   return ui.h("div", { class: "faixa faixa-versao", role: "status" }, ...[ui.icone("info"), ui.h("div", { class: "faixa-versao-txt" }, ...txt), bt, depois].filter(Boolean));
 }
 
@@ -220,7 +236,7 @@ export function iniciar(o) {
   };
   const mostrarFaixa = pronta => {
     if (!o.alvo || faixa) return;
-    faixa = criarFaixaVersao(o.ui, o.produto ? o.produto() : "Órbita", () => {
+    faixa = criarFaixaVersao(o.ui, o.produto ? o.produto() : "", () => {   // plano 2000d · DU-155: sem produto, «do sistema»
       // plano 1500c · UC-037: as notas vão junto para a versão nova (que as mostra uma vez)
       if (pronta && pronta.versao && pronta.notas) { try { guardarNovidades(globalThis.localStorage, pronta.versao, pronta.notas); } catch { /* sem armazenamento */ } }
       aplicarOuRecarregar(v, recarregar);
@@ -370,16 +386,47 @@ export function quandoOcioso(jan, fn, { prazoMs = 5000 } = {}) {
    ============================================================ */
 
 /** O objeto do manifesto (puro). URLs ABSOLUTAS: um manifesto em blob: não resolve caminho relativo. */
-export function construirManifesto({ nome, base, workspace = null, rota = null, fundo, icones = [], lang = "pt-BR" }) {
+// plano 2000d · DU-261/UCC-054: atalhos do ícone (toque longo/botão direito) — só para módulos que a empresa tem; DU-446: share_target
+export function construirManifesto({ nome, base, workspace = null, rota = null, fundo, icones = [], lang = "pt-BR", atalhos = [], compartilhar = false }) {
   const escopo = new URL("./", base).href;
   const inicio = workspace ? `${escopo}?produto=${workspace}${rota ? `#/${rota}` : ""}` : escopo;
-  return {
+  const m = {
     id: workspace ? `${escopo}?produto=${workspace}` : escopo,
     name: nome.name, short_name: nome.short_name, description: nome.description, lang,
     start_url: inicio, scope: escopo, display: "standalone",
     background_color: fundo, theme_color: fundo,
     icons: icones,
+    categories: ["business", "productivity"],
   };
+  const lista = (Array.isArray(atalhos) ? atalhos : []).filter(a => a && a.nome && /^[a-z-]+(?:\/[a-z0-9-]+)?$/.test(String(a.rota || ""))).slice(0, 4);
+  if (lista.length) m.shortcuts = lista.map(a => ({ name: a.nome, short_name: a.curto || a.nome, url: `${escopo}${workspace ? `?produto=${workspace}` : ""}#/${a.rota}` }));
+  if (compartilhar) m.share_target = { action: `${escopo}?compartilhar=1`, method: "GET", params: { title: "titulo", text: "texto", url: "link" } };
+  return m;
+}
+/** plano 2000d · DU-261: os atalhos do ícone pelos módulos liberados (Conversas, CRM, Agenda, nessa ordem); `rotulo(mod)` deixa a vertical renomear. */
+export const ATALHOS_ICONE = Object.freeze([{ rota: "conversas", nome: "Conversas" }, { rota: "crm", nome: "CRM" }, { rota: "agenda", nome: "Agenda" }]);
+export function atalhosDoIcone(modulos = [], rotulo = null) {
+  const tem = new Set(Array.isArray(modulos) ? modulos : []);
+  return ATALHOS_ICONE.filter(a => tem.has(a.rota)).map(a => ({ ...a, nome: (typeof rotulo === "function" && rotulo(a.rota)) || a.nome }));
+}
+/** plano 2000d · DU-446: o que o app instalado recebeu de «Compartilhar» (?compartilhar=1&titulo&texto&link) → um texto só (até 2000), ou null. */
+export function textoCompartilhado(busca) {
+  let q;
+  try { q = new URLSearchParams(String(busca || "")); } catch { return null; }
+  if (q.get("compartilhar") !== "1") return null;
+  const partes = [q.get("titulo"), q.get("texto"), q.get("link")].map(s => String(s || "").trim()).filter(Boolean);
+  const unico = [...new Set(partes)].join("\n").slice(0, 2000);
+  return unico || null;
+}
+/** plano 2000d · DU-408: o app instalado reabre na última tela principal (não sempre no Início). Só ao abrir (hash vazio/#/ /#/inicio),
+    só instalado e só rota principal conhecida («#/crm», «#/agenda»…), nunca login/convite. */
+export const CHAVE_ULTIMA_ROTA = "nx-ultima-rota";
+export function rotaAoAbrirInstalado({ instalado = false, hash = "", ultima = null, ligado = true } = {}) {
+  if (!instalado || !ligado) return null;
+  if (!["", "#", "#/", "#/inicio"].includes(String(hash || ""))) return null;
+  const u = String(ultima || "");
+  if (!/^#\/[a-z-]{2,20}$/.test(u) || /^#\/(inicio|login|entrar|convite|senha|trocar|testar|sair)$/.test(u)) return null;
+  return u;
 }
 
 /** Ícones estáticos (PNG empacotados) em URL absoluta: valem quando o cliente não tem logo próprio ou a rasterização falha. */
@@ -481,6 +528,12 @@ export function modoDeInstalacao({ evento = null, janela = globalThis.window, na
   return null;
 }
 export const PASSOS_IOS = Object.freeze(["Toque no botão Compartilhar (o quadrado com a seta para cima).", "Escolha «Adicionar à Tela de Início».", "Confirme em «Adicionar»: o app aparece na tela do aparelho."]);
+/** plano 2000d · DU-258: os mesmos passos com o desenho do botão que a pessoa procura no Safari (ícone do sprite) e onde ele fica. */
+export const PASSOS_IOS_VISUAL = Object.freeze([
+  Object.freeze({ icone: "compartilhar", onde: "Na barra de baixo do Safari (no iPad, em cima)", texto: PASSOS_IOS[0] }),
+  Object.freeze({ icone: "mais", onde: "Role a lista de opções para baixo", texto: PASSOS_IOS[1] }),
+  Object.freeze({ icone: "check", onde: "No canto de cima, à direita", texto: PASSOS_IOS[2] }),
+]);
 
 /** plano 1500c · UCC-131/UCC-132/UCC-135: nome curto do navegador para o diagnóstico («Chrome 141», «Safari 18», «Firefox 140», «Edge 141»,
     «Samsung Internet 28»). Só nome e versão principal: nada que identifique a pessoa. */
@@ -512,9 +565,14 @@ export function guardarNovidades(ls, versao, notas) {
 export function novidadesDaVersao(ls, versaoAtual) {
   try {
     const o = JSON.parse((ls && ls.getItem(CHAVE_NOVIDADES)) || "null");
-    if (!o || o.versao !== String(versaoAtual) || !Array.isArray(o.notas)) return { notas: [], vistas: true };
-    return { notas: o.notas.filter(t => typeof t === "string").slice(0, 3), vistas: !!o.vistas };
-  } catch { return { notas: [], vistas: true }; }
+    if (!o || o.versao !== String(versaoAtual) || !Array.isArray(o.notas)) return { notas: [], vistas: true, abertas: true };
+    // plano 2000d · DU-286: `abertas` — a pessoa abriu a lista (o ponto no menu some); o toast de «Atualizado» só marca `vistas`
+    return { notas: o.notas.filter(t => typeof t === "string").slice(0, 3), vistas: !!o.vistas, abertas: !!o.abertas };
+  } catch { return { notas: [], vistas: true, abertas: true }; }
+}
+/** plano 2000d · DU-286: abriu «Novidades desta versão» → o ponto do menu sai. */
+export function marcarNovidadesAbertas(ls) {
+  try { const o = JSON.parse(ls.getItem(CHAVE_NOVIDADES) || "null"); if (o) { o.vistas = true; o.abertas = true; ls.setItem(CHAVE_NOVIDADES, JSON.stringify(o)); } } catch { /* ok */ }
 }
 export function marcarNovidadesVistas(ls) {
   try { const o = JSON.parse(ls.getItem(CHAVE_NOVIDADES) || "null"); if (o) { o.vistas = true; ls.setItem(CHAVE_NOVIDADES, JSON.stringify(o)); } } catch { /* ok */ }

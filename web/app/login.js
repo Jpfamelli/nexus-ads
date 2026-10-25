@@ -83,7 +83,9 @@ function sequencia(t) {
 }
 /** senhaFraca(senha, {email, nome}) → true quando a senha é fácil de adivinhar: lista curta das mais usadas, sequência ou repetição
     («12345678», «aaaaaaaa», «abcdefgh»), «senha»/«password» seguida só de números, ou que contém o e-mail (antes do @) ou o nome da pessoa. */
-export function senhaFraca(senha, { email = "", nome = "" } = {}) {
+// plano 2000d · DU-219: também recusa a senha que contém o nome da empresa ou do produto («sorriso2026» na Clínica Sorriso)
+const PALAVRAS_GENERICAS = new Set(["clinica", "oficina", "loja", "empresa", "consultorio", "odontologia", "mecanica", "comercio", "servicos"]);
+export function senhaFraca(senha, { email = "", nome = "", empresa = "", produto = "" } = {}) {
   const t = String(senha ?? "").toLowerCase();
   if (!t) return false;
   if (SENHAS_COMUNS.has(t) || sequencia(t)) return true;
@@ -91,8 +93,13 @@ export function senhaFraca(senha, { email = "", nome = "" } = {}) {
   if (/^(\d{2,4})\1+$/.test(t) || /^([a-z]{2,4})\1+$/.test(t)) return true;
   const local = normalizarEmail(email).split("@")[0];
   if (local && local.length >= 4 && t.includes(local)) return true;
-  for (const pedaco of String(nome || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").split(/\s+/)) {
-    if (pedaco.length >= 4 && t.normalize("NFD").replace(/[̀-ͯ]/g, "").includes(pedaco)) return true;
+  const semAcento = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const tSem = semAcento(t);
+  for (const pedaco of semAcento(nome).split(/\s+/)) {
+    if (pedaco.length >= 4 && tSem.includes(pedaco)) return true;
+  }
+  for (const pedaco of semAcento(`${empresa} ${produto}`).split(/[^a-z0-9]+/)) {
+    if (pedaco.length >= 4 && !PALAVRAS_GENERICAS.has(pedaco) && tSem.includes(pedaco)) return true;
   }
   return false;
 }
@@ -114,10 +121,74 @@ export function caminhoProspect(m, linkWhatsApp) {
   const marca = m || {};
   if (marca.teste_aberto === true) return { rotulo: "Ainda não usa? Testar grátis", href: "#/testar", externo: false };
   if (!marca.suporte_wa || typeof linkWhatsApp !== "function") return null;
-  if (marcaPadrao(marca)) return { rotulo: "Ainda não tem acesso? Peça um teste grátis de 14 dias",
-    href: linkWhatsApp("Olá! Quero testar o Órbita na minha empresa por 14 dias.", marca.suporte_wa), externo: true };
+  // plano 2000d · DU-223: sem o nome do produto (a marca da revenda ainda não chegou) o caminho não aparece — nada de «testar o Órbita» errado
+  if (!String(marca.produto || "").trim()) return null;
+  const dias = diasDeTeste(marca);   // plano 2000d · DU-215
+  if (marcaPadrao(marca)) return { rotulo: `Ainda não tem acesso? Peça um teste grátis de ${dias} dias`,
+    href: linkWhatsApp(`Olá! Quero testar o ${String(marca.produto).trim()} na minha empresa por ${dias} dias.`, marca.suporte_wa), externo: true };
   const nome = String(marca.produto).trim().slice(0, 40);
   return { rotulo: `Ainda não usa? Fale com ${nome}`, href: linkWhatsApp(`Olá! Quero conhecer o ${nome}.`, marca.suporte_wa), externo: true };
+}
+
+/** plano 2000d · DU-215: o prazo do teste da revenda (marca.dias_teste, de nx_marca_publica); sem o dado, 14. */
+export function diasDeTeste(m) {
+  const n = Number(m && m.dias_teste);
+  return Number.isInteger(n) && n > 0 && n <= 90 ? n : 14;
+}
+/** plano 2000d · DU-224: o último e-mail que entrou neste aparelho (nunca a senha) — só com «Lembrar neste aparelho» marcado. */
+export const CHAVE_EMAIL_LEMBRADO = "nx-login-email";
+export function lerEmailLembrado(ls, compartilhado = false) {
+  if (compartilhado) return "";
+  try { const v = ls && ls.getItem(CHAVE_EMAIL_LEMBRADO); return v && emailValido(v) ? v : ""; } catch { return ""; }
+}
+export function gravarEmailLembrado(ls, email, lembrar) {
+  try { const e = normalizarEmail(email); if (lembrar && emailValido(e)) ls.setItem(CHAVE_EMAIL_LEMBRADO, e); else ls.removeItem(CHAVE_EMAIL_LEMBRADO); } catch { /* sem storage */ }
+}
+/** plano 2000d · DU-229: «A+» — texto 12 % maior no aparelho (vale no app todo; o antes.js aplica antes de pintar). */
+export const CHAVE_TEXTO_GRANDE = "nx-texto-grande";
+export function alternarTextoGrande(doc = globalThis.document, ls = globalThis.localStorage) {
+  const raiz = doc && doc.documentElement;
+  if (!raiz) return false;
+  const liga = raiz.dataset.texto !== "grande";
+  if (liga) raiz.dataset.texto = "grande"; else delete raiz.dataset.texto;
+  try { if (liga) ls.setItem(CHAVE_TEXTO_GRANDE, "1"); else ls.removeItem(CHAVE_TEXTO_GRANDE); } catch { /* vale até recarregar */ }
+  return liga;
+}
+/** plano 2000d · DU-217: mais tipos de empresa no teste, cada um levado ao modelo mais próximo (com a nota do que foi escolhido). */
+export const TIPOS_EMPRESA_TESTE = Object.freeze([
+  Object.freeze({ valor: "odonto", rotulo: "Clínica odontológica", vertical: "odonto" }),
+  Object.freeze({ valor: "estetica", rotulo: "Estética ou salão de beleza", vertical: "odonto", nota: "Usa o modelo de clínica: agenda com lembrete e confirmação." }),
+  Object.freeze({ valor: "saude", rotulo: "Consultório ou clínica de saúde", vertical: "odonto", nota: "Usa o modelo de clínica: agenda com lembrete e confirmação." }),
+  Object.freeze({ valor: "oficina", rotulo: "Oficina mecânica", vertical: "oficina" }),
+  Object.freeze({ valor: "loja", rotulo: "Loja", vertical: "loja" }),
+  Object.freeze({ valor: "imobiliaria", rotulo: "Imobiliária", vertical: "generico", nota: "Usa o modelo geral, com funil de visita e proposta." }),
+  Object.freeze({ valor: "servicos", rotulo: "Prestação de serviços", vertical: "generico", nota: "Usa o modelo geral de atendimento e vendas." }),
+  Object.freeze({ valor: "generico", rotulo: "Outro tipo de empresa", vertical: "generico" }),
+]);
+export function verticalDoTipo(valor) { const t = TIPOS_EMPRESA_TESTE.find(x => x.valor === valor); return t ? t.vertical : "generico"; }
+/** plano 2000d: a função do servidor ainda não tem o parâmetro novo (PostgREST: PGRST202/203)? Então o pedido é refeito sem os extras. */
+export function funcaoSemAssinatura(e) {
+  if (!e) return false;
+  if (e.funcaoAusente) return true;
+  const code = String((e.resposta && e.resposta.code) || "").toUpperCase();
+  return code === "PGRST202" || code === "PGRST203" || /could not find the function/i.test(String(e.codigo || e.message || ""));
+}
+export async function publicaComExtras(api, nome, base, extras = {}) {
+  const limpos = Object.fromEntries(Object.entries(extras || {}).filter(([, v]) => v !== undefined && v !== null && v !== ""));
+  if (!Object.keys(limpos).length) return api.publica(nome, base);
+  try { return await api.publica(nome, { ...base, ...limpos }); }
+  catch (e) { if (funcaoSemAssinatura(e)) return api.publica(nome, base); throw e; }
+}
+/** plano 2000d · DU-134: segundos de espera antes de «Mandar outro código» (e do «Mandar de novo» do e-mail do teste — DU-216). */
+export const ESPERA_REENVIO_CODIGO_S = 30, ESPERA_REENVIO_EMAIL_S = 60;
+/** plano 2000d · DU-136: o aparelho confiável (o servidor devolve um token ao marcar «Não pedir código por 30 dias»). */
+export const CHAVE_APARELHO = "nx-aparelho-confiavel";
+function lerAparelho() { try { return localStorage.getItem(CHAVE_APARELHO) || ""; } catch { return ""; } }
+function gravarAparelho(t) { try { if (t) localStorage.setItem(CHAVE_APARELHO, String(t).slice(0, 200)); else localStorage.removeItem(CHAVE_APARELHO); } catch { /* ok */ } }
+/** plano 2000d · DU-221: a frase do leitor de tela durante o bloqueio, de minuto em minuto. */
+export function fraseMinutosRestantes(segundos) {
+  const min = Math.max(1, Math.ceil(Number(segundos) / 60));
+  return `Faltam ${min} minuto${min === 1 ? "" : "s"} para tentar de novo.`;
 }
 
 /** Toque (celular/tablet): o foco automático abriria o teclado por cima da marca (AS-203). */
@@ -131,6 +202,8 @@ function focarDepois(ctx, seletor) {
 /** plano 1500c · UCB-041: o rótulo do papel vem do config.js (rotuloPapel, o mesmo do app inteiro); sem ele, o mapa de antes. */
 const PAPEL_LOCAL = { gestor: "gestor", admin: "administrador", supervisor: "supervisor", atendente: "atendente", leitura: "somente leitura" };
 async function rotuloDoPapel(ctx, papel) {
+  // plano 2000d · DU-218: o rótulo vem do rotas.js (já carregado no boot); o config.js (171 KB) só se o shell não mandou
+  if (ctx.rotas && typeof ctx.rotas.rotuloPapel === "function") return ctx.rotas.rotuloPapel(papel, { minusculo: true });
   try {
     const cfg = await import(`./config.js?v=${encodeURIComponent(ctx.versao || "dev")}`);
     if (cfg && typeof cfg.rotuloPapel === "function") return cfg.rotuloPapel(papel, { minusculo: true });
@@ -240,11 +313,15 @@ function telaEntrar(ctx) {
   const botao = h("button", { type: "submit", class: "bt bt-prim bt-g bt-bloco bt-carrega" }, rotuloBt);
   // plano 1000 (AS-185): «Lembrar neste aparelho» desmarcado = aparelho compartilhado — as respostas guardadas (contatos, telefones) ficam só na
   // memória da aba, nunca no disco do aparelho
+  // plano 2000d · DU-225: diz também que a conta sai sozinha depois de 2 h sem uso
   const lembrar = typeof ctx.aparelhoCompartilhado === "function"
     ? ui.campo({ rotulo: "Lembrar neste aparelho", nome: "lembrar", tipo: "checkbox", valor: !ctx.aparelhoCompartilhado(),
-      ajuda: "Desmarque em computador compartilhado: os dados da tela não ficam guardados aqui." }) : null;
+      ajuda: "Desmarque em computador compartilhado: os dados da tela não ficam guardados aqui e a conta sai sozinha depois de 2 h sem uso." }) : null;
+  // plano 2000d · DU-224: o último e-mail que entrou aqui já vem preenchido (aparelho compartilhado não guarda)
+  let lsLocal = null; try { lsLocal = typeof localStorage !== "undefined" ? localStorage : null; } catch { lsLocal = null; }
+  const emailLembrado = lerEmailLembrado(lsLocal, typeof ctx.aparelhoCompartilhado === "function" ? !!ctx.aparelhoCompartilhado() : false);
   const form = h("form", { class: "entrar-form", novalidate: true },
-    ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", autocomplete: "username", obrigatorio: true, inputmode: "email" }),
+    ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", autocomplete: "username", obrigatorio: true, inputmode: "email", valor: emailLembrado }),
     ui.campo({ rotulo: "Senha", nome: "senha", tipo: "senha", autocomplete: "current-password", obrigatorio: true }),
     lembrar,
     erro,
@@ -263,6 +340,8 @@ function telaEntrar(ctx) {
   };
   // bloqueio por tentativas (contrato 10): o botão espera o prazo com a contagem visível; o leitor de tela ouve a frase uma vez (a contagem é aria-hidden)
   const contagem = h("span", { class: "entrar-contagem dado", "aria-hidden": "true" });
+  // plano 2000d · DU-221: o leitor de tela ouve quanto falta de minuto em minuto (a contagem por segundo continua escondida dele)
+  const faltaSr = h("span", { class: "sr-only entrar-falta", role: "status", "aria-live": "polite" });
   const bloquearPor = (segundos, frase) => {
     let restam = Math.max(1, Math.round(segundos));
     botao.disabled = true;
@@ -270,11 +349,15 @@ function telaEntrar(ctx) {
     gravarBloqueio(Date.now() + restam * 1000);
     mostrar(erro, frase);
     erro.append(" ", contagem);
+    if (!faltaSr.isConnected) form.appendChild(faltaSr);
+    faltaSr.textContent = fraseMinutosRestantes(restam);
     const pintar = () => { contagem.textContent = `(${formatarContagem(restam)})`; };
     pintar();
     const t = setInterval(() => {
       restam -= 1;
+      if (restam > 0 && restam % 60 === 0) faltaSr.textContent = fraseMinutosRestantes(restam);
       if (restam > 0) { pintar(); return; }
+      faltaSr.textContent = "";
       clearInterval(t); _relogios.delete(t);
       gravarBloqueio(0);
       botao.disabled = false;
@@ -290,35 +373,93 @@ function telaEntrar(ctx) {
   const bloquear = e => bloquearPor(segundosDeBloqueio(e, api.minutosDoHint), api.mensagemErro(e));
 
   /** plano 1500c · UCB-049: conta com verificação em duas etapas — o servidor devolve {precisa_codigo, desafio} e o 2º passo pede o código. */
-  const pedirCodigo = (desafio, opcoesEntrada) => {
+  /* plano 2000d · DU-134 (reenviar com espera), DU-135 (6 números enviam sozinhos), DU-133 (código de recuperação, quando o servidor
+     oferece — `extras.recuperacao`), DU-136 («não pedir neste aparelho por 30 dias», quando o servidor oferece — `extras.lembrar_aparelho`) */
+  const pedirCodigo = (desafio, opcoesEntrada, extras = {}) => {
     const erroC = caixaMsg(ui);
-    const fc = h("form", { class: "entrar-form", novalidate: true },
-      ui.campo({ rotulo: "Código de verificação", nome: "codigo", inputmode: "numeric", autocomplete: "one-time-code", obrigatorio: true, max: 8,
-        ajuda: "O código de 6 números que chegou no seu WhatsApp ou no app autenticador." }),
-      erroC,
+    let modoRecuperacao = false;
+    const campoCodigo = ui.campo({ rotulo: "Código de verificação", nome: "codigo", inputmode: "numeric", autocomplete: "one-time-code", obrigatorio: true, max: 8,
+      ajuda: extras.ajuda || "O código de 6 números que chegou no seu WhatsApp ou no app autenticador." });
+    const lembrarAparelho = extras.lembrar_aparelho === true
+      ? ui.campo({ rotulo: "Não pedir código neste aparelho por 30 dias", nome: "lembrar_aparelho", tipo: "checkbox", valor: false,
+        ajuda: "Só em aparelho seu. Trocar a senha desfaz." }) : null;
+    const okC = h("p", { class: "entrar-ok", role: "status", hidden: true });
+    const fc = h("form", { class: "entrar-form", novalidate: true }, campoCodigo, lembrarAparelho, erroC, okC,
       h("button", { type: "submit", class: "bt bt-prim bt-g bt-bloco" }, "Confirmar e entrar"));
     const voltar = h("a", { class: "link", href: "#/login" }, "Voltar");
     voltar.addEventListener("click", ev => { ev.preventDefault(); telaEntrar(ctx); });
-    fc.addEventListener("submit", async ev2 => {
-      ev2.preventDefault();
-      mostrar(erroC, "");
-      ui.marcarErro(fc, null);
-      const codigo = String(ui.lerForm(fc).codigo || "").replace(/\D/g, "");
-      if (codigo.length < 6) return ui.marcarErro(fc, "codigo", "Digite os 6 números do código.");
+    // DU-134: «Mandar outro código» depois de 30 s, com a contagem no próprio botão
+    const reenviar = h("button", { type: "button", class: "link entrar-reenviar", disabled: true });
+    let espera = ESPERA_REENVIO_CODIGO_S, relogio = null;
+    const pintarReenvio = () => { reenviar.textContent = espera > 0 ? `Mandar outro código em ${espera} s` : "Mandar outro código"; reenviar.disabled = espera > 0; };
+    const contar = () => {
+      espera = ESPERA_REENVIO_CODIGO_S; pintarReenvio();
+      if (relogio) { clearInterval(relogio); _relogios.delete(relogio); }
+      relogio = setInterval(() => { espera -= 1; pintarReenvio(); if (espera <= 0) { clearInterval(relogio); _relogios.delete(relogio); relogio = null; } }, 1000);
+      _relogios.add(relogio);
+    };
+    reenviar.addEventListener("click", async () => {
+      if (espera > 0) return;
+      mostrar(erroC, ""); mostrar(okC, "");
       try {
-        const r2 = await ui.carregando(fc.querySelector("button[type=submit]"), api.publica("nx_entrar_codigo", { p_desafio: desafio, p_codigo: codigo }));
+        await ui.carregando(reenviar, api.publica("nx_entrar_codigo_reenviar", { p_desafio: desafio }));
+        mostrar(okC, "Mandamos um código novo. O anterior deixou de valer.");
+        contar();
+      } catch (e) {
+        if (funcaoSemAssinatura(e)) { reenviar.hidden = true; mostrar(erroC, "Se o código não chegar, volte e entre de novo para receber outro."); return; }
+        mostrar(erroC, api.mensagemErro(e)); contar();
+      }
+    });
+    contar();
+    // DU-133: o código de recuperação (para quem perdeu o celular) — só quando o servidor diz que a conta tem códigos
+    const recuperar = extras.recuperacao === true ? h("button", { type: "button", class: "link" }, "Usar um código de recuperação") : null;
+    if (recuperar) recuperar.addEventListener("click", () => {
+      modoRecuperacao = !modoRecuperacao;
+      const inp = fc.querySelector("input[name=codigo]");
+      const rot = campoCodigo.querySelector("label");
+      if (rot && rot.firstChild) rot.firstChild.textContent = modoRecuperacao ? "Código de recuperação" : "Código de verificação";
+      if (inp) { inp.value = ""; inp.setAttribute("inputmode", modoRecuperacao ? "text" : "numeric"); inp.setAttribute("autocomplete", modoRecuperacao ? "off" : "one-time-code"); inp.setAttribute("maxlength", modoRecuperacao ? "14" : "8"); }
+      recuperar.textContent = modoRecuperacao ? "Usar o código do celular" : "Usar um código de recuperação";
+      reenviar.hidden = modoRecuperacao;
+    });
+    let enviando = false, autoEnviou = false;
+    const enviar = async () => {
+      if (enviando) return;
+      mostrar(erroC, ""); mostrar(okC, "");
+      ui.marcarErro(fc, null);
+      const d = ui.lerForm(fc);
+      const bruto = String(d.codigo || "");
+      const codigo = modoRecuperacao ? bruto.toUpperCase().replace(/[^A-Z0-9]/g, "") : bruto.replace(/\D/g, "");
+      if (!modoRecuperacao && codigo.length < 6) return ui.marcarErro(fc, "codigo", "Digite os 6 números do código.");
+      if (modoRecuperacao && codigo.length < 8) return ui.marcarErro(fc, "codigo", "Digite o código de recuperação inteiro (8 letras e números ou mais).");
+      enviando = true;
+      try {
+        const bt = fc.querySelector("button[type=submit]");
+        const r2 = await ui.carregando(bt, modoRecuperacao
+          ? api.publica("nx_entrar_recuperacao", { p_desafio: desafio, p_codigo: codigo })
+          : publicaComExtras(api, "nx_entrar_codigo", { p_desafio: desafio, p_codigo: codigo }, { p_lembrar: d.lembrar_aparelho === true ? true : null }));
         if (!r2 || !r2.token) throw Object.assign(new Error("codigo_invalido"), { codigo: "codigo_invalido" });
+        if (r2.aparelho) gravarAparelho(r2.aparelho);   // DU-136
         await ctx.aoEntrar(r2.token, opcoesEntrada);
       } catch (e) {
         if (e && (e.codigo === "codigo_invalido" || e.codigo === "credenciais_invalidas")) {
-          ui.marcarErro(fc, "codigo", "Código incorreto ou vencido. Confira e tente de novo.");
+          ui.marcarErro(fc, "codigo", modoRecuperacao ? "Código de recuperação incorreto ou já usado." : "Código incorreto ou vencido. Confira e tente de novo.");
           const c = fc.querySelector("input[name=codigo]"); if (c) c.value = "";
+          autoEnviou = false;
         } else mostrar(erroC, api.mensagemErro(e));
-      }
+      } finally { enviando = false; }
+    };
+    fc.addEventListener("submit", ev2 => { ev2.preventDefault(); enviar(); });
+    // DU-135: os 6 números completos (digitados ou sugeridos pelo celular) enviam sozinhos, uma vez
+    const inpCodigo = fc.querySelector("input[name=codigo]");
+    if (inpCodigo) inpCodigo.addEventListener("input", () => {
+      if (modoRecuperacao || autoEnviou) return;
+      if (String(inpCodigo.value || "").replace(/\D/g, "").length === 6) { autoEnviou = true; enviar(); }
     });
     ui.limpar(cartao);
-    cartao.append(h("h1", { id: "t-entrar", tabindex: "-1" }, "Confirme que é você"),
-      h("p", { class: "sub" }, "Sua conta pede um código de verificação além da senha."), fc, h("div", { class: "entrar-rodape" }, voltar));
+    cartao.append(h("h1", { id: "t-entrar", tabindex: "-1" }, extras.titulo || "Confirme que é você"),
+      h("p", { class: "sub" }, extras.sub || "Sua conta pede um código de verificação além da senha."), fc,
+      h("div", { class: "entrar-rodape" }, voltar, reenviar, recuperar));
     const t = cartao.querySelector("h1"); if (t) try { t.focus({ preventScroll: true }); } catch { t.focus(); }
   };
 
@@ -336,12 +477,19 @@ function telaEntrar(ctx) {
     const bt = form.querySelector("button[type=submit]");
     rotuloBt.textContent = "Entrando…";
     const opcoesEntrada = lembrar ? { compartilhado: d.lembrar === false } : {};
+    gravarEmailLembrado(lsLocal, email, lembrar ? d.lembrar !== false : true);   // plano 2000d · DU-224
     try {
-      const r = await ui.carregando(bt, api.publica("nx_entrar", { p_email: email, p_senha: d.senha }));
-      if (r && r.precisa_codigo && r.desafio) { rotuloBt.textContent = "Entrar"; pedirCodigo(String(r.desafio), opcoesEntrada); return; }   // UCB-049
+      // plano 2000d · DU-136: o aparelho confiável vai junto (servidor sem o parâmetro: o pedido é refeito sem ele)
+      const r = await ui.carregando(bt, publicaComExtras(api, "nx_entrar", { p_email: email, p_senha: d.senha }, { p_aparelho: lerAparelho() || null }));
+      if (r && r.precisa_codigo && r.desafio) {   // UCB-049
+        rotuloBt.textContent = "Entrar";
+        pedirCodigo(String(r.desafio), opcoesEntrada, { recuperacao: r.recuperacao === true, lembrar_aparelho: r.lembrar_aparelho === true });
+        return;
+      }
       if (!r || !r.token) throw Object.assign(new Error("credenciais_invalidas"), { codigo: "credenciais_invalidas" });
       rotuloBt.textContent = "Abrindo…";
-      await ctx.aoEntrar(r.token, { ...opcoesEntrada, ...(r.expira_em ? { expira_em: r.expira_em } : {}) });
+      // plano 2000d · DU-222: o servidor que contar tentativas erradas recentes manda o resumo; o shell avisa depois de entrar
+      await ctx.aoEntrar(r.token, { ...opcoesEntrada, ...(r.expira_em ? { expira_em: r.expira_em } : {}), ...(r.tentativas_recentes ? { tentativas: r.tentativas_recentes } : {}) });
     } catch (e) {
       rotuloBt.textContent = "Entrar";
       const msg = api.mensagemErro(e);
@@ -369,6 +517,28 @@ function telaEntrar(ctx) {
       } catch (e) { mostrar(erro, e && e.codigo === "demo_indisponivel" ? "A demonstração não está disponível agora." : api.mensagemErro(e)); }
     });
   }
+  // plano 2000d · DU-212: «Entrar com código no WhatsApp» (sem senha) — só quando a marca diz que o servidor tem o pedido (entrar_codigo: true).
+  // A resposta é sempre a mesma frase: a tela não revela se o e-mail existe.
+  let porCodigo = null;
+  if (m.entrar_codigo === true) {
+    porCodigo = h("button", { type: "button", class: "bt bt-sec bt-bloco" }, ui.icone("whatsapp"), "Entrar com código no WhatsApp");
+    porCodigo.addEventListener("click", async () => {
+      mostrar(erro, "");
+      ui.marcarErro(form, null);
+      const email = normalizarEmail(ui.lerForm(form).email);
+      if (!emailValido(email)) { ui.marcarErro(form, "email", "Digite o seu e-mail acima para receber o código."); const i = form.querySelector("input[name=email]"); if (i) i.focus(); return; }
+      try {
+        const r = await ui.carregando(porCodigo, api.publica("nx_entrar_codigo_pedir", { p_email: email }));
+        const opcoes = lembrar ? { compartilhado: ui.lerForm(form).lembrar === false } : {};
+        pedirCodigo(String((r && r.desafio) || ""), opcoes, { titulo: "Digite o código", sub: "Se o e-mail tiver um WhatsApp verificado, o código de 6 números chega em instantes.",
+          ajuda: "O código que chegou no seu WhatsApp." });
+      } catch (e) { mostrar(erro, api.mensagemErro(e)); }
+    });
+  }
+  // plano 2000d · DU-229: «A+» aumenta o texto no aparelho (baixa visão), sem depender do zoom do navegador
+  const textoGrande = h("button", { type: "button", class: "link entrar-a-mais", "aria-pressed": String(typeof document !== "undefined" && document.documentElement && document.documentElement.dataset.texto === "grande") },
+    h("span", { "aria-hidden": "true" }, "A+"), h("span", { class: "sr-only" }, "Aumentar o texto"));
+  textoGrande.addEventListener("click", () => { const on = alternarTextoGrande(); textoGrande.setAttribute("aria-pressed", String(on)); });
   const prospect = caminhoProspect(m, ui.linkWhatsApp);   // plano 1500c · UCB-053 + UC-031
   const prospectEl = prospect ? h("p", { class: "entrar-prospect" }, h("a", { class: "link", href: prospect.href,
     ...(prospect.externo ? { target: "_blank", rel: "noopener noreferrer" } : {}) }, prospect.rotulo)) : null;
@@ -378,10 +548,12 @@ function telaEntrar(ctx) {
     prod ? h("p", { class: "entrar-produto" }, ui.icone(prod.icone), h("span", null, h("b", null, prod.titulo), " · ", prod.resumo)) : null,
     h("p", { class: "entrar-kicker selo-caps", "aria-hidden": "true" }, m.produto || "Órbita"),
     h("h1", { id: "t-entrar" }, "Entrar"),
-    h("p", { class: "sub" }, m.login_texto || "Entre com o e-mail e a senha que você recebeu."),
+    // plano 2000d · DU-231: com o teste aberto, quem entra criou a própria senha (ninguém «recebeu» nada)
+    h("p", { class: "sub" }, m.login_texto || (m.teste_aberto === true ? "Entre com seu e-mail e senha." : "Entre com o e-mail e a senha que você recebeu.")),
     form,
+    porCodigo,
     demo,
-    h("div", { class: "entrar-rodape" }, esqueci),
+    h("div", { class: "entrar-rodape" }, esqueci, textoGrande),
     ajuda,
     prospectEl);
   ui.limpar(ctx.alvo);
@@ -571,7 +743,7 @@ function telaSenha(ctx, token) {
     const d = ui.lerForm(form);
     if (!d.senha || d.senha.length < 8) return ui.marcarErro(form, "senha", "A senha precisa ter pelo menos 8 caracteres.");
     if (d.senha !== d.senha2) return ui.marcarErro(form, "senha2", "As duas senhas não são iguais.");
-    if (senhaFraca(d.senha)) return ui.marcarErro(form, "senha", FRASE_SENHA_FRACA);   // plano 1500c · UCB-044
+    if (senhaFraca(d.senha, { produto: m.produto })) return ui.marcarErro(form, "senha", FRASE_SENHA_FRACA);   // plano 1500c · UCB-044 · plano 2000d · DU-219
     const bt = form.querySelector("button[type=submit]");
     try {
       if (!/^[0-9a-f]{64}$/i.test(token)) throw Object.assign(new Error("link_invalido"), { codigo: "link_invalido" });
@@ -634,7 +806,7 @@ function telaTrocar(ctx) {
     // plano 1000b · UB-160: repetir a senha que o administrador criou não protege nada — erro aqui, sem gastar chamada
     if (d.nova === d.atual) return ui.marcarErro(form, "nova", "Use uma senha diferente da que o administrador criou.");
     const conta = ctx.sessao && ctx.sessao.conta;
-    if (senhaFraca(d.nova, { email: conta && conta.email, nome: conta && conta.nome })) return ui.marcarErro(form, "nova", FRASE_SENHA_FRACA);   // plano 1500c · UCB-044
+    if (senhaFraca(d.nova, { email: conta && conta.email, nome: conta && conta.nome, produto: m.produto })) return ui.marcarErro(form, "nova", FRASE_SENHA_FRACA);   // plano 1500c · UCB-044 · plano 2000d · DU-219
     const bt = form.querySelector("button[type=submit]");
     try {
       await ui.carregando(bt, api.rpc("nx_senha_trocar", { p_atual: d.atual, p_nova: d.nova }));
@@ -662,6 +834,11 @@ export const VERTICAIS_TESTE = Object.freeze([
   { valor: "odonto", rotulo: "Clínica odontológica" }, { valor: "oficina", rotulo: "Oficina mecânica" },
   { valor: "loja", rotulo: "Loja" }, { valor: "generico", rotulo: "Outro tipo de empresa" },
 ]);
+/** plano 2000d · DU-214: o texto do aceite com os links da marca (termos_url, privacidade_url); sem link, o texto sozinho. */
+export function partesDoAceite(m) {
+  const url = v => (typeof v === "string" && /^https:\/\//i.test(v.trim()) ? v.trim() : null);
+  return { termos: url(m && m.termos_url), privacidade: url(m && m.privacidade_url) };
+}
 /** Conta de teste de 14 dias pela própria tela — só quando a marca da org liga `teste_aberto` (o servidor tem nx_teste_criar, com limite por
     IP/e-mail e confirmação). Sem isso, o endereço #/testar mostra o caminho de sempre (falar com a revenda) em vez de um formulário que falharia. */
 function telaTestar(ctx) {
@@ -678,49 +855,109 @@ function telaTestar(ctx) {
     return;
   }
   const erro = caixaMsg(ui);
+  const dias = diasDeTeste(m);   // plano 2000d · DU-215: o prazo da revenda, não «14» fixo
+  const aceite = partesDoAceite(m);
+  // plano 2000d · DU-214: aceite obrigatório dos termos e da política de privacidade (LGPD), com os links da marca
+  const caixaAceite = h("div", { class: "campo campo-check campo-aceite", dataset: { campo: "aceite" } },
+    h("label", { for: "t-aceite" }, h("input", { type: "checkbox", id: "t-aceite", name: "aceite", required: true, "aria-describedby": "t-aceite-er" }),
+      h("span", { class: "check-marca", "aria-hidden": "true" }),
+      h("span", { class: "check-txt" }, "Li e aceito os ",
+        aceite.termos ? h("a", { class: "link", href: aceite.termos, target: "_blank", rel: "noopener noreferrer" }, "Termos de uso") : "Termos de uso",
+        " e a ", aceite.privacidade ? h("a", { class: "link", href: aceite.privacidade, target: "_blank", rel: "noopener noreferrer" }, "Política de privacidade") : "Política de privacidade", ".")),
+    h("small", { class: "campo-erro", id: "t-aceite-er", hidden: true }));
+  // plano 2000d · DU-217: o modelo escolhido aparece numa nota quando o tipo usa o de outra vertical
+  const notaTipo = h("p", { class: "entrar-nota nota-tipo", "aria-live": "polite", hidden: true });
+  const campoTipo = ui.campo({ rotulo: "Tipo de empresa", nome: "vertical", tipo: "select", opcoes: TIPOS_EMPRESA_TESTE, valor: "generico" });
+  const selTipo = campoTipo.querySelector("select");
+  if (selTipo) selTipo.addEventListener("change", () => { const t = TIPOS_EMPRESA_TESTE.find(x => x.valor === selTipo.value); notaTipo.textContent = (t && t.nota) || ""; notaTipo.hidden = !(t && t.nota); });
   const form = h("form", { class: "entrar-form", novalidate: true },
     ui.campo({ rotulo: "Nome da empresa", nome: "empresa", obrigatorio: true, max: 80, autocomplete: "organization" }),
-    ui.campo({ rotulo: "Tipo de empresa", nome: "vertical", tipo: "select", opcoes: VERTICAIS_TESTE, valor: "generico" }),
+    campoTipo, notaTipo,
     ui.campo({ rotulo: "Seu nome", nome: "nome", obrigatorio: true, max: 80, autocomplete: "name" }),
     ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", obrigatorio: true, autocomplete: "username", inputmode: "email" }),
-    ui.campo({ rotulo: "Senha", nome: "senha", tipo: "senha", obrigatorio: true, autocomplete: "new-password", ajuda: "Pelo menos 8 caracteres.", validar: "senha" }),
+    // plano 2000d · DU-213: o WhatsApp de quem testa (opcional) — a revenda consegue ajudar na configuração
+    ui.campo({ rotulo: "WhatsApp (para ajudar na configuração)", nome: "whatsapp", tipo: "tel", autocomplete: "tel", validar: "telefone", ajuda: "Opcional. Só usamos para ajudar você a começar." }),
+    // plano 2000d · DU-358: a regra da senha aparece antes do erro
+    ui.campo({ rotulo: "Senha", nome: "senha", tipo: "senha", obrigatorio: true, autocomplete: "new-password", ajuda: "Pelo menos 8 caracteres. Evite o nome da empresa ou o seu.", validar: "senha" }),
     // armadilha para robôs: invisível para pessoas (fora da tela e fora do Tab); preenchido = não envia
     h("div", { class: "sr-only", "aria-hidden": "true" }, h("label", null, "Site", h("input", { name: "site_url", tabindex: "-1", autocomplete: "off" }))),
+    caixaAceite,
     erro,
-    h("button", { type: "submit", class: "bt bt-prim bt-g bt-bloco" }, "Começar o teste de 14 dias"),
-    h("p", { class: "entrar-nota" }, "Sem cartão. Depois de 14 dias você decide se continua; nada é cobrado sozinho."));
+    h("button", { type: "submit", class: "bt bt-prim bt-g bt-bloco" }, `Começar o teste de ${dias} dias`),
+    h("p", { class: "entrar-nota" }, `Sem cartão. Depois de ${dias} dias você decide se continua; nada é cobrado sozinho.`));
+  const marcarAceite = msg => {
+    const er = caixaAceite.querySelector(".campo-erro"), inp = caixaAceite.querySelector("input");
+    er.textContent = msg || ""; er.hidden = !msg;
+    if (msg) { inp.setAttribute("aria-invalid", "true"); caixaAceite.dataset.estado = "erro"; } else { inp.removeAttribute("aria-invalid"); delete caixaAceite.dataset.estado; }
+  };
+  let ultimoEnvio = null;
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     mostrar(erro, "");
     ui.marcarErro(form, null);
+    marcarAceite(null);
     const d = ui.lerForm(form);
     if (d.site_url) return;
     if (!d.empresa || d.empresa.trim().length < 2) return ui.marcarErro(form, "empresa", "Informe o nome da empresa.");
     if (!d.nome || d.nome.trim().length < 2) return ui.marcarErro(form, "nome", "Informe o seu nome.");
     const email = normalizarEmail(d.email);
     if (!emailValido(email)) return ui.marcarErro(form, "email", "Confira o e-mail (exemplo: nome@empresa.com.br).");
+    const tel = String(d.whatsapp || "").replace(/[^\d+]/g, "");
+    if (tel && !(/^\d{10,11}$/.test(tel) || /^\+\d{8,15}$/.test(tel))) return ui.marcarErro(form, "whatsapp", "Informe o WhatsApp com DDD, por exemplo (12) 99830-3030 — ou deixe em branco.");
     if (!d.senha || d.senha.length < 8) return ui.marcarErro(form, "senha", "A senha precisa ter pelo menos 8 caracteres.");
-    if (senhaFraca(d.senha, { email, nome: d.nome })) return ui.marcarErro(form, "senha", FRASE_SENHA_FRACA);
+    if (senhaFraca(d.senha, { email, nome: d.nome, empresa: d.empresa, produto: m.produto })) return ui.marcarErro(form, "senha", FRASE_SENHA_FRACA);
+    if (d.aceite !== true) { marcarAceite("Para criar a conta, aceite os Termos de uso e a Política de privacidade."); const a = caixaAceite.querySelector("input"); if (a) a.focus(); return; }
     const org = ctx.marcaPublica && ctx.marcaPublica.org ? ctx.marcaPublica.org.slug || null : null;
+    const base = { p_org_slug: org, p_empresa: d.empresa.trim(), p_vertical: verticalDoTipo(d.vertical), p_nome: d.nome.trim(), p_email: email, p_senha: d.senha };
+    ultimoEnvio = { d, email };
     try {
-      const r = await ui.carregando(form.querySelector("button[type=submit]"), api.publica("nx_teste_criar",
-        { p_org_slug: org, p_empresa: d.empresa.trim(), p_vertical: d.vertical || "generico", p_nome: d.nome.trim(), p_email: email, p_senha: d.senha }));
+      // servidor sem os parâmetros novos (telefone, aceite, tipo): o pedido é refeito com os de sempre
+      const r = await ui.carregando(form.querySelector("button[type=submit]"), publicaComExtras(api, "nx_teste_criar", base,
+        { p_telefone: tel || null, p_aceite_em: new Date().toISOString(), p_tipo: d.vertical && verticalDoTipo(d.vertical) !== d.vertical ? d.vertical : null }));
       if (r && r.token) { await ctx.aoEntrar(r.token, { cliente_id: r.cliente_id || null, boasVindas: { empresa: d.empresa.trim(), papel: "administrador" } }); return; }
-      // confirmação de e-mail pendente: o servidor não devolve sessão
-      ui.limpar(cartao);
-      cartao.append(h("h1", { id: "t-testar", tabindex: "-1" }, "Confira o seu e-mail"),
-        h("p", { class: "entrar-ok", role: "status" }, `Mandamos um link para ${email}. Abra para ativar o teste.`),
-        h("div", { class: "entrar-form" }, h("a", { class: "bt bt-sec bt-bloco", href: "#/login" }, "Ir para a entrada")));
-      const t = cartao.querySelector("h1"); if (t) t.focus();
+      confiraEmail(email);
     } catch (e) {
       if (e && e.codigo === "email_em_uso") { ui.marcarErro(form, "email", api.mensagemErro(e)); return; }
       mostrar(erro, api.mensagemErro(e));
     }
   });
+  /** plano 2000d · DU-216: «Confira o seu e-mail» com «Mandar de novo» (espera de 60 s) e «Errei o e-mail» (volta ao formulário preenchido). */
+  const confiraEmail = email => {
+    ui.limpar(cartao);
+    const ok = h("p", { class: "entrar-ok", role: "status" }, `Mandamos um link para ${email}. Abra para ativar o teste.`);
+    const de = h("button", { type: "button", class: "bt bt-sec bt-bloco entrar-reenviar", disabled: true });
+    let espera = ESPERA_REENVIO_EMAIL_S, rel = null;
+    const pintar = () => { de.textContent = espera > 0 ? `Mandar de novo em ${espera} s` : "Mandar de novo"; de.disabled = espera > 0; };
+    const contar = () => {
+      espera = ESPERA_REENVIO_EMAIL_S; pintar();
+      if (rel) { clearInterval(rel); _relogios.delete(rel); }
+      rel = setInterval(() => { espera -= 1; pintar(); if (espera <= 0) { clearInterval(rel); _relogios.delete(rel); rel = null; } }, 1000);
+      _relogios.add(rel);
+    };
+    de.addEventListener("click", async () => {
+      if (espera > 0) return;
+      try { await ui.carregando(de, api.publica("nx_teste_reenviar", { p_email: email })); ok.textContent = `Mandamos de novo para ${email}. Confira também a caixa de spam.`; contar(); }
+      catch (e) { if (funcaoSemAssinatura(e)) { de.hidden = true; ok.textContent = `Confira a caixa de spam de ${email}. Se não chegar, fale com quem fornece o sistema.`; } else { ok.textContent = api.mensagemErro(e); contar(); } }
+    });
+    const errei = h("button", { type: "button", class: "link" }, "Errei o e-mail");
+    errei.addEventListener("click", () => {
+      if (rel) { clearInterval(rel); _relogios.delete(rel); rel = null; }
+      ui.limpar(cartao);
+      cartao.append(tituloCartao, subCartao, form, rodapeCartao);
+      const em = form.querySelector("input[name=email]"); if (em) { em.focus(); try { em.select(); } catch { /* ok */ } }
+    });
+    cartao.append(h("h1", { id: "t-testar", tabindex: "-1" }, "Confira o seu e-mail"), ok,
+      h("div", { class: "entrar-form" }, de, h("a", { class: "bt bt-fant bt-bloco", href: "#/login" }, "Ir para a entrada")), h("div", { class: "entrar-rodape" }, errei));
+    contar();
+    const t = cartao.querySelector("h1"); if (t) t.focus();
+  };
+  const tituloCartao = h("h1", { id: "t-testar" }, `Teste grátis por ${dias} dias`);
+  const subCartao = h("p", { class: "sub" }, `Crie a conta da sua empresa no ${m.produto || "sistema"} e comece agora.`);
+  const rodapeCartao = h("div", { class: "entrar-rodape" }, h("a", { class: "link", href: "#/login" }, "Já tenho conta: entrar"));
   const cartao = h("section", { class: "entrar-cartao", "aria-labelledby": "t-testar" },
-    h("h1", { id: "t-testar" }, "Teste grátis por 14 dias"),
-    h("p", { class: "sub" }, `Crie a conta da sua empresa no ${m.produto || "Órbita"} e comece agora.`),
-    form, h("div", { class: "entrar-rodape" }, h("a", { class: "link", href: "#/login" }, "Já tenho conta: entrar")));
+    tituloCartao,
+    subCartao,
+    form, rodapeCartao);
   ui.limpar(ctx.alvo);
   ctx.alvo.appendChild(moldura(ctx, { titulo: m.login_titulo, cartao }));
   focarDepois(ctx, "input[name=empresa]");

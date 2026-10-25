@@ -136,7 +136,7 @@ export async function montarImportar(k, el) {
       ui.icone("clipe"),
       // plano 1000b · RB-219: no toque não há arrastar
       h("b", null, toque() ? "Toque para escolher o arquivo" : "Arraste o arquivo aqui ou clique para escolher"),
-      h("p", null, "Aceita .csv (separado por ponto e vírgula, vírgula ou tabulação). No Excel ou no Google Planilhas: Arquivo → Salvar como / Fazer download → CSV. Até 20.000 linhas por arquivo."));
+      h("p", null, "Aceita .csv (separado por ponto e vírgula, vírgula, tabulação ou barra vertical). No Excel ou no Google Planilhas: Arquivo → Salvar como / Fazer download → CSV. Até 20.000 linhas por arquivo."));
     const status = h("div", { class: "imp-arq", hidden: true });
     const avisoCortado = h("p", { class: "aviso aviso-aten imp-aviso", hidden: true }, ui.icone("alerta"), h("span"));
     // plano 1000b · RB-070: aspas abertas e nunca fechadas engolem o resto do arquivo numa célula — a tela diz em que linha
@@ -173,6 +173,8 @@ export async function montarImportar(k, el) {
 
     async function lerArquivo(f) {
       if (f.size > 25 * 1024 * 1024) { ui.toast("Arquivo grande demais (até 25 MB). Divida a planilha em partes.", { tipo: "erro" }); return; }
+      // plano 1500c · RX-050: arquivo vazio (0 byte, comum quando o download não terminou) ganha a frase certa, não «não achamos linhas»
+      if (f.size === 0) { ui.toast(`O arquivo «${f.name || "arquivo"}» está vazio. Baixe ou salve a planilha de novo.`, { tipo: "erro", ms: 8000 }); return; }
       // plano 1000 (CR-120): planilha do Excel (.xlsx/.xls, ou o «PK» do zip no começo) ganha o passo a passo em vez do «não parece CSV»
       if (/\.xls[xmb]?$/i.test(f.name || "") || /spreadsheetml|ms-excel/.test(f.type || "") || await comecaComPK(f)) {
         ui.toast("É uma planilha do Excel. Abra no Excel e use Arquivo → Salvar como → «CSV UTF-8 (separado por vírgulas)» e escolha o arquivo .csv aqui. Ou copie as células e use «Ou cole direto do Excel».", { tipo: "erro", ms: 12000 });
@@ -216,7 +218,7 @@ export async function montarImportar(k, el) {
       S.opcoes.criarNegocio = L.mapaTemNegocio(S.mapa);
       S.resumo = null; S.feitas = 0; S.terminou = false; S.erroFatal = null; S.imp = null;
       mostrarStatus();
-      ui.anunciar(`${d.linhas.length} linhas encontradas.`);
+      ui.anunciar(`${ui.num(d.linhas.length)} ${d.linhas.length === 1 ? "linha encontrada" : "linhas encontradas"}.`);      // plano 1500c · RX-051: singular e número com ponto (20.000)
     }
 
     function mostrarStatus() {
@@ -475,7 +477,7 @@ export async function montarImportar(k, el) {
     const btBaixarRuins = ruins.length ? botao("Baixar a lista de problemas", "fant", () => {
       const csv = L.gerarCSV(["linha", "problema"], ruins.map(l => [l._linha, l._erros.join(" · ")]));
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-      const a = h("a", { href: url, download: "problemas-da-planilha.csv", hidden: true });
+      const a = h("a", { href: url, download: L.nomeArquivoImportacao ? L.nomeArquivoImportacao("problemas", S.arquivo && S.arquivo.nome, ui.hojeSP ? ui.hojeSP() : "") : "problemas-da-planilha.csv", hidden: true });      // plano 1500c · RX-069
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
     }) : null;
@@ -744,7 +746,7 @@ export async function montarImportar(k, el) {
     function baixar(problemas) {
       const csv = L.gerarCSV(["linha", "tipo", "motivo"], problemas.map(p => [p.linha, p.tipo, p.motivo]));
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-      const a = h("a", { href: url, download: "erros-da-importacao.csv", hidden: true });
+      const a = h("a", { href: url, download: L.nomeArquivoImportacao ? L.nomeArquivoImportacao("erros", S.arquivo && S.arquivo.nome, ui.hojeSP ? ui.hojeSP() : "") : "erros-da-importacao.csv", hidden: true });      // plano 1500c · RX-069
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
     }

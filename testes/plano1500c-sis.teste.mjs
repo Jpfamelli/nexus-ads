@@ -418,11 +418,13 @@ test("UCB-052 · convite: conta_existente marca o campo de e-mail (e foca), não
 
 test("UCB-053 · caminho de quem ainda não usa: padrão → teste de 14 dias; revenda → fale com ela; teste_aberto → #/testar; sem nada → nada", async () => {
   const wa = (t, n) => `https://wa.me/${n}?text=${encodeURIComponent(t)}`;
-  assert.match(LOGIN.caminhoProspect({ suporte_wa: "55" }, wa).rotulo, /teste grátis de 14 dias/);
+  // plano 2000d: DU-223 — sem o nome do produto (marca ainda não chegou) não há caminho; com a marca padrão confirmada, o de 14 dias
+  assert.equal(LOGIN.caminhoProspect({ suporte_wa: "55" }, wa), null);
+  assert.match(LOGIN.caminhoProspect({ produto: "Órbita", suporte_wa: "55" }, wa).rotulo, /teste grátis de 14 dias/);
   assert.match(LOGIN.caminhoProspect({ produto: "Clinix", suporte_wa: "55" }, wa).rotulo, /Fale com Clinix/);
   assert.deepEqual(LOGIN.caminhoProspect({ teste_aberto: true }, wa), { rotulo: "Ainda não usa? Testar grátis", href: "#/testar", externo: false });
   assert.equal(LOGIN.caminhoProspect({}, wa), null);
-  const alvo = await montarLogin("login", [], { marca: { suporte_wa: "5512999998888" }, api: { publica: async () => ({}), mensagemErro: A.mensagemErro } });
+  const alvo = await montarLogin("login", [], { marca: { produto: "Órbita", suporte_wa: "5512999998888" }, api: { publica: async () => ({}), mensagemErro: A.mensagemErro } });   // plano 2000d: DU-223
   assert.ok(alvo.querySelector(".entrar-prospect a"));
   LOGIN.desmontar();
 });
@@ -1330,10 +1332,11 @@ test("UCC-138 · paleta: «Trocar para <empresa>» pelo nome (2+ empresas, 2+ le
 });
 
 test("UCC-141 · aviso comprido fica mais tempo (até 10 s); o erro continua 12 s", () => {
-  assert.equal(U.duracaoToast("Salvo."), 4500);
-  assert.equal(U.duracaoToast("x".repeat(110)), 4500 + 50 * 60);
-  assert.equal(U.duracaoToast("x".repeat(500)), 10000);
-  assert.equal(U.duracaoToast("Excluído.", { comBotao: true }), 7000);
+  // plano 2000d: DU-319 — mínimo de 6 s (8 s com botão) + 1 s a cada 20 caracteres, teto de 15 s
+  assert.equal(U.duracaoToast("Salvo."), 7000);
+  assert.equal(U.duracaoToast("x".repeat(110)), 6000 + 6 * 1000);
+  assert.equal(U.duracaoToast("x".repeat(500)), 15000);
+  assert.equal(U.duracaoToast("Excluído.", { comBotao: true }), 9000);
   assert.match(UI_TXT, /tipo === "erro" \? \(comAcao && toqueGrosso\(\) \? 0 : 12000\) : duracaoToast\(texto/);
 });
 
@@ -1395,7 +1398,8 @@ test("UC-005 · janela do fim do teste: administrador, a 3 e a 1 dia, uma vez po
 });
 
 test("UC-006 · teste vencido: o que para e por quanto tempo os dados ficam (só com retencao_dias)", () => {
-  assert.equal(ROTAS.textoTesteVencido({ retencaoDias: 30 }), "O período de teste terminou: você pode consultar, mas não alterar nada. As automações, lembretes e envios automáticos ficam parados. Seus contatos, conversas e negócios continuam guardados por 30 dias.");
+  // plano 2000d: DU-240 — o texto termina com o próximo passo
+  assert.equal(ROTAS.textoTesteVencido({ retencaoDias: 30 }), "O período de teste terminou: você pode consultar, mas não alterar nada. As automações, lembretes e envios automáticos ficam parados. Seus contatos, conversas e negócios continuam guardados por 30 dias. Para voltar a usar, escolha um plano.");
   assert.doesNotMatch(ROTAS.textoTesteVencido({}), /guardados por/);
   assert.match(ROTAS.textoTesteVencido({ equipe: true }), /Só a equipe/);
 });

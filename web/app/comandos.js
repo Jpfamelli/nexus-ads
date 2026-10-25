@@ -197,7 +197,9 @@ export const CATALOGO = Object.freeze([
   { id: "nova-tarefa", grupo: "Criar", rotulo: () => "Nova tarefa", palavras: "tarefa lembrete afazer pendencia criar", icone: "tarefa", quando: a => a.rotaOk("tarefas") && a.pode("atendente") },
   { id: "alternar-tema", grupo: "Aparência e app", rotulo: () => "Alternar tema", palavras: "tema claro escuro aparencia modo noturno dark", icone: "pincel", quando: () => true },
   { id: "trocar-empresa", grupo: "Ir e ver", rotulo: () => "Trocar empresa", palavras: "empresa cliente conta trocar mudar", icone: "empresa", quando: a => a.empresas > 1 },
-  { id: "abrir-produto", grupo: "Ir e ver", rotulo: () => "Abrir outro produto", palavras: "produto crm anuncios ads atendimento trocar espaco area", icone: "camadas", quando: a => !!a.temCliente },
+  // plano 2000d · DU-283: só com 2+ produtos liberados no plano; o rótulo diz para onde («Trocar para Anúncios» quando só há um outro)
+  { id: "abrir-produto", grupo: "Ir e ver", rotulo: a => (Array.isArray(a && a.outrosProdutos) && a.outrosProdutos.length === 1 ? `Trocar para ${a.outrosProdutos[0]}` : "Trocar de produto"), palavras: "produto crm anuncios ads atendimento trocar espaco area", icone: "camadas",
+    quando: a => !!a.temCliente && (a.produtosLiberados === undefined || a.produtosLiberados >= 2) },
   { id: "instalar", grupo: "Aparência e app", rotulo: () => "Instalar o app", palavras: "instalar app aplicativo celular tela inicial", icone: "baixar", quando: a => !!a.instalar },
   { id: "atalhos", grupo: "Ajuda", rotulo: () => "Atalhos de teclado", palavras: "atalhos teclado ajuda teclas", icone: "ajuda", atalho: "?", quando: () => true },
   { id: "primeiros-passos", grupo: "Ir e ver", rotulo: () => "Primeiros passos", palavras: "primeiros passos comecar configurar checklist ajuda deixe pronto", icone: "check", quando: a => a.rotaOk("inicio") && a.pode("admin") },
@@ -217,26 +219,51 @@ export const CATALOGO = Object.freeze([
   { id: "comece-aqui", grupo: "Ajuda", rotulo: () => "Comece aqui", palavras: "comece aqui primeiros passos comecar checklist perfil instalar avisos", icone: "check", quando: a => !!a.passosEquipe },
   { id: "novidades", grupo: "Ajuda", rotulo: () => "Novidades desta versão", palavras: "novidades novo mudou atualizacao versao changelog", icone: "info", quando: a => !!a.novidades },
   { id: "situacao-servicos", grupo: "Ajuda", rotulo: () => "Situação dos serviços", palavras: "situacao servicos status conexao numero whatsapp caiu ia funcionando", icone: "info", quando: a => !!a.temCliente },
+  // plano 2000d · DU-141: bloquear a tela com PIN (recepção) sem sair da conta
+  { id: "bloquear-tela", grupo: "Conta", rotulo: () => "Bloquear a tela", palavras: "bloquear tela pin travar recepcao pausa sair rapido", icone: "cadeado", quando: a => !!a.temCliente },
+  // plano 2000d · DU-281: modo foco (esconde o menu lateral e as faixas que não bloqueiam) para quem só atende
+  { id: "modo-foco", grupo: "Aparência e app", rotulo: a => (a && a.modoFoco ? "Sair do modo foco" : "Modo foco"), palavras: "foco concentrar esconder menu lateral faixas atendimento tela cheia distração", icone: "olho", atalho: "", quando: () => true },
+  // plano 2000d · DU-239: os primeiros passos dispensados voltam pela Ajuda/paleta
+  { id: "reabrir-passos", grupo: "Ajuda", rotulo: () => "Reabrir os primeiros passos", palavras: "primeiros passos reabrir checklist voltar mostrar de novo", icone: "check", quando: a => !!a.passosDispensados && a.pode("admin") },
 ]);
+/** plano 2000d · DU-285: a mensagem do suporte já vai com o contexto (sem dado de cliente: só empresa, tela, versão e aparelho). */
+export function textoSuporte({ app = "sistema", tela = "", empresa = "", versao = "", aparelho = "" } = {}) {
+  return [`Olá! Preciso de ajuda no ${app}.`, empresa ? `Empresa: ${empresa}.` : "", tela ? `Tela: ${tela}.` : "", versao ? `Versão: ${versao}.` : "", aparelho ? `Aparelho: ${aparelho}.` : ""]
+    .filter(Boolean).join(" ").slice(0, 600);
+}
+/** plano 2000d · DU-270: as automações pelo nome na paleta (2+ letras) → [{id, nome, ativo}] (até max). */
+export function automacoesDaPaleta(lista, termo, { max = 4 } = {}) {
+  const t = normalizar(String(termo || "").replace(/^[>#]\s*/, ""));
+  if (!Array.isArray(lista) || t.length < 2) return [];
+  return filtrar(lista.filter(a => a && a.id != null && a.nome), t, { rotulo: a => a.nome, extras: () => "automacao" }).slice(0, max)
+    .map(a => ({ id: a.id, nome: String(a.nome).slice(0, 80), ativo: a.ativo !== false && a.ativa !== false }));
+}
 
 /** plano 1500c · UCC-098: o tour de primeira vez — 4 paradas no topo do app (o que cada uma faz, em uma frase). `seletor` = onde o balão aponta;
     parada sem o elemento na tela (produto único, celular) é pulada. */
 export const PASSOS_TOUR = Object.freeze([
-  Object.freeze({ id: "paleta", seletor: ".topo-busca", titulo: "Busca e comandos", texto: "Ache um contato, uma conversa ou faça uma ação sem procurar no menu. Atalho: Ctrl/⌘ + K." }),
+  Object.freeze({ id: "paleta", seletor: ".topo-busca", titulo: "Busca e comandos", texto: "Ache um contato, uma conversa ou faça uma ação sem procurar no menu. Atalho: {mod} + K." }),
   Object.freeze({ id: "produtos", seletor: ".topo-produtos", titulo: "Seus produtos", texto: "Troque entre CRM, Anúncios e Atendimento por aqui. A conta é a mesma." }),
   Object.freeze({ id: "sino", seletor: "#bt-sino", titulo: "Notificações", texto: "Mensagens novas, números que caíram e avisos do sistema chegam no sino." }),
   Object.freeze({ id: "ajuda", seletor: "#bt-conta-topo, .lat-conta", titulo: "Ajuda", texto: "No menu da sua conta: Central de ajuda, atalhos e o suporte. Dá para rever este tour por lá." }),
 ]);
 export const chaveTour = conta => `nx-tour-visto:${conta || "-"}`;
-/** As paradas que existem nesta tela (doc.querySelector acha o elemento), na ordem. */
-export function paradasDoTour(doc, passos = PASSOS_TOUR) {
+/** plano 2000d · DU-447: o atalho com a tecla da plataforma atual — «⌘ + K» no Mac (inclusive o app instalado), «Ctrl + K» nos outros. */
+export function teclaDaPlataforma(plataforma = "") { return /mac|iphone|ipad/i.test(String(plataforma || "")) ? "⌘" : "Ctrl"; }
+export function textoAtalho(texto, plataforma = "") { return String(texto ?? "").replace(/\{mod\}/g, teclaDaPlataforma(plataforma)).replace(/Ctrl\/⌘/g, teclaDaPlataforma(plataforma)); }
+/** As paradas que existem nesta tela (doc.querySelector acha o elemento), na ordem. `plataforma` troca {mod} pela tecla certa. */
+export function paradasDoTour(doc, passos = PASSOS_TOUR, plataforma = "") {
   const out = [];
-  for (const p of passos) { let el = null; try { el = doc.querySelector(p.seletor); } catch { el = null; } if (el && !el.hidden && !(el.closest && el.closest("[hidden]"))) out.push({ ...p, el }); }
+  for (const p of passos) { let el = null; try { el = doc.querySelector(p.seletor); } catch { el = null; } if (el && !el.hidden && !(el.closest && el.closest("[hidden]"))) out.push({ ...p, texto: textoAtalho(p.texto, plataforma), el }); }
   return out;
 }
 
-/** plano 1500c · UCC-086: navegação em sequência — «g» e depois a letra (em até 1,2 s, fora de campo de texto). */
-export const SEQUENCIAS_G = Object.freeze({ i: "#/inicio", c: "#/conversas", r: "#/crm", a: "#/agenda", t: "#/tarefas", n: "#/anuncios", u: "#/automacoes", s: "#/config" });
+/** plano 1500c · UCC-086: navegação em sequência — «g» e depois a letra (em até 1,2 s, fora de campo de texto).
+    plano 2000d · DU-269: também Relatórios (p) e Equipe (e). */
+export const SEQUENCIAS_G = Object.freeze({ i: "#/inicio", c: "#/conversas", r: "#/crm", a: "#/agenda", t: "#/tarefas", n: "#/anuncios", u: "#/automacoes", s: "#/config", p: "#/relatorios/vendas", e: "#/config/equipe" });
+/** plano 2000d · DU-410: o atalho «G C» de cada destino do menu (id do menu → letra da sequência). */
+export const LETRA_DO_DESTINO = Object.freeze({ inicio: "i", conversas: "c", crm: "r", agenda: "a", tarefas: "t", anuncios: "n", automacoes: "u", config: "s", relatorios: "p" });
+export function atalhoDoDestino(id) { return Object.hasOwn(LETRA_DO_DESTINO, id) ? `G ${LETRA_DO_DESTINO[id].toUpperCase()}` : ""; }
 export function criarSequenciaG({ agora = () => Date.now(), janelaMs = 1200, mapa = SEQUENCIAS_G } = {}) {
   let gEm = -Infinity;
   return {
@@ -334,7 +361,8 @@ export const PALAVRAS_DESTINO = Object.freeze({
 });
 /** Itens do menu (rotas.itensDoMenu) → destinos da paleta. */
 export function destinos(itens) {
-  return itens.map(it => ({ id: it.id, rotulo: it.rotulo, hash: `#/${it.rota}`, icone: it.icone, palavras: PALAVRAS_DESTINO[it.id] || "", emConstrucao: !!it.emConstrucao }));
+  // plano 2000d · DU-410: o atalho de teclado aparece ao lado do destino na paleta
+  return itens.map(it => ({ id: it.id, rotulo: it.rotulo, hash: `#/${it.rota}`, icone: it.icone, palavras: PALAVRAS_DESTINO[it.id] || "", emConstrucao: !!it.emConstrucao, atalho: atalhoDoDestino(it.id) }));
 }
 
 /* ---------- Recentes ---------- */
@@ -399,7 +427,7 @@ export const ATALHOS_GERAIS = Object.freeze([
   Object.freeze({ teclas: ["{mod}", "Z"], rotulo: "Desfazer a última ação que mostrou «Desfazer»" }),
   Object.freeze({ teclas: ["Tab"], rotulo: "No começo da página: «Ir para…» o conteúdo, a lista, o campo de mensagem" }),
   // plano 1500c · UCC-086
-  Object.freeze({ teclas: ["G", "C"], rotulo: "Ir para Conversas (G e depois I Início, R CRM, A Agenda, T Tarefas, N Anúncios, U Automações, S Configurações)" }),
+  Object.freeze({ teclas: ["G", "C"], rotulo: "Ir para Conversas (G e depois I Início, R CRM, A Agenda, T Tarefas, N Anúncios, U Automações, P Relatórios, E Equipe, S Configurações)" }),   // plano 2000d · DU-269
 ]);
 
 /** plano 1500c · UCC-138: trocar de empresa direto pela paleta — digitando parte do nome, as empresas da conta (menos a atual) aparecem

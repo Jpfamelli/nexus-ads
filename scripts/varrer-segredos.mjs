@@ -35,6 +35,16 @@ export const PADROES = [
   ["access token do Google", /\bya29\.[A-Za-z0-9_-]{60,}/g, variado],
   ["client secret do Google", /\bGOCSPX-[A-Za-z0-9_-]{24,}/g, variado],
   ["token do GitHub", /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{60,}/g, variado],
+  // plano 1500c · SC-045: mais padrões (token pessoal do Supabase, Stripe, AWS, chave da API do Google, Slack, chave privada PEM,
+  // URL do Postgres com senha)
+  ["token de acesso do Supabase", /\bsbp_[a-f0-9]{40}\b/g, v => variado(v, 10)],
+  ["chave secreta do Stripe", /\b(?:sk|rk)_live_[A-Za-z0-9]{24,}\b/g, variado],
+  ["chave de acesso da AWS", /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, v => variado(v, 8)],
+  ["chave da API do Google", /\bAIza[0-9A-Za-z_-]{35}\b/g, variado],
+  ["token do Slack", /\bxox[abposr]-[A-Za-z0-9-]{20,}/g, variado],
+  ["chave privada", /-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/g, null],
+  ["URL do Postgres com senha", /\bpostgres(?:ql)?:\/\/[^:\s/@'"]+:[^@\s'"]{8,}@[^\s'"]+/g,
+    v => { const s = v.slice(v.indexOf(":", 12) + 1, v.lastIndexOf("@")); return variado(s, 8) && !/^\$\{?|senha|password|<|\*{3}/i.test(s); }],
 ];
 
 /** Achados de um texto: [{linha, tipo}] (nunca o valor). */

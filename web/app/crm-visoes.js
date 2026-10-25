@@ -27,6 +27,8 @@ export function controlesVisoes(k, { tipo, obterDados, aplicar } = {}) {
     ui.limpar(seletor);
     seletor.appendChild(h("option", { value: "", selected: !selecionada }, "Filtros salvos…"));
     for (const v of visoes) seletor.appendChild(h("option", { value: v.id, selected: v.id === selecionada }, v.nome));
+    // plano 1500c · RX-053: sem nenhum filtro salvo o seletor vazio («Filtros salvos…» sem opção) some — fica só «Salvar filtro»
+    seletor.hidden = !visoes.length;
     excluir.disabled = !selecionada;
     excluir.hidden = !selecionada;
     renomear.hidden = !selecionada;
@@ -66,7 +68,7 @@ export function controlesVisoes(k, { tipo, obterDados, aplicar } = {}) {
         if (!r.ok) {
           const txt = r.codigo === "nome_invalido" ? "Use um nome de 2 a 32 caracteres."
             : r.codigo === "nome_duplicado" ? "Já existe um filtro salvo com esse nome."
-              : r.codigo === "limite" ? "Você já tem 12 filtros salvos nesta tela. Exclua um antes de criar outro."   // plano 1000b · RB-196: «filtro» é masculino
+              : r.codigo === "limite" ? `Você já tem ${L.LIMITE_VISOES_CRM || 12} filtros salvos nesta tela. Exclua um antes de criar outro.`   // plano 1000b · RB-196: «filtro» é masculino; plano 1500c · RX-052: o número vem da mesma constante da lógica
                 :"Não foi possível salvar esse estado da tela.";
           api.erro(txt); return false;
         }
@@ -137,7 +139,9 @@ export function grupoFiltroCampo(k, { entidade, funilId = null, atual = null } =
     // plano 1500c · RC-142: data salva no formato antigo («31/12/2026») vira AAAA-MM-DD; se não der, avisa já no campo (antes sumia calada)
     let avisoData = null;
     if (c.tipo === "data" && v0) { const iso = L.dataParaFiltro(v0); if (!iso) avisoData = `O valor salvo «${v0}» não é uma data válida. Escolha a data de novo.`; v0 = iso; }
-    if (c.tipo === "opcao" || c.tipo === "multi") ctlValor = h("select", { class: "sel", "aria-label": `Valor de ${c.rotulo}` }, (c.opcoes || []).map(o => h("option", { value: o, selected: o === v0 }, o)));
+    // plano 1500c · RX-054: opção salva que saiu do campo continua escolhida, marcada «(não existe mais)» — antes virava a 1ª opção sem aviso e o filtro mudava sozinho
+    if (c.tipo === "opcao" || c.tipo === "multi") ctlValor = h("select", { class: "sel", "aria-label": `Valor de ${c.rotulo}` }, (c.opcoes || []).map(o => h("option", { value: o, selected: o === v0 }, o)),
+      v0 && !(c.opcoes || []).includes(v0) ? [h("option", { value: v0, selected: true }, `${v0} (não existe mais)`)] : []);
     else if (c.tipo === "sim_nao") ctlValor = h("select", { class: "sel", "aria-label": `Valor de ${c.rotulo}` }, h("option", { value: "true", selected: v0 !== "false" }, "Sim"), h("option", { value: "false", selected: v0 === "false" }, "Não"));
     // plano 1500c · RC-143: o exemplo segue o tipo («Ex.: 1.500,00» na moeda) — a leitura é a do lerNumero
     else ctlValor = h("input", { type: c.tipo === "data" ? "date" : "text", inputmode: ["numero", "moeda"].includes(c.tipo) ? "decimal" : null, "aria-label": `Valor de ${c.rotulo}`,
@@ -170,7 +174,7 @@ export function buscaEtiquetas(k, opsEt, { limite = 12 } = {}) {
   const itens = opsEt ? opsEt.querySelectorAll(".crm-op") : [];
   if (itens.length <= limite) return null;
   const norm = s => (L && L.semAcento ? L.semAcento(String(s || "")) : String(s || "").toLowerCase()).trim();
-  const campo = h("input", { type: "search", class: "crm-fe-busca", placeholder: "Buscar etiqueta", "aria-label": "Buscar etiqueta", autocomplete: "off" });
+  const campo = h("input", { type: "search", enterkeyhint: "search", class: "crm-fe-busca", placeholder: "Buscar etiqueta", "aria-label": "Buscar etiqueta", autocomplete: "off" });
   const nada = h("small", { class: "crm-fe-nada", hidden: true }, "Nenhuma etiqueta com esse nome.");
   // plano 1500c · RC-144: quantas sobraram, dito ao leitor (com pausa — não a cada letra)
   const contagem = h("small", { class: "sr-only crm-fe-cont", role: "status" });

@@ -1402,3 +1402,22 @@ mark.cvx-pend { background: var(--c-aten-suave); color: var(--c-texto); border-r
 .cfg-sync-erro { display: block; margin-top: .25rem; font-size: var(--fs-12); color: var(--c-aten); }
 .cfg-dep-ninguem { margin: .25rem 0 0; font-size: var(--fs-13); }
 .cfg-ia-da-agenda { align-self: flex-start; margin-top: .35rem; }
+/* plano 1500c · CX-030: mensagem só com emoji aparece grande */
+.cv-texto.cv-texto-emoji { font-size: 2.25rem; line-height: 1.15; letter-spacing: .04em; }
+/* plano 1500c · CX-029: «+N contatos no texto da mensagem» */
+.cv-contato-mais { margin: 0 0 .25rem; font-size: var(--fs-12); }
+/* plano 1500c · CX-016: e-mail na mensagem */
+.cv-link-email { color: var(--c-prim-luz); text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
+/* plano 1500c · CX-064: lista com milhares de conversas — o navegador só desenha as linhas que aparecem (a altura reservada evita pulos) */
+.cvl-item { content-visibility: auto; contain-intrinsic-size: auto 76px; }
+/* plano 1500c · CX-065: alto contraste do Windows — a conversa aberta, a selecionada e o contador de não lidas não somem (eram só cor de fundo) */
+@media (forced-colors: active) {
+  .cvl-item[aria-current="true"], .cvl-item[data-sel="1"] { outline: 2px solid Highlight; outline-offset: -2px; }
+  .cvl-item[aria-current="true"]::before { background: Highlight; }
+  .cvl-badge { border: 1px solid CanvasText; }
+  .cv-texto mark, .cvl-msg-trecho mark { background: Mark; color: MarkText; }
+}
+/* plano 1500c · CX-066: no iPhone, campo com fonte menor que 16 px dá zoom ao focar — o campo de mensagem e os das janelas de Conversas ficam com 16 px no toque */
+@media (max-width: 760px), (pointer: coarse) {
+  .cvx textarea, #cv-nv-busca, #cv-nv-tel, #cv-nv-nome, #cv-enc-busca, .cv-teclas-filtro, .cvt-nome-ed input, .cvt-campo-caixa input { font-size: 16px; }
+}

@@ -698,7 +698,7 @@ async function secaoEtiquetas(ctx, alvo) {
   const { ui, h, L } = k;
   let vivo = true;
   const podeExcluir = k.pode("admin");
-  const busca = h("input", { type: "search", placeholder: "Buscar etiqueta", "aria-label": "Buscar etiqueta" });
+  const busca = h("input", { type: "search", enterkeyhint: "search", placeholder: "Buscar etiqueta", "aria-label": "Buscar etiqueta" });
   const corpo = h("div", { class: "crm-cfg-lista crm-cfg-etqs", role: "list" });
   // plano 1500c · RC-329: a busca só esconde/mostra os itens já desenhados (antes recriava a lista inteira a cada tecla)
   busca.addEventListener("input", ui.debounce(() => filtrar(), 150));
@@ -850,6 +850,9 @@ async function secaoMotivos(ctx, alvo) {
         const d = ui.lerForm(f);
         ui.marcarErro(f, null);
         if (!d.nome) { ui.marcarErro(f, "nome", "Escreva o motivo."); return false; }
+        // plano 1500c · RX-057: nome repetido (sem olhar acento/maiúscula) é avisado aqui, sem ida ao servidor
+        const igual = (k.base.motivos || []).find(x => x && (!m || x.id !== m.id) && L.semAcento(String(x.nome || "").trim()) === L.semAcento(String(d.nome).trim()));
+        if (igual) { ui.marcarErro(f, "nome", `Já existe o motivo «${igual.nome}».`); return false; }
         try { return await k.api.rpcC("nx_motivo_salvar", { p_motivo: { ...(m ? { id: m.id } : {}), nome: d.nome, exige_texto: !!d.exige_texto } }); }
         catch (e) { if (e && e.hint === "nome_em_uso") ui.marcarErro(f, "nome", "Já existe um motivo com esse nome."); else api.erro(k.erro(e)); return false; }     // plano 1000b · RB-141
       } }] });
@@ -862,13 +865,17 @@ async function secaoMotivos(ctx, alvo) {
   /** plano 1500c · RC-162: cria os motivos sugeridos em fila (um nx_motivo_salvar por motivo) e diz quantos entraram. */
   async function usarSugeridos(lista, bt) {
     if (bt) { bt.disabled = true; bt.setAttribute("aria-busy", "true"); }
-    let ok = 0, erro = null;
+    let ok = 0, erro = null, jaHavia = 0;
     for (const m of lista) {
       try { await k.api.rpcC("nx_motivo_salvar", { p_motivo: { nome: m.nome, exige_texto: !!m.exige_texto } }); ok++; }
-      catch (e) { if (!(e && e.hint === "nome_em_uso")) erro = erro || e; }
+      catch (e) { if (e && e.hint === "nome_em_uso") jaHavia++; else erro = erro || e; }
     }
     await k.recarregarBase().catch(() => {});
-    if (ok) ui.toast(`${ok} ${ok === 1 ? "motivo criado" : "motivos criados"}.`, { tipo: "ok" });
+    if (!vivo) return;
+    // plano 1500c · RX-055: diz também quantos já existiam (antes, todos repetidos = nenhum aviso; parecia que o botão não fez nada)
+    const jaTxt = jaHavia ? `${jaHavia} já ${jaHavia === 1 ? "existia" : "existiam"}` : "";
+    if (ok) ui.toast(`${ok} ${ok === 1 ? "motivo criado" : "motivos criados"}${jaTxt ? ` · ${jaTxt}` : ""}.`, { tipo: "ok" });
+    else if (jaHavia && !erro) ui.toast(`Nada novo: os ${jaHavia === 1 ? "motivo sugerido já existia" : "motivos sugeridos já existiam"}.`, { tipo: "info" });
     if (erro) ui.toast(k.erro(erro), { tipo: "erro" });
     desenhar();
   }

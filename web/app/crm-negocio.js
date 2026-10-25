@@ -800,7 +800,14 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
         el.appendChild(h("section", { class: "ng-bloco", "aria-label": k.v.contato },
           h("div", { class: "ng-contato" },
             ui.avatar(ct.nome || ct.telefone, ct.id),
-            h("div", null, h("b", null, L.nomeContato(ct)), h("small", null, [ct.telefone ? ui.telBR(ct.telefone) : null, ct.email].filter(Boolean).join(" · ") || "Sem telefone")),
+            // plano 1500c · UC-030: nome, telefone e e-mail borrados no modo apresentação. RX-029: o telefone liga com um toque (tel:)
+            h("div", null, h("b", { class: "dado-pessoal" }, L.nomeContato(ct)),
+              ct.telefone || ct.email ? h("small", { class: "dado-pessoal" },
+                ct.telefone && L.hrefTel(ct.telefone) ? h("a", { class: "ng-tel", href: L.hrefTel(ct.telefone), "aria-label": `Ligar para ${ui.telBR(ct.telefone)}` }, ui.telBR(ct.telefone)) : ct.telefone ? ui.telBR(ct.telefone) : null,
+                ct.telefone && ct.email ? " · " : null, ct.email || null) : h("small", null, "Sem telefone")),
+            // plano 1500c · RX-078: sem o módulo Conversas, o WhatsApp abre direto (wa.me) — antes a gaveta não tinha como chamar o contato
+            !(k.ctx.temModulo && k.ctx.temModulo("conversas")) && ct.telefone && L.hrefWhatsApp && L.hrefWhatsApp(ct.telefone)
+              ? h("a", { class: "bt bt-sec bt-p ng-wa", href: L.hrefWhatsApp(ct.telefone), target: "_blank", rel: "noopener noreferrer", "aria-label": `Chamar ${L.nomeContato(ct)} no WhatsApp` }, ui.icone("whatsapp"), "WhatsApp") : null,
             h("div", { class: "linha" },
               k.ctx.temModulo && k.ctx.temModulo("conversas") ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => {
                 g.fechar();
@@ -822,7 +829,8 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
       const dl = h("dl", { class: "ng-kv" });
       const sel = (opcoes, valor) => h("select", null, opcoes.map(o => h("option", { value: o.valor, selected: String(o.valor) === String(valor ?? "") }, o.rotulo)));
       dl.append(...linhaEd(k, { rotulo: "Responsável", desabilitado: !podeEditar,
-        controle: sel([{ valor: "", rotulo: "Sem responsável" }, ...k.base.usuarios.map(u => ({ valor: u.id, rotulo: u.nome }))], n.dono_id),
+        // plano 1500c · RX-033: responsável que saiu da equipe aparece como «Fulano (desativado)» — antes o select mostrava «Sem responsável» (mentira)
+        controle: sel([{ valor: "", rotulo: "Sem responsável" }, ...L.opcoesResponsavel(k.base.usuarios, n.dono_id, n.dono_nome || (n.dono && n.dono.nome) || null)], n.dono_id),
         ler: c => c.value || null, salvar: v => salvar({ dono_id: v }) }));
       // plano 1500c · RC-268: «R$» visível dentro do campo (os dois valores), como o ui.campo tipo moeda
       const comMoeda = blocos => {
@@ -835,11 +843,11 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
       };
       dl.append(...comMoeda(linhaEd(k, { rotulo: "Valor previsto", desabilitado: !podeEditar,
         controle: h("input", { type: "text", inputmode: "decimal", value: n.valor_previsto != null ? Number(n.valor_previsto).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "", placeholder: "0,00" }),
-        ler: c => k.L.lerNumero(c.value), validar: c => k.L.dinheiroInvalido(c.value) ? "Valor inválido. Use só números, por exemplo 1.500,00." : null,
+        ler: c => k.L.lerNumero(c.value), validar: c => (k.L.erroDinheiro ? k.L.erroDinheiro(c.value) : k.L.dinheiroInvalido(c.value) ? "Valor inválido. Use só números, por exemplo 1.500,00." : null),      // plano 1500c · RX-071: negativo também
         salvar: v => salvar({ valor_previsto: v }) })));
       if (n.status === "ganho") dl.append(...comMoeda(linhaEd(k, { rotulo: "Valor final", desabilitado: !podeEditar || pendente,
         controle: h("input", { type: "text", inputmode: "decimal", value: n.valor != null ? Number(n.valor).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "", placeholder: "0,00" }),
-        ler: c => k.L.lerNumero(c.value), validar: c => k.L.dinheiroInvalido(c.value) ? "Valor inválido. Use só números, por exemplo 1.500,00." : null,
+        ler: c => k.L.lerNumero(c.value), validar: c => (k.L.erroDinheiro ? k.L.erroDinheiro(c.value) : k.L.dinheiroInvalido(c.value) ? "Valor inválido. Use só números, por exemplo 1.500,00." : null),      // plano 1500c · RX-071: negativo também
         salvar: v => salvar({ valor: v }) })));
       const servicos = Object.keys(k.base.ticket || {});
       const idLista = `srv-${n.id}`;
@@ -848,7 +856,8 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
         ler: c => c.value.trim() || null,
         salvar: async v => {
           const extra = {};
-          const t = v && k.base.ticket ? Number(k.base.ticket[v]) : NaN;
+          // plano 1500c · RX-073: «implante» acha o ticket de «Implante»
+          const t = v && k.base.ticket ? (L.ticketDoServico ? (L.ticketDoServico(k.base.ticket, v) ?? NaN) : Number(k.base.ticket[v])) : NaN;
           if (n.valor_previsto == null && Number.isFinite(t)) extra.valor_previsto = t;
           await salvar({ servico: v, ...extra });
           if (extra.valor_previsto != null) ui.toast(`Valor previsto sugerido pelo ticket: ${ui.brl(t)}.`, { tipo: "info" });
@@ -964,7 +973,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
             h("i", { "aria-hidden": "true" }), h("span", null, `${k.L.tituloCard(o)} · ${e ? e.nome : ""}`),
             // plano 1500c · RC-094: sem valor → «Sem valor» (antes: ui.brl(null) = «R$ 0»), na régua do cartão (valor final ?? previsto)
             (o.status === "ganho" ? (o.valor ?? o.valor_previsto) : o.valor_previsto) != null
-              ? h("b", null, ui.brl(o.status === "ganho" ? (o.valor ?? o.valor_previsto) : o.valor_previsto)) : h("span", { class: "sem" }, "Sem valor")));
+              ? h("b", null, ui.brl(L.valorCard(o), { centavos: L.temCentavos(L.valorCard(o)) })) : h("span", { class: "sem" }, "Sem valor")));      // plano 1500c · RX-034: centavos só quando há (a régua do cartão)
         }
         // plano 1000b · RB-051: sem o módulo Conversas o protocolo é só texto (o link levava a uma tela que a conta não tem)
         const temConversas = !!(k.ctx && typeof k.ctx.temModulo === "function" && k.ctx.temModulo("conversas"));
@@ -1199,7 +1208,7 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
         h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { modoNovo = false; desenharContato(); } } }, "Buscar um cadastro existente"));
       return;
     }
-    const busca = h("input", { type: "search", placeholder: "Buscar por nome ou telefone", "aria-label": `Buscar ${k.v.min("contato")}`, autocomplete: "off" });
+    const busca = h("input", { type: "search", enterkeyhint: "search", placeholder: "Buscar por nome ou telefone", "aria-label": `Buscar ${k.v.min("contato")}`, autocomplete: "off" });
     const res = h("div", { class: "crm-busca-res", role: "group", "aria-label": "Resultados" });   // plano 1000b · RB-052: grupo de botões comuns (Tab entre eles) — era listbox sem setas nem aria-selected
     let seq = 0;
     const buscar = ui.debounce(async () => {

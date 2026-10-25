@@ -460,3 +460,111 @@ test("SC-022 CORS: com NX_ORIGENS, a resposta do painel leva a origem exata (ou 
     assert.equal(ok.headers.get("access-control-allow-origin"), "https://orbita-nexus-ads.netlify.app");
   } finally { if (antes === undefined) delete globalThis.Deno; else globalThis.Deno = antes; }
 });
+
+// ---------------------------------------------------------------- scripts e CI
+test("SC-039/SC-040/SC-041 lint por função: security definer sem search_path, grant a authenticated e função nova sem revoke próprio", async () => {
+  const { lintMigracao } = await import("../scripts/lint-migracoes.mjs");
+  const fim = "\ninsert into public.nx_versao_banco (nome) values ('20990101a_x');\nnotify pgrst, 'reload schema';\n";
+  const fn = (nome, extra = "set search_path = ''") => `create or replace function public.${nome}()\nreturns int\nlanguage sql\nsecurity definer\n${extra}\nas $$ select 1 $$;\n`;
+  const regras = sql => lintMigracao("20990101a_x.sql", sql, new Set(["nx_velha"])).map(v => v.regra);
+  // limpa: função nova com revoke/grant próprio; a cópia de uma antiga (nx_velha) não precisa de bloco próprio
+  assert.deepEqual(regras(fn("nx_nova") + fn("nx_velha") + "revoke all on function public.nx_nova() from public, anon, authenticated;\ngrant execute on function public.nx_nova() to service_role;" + fim), []);
+  assert.ok(regras(fn("nx_nova", "") + "revoke all on function public.nx_nova() from public;" + fim).includes("search_path"), "sem search_path");
+  assert.ok(regras(fn("nx_nova") + "revoke all on function public.nx_nova() from public;\ngrant execute on function public.nx_nova() to anon, authenticated;" + fim).includes("grant_authenticated"));
+  assert.ok(regras(fn("nx_nova") + fn("nx_outra") + "revoke all on function public.nx_nova() from public;" + fim).includes("permissao_funcao"), "nx_outra sem revoke próprio");
+  // o grant dentro de execute format('…') também conta (é como os blocos do repositório fazem)
+  assert.ok(regras(fn("nx_nova") + "do $$ begin execute format('grant execute on function %s to authenticated', 'public.nx_nova()'); revoke all on function public.nx_nova() from public; end $$;" + fim).includes("grant_authenticated"));
+});
+
+test("SC-045 varrer-segredos: token do Supabase, Stripe, AWS, chave do Google, Slack, chave privada e URL do Postgres com senha", async () => {
+  const { varrerTexto } = await import("../scripts/varrer-segredos.mjs");
+  const al = n => Array.from({ length: n }, (_, i) => "aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC"[(i * 7 + 3) % 32]).join("");
+  const hex = n => Array.from({ length: n }, (_, i) => "0123456789abcdef"[(i * 5 + 1) % 16]).join("");
+  const tipos = t => varrerTexto(t).map(a => a.tipo);
+  assert.deepEqual(tipos(`x = "sbp_${hex(40)}"`), ["token de acesso do Supabase"]);
+  assert.deepEqual(tipos(`k=sk_live_${al(30)}`), ["chave secreta do Stripe"]);
+  // os dublês são montados em pedaços: o próprio varrer-segredos lê este arquivo no CI
+  assert.deepEqual(tipos("AKIA" + "Z7Q3W5E2R8T4Y6U1"), ["chave de acesso da AWS"]);
+  assert.deepEqual(tipos(`AIza${al(35)}`), ["chave da API do Google"]);
+  assert.deepEqual(tipos(`xoxb-${al(30)}`), ["token do Slack"]);
+  assert.deepEqual(tipos("-----BEGIN OPENSSH " + "PRIVATE KEY-----"), ["chave privada"]);
+  assert.deepEqual(tipos(`postgresql://leitor:${al(20)}@db.exemplo:5432/postgres`), ["URL do Postgres com senha"]);
+  // exemplos de documentação não casam
+  assert.deepEqual(tipos("postgresql://leitor:<SENHA>@db.exemplo:5432/postgres postgres://u:${BACKUP_SENHA}@h/x sk_test_123 AKIAEXAMPLE"), []);
+});
+
+test("SC-157 conferir-migracoes: deploy para quando falta migração registrada; a resposta da Management API é lida; o workflow chama antes de publicar", async () => {
+  const { migracoesEsperadas, lerAplicadas, faltando } = await import("../scripts/conferir-migracoes.mjs");
+  const esperadas = migracoesEsperadas();
+  assert.ok(esperadas.includes("20261022a_plano1500c") && esperadas.includes("20261015a_plano1000b"));
+  const todas = lerAplicadas(JSON.stringify(esperadas.map(nome => ({ nome }))));
+  assert.deepEqual(faltando(esperadas, todas), []);
+  const semUltima = lerAplicadas(JSON.stringify(esperadas.filter(n => n !== "20261022a_plano1500c")));
+  assert.deepEqual(faltando(esperadas, semUltima), ["20261022a_plano1500c"]);
+  assert.equal(lerAplicadas("{\"message\":\"Unauthorized\"}"), null);
+  assert.equal(lerAplicadas("não é json"), null);
+  const wf = readFileSync(join(RAIZ, ".github/workflows/funcoes-supabase.yml"), "utf8");
+  const portao = wf.indexOf("node scripts/conferir-migracoes.mjs"), publicar = wf.indexOf("name: Publicar (verify_jwt=false");
+  assert.ok(portao > 0 && publicar > portao, "o portão vem antes do Publicar");
+});
+
+test("SC-153 backup guardado por 90 dias (antes 14)", () => {
+  assert.match(readFileSync(join(RAIZ, ".github/workflows/backup.yml"), "utf8"), /retention-days: 90\b/);
+});
+
+// ---------------------------------------------------------------- núcleo usado pelas Edge Functions (srv-a1)
+const N = await import("../web/nucleo.js");
+const { gerarDemo } = await import("../web/demo.js");
+
+test("AC-311 nucleo.js roda sem APIs de navegador (as Edge Functions o importam no Deno)", () => {
+  const src = readFileSync(join(RAIZ, "web/nucleo.js"), "utf8");
+  assert.doesNotMatch(src, /\b(window|document|localStorage|sessionStorage|navigator|location)\b/);
+  assert.equal(typeof globalThis.window, "undefined");
+  const M = N.montar(gerarDemo({ hoje: "2026-10-15" }));
+  assert.ok(M.relDiario(M.R).length > 50, "o relatório diário sai em Node puro");
+});
+
+/** gerador determinístico (mulberry32) para os datasets de propriedade */
+function mulberry32(a) { return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+test("AC-053 propriedade: consolidar nunca devolve NaN/Infinity (zeros, faltas e valores estranhos em 300 datasets)", () => {
+  const r = mulberry32(1500);
+  const estranho = () => [0, null, undefined, "", -0, 1e-9, r() * 500, Math.round(r() * 50)][Math.floor(r() * 8)];
+  for (let k = 0; k < 300; k++) {
+    const metricas = [];
+    const dias = 1 + Math.floor(r() * 40);
+    for (let d = 0; d < dias; d++) {
+      const dt = new Date(2026, 9, 14 - d, 12);
+      metricas.push({ p: r() < 0.5 ? "meta" : "google", d: N.isoDe(dt), n: "anuncio", c: `C${k % 3}`, cn: "Camp", a: `A${d % 4}`, an: "Anúncio",
+        g: estranho(), imp: estranho(), cli: estranho(), conv: estranho(), freq: estranho(), alc: estranho() });
+    }
+    const M = N.montar(N.datasetDeLinhas({ metricas, leads: [], cliente: { nome: "P" }, hoje: "2026-10-15" }));
+    for (const [de, ate] of [[M.R - 6, M.R], [M.R - 29, M.R], [M.R, M.R]]) {
+      const t = M.consolidar(M.linhasDe(de, ate));
+      for (const [chave, v] of Object.entries(t)) {
+        if (typeof v === "number") assert.ok(Number.isFinite(v), `dataset ${k}: ${chave} = ${v}`);
+      }
+    }
+  }
+});
+
+test("AC-035 fuso: 00:30 em São Paulo (03:30Z) já é o dia novo; 23:30 SP (02:30Z do dia seguinte) ainda é o anterior", () => {
+  assert.equal(N.hojeSP(new Date("2026-10-15T03:30:00Z")), "2026-10-15");
+  assert.equal(N.hojeSP(new Date("2026-10-16T02:30:00Z")), "2026-10-15");
+  // o relatório de «ontem» calculado às 00:30 SP fala do dia 14
+  const M = N.montar(gerarDemo({ hoje: N.hojeSP(new Date("2026-10-15T03:30:00Z")) }));
+  assert.equal(N.isoDe(M.dataDe(M.R)), "2026-10-14");
+});
+
+test("AC-066 relMensal de mês sem fechamentos e de cliente sem CRM: sai sem NaN, undefined nem «Infinity»", () => {
+  const metricas = [];
+  for (let d = 1; d <= 30; d++) metricas.push({ p: "meta", d: `2026-09-${String(d).padStart(2, "0")}`, n: "anuncio", c: "C1", cn: "Implante", a: "A1", an: "Vídeo", g: 40, imp: 900, cli: 15, conv: 2, freq: 1.3, alc: 700 });
+  for (const leads of [[], [{ id: 1, d: "2026-09-10", etapa: "conversa", origem: "anuncio", plataforma: "meta", campanha_ext: "C1" }]]) {
+    const M = N.montar(N.datasetDeLinhas({ metricas, leads, cliente: { nome: "Sem CRM" }, hoje: "2026-10-15" }));
+    const set = M.mesesDados().find(m => m.mes === 8 && m.ano === 2026);
+    assert.ok(set, "setembro na janela");
+    const txt = M.relMensal(set);
+    assert.ok(txt.length > 40);
+    assert.doesNotMatch(txt, /NaN|undefined|Infinity|null/);
+  }
+});

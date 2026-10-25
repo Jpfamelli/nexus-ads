@@ -64,6 +64,30 @@ function nomeSuporte(ctx) {
   try { const m = ctx.shell && typeof ctx.shell.marcaEfetiva === "function" ? ctx.shell.marcaEfetiva() : null; return m && m.produto ? String(m.produto) : null; } catch { return null; }
 }
 
+/** plano 2000d · DU-024: só a equipe da plataforma/revenda (gestor, super) vê o nome do fornecedor do WhatsApp. */
+function equipeDaPlataforma(ctx) {
+  const p = ctx && ctx.sessao && ctx.sessao.conta ? String(ctx.sessao.conta.papel || "") : "";
+  const pc = ctx && ctx.cliente ? String(ctx.cliente.papel || "") : "";
+  return p === "gestor" || p === "super" || pc === "gestor" || pc === "super" || !!(ctx && ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.super);
+}
+
+/** plano 2000d · DU-095: minutos por mensagem da empresa (Configurações → base.minutos_por_mensagem, entre 0,5 e 30); padrão 2. */
+export function minutosPorMensagem(base) {
+  const v = Number(base && base.minutos_por_mensagem);
+  return Number.isFinite(v) && v >= 0.5 && v <= 30 ? v : 2;
+}
+
+/** plano 2000d · DU-078/DU-079: o pedido de contratação do shell (app.js), quando ele expõe; null sem ele (a tela usa o link do plano). */
+function pedirContratacao(ctx) {
+  const f = ctx && ctx.shell && typeof ctx.shell.pedirContratacao === "function" ? ctx.shell.pedirContratacao : null;
+  return f ? origem => { try { f(origem); } catch { ctx.navegar("#/config/plano"); } } : null;
+}
+
+/** plano 2000d · DU-026: a frase do texto colado inválido com a marca efetiva (revenda) — nunca a marca padrão fixa. */
+export function textoColagemInvalida(produto) {
+  return produto ? `Esse texto não é uma automação copiada do ${produto}.` : "Esse texto não é uma automação copiada deste sistema.";
+}
+
 /**
  * plano 1000b · UB-078 / UB-210: preferência de TELA guardada no aparelho (abrir o «Ver o fluxo», ver receitas de outros segmentos) —
  * só chaves «nx-au-*» de interface; rascunho e dado de cliente nunca passam por aqui (ficam na aba, sessionStorage).
@@ -229,10 +253,15 @@ function telaLista(ctx, raiz, dados, P) {
   // plano 1000b · UB-185: diz A QUEM pedir (o mesmo caminho do semEditar)
   if (!podeEditar) raiz.appendChild(h("p", { class: "aviso au-aviso-papel" }, ui.icone("cadeado"),
     h("span", null, `Você pode ver as automações e o histórico. Para criar ou mudar: ${L.frasePedirAdmin(dados.base && dados.base.usuarios)}`)));
+  // plano 2000d · DU-071: teste vencido/suspensa — as ligadas não estão rodando; o topo diz antes de alguém achar que está tudo saindo
+  if (L.empresaBloqueada(ctx.cliente) && itens.some(x => x.ativo)) raiz.appendChild(h("p", { class: "aviso aviso-aten au-aviso-parada" }, ui.icone("alerta"),
+    h("span", null, "O acesso está só para consulta: nenhuma automação está rodando agora, nem as que aparecem como ligadas. ", h("a", { href: "#/config/plano" }, "Ver Plano e uso"), ".")));
   // plano 1000b · UB-047: UM aviso de limite (aqui no topo, com o caminho para o plano); a caixa da IA e as receitas apontam para ele
   if (noLimite && podeEditar) raiz.appendChild(h("p", { class: "aviso aviso-aten au-aviso-limite", id: "au-limite" }, ui.icone("alerta"),
-    h("span", null, `Seu plano chegou ao limite de ${lim.limite} automações (desligadas também contam). Exclua uma que não usa para criar outra, ou fale com o suporte para aumentar. `,
-      h("a", { href: "#/config/plano" }, "Ver Plano e uso"), ".")));
+    h("span", null, `Seu plano chegou ao limite de ${lim.limite} automações (desligadas também contam). Exclua uma que não usa para criar outra, ou peça mais. `,
+      h("a", { href: "#/config/plano" }, "Ver Plano e uso"), "."),
+    // plano 2000d · DU-079: o pedido de aumento direto (o shell abre o pedido de contratação; sem ele, o link do plano basta)
+    pedirContratacao(ctx) ? h("button", { type: "button", class: "bt bt-sec bt-p au-pedir-mais", on: { click: () => pedirContratacao(ctx)("automacoes_limite") } }, ui.icone("mais"), "Pedir mais automações") : null));
 
   // ------------------------------------------------ resumo em números (item 52): ligadas, execuções, taxa de sucesso, em espera
   const faixaResumo = h("div", { class: "au-resumo", role: "group", "aria-label": "Resumo das automações" });
@@ -252,9 +281,15 @@ function telaLista(ctx, raiz, dados, P) {
         ajuda: r.pct == null ? "Ainda não há execuções para medir." : `${ui.num(r.execucoes - r.erros)} de ${ui.num(r.execucoes)} execuções sem erro ${periodo}.`, icone: "check", tom: r.pct == null ? null : L.nivelTaxa(r.pct) }),
       kpi({ rotulo: "Em espera", num: r.em_espera, texto: ui.num(r.em_espera), ajuda: "Pessoas no meio de uma sequência, aguardando o próximo passo.", icone: "relogio", tom: r.em_espera ? "info" : null }));
     // plano 1500c · UCA-105: o tempo que a equipe deixou de gastar (só quando o servidor manda mensagens_30d; sem o dado, o KPI some)
-    const te = L.tempoEconomizado(itens);
+    // plano 2000d · DU-095: os minutos por mensagem vêm da configuração da empresa (base.minutos_por_mensagem; padrão 2) e a ajuda cita o valor
+    const mpm = minutosPorMensagem(dados.base);
+    const te = L.tempoEconomizado(itens, { minutosPorMensagem: mpm });
     if (te) faixaResumo.append(P.kpi({ rotulo: "Tempo poupado", valor: `≈ ${te.texto}`, icone: "relogio", tom: "ok",
-      ajuda: "Nos últimos 30 dias: cada mensagem automática conta 2 minutos que alguém da equipe gastaria para escrever e mandar." }));
+      ajuda: `Nos últimos 30 dias: cada mensagem automática conta ${mpm === 1 ? "1 minuto" : `${String(mpm).replace(".", ",")} minutos`} que alguém da equipe gastaria para escrever e mandar (o valor muda em Configurações).` }));
+    // plano 2000d · DU-101: mensagens enviadas hoje pelas automações (quando o servidor manda mensagens_hoje), com o link do histórico
+    const mh = dados.base && dados.base.mensagens_hoje != null ? Number(dados.base.mensagens_hoje) : (itens.some(x => x && x.mensagens_hoje != null) ? itens.reduce((n, x) => n + (Number(x && x.mensagens_hoje) || 0), 0) : null);
+    // (o histórico de envios ainda não tem tela própria: o KPI fica sem link até ela existir)
+    if (Number.isFinite(mh)) faixaResumo.append(P.kpi({ rotulo: "Mensagens hoje", valor: ui.num(mh), icone: "whatsapp", ajuda: "Mensagens que as automações mandaram hoje (as de aviso interno não contam)." }));
   };
   if (itens.length) { pintarResumo(); raiz.appendChild(faixaResumo); }
 
@@ -281,8 +316,12 @@ function telaLista(ctx, raiz, dados, P) {
     if (btPausar) btPausar.hidden = !L.ligadasQueEnviam(itens).length;
     try { aoMudarCmds(); } catch { /* a paleta é um extra */ }
   };
+  // plano 2000d · DU-357: o vazio cita um caso do segmento e abre a receita certa; DU-086: o kit inicial cria 3 desligadas de uma vez
+  const vz = L.textoVazio(vertical);
   const vazioLista = () => h("div", { class: "au-vazio" }, ui.vazio({ tema: "automacoes",
-    titulo: "Automações fazem o trabalho repetitivo.", /* plano 1000b · UB-071: para quem não edita, o vazio diz a quem pedir */ texto: podeEditar ? "Descreva o que você quer na caixa acima, ou comece por uma receita pronta." : `Ainda não há automações criadas. ${L.frasePedirAdmin(dados.base && dados.base.usuarios)}`, icone: "raio" }));
+    titulo: "Automações fazem o trabalho repetitivo.", /* plano 1000b · UB-071: para quem não edita, o vazio diz a quem pedir */ texto: podeEditar ? `${vz.texto} Descreva o que você quer na caixa acima, ou comece por uma receita pronta.` : `Ainda não há automações criadas. ${L.frasePedirAdmin(dados.base && dados.base.usuarios)}`, icone: "raio",
+    acao: podeEditar && !noLimite && L.MODELOS.some(m => m.id === vz.receita) ? { rotulo: "Abrir essa receita", fn: () => ctx.navegar(`#/automacoes/nova?modelo=${encodeURIComponent(vz.receita)}`) } : undefined }),
+    podeEditar && !noLimite ? kitInicialCaixa(ctx, dados, vertical) : null);
   if (itens.length) {
     suas = secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado, aoExcluida, () => {
       // plano 1000 · AS-010: a última automação saiu — a seção vira o vazio e o resumo do topo some (sem redesenhar a tela inteira)
@@ -452,9 +491,12 @@ function caixaColar(ctx, dados) {
   const erro = h("p", { class: "campo-erro", role: "alert", hidden: true });
   const btAbrir = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("seta-dir"), "Abrir no editor");
   btAbrir.addEventListener("click", () => {
-    const r = L.importarAutomacao(area.value.trim(), dados.base);
-    if (!r.auto) { erro.textContent = "Esse texto não é uma automação copiada do Órbita."; erro.hidden = false; area.focus(); return; }
+    // plano 2000d · DU-059: o texto pode trazer uma ou várias automações (o formato antigo continua aceito)
+    const lista = L.importarAutomacoes(area.value.trim(), dados.base, ctx.vocab);
+    if (!lista.length) { erro.textContent = textoColagemInvalida(nomeSuporte(ctx)); erro.hidden = false; area.focus(); return; }   // plano 2000d · DU-026
     erro.hidden = true;
+    if (lista.length > 1) { colarVarias(ctx, dados, lista, btAbrir); return; }
+    const r = lista[0];
     colagem = { auto: r.auto, explicacao: "Automação colada de outro cliente. Os itens com o mesmo nome foram ligados aos deste cliente; ela nasce desligada.", avisos: r.pendencias, colada: true };
     ctx.navegar("#/automacoes/nova?colar=1");
   });
@@ -462,6 +504,42 @@ function caixaColar(ctx, dados) {
     h("summary", { class: "au-colar-sum" }, ui.icone("copiar"), h("span", null, "Colar automação de outro cliente")),
     h("div", { class: "campo campo-textarea" }, h("label", { for: id }, "Texto da automação"), area, erro),
     h("div", { class: "linha" }, btAbrir));
+}
+
+/**
+ * plano 2000d · DU-059: colar VÁRIAS automações — cria cada uma DESLIGADA (as que precisam de ajuste ficam de fora e são ditas pelo nome).
+ */
+async function colarVarias(ctx, dados, lista, botao) {
+  const { ui } = ctx;
+  const prontas = lista.filter(r => L.validar(r.auto, { base: dados.base, ligar: false }).ok);
+  const ajustar = lista.filter(r => !prontas.includes(r));
+  const ok = await ui.confirmar({ titulo: `Criar ${L.plural(prontas.length, "automação", "automações")}?`, rotulo: "Criar desligadas",
+    texto: `Elas nascem desligadas.${ajustar.length ? ` ${L.listaNomesCurta(ajustar.map(r => r.auto.nome || "sem nome"))} precisam de ajuste (etapa, etiqueta ou campo que não existe aqui): cole uma de cada vez para abrir no editor.` : ""}` });
+  if (!ok || !prontas.length) return;
+  const feitas = [], falhas = [];
+  const exec = (async () => { for (const r of prontas) { try { await ctx.api.rpcC("nx_automacao_salvar", { p_auto: L.limpar({ ...r.auto, ativo: false }) }); feitas.push(r); } catch { falhas.push(r); } } })();
+  await (typeof ui.carregando === "function" ? ui.carregando(botao, exec) : exec);
+  if (feitas.length) ui.toast(`${L.plural(feitas.length, "automação criada", "automações criadas")} (desligadas).`, { tipo: "ok" });
+  if (falhas.length) ui.toast(`Não consegui criar ${L.listaNomesCurta(falhas.map(r => r.auto.nome))}.`, { tipo: "erro" });
+  if (feitas.length) ctx.navegar("#/automacoes");
+}
+
+/** plano 2000d · DU-086: «Criar o kit da clínica» — as receitas de destaque desta vertical, desligadas, num toque (só com a lista vazia). */
+function kitInicialCaixa(ctx, dados, vertical) {
+  const { ui } = ctx;
+  const h = ui.h;
+  const kit = L.kitInicial(vertical, dados.base, ctx.vocab);
+  if (kit.length < 2) return null;
+  const nomeSeg = { odonto: "da clínica", oficina: "da oficina", loja: "da loja" }[vertical] || "para começar";
+  const bt = h("button", { type: "button", class: "bt bt-sec au-kit-bt" }, ui.icone("raio"), `Criar o kit ${nomeSeg} (${kit.length} desligadas)`);
+  bt.addEventListener("click", async () => {
+    const feitas = [];
+    const exec = (async () => { for (const a of kit) { try { await ctx.api.rpcC("nx_automacao_salvar", { p_auto: L.limpar({ ...a, ativo: false }) }); feitas.push(a); } catch { /* segue com as outras */ } } })();
+    await (typeof ui.carregando === "function" ? ui.carregando(bt, exec) : exec);
+    ui.toast(feitas.length ? `${L.plural(feitas.length, "automação criada", "automações criadas")} desligada${feitas.length === 1 ? "" : "s"}. Revise e ligue quando quiser.` : "Não consegui criar o kit agora. Tente de novo.", { tipo: feitas.length ? "ok" : "erro" });
+    if (feitas.length) ctx.navegar("#/automacoes");
+  });
+  return h("div", { class: "au-kit" }, h("p", { class: "sub" }, `Ou comece pelo kit: ${kit.map(a => `«${a.nome}»`).join(", ")}.`), bt);
 }
 
 /* ------------------------------------------------------------------ Criar com IA */
@@ -570,7 +648,7 @@ function cartaoIA(ctx, dados, noLimite, P, aoLiberarLimite = []) {
   if (desligada) estado.appendChild(h("p", { class: "aviso aviso-aten" }, ui.icone("ia"),
     h("span", null, "A IA ainda não está ligada nesta plataforma. Peça ao suporte da plataforma para ativar; enquanto isso, use as receitas prontas abaixo ou crie do zero." /* plano 1000b · UB-068: sem citar a Nexus (white-label) */)));
   else if (semCota) estado.appendChild(h("p", { class: "aviso aviso-aten" }, ui.icone("alerta"),
-    h("span", null, "A cota de IA deste mês acabou. As receitas prontas e o editor continuam funcionando; a cota volta no dia 1º do próximo mês (ou fale com o suporte da plataforma para ampliar).")));   // plano 1000b · UB-068
+    h("span", null, L.textoCotaEsgotada(ia))));   // plano 1000b · UB-068 · plano 2000d · DU-070: a data de renovação do servidor quando houver
 
   let pedindo = false;
   let pedidoAtual = 0;           // plano 1000 · AS-073: «Parar de esperar» abandona o pedido em andamento (a resposta que chegar depois é ignorada)
@@ -622,7 +700,7 @@ function cartaoIA(ctx, dados, noLimite, P, aoLiberarLimite = []) {
       if (e && e.cancelado) {
         pedidoAtual++;      // a resposta que ainda chegar não pinta nada
         estado.appendChild(h("p", { class: "aviso au-ia-desistiu", role: "status" }, ui.icone("info"),
-          h("span", null, "Paramos de esperar. Se a IA já tinha começado, este pedido pode ter usado 1 montagem da cota do mês. O texto continua na caixa.")));
+          h("span", null, "Paramos de esperar. Se a IA já tinha começado, este pedido pode ter gastado 1 uso da IA do mês. O texto continua na caixa.")));
         if (anteriores.length) estado.append(...anteriores);
         area.focus();
         return;
@@ -705,7 +783,7 @@ function perguntasIA(ctx, dados, m, reenviar, P) {
   const atualizar = () => {
     const n = perguntas.filter(p => String(respostas[p.id] || "").trim()).length;
     bt.disabled = !n || typeof reenviar !== "function" || !m.descricao;
-    nota.textContent = n ? `${n} ${n === 1 ? "resposta" : "respostas"} para mandar à IA (usa mais uma montagem da cota).` : "";
+    nota.textContent = n ? `${n} ${n === 1 ? "resposta" : "respostas"} para mandar à IA (gasta mais 1 uso da IA do mês).` : "";
   };
   const lista = h("ol", { class: "au-ia-perg", role: "list" }, perguntas.map(p => {
     const idCampo = `au-ia-resp-${p.id}-${Math.random().toString(36).slice(2, 6)}`;
@@ -760,7 +838,8 @@ function secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado, aoExcluida = () =
   const { ui } = ctx;
   const h = ui.h;
   let filtro = "todas";
-  const lista = h("ul", { class: "au-lista", role: "list" });
+  // plano 2000d · DU-343: acima de 60 automações, os cartões fora da tela não são desenhados (content-visibility no CSS)
+  const lista = h("ul", { class: ["au-lista", itens.length > 60 && "au-lista-longa"], role: "list" });
   const vazio = h("div", { class: "au-lista-vazio", hidden: true });
   const filtros = [["todas", "Todas", () => true], ["ligadas", "Ligadas", x => !!x.ativo], ["desligadas", "Desligadas", x => !x.ativo],
     // plano 1500c · UCA-026: «Com erro» na mesma régua do resumo do topo (30 dias quando o servidor manda) — erro de meses atrás não conta
@@ -789,7 +868,7 @@ function secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado, aoExcluida = () =
       }, SAIDA_FILTRO_MS);
     },
     /** AS-010 + AS-011: o cartão some na hora com «Desfazer»; só quando o aviso fecha a exclusão vale no servidor. */
-    excluirItem(it, li, foco) { return excluir(ctx, it, li, { itens, metas, aoMudarEstado, pintarVazio, aoEsvaziar, aoExcluida, foco }); },
+    excluirItem(it, li, foco) { return excluir(ctx, it, li, { itens, metas, aoMudarEstado, pintarVazio, aoEsvaziar, aoExcluida, foco, usuarios: dados.base && dados.base.usuarios }); },
   };
   // plano 1000 · AS-015: com muitas automações, busca por nome (sem acento) e ordem lembrada por pessoa neste aparelho
   const chaveOrdem = `nx-au-ordem:${ctx.cliente ? ctx.cliente.id : "-"}|${ctx.sessao && ctx.sessao.conta ? (ctx.sessao.conta.id || "-") : "-"}`;
@@ -816,6 +895,13 @@ function secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado, aoExcluida = () =
     if (ordem === "gatilho") {
       let i = 0;
       for (const g of L.agruparPorGatilho(vis)) {
+        lista.appendChild(h("li", { class: "au-lista-grupo", role: "presentation" }, h("h3", { class: "rotulo au-lista-grupo-tit" }, `${g.grupo} · ${g.itens.length}`)));
+        for (const it of g.itens) lista.appendChild(itemLista(ctx, dados, it, metas, P, i++, aoMudarEstado, ops));
+      }
+    } else if (ordem === "objetivo") {
+      // plano 2000d · DU-082: grupos Lembretes / Vendas / Relacionamento / Equipe
+      let i = 0;
+      for (const g of L.agruparPorObjetivo(vis)) {
         lista.appendChild(h("li", { class: "au-lista-grupo", role: "presentation" }, h("h3", { class: "rotulo au-lista-grupo-tit" }, `${g.grupo} · ${g.itens.length}`)));
         for (const it of g.itens) lista.appendChild(itemLista(ctx, dados, it, metas, P, i++, aoMudarEstado, ops));
       }
@@ -870,11 +956,15 @@ function secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado, aoExcluida = () =
  * plano 1500c · UCA-089 + UCA-017/018: texto da confirmação de LIGAR pela lista — a mesma régua do editor (mensagem OU IA),
  * com a cota de IA do mês quando houver e o aviso reforçado para disparo em massa. null = liga sem perguntar.
  */
-export function textoConfirmarLigar(it, dados, vocab) {
+// plano 2000d · DU-040: opcoes.total = quantos recebem agora (nx_auto_simular) → a frase com o número e, acima de 50, digitar o número
+// plano 2000d · DU-018: o conflito com a IA de atendimento entra como aviso reforçado
+export function textoConfirmarLigar(it, dados, vocab, opcoes = {}) {
   const msg = L.enviaMensagem(it), ia = L.temIA(it);
   if (!msg && !ia) return null;
   let massa = null;
-  try { massa = L.avisosEstruturaDetalhados(it, vocab).find(x => x.tipo === "massa_diaria" || x.tipo === "toda_mensagem") || null; } catch { massa = null; }
+  const opAv = { iaAtendimentoLigada: L.iaAtendimentoLigada(dados) };
+  try { massa = L.avisosEstruturaDetalhados(it, vocab, opAv).find(x => x.tipo === "massa_diaria" || x.tipo === "toda_mensagem" || x.tipo === "conflito_ia") || null; } catch { massa = null; }
+  const quem = msg && opcoes && opcoes.total != null ? L.fraseQuemRecebe(opcoes.total) : null;
   const d = dados || {};
   const iaD = d.ia || (d.base && d.base.ia) || null;
   const cota = iaD && (iaD.cota || (iaD.limite !== undefined ? { usadas: iaD.usadas, limite: iaD.limite } : null));
@@ -882,9 +972,36 @@ export function textoConfirmarLigar(it, dados, vocab) {
   const partes = [];
   if (massa) partes.push(`Atenção: ${massa.texto}`);
   if (msg) partes.push("Esta automação envia mensagens de WhatsApp para clientes. Assim que ligar, quem se encaixar no gatilho começa a receber.");
+  if (quem) partes.push(quem.texto);
   if (ia) partes.push(`Ela usa a IA a cada execução (gasta a cota do mês)${linha ? `: ${linha.texto}` : ""}.`);
   partes.push("Dá para desligar a qualquer momento.");
-  return { texto: partes.join(" "), massa: !!massa };
+  return { texto: partes.join(" "), massa: !!massa || !!(quem && quem.massa), digitar: quem ? quem.digitar : null, motivoMassa: massa ? massa.texto : null };
+}
+
+/**
+ * plano 2000d · DU-040: quantos recebem AGORA se ligar (automação de tempo/diária que manda mensagem). null quando não precisa contar ou
+ * quando a simulação falha (o diálogo continua, sem o número).
+ */
+export async function contarQuemRecebe(ctx, it, dados) {
+  if (!L.contarAoLigar(it)) return null;
+  try {
+    const resp = await ctx.api.rpcC("nx_auto_simular", { p_automacao: L.limpar(it) });
+    const sim = L.normalizarSimulacao(resp, it, dados && dados.base, ctx.vocab);
+    return Number.isFinite(sim.total) ? sim.total : null;
+  } catch { return null; }
+}
+
+/**
+ * plano 2000d · DU-046: o diálogo de ligar várias diz QUAIS disparam em massa (nome + motivo) e, havendo alguma, pede para digitar «ligar».
+ * conf = [{it, c}] (c = textoConfirmarLigar). → {texto, massa, digitar}
+ */
+export function textoLigarLote(alvo, conf) {
+  if (alvo.length === 1 && conf.length === 1) return { texto: conf[0].c.texto, massa: conf[0].c.massa, digitar: conf[0].c.digitar || null };
+  const massas = conf.filter(x => x.c.massa);
+  const base = `${conf.length === 1 ? "Uma delas envia" : `${conf.length} delas enviam`} WhatsApp ou usa a IA: assim que ligar, quem se encaixar começa a receber.`;
+  const lista = massas.map(x => `«${x.it.nome}»${x.c.motivoMassa ? `: ${x.c.motivoMassa}` : ""}`).join(" ");
+  const texto = massas.length ? `${base} Disparam em massa: ${lista} Dá para desligar a qualquer momento.` : `${base} Dá para desligar a qualquer momento.`;
+  return { texto, massa: massas.length > 0, digitar: massas.length ? "ligar" : null };
 }
 
 /**
@@ -896,21 +1013,24 @@ function modoSelecao(ctx, dados, itens, metas, lista, P, aoMudarEstado, redesenh
   const h = ui.h;
   const marcadas = new Set();
   let ativo = false;
+  let ultimaTocada = null;   // plano 2000d · DU-102
   const btModo = h("button", { type: "button", class: "bt bt-fant bt-p au-sel-modo", "aria-pressed": "false" }, ui.icone("check"), h("span", null, "Selecionar"));
   const status = h("p", { class: "au-sel-status", role: "status", "aria-live": "polite" });
   const btLigar = h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { acao: "ligar" } }, "Ligar");
   const btDesligar = h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { acao: "desligar" } }, "Desligar");
   const btExcluir = h("button", { type: "button", class: "bt bt-perigo bt-p", dataset: { acao: "excluir" } }, ui.icone("lixeira"), h("span", null, "Excluir"));
   const btTodas = h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { acao: "todas" } }, "Marcar todas");
-  const barraSel = h("div", { class: "au-sel-barra", role: "toolbar", "aria-label": "Ações nas automações selecionadas", hidden: true }, status, btTodas, btLigar, btDesligar, btExcluir);
+  // plano 2000d · DU-059: as marcadas viram um texto só para colar em outro cliente
+  const btCopiar = h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { acao: "copiar" } }, ui.icone("copiar"), h("span", null, "Copiar"));
+  const barraSel = h("div", { class: "au-sel-barra", role: "toolbar", "aria-label": "Ações nas automações selecionadas", hidden: true }, status, btTodas, btLigar, btDesligar, btCopiar, btExcluir);
   const el = h("div", { class: "au-sel" }, btModo, barraSel);
   const visiveis = () => [...lista.querySelectorAll(".au-item")];
   const doId = id => itens.find(x => String(x.id) === String(id));
   const pintar = () => {
     const n = marcadas.size;
-    status.textContent = n === 0 ? "Nenhuma selecionada" : n === 1 ? "1 selecionada" : `${n} selecionadas`;
-    for (const b of [btLigar, btDesligar, btExcluir]) b.disabled = !n;
     const vs = visiveis();
+    status.textContent = L.textoSelecao(marcadas, vs.map(li => li.dataset.id));   // plano 2000d · DU-076: «3 selecionadas (1 fora do filtro)»
+    for (const b of [btLigar, btDesligar, btExcluir, btCopiar]) b.disabled = !n;
     btTodas.textContent = vs.length && vs.every(li => marcadas.has(li.dataset.id)) ? "Desmarcar todas" : "Marcar todas";
   };
   const caixa = li => {
@@ -918,15 +1038,25 @@ function modoSelecao(ctx, dados, itens, metas, lista, P, aoMudarEstado, redesenh
     const it = doId(id);
     const c = h("input", { type: "checkbox", class: "au-sel-chk", "aria-label": `Selecionar «${it ? it.nome : ""}»` });
     c.checked = marcadas.has(id);
+    // plano 2000d · DU-102: Shift+clique marca (ou desmarca) o intervalo desde a última caixa tocada
+    c.addEventListener("click", ev => {
+      const vs = visiveis();
+      const j = vs.indexOf(li);
+      if (ev.shiftKey && ultimaTocada != null && j >= 0) {
+        const [a, b] = [Math.min(ultimaTocada, j), Math.max(ultimaTocada, j)];
+        for (const x of vs.slice(a, b + 1)) { const cx = x.querySelector(".au-sel-chk"); if (c.checked) marcadas.add(x.dataset.id); else marcadas.delete(x.dataset.id); if (cx) cx.checked = c.checked; }
+      }
+      ultimaTocada = j >= 0 ? j : null;
+    });
     c.addEventListener("change", () => { if (c.checked) marcadas.add(id); else marcadas.delete(id); pintar(); });
     return h("label", { class: "au-sel-caixa" }, c);
   };
   const aoDesenhar = () => {
     lista.classList.toggle("au-selecionando", ativo);
     if (!ativo) return;
-    // o que saiu da lista (filtro, busca) deixa de estar marcado: a ação vale só para o que se vê
-    const ids = new Set(visiveis().map(li => li.dataset.id));
-    for (const id of [...marcadas]) if (!ids.has(id)) marcadas.delete(id);
+    // plano 2000d · DU-076: o que só saiu da vista (filtro, busca) CONTINUA marcado (o status diz quantas estão fora); só o que foi excluído sai
+    const existentes = new Set(itens.map(x => String(x.id)));
+    for (const id of [...marcadas]) if (!existentes.has(id)) marcadas.delete(id);
     for (const li of visiveis()) if (!li.querySelector(".au-sel-caixa")) li.insertBefore(caixa(li), li.firstChild);
     pintar();
   };
@@ -939,6 +1069,20 @@ function modoSelecao(ctx, dados, itens, metas, lista, P, aoMudarEstado, redesenh
     aoDesenhar();
   };
   btModo.addEventListener("click", () => ligarModo(!ativo));
+  // plano 2000d · DU-102: Ctrl/⌘+A com o foco na lista marca todas as visíveis
+  lista.addEventListener("keydown", ev => {
+    if (!ativo || !(ev.ctrlKey || ev.metaKey) || String(ev.key).toLowerCase() !== "a") return;
+    if (ev.target && /^(INPUT|TEXTAREA)$/.test(ev.target.tagName) && ev.target.type !== "checkbox") return;
+    ev.preventDefault();
+    for (const li of visiveis()) { marcadas.add(li.dataset.id); const c = li.querySelector(".au-sel-chk"); if (c) c.checked = true; }
+    pintar();
+  });
+  btCopiar.addEventListener("click", () => {
+    const alvo = escolhidas();
+    if (!alvo.length) return;
+    ui.copiar(JSON.stringify(L.exportarAutomacoes(alvo, dados.base, ctx.vocab)),
+      { aviso: `${L.plural(alvo.length, "automação copiada", "automações copiadas")}. No outro cliente, use «Colar automação» na lista.` });
+  });
   btTodas.addEventListener("click", () => {
     const vs = visiveis();
     const todas = vs.every(li => marcadas.has(li.dataset.id));
@@ -950,11 +1094,20 @@ function modoSelecao(ctx, dados, itens, metas, lista, P, aoMudarEstado, redesenh
     const alvo = escolhidas().filter(x => !!x.ativo !== v);
     if (!alvo.length) { ui.toast(v ? "As selecionadas já estão ligadas." : "As selecionadas já estão desligadas.", { tipo: "info" }); return; }
     if (v) {
-      const conf = alvo.map(x => textoConfirmarLigar(x, dados, ctx.vocab)).filter(Boolean);
+      const conf = [];
+      for (const x of alvo) { const c = textoConfirmarLigar(x, dados, ctx.vocab, { total: alvo.length === 1 ? await contarQuemRecebe(ctx, x, dados) : null }); if (c) conf.push({ it: x, c }); }
       if (conf.length) {
+        const t = textoLigarLote(alvo, conf);
         const ok = await ui.confirmar({ titulo: alvo.length === 1 ? `Ligar «${alvo[0].nome}»?` : `Ligar ${alvo.length} automações?`,
-          rotulo: conf.some(c => c.massa) ? "Ligar mesmo assim" : "Ligar", perigo: conf.some(c => c.massa),
-          texto: alvo.length === 1 ? conf[0].texto : `${conf.length === 1 ? "Uma delas envia" : `${conf.length} delas enviam`} WhatsApp ou usa a IA: assim que ligar, quem se encaixar começa a receber. Dá para desligar a qualquer momento.` });
+          rotulo: t.massa ? "Ligar mesmo assim" : "Ligar", perigo: t.massa, texto: t.texto, digitar: t.digitar });
+        if (!ok) return;
+      }
+    } else {
+      // plano 2000d · DU-443: desligar várias também diz o que fica pendente (as esperas delas são canceladas, como no interruptor)
+      const w = alvo.reduce((n, x) => n + (Number(x.em_espera) || 0), 0);
+      if (w) {
+        const ok = await ui.confirmar({ titulo: alvo.length === 1 ? `Desligar «${alvo[0].nome}»?` : `Desligar ${alvo.length} automações?`, rotulo: "Desligar", perigo: true,
+          texto: `${w === 1 ? "1 pessoa está" : `${w} pessoas estão`} no meio de uma sequência e não ${w === 1 ? "recebe" : "recebem"} os próximos passos: as esperas são canceladas ao desligar.` });
         if (!ok) return;
       }
     }
@@ -974,8 +1127,8 @@ function modoSelecao(ctx, dados, itens, metas, lista, P, aoMudarEstado, redesenh
     await (typeof ui.carregando === "function" ? ui.carregando(botao, exec) : exec);
     aoMudarEstado();
     pintar();
-    if (falhas.length) ui.toast(`Não consegui ${v ? "ligar" : "desligar"} ${falhas.map(x => `«${x.nome}»`).join(", ")}.`, { tipo: "erro" });
-    if (feitas.length) ui.toast(`${feitas.length} ${feitas.length === 1 ? "automação" : "automações"} ${v ? (feitas.length === 1 ? "ligada" : "ligadas") : (feitas.length === 1 ? "desligada" : "desligadas")}.`, { tipo: "ok" });
+    if (falhas.length) ui.toast(`Não consegui ${v ? "ligar" : "desligar"} ${L.listaNomesCurta(falhas.map(x => x.nome))}.`, { tipo: "erro" });   // plano 2000d · DU-048
+    if (feitas.length) ui.toast(`${v ? L.plural(feitas.length, "automação ligada", "automações ligadas") : L.plural(feitas.length, "automação desligada", "automações desligadas")}.`, { tipo: "ok" });   // plano 2000d · DU-356
   };
   btLigar.addEventListener("click", () => mudarVarias(true, btLigar));
   btDesligar.addEventListener("click", () => mudarVarias(false, btDesligar));
@@ -983,24 +1136,47 @@ function modoSelecao(ctx, dados, itens, metas, lista, P, aoMudarEstado, redesenh
     const alvo = escolhidas();
     if (!alvo.length) return;
     const ok = await ui.confirmar({ titulo: alvo.length === 1 ? `Excluir «${alvo[0].nome}»?` : `Excluir ${alvo.length} automações?`, perigo: true,
-      texto: "O histórico de execuções delas é apagado junto. Dá para desfazer enquanto o aviso estiver na tela." });
+      // plano 2000d · DU-354: diz a consequência (quem está no meio da sequência perde os próximos passos)
+      texto: (() => { const w = alvo.reduce((n, x) => n + (Number(x.em_espera) || 0), 0); return `O histórico de execuções delas é apagado junto.${w ? ` ${w === 1 ? "1 pessoa no meio de uma sequência não recebe" : `${w} pessoas no meio de sequências não recebem`} os próximos passos.` : ""} Dá para desfazer enquanto o aviso estiver na tela.`; })() });
     if (!ok) return;
     const posicoes = alvo.map(it => [it, itens.indexOf(it)]);
     alvo.forEach(it => excluindo.add(it.id));
+    // plano 2000d · DU-047: as que o servidor já apagou não voltam para a tela quando outra falha no meio
+    const jaExcluidas = new Set();
     let r;
     try {
       r = await ui.acaoComDesfazer({
         texto: alvo.length === 1 ? `«${alvo[0].nome}» excluída.` : `${alvo.length} automações excluídas.`,
         aplicar: () => { for (const it of alvo) { const i = itens.indexOf(it); if (i >= 0) itens.splice(i, 1); } marcadas.clear(); redesenhar(); aoMudarEstado(); },
-        reverter: () => { for (const [it, i] of posicoes.slice().sort((a, b) => a[1] - b[1])) if (!itens.includes(it)) itens.splice(Math.min(Math.max(i, 0), itens.length), 0, it); redesenhar(); aoMudarEstado(); },
-        firmar: async o => { for (const it of alvo) await ctx.api.rpcC("nx_automacao_excluir", { p_id: it.id }, o && o.saindo ? { keepalive: true } : {}); },
+        reverter: () => { for (const [it, i] of posicoes.slice().sort((a, b) => a[1] - b[1])) if (!jaExcluidas.has(it) && !itens.includes(it)) itens.splice(Math.min(Math.max(i, 0), itens.length), 0, it); redesenhar(); aoMudarEstado(); },
+        firmar: async o => {
+          let erro = null;
+          for (const it of alvo) {
+            try { await ctx.api.rpcC("nx_automacao_excluir", { p_id: it.id }, o && o.saindo ? { keepalive: true } : {}); jaExcluidas.add(it); }
+            catch (e) { erro = erro || e; }
+          }
+          if (erro) throw erro;
+        },
       });
     } finally { alvo.forEach(it => excluindo.delete(it.id)); }
-    if (r && r.estado === "mantida") { try { aoExcluida(); } catch { /* ok */ } if (!itens.length) aoEsvaziar(); }
-    else if (r && r.estado === "falhou" && r.erro) ui.toast(L.erroAutomacao(r.erro, ctx.api.mensagemErro(r.erro), dados.base && dados.base.usuarios), { tipo: "erro" });
+    if (r && r.estado === "mantida") { for (let k = 0; k < alvo.length; k++) { try { aoExcluida(); } catch { /* ok */ } } if (!itens.length) aoEsvaziar(); }
+    else if (r && r.estado === "falhou" && r.erro) {
+      // plano 2000d · DU-047/DU-048: diz quais saíram e quais ficaram (até 3 nomes + «e mais N»)
+      const feitas = alvo.filter(it => jaExcluidas.has(it)), ficaram = alvo.filter(it => !jaExcluidas.has(it));
+      for (let k = 0; k < feitas.length; k++) { try { aoExcluida(); } catch { /* ok */ } }
+      ui.toast(feitas.length ? `Excluídas: ${L.listaNomesCurta(feitas.map(x => x.nome))}. Não consegui excluir ${L.listaNomesCurta(ficaram.map(x => x.nome))}.`
+        : L.erroAutomacao(r.erro, ctx.api.mensagemErro(r.erro), dados.base && dados.base.usuarios), { tipo: "erro" });
+      if (!itens.length) aoEsvaziar();
+    }
   });
   pintar();
   return { el, aoDesenhar, marcadas, ligarModo };
+}
+
+/** plano 2000d · DU-054: a observação do cartão (até 120 letras, «…» no corte); "" sem observação. */
+export function obsCartao(it) {
+  const t = String((it && it.descricao) || "").replace(/\s+/g, " ").trim();
+  return t.length > 120 ? `${t.slice(0, 119).trimEnd()}…` : t;
 }
 
 /** plano 1000 · AS-226: «Com erro, 2 automações» para o leitor de tela (o «·» do chip era lido de um jeito estranho). */
@@ -1026,6 +1202,8 @@ function itemLista(ctx, dados, it, metas, P, posicao = 0, aoMudarEstado = () => 
   const idFrase = `au-item-fr-${String(it.id).replace(/[^\w-]/g, "")}-${posicao}`;
   const estadoTxt = h("span", { class: "au-item-estado", id: `${idFrase}-est` });
   const ponto = h("span", { class: "au-item-ponto" });
+  const pilParada = h("span", { class: "pilula pilula-aten au-pil-parada", hidden: true, title: "Ligada, mas não roda há uma semana: confira se a etapa, o funil ou o horário ainda existem." });
+  const pilCaido = h("span", { class: "pilula pilula-ruim au-pil-caido", hidden: true }, "Número desconectado: mensagens paradas");
   const li = h("li", { class: ["au-item", !it.ativo && "au-desligada"], style: { "--i": String(posicao) }, dataset: { id: String(it.id) } });
   const pintar = x => {
     // plano 1500c · UCA-027: a barra mostra os últimos 30 dias quando o servidor manda (quebra recente não fica verde); o total segue no title
@@ -1047,7 +1225,11 @@ function itemLista(ctx, dados, it, metas, P, posicao = 0, aoMudarEstado = () => 
     ultima.textContent = x.ultima_execucao_em ? (quemUlt ? `última: ${quemUlt}, ${ui.relativo(x.ultima_execucao_em)}` : `última ${ui.relativo(x.ultima_execucao_em)}`) : "ainda não rodou";
     ultima.title = x.ultima_execucao_em ? ui.dataHoraBR(x.ultima_execucao_em) : "";
     ui.limpar(taxa); taxa.appendChild(P.barraTaxa({ pct: t.pct, total: t.total }));
-    estadoTxt.textContent = x.ativo ? "Ligada" : "Desligada";
+    estadoTxt.textContent = L.estadoExibido(x, ctx.cliente);   // plano 2000d · DU-071: «Parada (teste terminou)» quando nada está saindo
+    // plano 2000d · DU-067/DU-087: ligada mas parada de verdade (sem rodar há 7 dias; números desconectados)
+    const sr = L.semRodarHa(x), ev = L.estadoEnvio(x, dados.base && dados.base.canais);
+    pilParada.hidden = !sr; pilParada.textContent = sr ? sr.texto : "";
+    pilCaido.hidden = ev !== "parado";
     ui.limpar(ponto); ponto.appendChild(P.pontoEstado(!!x.ativo, { erro: t.erros > 0 }));
   };
   pintar(it);
@@ -1056,10 +1238,10 @@ function itemLista(ctx, dados, it, metas, P, posicao = 0, aoMudarEstado = () => 
     aoMudar: async (v, b) => {
       // ligar algo que manda mensagem ao cliente merece uma confirmação (item 52): a partir dali sai WhatsApp de verdade
       // plano 1500c · UCA-089: a IA também confirma (com a cota do mês), igual ao editor; UCA-017/018: disparo em massa ganha aviso reforçado
-      const confirmacao = v ? textoConfirmarLigar(it, dados, vv) : null;
+      const confirmacao = v ? textoConfirmarLigar(it, dados, vv, { total: await contarQuemRecebe(ctx, it, dados) }) : null;   // plano 2000d · DU-040
       if (confirmacao) {
         const ok = await ui.confirmar({ titulo: `Ligar «${it.nome}»?`, rotulo: confirmacao.massa ? "Ligar mesmo assim" : "Ligar", perigo: confirmacao.massa,
-          texto: confirmacao.texto });
+          texto: confirmacao.texto, digitar: confirmacao.digitar || null });
         if (!ok) { b.definir(false); b.focus({ preventScroll: true }); return; }
       }
       // plano 1000 · AS-277: desligar cancela as esperas em andamento (gatilho nx_tg_auto_desligada) — quem está no meio perde os próximos passos
@@ -1106,7 +1288,9 @@ function itemLista(ctx, dados, it, metas, P, posicao = 0, aoMudarEstado = () => 
     { rotulo: podeEditar ? "Editar" : "Ver", icone: "editar", fn: () => ctx.navegar(`#/automacoes/${it.id}`) },
     podeEditar ? { rotulo: "Testar (sem enviar nada)", icone: "olho", fn: () => ctx.navegar(`#/automacoes/${it.id}?testar=1`) } : null,
     // plano 1000b · UB-258: o menu diz quantas execuções há
-    { rotulo: nExec ? `Ver execuções (${ui.num(nExec)})` : "Ver execuções", icone: "relogio", fn: () => ctx.navegar(`#/automacoes/${it.id}?aba=execucoes`) },
+    { rotulo: L.rotuloVerExecucoes(it), icone: "relogio", fn: () => ctx.navegar(`#/automacoes/${it.id}?aba=execucoes`) },   // plano 2000d · DU-100: o mesmo período do cartão
+    // plano 2000d · DU-059: copiar para outro cliente direto do cartão (antes só no menu do editor)
+    podeEditar ? { rotulo: "Copiar para outro cliente", icone: "copiar", fn: () => ui.copiar(JSON.stringify(L.exportarAutomacao(it, dados.base, vv)), { aviso: "Automação copiada. No outro cliente, use «Colar automação» na lista de automações." }) } : null,
     // AS-005: no limite do plano a cópia seria recusada pelo servidor — o item já aparece desabilitado com o motivo
     podeEditar ? { rotulo: noLimite ? `Duplicar (o plano permite até ${lim.limite})` : "Duplicar", icone: "copiar", desabilitado: noLimite || duplicando.has(it.id),
       fn: () => duplicar(ctx, it, dados.base, null, dados.itens) } : null,
@@ -1131,9 +1315,11 @@ function itemLista(ctx, dados, it, metas, P, posicao = 0, aoMudarEstado = () => 
       h("span", { class: "au-item-topo" }, ponto,
         h("a", { class: "au-item-nome au-item-link", href: `#/automacoes/${it.id}`, "aria-describedby": idFrase }, it.nome), estadoTxt),
       h("span", { class: "au-item-frase", id: idFrase }, frase),
+      // plano 2000d · DU-054: a observação interna («por que existe») aparece abaixo da frase, até 120 letras (a busca já olha ela)
+      obsCartao(it) ? h("span", { class: "au-item-obs", title: String(it.descricao) }, obsCartao(it)) : null,
       h("span", { class: "au-item-meta" },
         h("span", { class: "pilula pilula-neutra au-item-gat" }, ui.icone(g ? g.icone : "raio"), L.rotuloGatilho(it.gatilho, vv)),
-        etiquetas, exec, errs, msgs, espera, ultima),
+        pilParada, pilCaido, etiquetas, exec, errs, msgs, espera, ultima),
       h("span", { class: "au-item-rodape" }, taxa)),
     btMais);
   return li;
@@ -1187,7 +1373,7 @@ async function duplicar(ctx, origem, base, botao = null, itens = []) {
  * Excluir com «Desfazer» (AS-011): o cartão some na hora (sem redesenhar a tela — AS-010), o aviso fica 7 s e só quando ele fecha
  * a exclusão vai ao servidor (firmar). Desfazer devolve o cartão no mesmo lugar sem chamada nenhuma.
  */
-async function excluir(ctx, it, li, { itens = null, metas = null, aoMudarEstado = () => {}, pintarVazio = () => {}, aoEsvaziar = () => {}, aoExcluida = () => {}, foco = null } = {}) {
+async function excluir(ctx, it, li, { itens = null, metas = null, aoMudarEstado = () => {}, pintarVazio = () => {}, aoEsvaziar = () => {}, aoExcluida = () => {}, foco = null, usuarios = null } = {}) {
   const { ui } = ctx;
   const pai = li && li.parentNode;
   let posLista = -1, posItens = -1, depoisDe = null;
@@ -1228,7 +1414,7 @@ async function excluir(ctx, it, li, { itens = null, metas = null, aoMudarEstado 
   }); } finally { excluindo.delete(it.id); }
   // plano 1000b · UB-001: excluída de vez → libera a vaga do plano (os botões de criar reacendem)
   if (r && r.estado === "mantida") { try { aoExcluida(); } catch { /* ok */ } if (itens && !itens.length) aoEsvaziar(); return true; }
-  if (r && r.estado === "falhou" && r.erro) ui.toast(L.erroAutomacao(r.erro, ctx.api.mensagemErro(r.erro)), { tipo: "erro" });
+  if (r && r.estado === "falhou" && r.erro) ui.toast(L.erroAutomacao(r.erro, ctx.api.mensagemErro(r.erro), usuarios), { tipo: "erro" });   // plano 2000d · DU-081: diz a quem pedir
   return false;
 }
 
@@ -1273,7 +1459,7 @@ async function pausarEnvios(ctx, itens, metas, botao, aoMudarEstado, raiz = null
     return { feitas, falhas };
   };
   const r = await ui.carregando(botao, mudar(alvo, false));
-  if (r.falhas.length) ui.toast(`Não consegui desligar ${r.falhas.map(x => `«${x.nome}»`).join(", ")}. Tente de novo ou desligue pelo interruptor.`, { tipo: "erro" });
+  if (r.falhas.length) ui.toast(`Não consegui desligar ${L.listaNomesCurta(r.falhas.map(x => x.nome))}. Tente de novo ou desligue pelo interruptor.`, { tipo: "erro" });   // plano 2000d · DU-048
   if (!r.feitas.length) return;
   const pausadas = r.feitas;
   ui.toast(pausadas.length === 1 ? "1 automação pausada." : `${pausadas.length} automações pausadas.`, { tipo: "ok", ms: 10000,
@@ -1294,7 +1480,7 @@ function secaoReceitas(ctx, dados, vertical, vv, noLimite, qtdItens, P, aoLibera
   const h = ui.h;
   const grade = h("div", { class: "au-modelos" });
   const temModeloAprovado = (dados.base.templates || []).some(t => String(t.status || "").toUpperCase() === "APPROVED");
-  const exemplo = L.exemploVariaveis({ empresa: ctx.cliente ? ctx.cliente.nome : "", atendente: ctx.sessao && ctx.sessao.conta ? ctx.sessao.conta.nome : "Ana", base: dados.base });   // plano 1000b · UB-073
+  const exemplo = L.exemploVariaveis({ empresa: ctx.cliente ? ctx.cliente.nome : "", atendente: ctx.sessao && ctx.sessao.conta ? ctx.sessao.conta.nome : "Ana", base: dados.base, vertical });   // plano 1000b · UB-073 · plano 2000d · DU-038
   // plano 1000b · UB-210: «Mostrar receitas de outros segmentos» (lembrado no aparelho) — as escondidas desta vertical vêm no fim
   const daVertical = L.modelosDaVertical(vertical);
   const deOutros = L.MODELOS.filter(m => !daVertical.includes(m));
@@ -1306,24 +1492,30 @@ function secaoReceitas(ctx, dados, vertical, vv, noLimite, qtdItens, P, aoLibera
   let categoria = "todas";
   let termo = "";
   const lim = dados.limite || {};
-  const motivoLimite = `Seu plano permite até ${lim.limite} automações (desligadas também contam). Exclua uma para usar outra receita.`;
+  const motivoLimite = `Seu plano permite até ${lim.limite} automações. Exclua uma para usar outra receita (veja o aviso no topo).`;   // plano 2000d · DU-103: «desligadas também contam» fica só no aviso do topo
   const iaInfo = dados.ia || (dados.base && dados.base.ia) || null;
   const cotaIA = iaInfo && (iaInfo.cota || (iaInfo.limite !== undefined ? { usadas: iaInfo.usadas, limite: iaInfo.limite } : null));
   const canaisBase = dados.base && Array.isArray(dados.base.canais) ? dados.base.canais : null;
-  const semCodewords = !!canaisBase && canaisBase.every(c => c && c.provedor) && !canaisBase.some(c => c.provedor === "codewords");
   const cotaTxt = cotaIA && cotaIA.limite != null ? `${ui.num(Number(cotaIA.usadas) || 0)} de ${ui.num(cotaIA.limite)} já usadas` : "";
+  // plano 2000d · DU-078: o plano da empresa não inclui IA (o servidor manda ia.no_plano=false e, se souber, ia.plano_com_ia)
+  const iaForaDoPlano = !!iaInfo && iaInfo.no_plano === false;
+  // plano 2000d · DU-085: as receitas que a empresa já usa (auto.modelo, quando o servidor guardar)
+  const emUso = L.receitasEmUso(dados.itens);
+  // plano 2000d · DU-419: o tom do texto das receitas (próximo = o de sempre; formal = sem «Oi», com «Olá» e tratamento)
+  let tom = "proximo";
 
   const cacheReceitas = new Map();
   /** plano 1500c · UCA-031 + UCA-120: {auto, frase, bolha} por receita; a bolha usa o corpo do modelo aprovado que a receita escolheu. */
   const preparada = m => {
-    if (cacheReceitas.has(m.id)) return cacheReceitas.get(m.id);
+    const chaveR = `${m.id}|${tom}`;
+    if (cacheReceitas.has(chaveR)) return cacheReceitas.get(chaveR);
     let auto = null, frase = "";
-    try { auto = L.aplicarModelo(m, dados.base, vv); } catch { auto = null; }
+    try { auto = L.aplicarModelo(m, dados.base, vv, { tom }); } catch { auto = null; }
     try { frase = auto ? L.descrever(auto, dados.base, vv) : ""; } catch { frase = ""; }
     let b = { texto: "", sugestao: false };
     try { b = textoBolhaReceita(m, auto, dados.base, vertical, exemplo); } catch { /* sem bolha */ }
     const r = { auto, frase, bolha: b.texto, sugestao: b.sugestao };
-    cacheReceitas.set(m.id, r);
+    cacheReceitas.set(chaveR, r);
     return r;
   };
   const cartao = (m, primeiro) => {
@@ -1358,11 +1550,12 @@ function secaoReceitas(ctx, dados, vertical, vv, noLimite, qtdItens, P, aoLibera
         h("div", { class: "au-modelo-selos" },
           selo ? h("span", { class: "pilula pilula-prim" }, selo) : null,
           // plano 1000b · UB-069: sem número CodeWords na empresa, a pílula diz o que falta (em vez de prometer «sai pelo CodeWords»)
-          canal === "codewords" ? (semCodewords
-            ? h("span", { class: "pilula pilula-aten au-pil-tipo au-pil-falta-cw", title: "As mensagens desta receita saem por um número conectado por aparelho (CodeWords), que a empresa ainda não tem." }, ui.icone("whatsapp"), "precisa de número conectado por aparelho")
-            : h("span", { class: "pilula pilula-neutra au-pil-tipo", title: "As mensagens saem pelo CodeWords (WhatsApp conectado por aparelho). Receita pronta e testada." }, ui.icone("whatsapp"), "sai pelo CodeWords")) : null,
+          canal === "codewords" ? (selosCanalReceita(m, canaisBase).pilula === "falta"
+            ? h("span", { class: "pilula pilula-aten au-pil-tipo au-pil-falta-cw", title: "As mensagens desta receita saem por um número conectado por aparelho, que a empresa ainda não tem." }, ui.icone("whatsapp"), "precisa de número conectado por aparelho")
+            : h("span", { class: "pilula pilula-neutra au-pil-tipo", title: equipeDaPlataforma(ctx) ? "As mensagens saem pelo CodeWords (WhatsApp conectado por aparelho). Receita pronta e testada." : "As mensagens saem pelo número conectado por aparelho. Receita pronta e testada." }, ui.icone("whatsapp"), "sai pelo número por aparelho")) : null,   // plano 2000d · DU-024: o fornecedor só no title de gestor/super
           canal === "meta" ? h("span", { class: "pilula pilula-info", title: "Usa um modelo aprovado pela Meta (WhatsApp oficial)." }, ui.icone("whatsapp"), "modelo oficial da Meta") : null,
-          L.usaIA(m) ? h("span", { class: "pilula pilula-prim", title: "Usa uma sugestão da cota de IA do mês a cada execução." }, ui.icone("ia"), "usa IA") : null)),
+          L.usaIA(m) ? h("span", { class: "pilula pilula-prim", title: "Gasta 1 uso da IA do mês a cada execução." }, ui.icone("ia"), "usa IA") : null,
+          emUso.has(m.id) ? h("a", { class: "pilula pilula-ok au-pil-em-uso", href: `#/automacoes/${encodeURIComponent(emUso.get(m.id).id)}`, title: `Já existe: «${emUso.get(m.id).nome}»` }, ui.icone("check"), "Você já usa") : null)),   // plano 2000d · DU-085
       h("h3", null, L.tituloModelo(m, vv)),
       h("p", { class: "sub" }, L.textoModelo(m, vv)),
       fraz ? h("p", { class: "au-modelo-frase" }, ui.icone("raio"), h("span", null, fraz)) : null,
@@ -1370,24 +1563,36 @@ function secaoReceitas(ctx, dados, vertical, vv, noLimite, qtdItens, P, aoLibera
       previa,
       acTpl && !temModeloAprovado ? h("p", { class: "au-modelo-nota" }, ui.icone("info"), "Precisa de um modelo aprovado na Meta; dá para deixar pronta e ligar depois.") : null,
       m.aviso && !acTpl ? h("p", { class: "au-modelo-nota" }, ui.icone("info"), m.aviso) : null,
+      // plano 2000d · DU-053: empresa só com número oficial: a receita de texto livre avisa da janela de 24 h (não promete «sai a qualquer hora»)
+      selosCanalReceita(m, canaisBase).notaJanela ? h("p", { class: "au-modelo-nota au-modelo-janela" }, ui.icone("alerta"), selosCanalReceita(m, canaisBase).notaJanela) : null,
       iaOff && L.usaIA(m) ? h("p", { class: "au-modelo-nota au-modelo-nota-ia" }, ui.icone("ia"), "A IA ainda não está ligada nesta plataforma: dá para deixar pronta, mas o passo de IA só funciona depois que o suporte da plataforma ativar." /* plano 1000b · UB-068 */) : null,
       // plano 1000 · AS-076: cada execução de uma receita com IA gasta 1 da cota do mês (200 contatos/mês = 200 da cota)
-      !iaOff && L.usaIA(m) ? h("p", { class: "au-modelo-nota au-modelo-custo" }, ui.icone("ia"),
-        `Cada vez que roda, usa 1 da cota de IA do mês${cotaTxt ? ` (${cotaTxt})` : ""}.`) : null,
+      !iaOff && !iaForaDoPlano && L.usaIA(m) ? h("p", { class: "au-modelo-nota au-modelo-custo" }, ui.icone("ia"),
+        `Cada vez que roda, usa 1 da cota de IA do mês${cotaTxt ? ` (${cotaTxt})` : ""}.`,
+        // plano 2000d · DU-090: a estimativa do mês pelo volume do gatilho nos últimos 30 dias (base.volume_30d)
+        L.estimativaUsosIA(m, dados.base, cotaIA) ? ` ${L.estimativaUsosIA(m, dados.base, cotaIA)}.` : "") : null,
+      // plano 2000d · DU-078: sem IA no plano, a nota diz em qual plano tem e oferece o pedido
+      iaForaDoPlano && L.usaIA(m) ? h("p", { class: "au-modelo-nota au-modelo-plano" }, ui.icone("ia"),
+        h("span", null, `A IA não faz parte do seu plano${iaInfo.plano_com_ia ? `: disponível no plano ${iaInfo.plano_com_ia}` : ""}. `),
+        pedirContratacao(ctx) ? h("button", { type: "button", class: "bt bt-fant bt-p au-quero-ia", on: { click: () => pedirContratacao(ctx)("automacoes_ia") } }, "Quero a IA")
+          : h("a", { href: "#/config/plano" }, "Ver planos")) : null,
       h("div", { class: "au-modelo-rod" },
         btVer,
+        // plano 2000d · DU-077: quantas pessoas a receita pegaria hoje (simula sem salvar)
+        pr.auto && L.enviaMensagem(pr.auto) ? botaoQuemPegaria(ctx, pr.auto, dados) : null,
         // plano 1000 · AS-013: no limite, o botão apagado diz o porquê
         // plano 1000b · UB-047: o porquê é o aviso único do topo (#au-limite)
         h("button", { type: "button", class: ["bt", selo ? "bt-prim" : "bt-sec", "bt-p", "au-usar-receita"], disabled: noLimite,
           title: noLimite ? motivoLimite : null, "aria-describedby": noLimite ? "au-limite" : null,
           // plano 1000b · UB-012: cada botão diz QUAL receita (na lista de botões do leitor de tela eram todos «Usar receita»)
           "aria-label": `Usar a receita «${L.tituloModelo(m, vv)}»`,
-          on: { click: () => ctx.navegar(`#/automacoes/nova?modelo=${encodeURIComponent(m.id)}`) } }, "Usar receita")));
+          on: { click: () => ctx.navegar(`#/automacoes/nova?modelo=${encodeURIComponent(m.id)}${tom === "formal" ? "&tom=formal" : ""}`) } }, "Usar receita")));
   };
 
   const vazioBusca = h("div", { class: "au-modelos-vazio", hidden: true });
   const statusBusca = h("p", { class: "sr-only", role: "status", "aria-live": "polite" });
   const desenhar = () => {
+    desenhada = true;   // plano 2000d · DU-084
     ui.limpar(grade);
     const vis = L.filtrarModelos(todas.filter(m => categoria === "todas" || m.categoria === categoria), termo, vv);
     vis.forEach((m, i) => grade.appendChild(cartao(m, i === 0 && categoria === "todas" && !termo)));
@@ -1442,25 +1647,74 @@ function secaoReceitas(ctx, dados, vertical, vv, noLimite, qtdItens, P, aoLibera
     });
   }
   const filtroOutros = chkOutros ? h("label", { class: "au-modelos-outros" }, chkOutros, h("span", null, `Mostrar receitas de outros segmentos (${deOutros.length})`)) : null;
-  desenhar();
+  // plano 2000d · DU-419: o tom do texto, escolhido aqui, vale para a prévia e para o editor (?tom=formal)
+  const barraTom = h("div", { class: "au-chips au-modelos-tom", role: "radiogroup", "aria-label": "Tom das mensagens" });
+  for (const [k, rot] of L.TONS_RECEITA) {
+    const b = P.chip({ rotulo: rot, ligado: k === tom, modo: "radio", aoClicar: () => {
+      tom = k; barraTom.querySelectorAll(".au-chip").forEach(c => c.setAttribute("aria-checked", String(c === b))); if (desenhada) desenhar(); } });
+    barraTom.appendChild(b);
+  }
+  P.setas(barraTom);
+  // plano 2000d · DU-084: a grade (aplicarModelo de cada receita) só é montada quando a seção chega perto da tela ou a busca é usada
+  let desenhada = false;
+  const desenharJa = desenhar;
+  const garantir = () => { if (!desenhada) { desenhada = true; desenharJa(); } };
+  campoBusca.addEventListener("focus", garantir);
+  recontarChips();
   // plano 1000b · UB-001: saiu do limite → «Usar receita» reacende (e os cartões desenhados depois já nascem acesos)
   aoLiberarLimite.push(() => {
     noLimite = false;
     grade.querySelectorAll(".au-usar-receita").forEach(b => { b.disabled = false; b.removeAttribute("title"); b.removeAttribute("aria-describedby"); });
   });
-  return h("section", { class: "au-sec", "aria-labelledby": "au-mod" },
+  const secao = h("section", { class: "au-sec", "aria-labelledby": "au-mod" },
     h("div", { class: "au-sec-cab" },
       h("h2", { class: "titulo-sec", id: "au-mod" }, qtdItens ? "Receitas prontas" : "Comece por uma receita"),
       contaReceitas),
-    h("div", { class: "au-modelos-ferramentas" }, busca, barra, filtroOutros),
+    h("div", { class: "au-modelos-ferramentas" }, busca, barra, barraTom, filtroOutros),
     grade, vazioBusca, statusBusca);
+  if (typeof IntersectionObserver === "function") {
+    try {
+      const io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { io.disconnect(); garantir(); } }, { rootMargin: "400px 0px" });
+      io.observe(secao);
+    } catch { garantir(); }
+  } else garantir();
+  return secao;
 }
 
-/** Mini linha do tempo de uma receita com esperas: «Na hora · Esperar 1 dia · Mensagem · …». */
+/** plano 2000d · DU-077: «Ver quem pegaria» — simula a receita aplicada (nada é salvo nem enviado) e diz o número no próprio botão. */
+function botaoQuemPegaria(ctx, auto, dados) {
+  const { ui } = ctx;
+  const h = ui.h;
+  const res = h("span", { class: "sub au-quem-pegaria", role: "status" });
+  const bt = h("button", { type: "button", class: "bt bt-fant bt-p au-ver-quem" }, ui.icone("olho"), h("span", null, "Ver quem pegaria"));
+  bt.addEventListener("click", async () => {
+    const p = ctx.api.rpcC("nx_auto_simular", { p_automacao: L.limpar(auto) })
+      .then(r => L.normalizarSimulacao(r, auto, dados && dados.base, ctx.vocab), () => null);
+    const sim = await (typeof ui.carregando === "function" ? ui.carregando(bt, p).catch(() => null) : p);
+    const total = sim && Number.isFinite(sim.total) ? sim.total : null;
+    res.textContent = total == null ? "Não deu para contar agora." : sim.porEvento ? `Ela roda quando o gatilho acontece${total ? `; agora ${L.plural(total, "pessoa se encaixa", "pessoas se encaixam")}` : ""}.`
+      : total === 0 ? "Hoje ninguém se encaixa." : `Hoje pegaria ${L.plural(total, "pessoa", "pessoas")}.`;
+  });
+  return h("span", { class: "au-ver-quem-caixa" }, bt, res);
+}
+
 /**
  * plano 1500c · UCA-120: o texto da bolha de uma receita. Com enviar_template e um modelo achado pelo aplicarModelo (template_id),
  * mostra o CORPO desse modelo; sem modelo, o lembrete sugerido (sugestao:true). Mensagem simples: o texto da receita com o exemplo. → {texto, sugestao}
  */
+/**
+ * plano 2000d · DU-053: o selo de canal de uma receita pelos números da empresa → {pilula: "ok"|"falta"|null, notaJanela: frase|null}.
+ * Só número oficial (todos com provedor e nenhum por aparelho): a receita de texto livre mostra a pílula «falta» e a nota da janela de 24 h.
+ */
+export function selosCanalReceita(m, canais) {
+  if (L.canalDaReceita(m) !== "codewords") return { pilula: null, notaJanela: null };
+  const cs = Array.isArray(canais) ? canais : null;
+  const semAparelho = !!cs && cs.every(c => c && c.provedor) && !cs.some(c => c.provedor === "codewords");
+  const soOficial = semAparelho && cs.length > 0;
+  return { pilula: semAparelho ? "falta" : "ok",
+    notaJanela: soOficial ? "No seu número oficial, este texto só sai se o cliente escreveu nas últimas 24 h; fora disso, use um modelo aprovado." : null };
+}
+
 export function textoBolhaReceita(m, auto, base, vertical, exemplo) {
   const acTpl = m.auto.acoes.find(a => a.tipo === "enviar_template");
   if (acTpl) {
@@ -1474,6 +1728,7 @@ export function textoBolhaReceita(m, auto, base, vertical, exemplo) {
   return { texto: acMsg ? L.aplicarVariaveis(acMsg.texto, exemplo) : "", sugestao: false };
 }
 
+/** Mini linha do tempo de uma receita com esperas: «Na hora · Esperar 1 dia · Mensagem · …». */   // plano 2000d · DU-089: o comentário voltou para a função dele
 function miniTempo(ui, m, vv = null) {
   const h = ui.h;
   const tl = L.linhaDoTempo(m.auto.acoes);

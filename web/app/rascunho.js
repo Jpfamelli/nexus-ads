@@ -109,6 +109,10 @@ export function criarRascunhos(o = {}) {
     if (!storage) return false;
     if (!texto || !texto.trim()) { apagarChave(k); return true; }
     if (texto.length * 2 > tetoUm) { apagarChave(k); return false; }
+    // plano 1500c · CX-042: o mesmo texto não é regravado — antes cada «salvarTudo» (esconder a aba, pagehide) renovava o «em» e o
+    // texto do paciente nunca vencia as 24 h do CA-122 enquanto a aba ia e voltava
+    const atual = ler(k);
+    if (atual && atual.t === texto && !venceu(k, atual)) return true;
     const bruto = JSON.stringify({ t: texto, em: agora() });
     const ok = seguro(() => { storage.setItem(k, bruto); return true; }, false);
     // CA-100: gravou bem — a varredura completa só se já faz 1 min da última (senão o índice cuida do teto); a cota cheia (setItem falhou)
@@ -128,15 +132,27 @@ export function criarRascunhos(o = {}) {
 
   /** plano 1500c · CC-023: «descartar» vira «Rascunho descartado · desfazer» por 7 s (um toque errado no celular não perde o texto). */
   const DESFAZER_MS = 7000;
-  function criarSelo(aoDescartar, aoDesfazer, aoFim) {
+  /** CX-040: «de 25 min atrás », «de 3 h atrás », «de 2 dias atrás » (com o espaço) ou "" quando é de agora há pouco (até 10 min). */
+  function quandoRascunho(em) {
+    const d = Number.isFinite(em) ? agora() - em : 0;
+    if (!(d > 10 * 60000)) return "";
+    if (d < 3600000) return `de ${Math.floor(d / 60000)} min atrás `;
+    if (d < 86400000) return `de ${Math.floor(d / 3600000)} h atrás `;
+    const dias = Math.floor(d / 86400000);
+    return `de ${dias} ${dias === 1 ? "dia" : "dias"} atrás `;
+  }
+  function criarSelo(aoDescartar, aoDesfazer, aoFim, em = null) {
     if (!doc || typeof doc.createElement !== "function") return null;
     const p = doc.createElement("p");
     p.className = "rascunho-selo";
     p.setAttribute("role", "status");
-    const txt = doc.createTextNode("Rascunho restaurado · ");
+    // plano 1500c · CX-040: rascunho antigo diz de quando é («Rascunho de 3 h atrás restaurado») — a pessoa sabe se ainda vale
+    const txt = doc.createTextNode(`Rascunho ${quandoRascunho(em)}restaurado · `);
     p.appendChild(txt);
     const b = doc.createElement("button");
     b.type = "button"; b.className = "link"; b.textContent = "descartar";
+    // plano 1500c · CX-041: o leitor de tela ouve o que o botão faz (só «descartar», solto, não diz o quê)
+    b.setAttribute("aria-label", "Descartar o rascunho restaurado");
     let modo = "restaurado", t = null;
     b.addEventListener("click", () => {
       if (modo === "restaurado") {
@@ -145,6 +161,7 @@ export function criarRascunhos(o = {}) {
         modo = "descartado";
         txt.data = "Rascunho descartado · "; if (typeof txt.textContent === "string") txt.textContent = "Rascunho descartado · ";
         b.textContent = "desfazer";
+        b.setAttribute("aria-label", "Desfazer: devolver o rascunho ao campo");   // CX-041
         t = agendar(() => { t = null; modo = "fim"; if (aoFim) aoFim(); }, DESFAZER_MS);
       } else if (modo === "descartado") {
         if (t) { cancelar(t); t = null; }
@@ -191,7 +208,7 @@ export function criarRascunhos(o = {}) {
         selo = criarSelo(
           () => { porTexto(""); disparar(); apagarChave(k); },
           () => { if (!valor().trim()) { porTexto(textoGuardado); disparar(); gravar(k, textoGuardado); } tirarSelo(); },   // CC-023: o Desfazer devolve o texto
-          () => tirarSelo());
+          () => tirarSelo(), guardado.em);
         const alvo = opcoes.seloEm || null;
         if (selo) {
           if (alvo && typeof alvo.appendChild === "function") alvo.appendChild(selo);

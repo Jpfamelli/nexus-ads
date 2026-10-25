@@ -1023,3 +1023,52 @@ h3.au-ia-res-nome:focus:not(:focus-visible) { outline: none; }
 .au-sel-chk:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
 /* plano 1500c · UCA-032: progresso da pausa só para o leitor de tela (o botão já gira) */
 .au-pausa-prog:empty { display: none; }
+
+/* ================================================================ plano 2000d · frente auto */
+/* plano 2000d · DU-054: a observação interna abaixo da frase do cartão */
+.au-item-obs { display: block; color: var(--c-texto-3); font-size: var(--fs-13, .8125rem); line-height: 1.4; overflow-wrap: anywhere; }
+/* plano 2000d · DU-037: o chip da variável com o valor de exemplo na segunda linha */
+.au-var { display: inline-flex; flex-direction: column; align-items: flex-start; gap: .05rem; }
+.au-var-ex { font-size: .72rem; color: var(--c-texto-3); font-family: inherit; max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* plano 2000d · DU-053: a nota da janela de 24 h (só número oficial) */
+.au-modelo-janela .ic { color: var(--c-aten, currentColor); }
+/* plano 2000d · DU-313: o foco fica no próprio link (vale sem :has); o :has só reforça o contorno do cartão */
+.au-item-link:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; }
+@supports selector(:has(a)) {
+  .au-item-link:focus-visible { outline: none; }
+}
+/* plano 2000d · DU-412: os números do cartão em texto secundário (a situação e a frase mandam) */
+.au-item-meta .au-item-num, .au-item-meta .au-item-ult { color: var(--c-texto-3); font-size: var(--fs-13, .8125rem); }
+/* plano 2000d · DU-343: com muitas automações, o navegador só desenha o cartão quando ele chega perto da tela */
+.au-lista-longa .au-item { content-visibility: auto; contain-intrinsic-size: auto 132px; }
+/* plano 2000d · DU-307: alto contraste — foco do diagrama, chips e cartões com bordas e cores do sistema */
+@media (forced-colors: active) {
+  .au-dg-no:focus-visible .au-dg-ret, .au-dg-no:hover .au-dg-ret { stroke: Highlight; stroke-width: 3; }
+  .au-dg-no .au-dg-ret { stroke: CanvasText; }
+  .au-dg-no svg, .au-dg-no .ic, .au-item .ic, .au-modelo .ic { color: currentColor; fill: currentColor; }
+  .au-chip, .au-var, .au-item, .au-modelo, .pilula { border: 1px solid CanvasText; }
+  .au-item:has(.au-item-link:focus-visible), .au-item-link:focus-visible, .au-chip:focus-visible, .au-var:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+  .au-sim-pil, .au-pil-estado { border: 1px solid CanvasText; }
+}
+
+/* plano 2000d · DU-432: o «Pular o fluxo» aparece dentro do cartão do diagrama quando recebe o foco */
+.au-dg { position: relative; }
+.au-dg .au-dg-pular:focus { left: .5rem; top: .5rem; }
+.au-previa:focus-visible { outline: var(--foco-largura) solid var(--c-foco); outline-offset: 2px; }
+/* plano 2000d · DU-061: as outras automações no mesmo gatilho */
+.au-outras { display: flex; flex-direction: column; gap: .4rem; border-top: 1px solid var(--c-borda); padding-top: .6rem; }
+.au-outras-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
+.au-outras-lista li { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .5rem; min-width: 0; }
+.au-outras-lista a { min-height: var(--alvo-toque); display: inline-flex; align-items: center; overflow-wrap: anywhere; }
+.au-outras-lista small { flex-basis: 100%; }
+/* plano 2000d · DU-086 / DU-077 / DU-419 / DU-068 / DU-063 */
+.au-kit { display: flex; flex-direction: column; align-items: center; gap: .5rem; margin-top: .8rem; text-align: center; }
+.au-ver-quem-caixa { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; min-width: 0; }
+.au-quem-pegaria:empty { display: none; }
+.au-modelos-tom { flex-wrap: wrap; }
+.au-ex-tendencia { display: flex; align-items: center; gap: .4rem; margin: .2rem 0 .6rem; }
+.au-sim-copiar { margin-left: auto; }
+.au-pil-em-uso { text-decoration: none; min-height: 28px; }
+.au-pil-em-uso:focus-visible { outline: var(--foco-largura) solid var(--c-foco); outline-offset: 2px; }
+.au-pedir-mais, .au-quero-ia { margin-left: .4rem; }
+@media (pointer: coarse) { .au-ver-quem, .au-quero-ia, .au-pedir-mais, .au-pil-em-uso { min-height: var(--alvo-toque); } }

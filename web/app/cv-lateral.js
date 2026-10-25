@@ -173,7 +173,8 @@ export function criarLateral(A) {
   async function salvarNome(ct) {
     const ed = editandoNome;
     if (!ed || ed.salvando || ed.ctId !== ct.id) return;
-    const novo = String(ed.valor || "").trim();
+    // plano 1500c · CX-033: espaços repetidos e tabulação do nome colado («Maria   Souza») viram um espaço só
+    const novo = String(ed.valor || "").replace(/\s+/g, " ").trim();
     if (!novo) { ed.erro = "O nome não pode ficar vazio."; redesenhar("contato"); focarNome(); return; }
     if (novo === String(ct.nome || "").trim()) { fecharEdicaoNome(); return; }
     ed.salvando = true; ed.erro = "";
@@ -202,7 +203,7 @@ export function criarLateral(A) {
         A.podeEscrever ? h("button", { type: "button", class: "bt-icone", "aria-label": "Editar nome", title: "Editar nome", dataset: { foco: "editar-nome" }, on: { click: () => abrirEdicaoNome(ct) } }, ui.icone("editar")) : null);
     }
     const idErro = `cvt-nome-erro-${ct.id}`;
-    const inp = h("input", { type: "text", value: ed.valor, maxlength: 160, "aria-label": "Nome do contato", disabled: ed.salvando,
+    const inp = h("input", { type: "text", value: ed.valor, maxlength: 160, "aria-label": "Nome do contato", disabled: ed.salvando, autocapitalize: "words",   /* plano 1500c · CX-052 */
       "aria-invalid": ed.erro ? "true" : null, "aria-describedby": ed.erro ? idErro : null, autocomplete: "off", dataset: { foco: "nome-campo" } });
     inp.addEventListener("input", () => { if (editandoNome === ed) ed.valor = inp.value; });
     inp.addEventListener("keydown", ev => {
@@ -236,7 +237,9 @@ export function criarLateral(A) {
   async function salvarCampo(ct) {
     const ed = editandoCampo;
     if (!ed || ed.salvando || ed.ctId !== ct.id) return;
-    const novo = String(ed.valor || "").trim();
+    // plano 1500c · CX-034: e-mail sai sem espaço e em minúsculas («Ana@Clinica.com » = ana@clinica.com); cidade com um espaço só entre palavras
+    const bruto = String(ed.valor || "").trim();
+    const novo = ed.campo === "email" ? bruto.replace(/\s+/g, "").toLowerCase() : bruto.replace(/\s+/g, " ");
     if (ed.campo === "email" && novo && !RE_EMAIL.test(novo)) { ed.erro = "Confira o e-mail: algo como nome@exemplo.com."; redesenhar("dados"); focarCampo(); return; }
     const atual = String((ed.campo === "email" ? ct.email : ct.cidade) || "").trim();
     if (novo === atual) { fecharEdicaoCampo(); return; }
@@ -263,7 +266,8 @@ export function criarLateral(A) {
     const ed = editandoCampo;
     const idErro = `cvt-${campo}-erro-${ct.id}`;
     const inp = h("input", { type: campo === "email" ? "email" : "text", value: ed.valor, maxlength: campo === "email" ? 160 : 80, "aria-label": `${rotulo} do contato`, disabled: ed.salvando,
-      autocomplete: "off", inputmode: campo === "email" ? "email" : null, "aria-invalid": ed.erro ? "true" : null, "aria-describedby": ed.erro ? idErro : null, dataset: { foco: `${campo}-campo` } });
+      // plano 1500c · CX-078: teclado do celular sem maiúscula automática nem corretor no e-mail; cidade com maiúscula em cada palavra
+      autocomplete: "off", inputmode: campo === "email" ? "email" : null, autocapitalize: campo === "email" ? "off" : "words", spellcheck: campo === "email" ? "false" : null, "aria-invalid": ed.erro ? "true" : null, "aria-describedby": ed.erro ? idErro : null, dataset: { foco: `${campo}-campo` } });
     inp.addEventListener("input", () => { if (editandoCampo === ed) ed.valor = inp.value; });
     inp.addEventListener("keydown", ev => {
       if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); salvarCampo(ct); }
@@ -297,7 +301,8 @@ export function criarLateral(A) {
       selos.childNodes.length ? selos : null,
       h("div", { class: "linha" },
         // plano 1000 · CA-080: o formato internacional (+55…), pronto para o discador e o WhatsApp; o aviso diz qual foi
-        ct.telefone ? h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { foco: "copiar-tel" }, title: `Copiar ${L.telefoneInternacional(ct.telefone)}`,
+        // plano 1500c · CX-058: o leitor de tela ouve «Copiar o telefone», não só «Copiar»
+        ct.telefone ? h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { foco: "copiar-tel" }, title: `Copiar ${L.telefoneInternacional(ct.telefone)}`, "aria-label": "Copiar o telefone",
           on: { click: () => ui.copiar(L.telefoneInternacional(ct.telefone), { aviso: `Telefone copiado: ${L.telefoneInternacional(ct.telefone)}` }) } }, ui.icone("copiar"), "Copiar") : null,
         // CA-239: contato removido (sem id) — o botão fica desligado e diz por quê (antes abria uma gaveta de erro)
         h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { foco: "abrir-ficha" }, disabled: !ct.id, title: ct.id ? null : "Contato removido: não há ficha para abrir",

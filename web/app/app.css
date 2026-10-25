@@ -94,6 +94,11 @@
 
   /* ---- forma ---- */
   --r: 18px; --r-g: 24px; --r-p: 12px; --r-pp: 8px;
+  /* plano 2000d · DU-297: uma opacidade de desabilitado só; DU-315: três degraus de elevação (repouso, flutuante, arrastando) */
+  --opac-desab: .55;
+  --sombra-1: 0 1px 2px var(--c-sombra);
+  --sombra-2: 0 6px 18px var(--c-sombra);
+  --sombra-3: 0 14px 36px var(--c-sombra), 0 2px 6px var(--c-sombra);
   --lat: 232px; --lat-rec: 72px; --topo: 56px; --barra: 64px;
   --pad: clamp(1rem, 2.4vw, 2rem);
 
@@ -199,7 +204,10 @@ html[data-esquema="claro"] .palco .grao { mix-blend-mode: multiply; opacity: .05
 }
 .bt .ic { width: 16px; height: 16px; }
 .bt:active:not(:disabled) { transform: scale(.97); }
-.bt:disabled { opacity: .5; }
+/* plano 2000d · DU-295/DU-296: desabilitado com cores próprias (o texto não cai abaixo de 3:1 como na opacidade .5), borda tracejada e o cursor
+   que diz «não dá»; [aria-disabled="true"] (botão que continua focável para o leitor de tela explicar o porquê) com o MESMO estilo */
+.bt:disabled, .bt[aria-disabled="true"] { opacity: 1; background: var(--c-sup-2); color: var(--c-texto-2); border-color: var(--c-borda-2); border-style: dashed; box-shadow: none; cursor: not-allowed; }
+.bt[aria-disabled="true"]:hover { background: var(--c-sup-2); }
 .bt-prim { background: var(--c-prim); color: var(--c-prim-txt); }
 .bt-prim:hover:not(:disabled) { background: var(--c-prim-hi); }
 .bt-sec { background: var(--c-tinta); border-color: var(--c-borda-2); color: var(--c-texto); }
@@ -210,6 +218,11 @@ html[data-esquema="claro"] .palco .grao { mix-blend-mode: multiply; opacity: .05
 .bt-perigo { background: transparent; border-color: var(--c-ruim); color: var(--c-ruim); }
 .bt-perigo:hover:not(:disabled) { background: var(--c-ruim-suave); }
 .bt-perigo[aria-busy="true"]::after { border-color: var(--c-ruim); border-right-color: transparent; }
+/* plano 2000d · DU-304: o botão FINAL de uma ação destrutiva é cheio (o contorno fica para o botão que abre a confirmação) e o de confirmação positiva */
+.bt-perigo-cheio { background: var(--c-ruim); border-color: var(--c-ruim); color: var(--c-ruim-txt); }
+.bt-perigo-cheio:hover:not(:disabled) { background: color-mix(in srgb, var(--c-ruim) 86%, var(--c-texto)); }
+.bt-ok { background: var(--c-ok); border-color: var(--c-ok); color: var(--c-ok-txt); }
+.bt-ok:hover:not(:disabled) { background: color-mix(in srgb, var(--c-ok) 86%, var(--c-texto)); }
 .bt-p { min-height: 32px; padding: .3rem .8rem; font-size: var(--fs-13); }
 .bt-g { min-height: 48px; padding: .75rem 1.4rem; font-size: var(--fs-15); }
 .bt-bloco { width: 100%; }
@@ -285,7 +298,7 @@ html[data-esquema="escuro"] .cartao { box-shadow: 0 24px 48px -36px var(--c-somb
   outline: 2px solid var(--c-foco); outline-offset: 1px; border-color: var(--c-prim);
 }
 .campo [aria-invalid="true"], .cor-hex[aria-invalid="true"] { border-color: var(--c-ruim) !important; }
-.campo input:disabled, .campo select:disabled, .campo textarea:disabled { opacity: .6; cursor: not-allowed; }
+.campo input:disabled, .campo select:disabled, .campo textarea:disabled { opacity: var(--opac-desab); cursor: not-allowed; }   /* plano 2000d · DU-297 */
 .campo input[readonly] { background: var(--c-sup-2); }
 .campo-ajuda { color: var(--c-texto-3); font-size: var(--fs-13); }
 .campo-erro { color: var(--c-ruim); font-size: var(--fs-13); font-weight: 600; line-height: 1.4; margin-block-start: var(--esp-1); text-wrap: pretty; }
@@ -305,16 +318,21 @@ html[data-esquema="claro"] input[type="date"]::-webkit-calendar-picker-indicator
 .campo-switch .check-marca { width: 38px; height: 22px; border-radius: 999px; }
 .campo-switch .check-marca::after { left: 2px; top: 2px; width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--c-texto-3); transform: none; transition: transform var(--t-ui) var(--e-out), background-color var(--t-ui) var(--e-out); }
 .campo-switch input:checked + .check-marca::after { transform: translateX(16px); background: var(--c-prim-txt); }
-.campo-check input:disabled + .check-marca { opacity: .5; }
+.campo-check input:disabled + .check-marca { opacity: var(--opac-desab); }   /* plano 2000d · DU-297 */
 .campo-multi legend { margin-bottom: .5rem; }
 .multi-opcoes { display: flex; flex-wrap: wrap; gap: .45rem; }
 .chip-check { position: relative; display: inline-flex; align-items: center; cursor: pointer; }
 .chip-check input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .chip-check span { display: inline-flex; align-items: center; min-height: 34px; padding: .3rem .85rem; border-radius: 999px; border: 1px solid var(--c-borda-2); color: var(--c-texto-2); font-weight: 600; font-size: var(--fs-13); transition: background-color var(--t-ui) var(--e-out), border-color var(--t-ui) var(--e-out), color var(--t-ui) var(--e-out); }
 .chip-check input:checked + span { background: var(--c-prim-suave); border-color: var(--c-prim); color: var(--c-texto); }
-.chip-check input:checked + span::before { content: "✓"; margin-right: .35rem; color: var(--c-prim-luz); }
+/* plano 2000d · DU-303: o ✓ do chip marcado é um desenho (máscara), não um glifo — a fonte do Windows não desloca nem vira emoji */
+.chip-check input:checked + span::before { content: ""; width: .9em; height: .9em; margin-right: .35rem; flex: none; background: var(--c-prim-luz);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4.5 12.5l5 5L19.5 7' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4.5 12.5l5 5L19.5 7' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; }
+/* plano 2000d · DU-302: o chip responde ao mouse */
+@media (hover: hover) { .chip-check input:not(:disabled):not(:checked) + span:hover { background: var(--c-hover); border-color: var(--c-texto-3); color: var(--c-texto); } }
 .chip-check input:focus-visible + span { outline: 2px solid var(--c-foco); outline-offset: 2px; }
-.chip-check input:disabled + span { opacity: .45; cursor: not-allowed; }
+.chip-check input:disabled + span { opacity: var(--opac-desab); cursor: not-allowed; }   /* plano 2000d · DU-297 */
 .form-grade { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem 1rem; }
 .form-grade .inteiro { grid-column: 1 / -1; }
 .busca { position: relative; min-width: 0; }
@@ -356,7 +374,8 @@ html[data-esquema="claro"] input[type="date"]::-webkit-calendar-picker-indicator
 .pilula-info:not(:has(.ic))::before { content: "i"; display: inline-grid; place-items: center; width: 1.2em; height: 1.2em; border: 1.5px solid currentColor; border-radius: 50%; font-size: .72em; }
 .pilula-cor { background: color-mix(in srgb, var(--cor) 18%, var(--c-fundo)); color: color-mix(in srgb, var(--cor) 58%, var(--c-texto)); }
 .etiq {
-  display: inline-flex; align-items: center; gap: .4rem; min-height: 26px; max-width: 100%; padding: .15rem .6rem .15rem .5rem; border-radius: 999px;
+  /* plano 2000d · DU-310: a mesma altura da pílula (24) — numa linha com as duas nada fica desalinhado */
+  display: inline-flex; align-items: center; gap: .4rem; min-height: 24px; max-width: 100%; padding: .12rem .6rem .12rem .5rem; border-radius: 999px;
   background: var(--c-sup-2); border: 1px solid var(--c-borda); color: var(--c-texto-2); font-size: var(--fs-12); font-weight: 600;
 }
 .etiq > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -508,8 +527,11 @@ dialog { color: var(--c-texto); }
 .menu-motivo { display: block; font-size: var(--fs-12); color: var(--c-texto-3); font-weight: 400; line-height: 1.3; margin-top: var(--esp-1); }   /* plano 1000 · AS-288 */
 .menu-item:hover:not(:disabled), .menu-item:focus-visible { background: var(--c-hover); outline: none; }
 .menu-item.perigo, .menu-item.perigo .ic { color: var(--c-ruim); }
-.menu-item:disabled { opacity: .45; }
+.menu-item:disabled { opacity: var(--opac-desab); }   /* plano 2000d · DU-297 */
 .menu-sep { border: 0; height: 1px; background: var(--c-borda); margin: .3rem .4rem; }
+/* CC-139 (plano 1500c) · plano 2000d: título de grupo dentro do menu */
+.menu-titulo { margin: .45rem .6rem .2rem; font-size: var(--fs-12); font-weight: 600; color: var(--c-texto-3); }
+.menu-titulo:first-child { margin-top: .2rem; }
 .flut-busca { width: 100%; min-height: 38px; padding: .45rem .8rem; border-radius: 10px; border: 1px solid var(--c-borda-2); background: var(--c-poco); color: var(--c-texto); }
 .flut-lista { display: flex; flex-direction: column; gap: .15rem; max-height: 260px; overflow: auto; }
 .flut-op { display: flex; align-items: center; gap: .55rem; min-height: 36px; padding: .25rem .4rem; border-radius: 8px; cursor: pointer; }
@@ -1268,7 +1290,9 @@ html[data-produto="atendimento"] { --c-prod: var(--c-prod-atend); }
 .cab-txt { flex: 1 1 18rem; min-width: 0; }
 .cab-rotulo { margin-bottom: .3rem; }
 .cab-titulo { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-h1); letter-spacing: -.02em; line-height: 1.1; text-wrap: balance; overflow-wrap: anywhere; }
+/* plano 2000d · DU-325: o título recebe o foco a cada troca de tela — sem anel no foco por script, com um traço discreto para quem chega pelo teclado */
 .cab-titulo:focus { outline: none; }
+.cab-titulo:focus-visible { outline: 1px solid var(--c-foco); outline-offset: 4px; border-radius: var(--r-pp); }
 .cab-sub { margin-top: .45rem; color: var(--c-texto-2); font-size: var(--fs-corpo); max-width: 68ch; }
 .cab-acoes { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-width: 0; }
 .cab-n2 { margin: 0 0 1rem; }
@@ -1364,7 +1388,9 @@ html[data-produto="atendimento"] { --c-prod: var(--c-prod-atend); }
 .protege-faixa { display: flex; align-items: center; justify-content: space-between; gap: .6rem 1rem; flex-wrap: wrap; padding: .75rem 1.2rem; background: var(--c-aten-suave); border-block: 1px solid var(--c-borda); color: var(--c-texto); font-size: var(--fs-14); font-weight: 600; }
 .protege-faixa p { flex: 1 1 12rem; min-width: 0; }
 .protege-faixa .linha { flex: none; }
+/* plano 2000d · DU-324: o contêiner focado ao abrir (quando não há campo) mostra onde o foco está, discreto */
 .modal:focus, .gaveta:focus { outline: none; }
+.modal:focus-visible, .gaveta:focus-visible { outline: 2px solid color-mix(in srgb, var(--c-foco) 55%, transparent); outline-offset: -2px; }
 
 /* ---- campo com validação ao vivo, máscara e medidor ---- */
 .campo[data-estado="erro"] .campo-erro::before { content: "! "; font-weight: 800; }
@@ -1686,6 +1712,9 @@ html[data-esquema="escuro"] .modal, html[data-esquema="escuro"] .gaveta, html[da
 }
 html[data-esquema="escuro"] .topo, html[data-esquema="escuro"] .lateral, html[data-esquema="escuro"] .barra, html[data-esquema="escuro"] .faixa, html[data-esquema="escuro"] .lat-pe,
 html[data-esquema="escuro"] .modal-rod, html[data-esquema="escuro"] .gaveta-cab { border-color: var(--c-borda-alfa); }
+/* plano 2000d · DU-306: no escuro a elevação é a borda alfa — também nos avisos, faixas, painéis flutuantes, etiquetas e na tela de bloqueio */
+html[data-esquema="escuro"] .aviso, html[data-esquema="escuro"] .faixa, html[data-esquema="escuro"] .flut, html[data-esquema="escuro"] .menu-pop,
+html[data-esquema="escuro"] .etiq, html[data-esquema="escuro"] .tela-bloqueio-cartao, html[data-esquema="escuro"] .toast { border-color: var(--c-borda-alfa); }
 html[data-esquema="escuro"] .tabela th, html[data-esquema="escuro"] .tabela td, html[data-esquema="escuro"] .divisor { border-color: var(--c-borda-alfa); }
 html[data-esquema="escuro"] .campo input:not([type=checkbox]):not([type=radio]), html[data-esquema="escuro"] .campo select, html[data-esquema="escuro"] .campo textarea,
 html[data-esquema="escuro"] .sel, html[data-esquema="escuro"] .busca input { border-color: var(--c-borda-alfa-2); }
@@ -1816,3 +1845,52 @@ html.somente-consulta [data-so-consulta] { opacity: .55; cursor: not-allowed; }
 .beneficios { list-style: none; margin: var(--esp-3) auto 0; padding: 0; display: grid; gap: var(--esp-2); max-width: 30rem; text-align: left; }
 .beneficios li { display: flex; gap: .5rem; align-items: flex-start; }
 .beneficios .ic { flex: none; width: 18px; height: 18px; color: var(--c-ok); margin-top: .15rem; }
+
+/* ============================================================
+   plano 2000d · frente sis
+   ============================================================ */
+/* DU-229: «A+» da entrada — texto 12 % maior no aparelho inteiro (o antes.js aplica antes de pintar) */
+html[data-texto="grande"] { font-size: 112.5%; }
+.entrar-a-mais { font-weight: 800; letter-spacing: .02em; }
+/* DU-141: tela bloqueada com PIN (a sessão continua aberta por baixo) */
+.tela-bloqueio { position: fixed; inset: 0; z-index: 140; display: grid; place-items: center; padding: var(--pad); background: var(--c-fundo); }
+.tela-bloqueio-cartao { width: min(100%, 22rem); display: grid; gap: var(--esp-3); padding: var(--esp-5, 1.5rem); border-radius: var(--r); background: var(--c-sup); border: 1px solid var(--c-borda); box-shadow: var(--sombra-2); text-align: center; }
+.tela-bloqueio-cartao > .ic { width: 32px; height: 32px; margin: 0 auto; color: var(--c-prim-luz); }
+/* DU-281: modo foco — sem menu lateral e sem as faixas que não bloqueiam (o bloqueio continua aparecendo) */
+html.modo-foco .lateral { display: none; }
+html.modo-foco .coluna { margin-left: 0; }
+html.modo-foco .faixas > .faixa:not(.faixa-bloqueio) { display: none; }
+/* DU-242/DU-152: objetivo e textos da revenda nas boas-vindas */
+.bv-objetivo { display: flex; flex-wrap: wrap; gap: var(--esp-2); }
+.bv-objetivo legend { width: 100%; margin-bottom: var(--esp-1); font-weight: 700; }
+.chip-op { min-height: var(--alvo-toque, 44px); padding: .3rem .9rem; border-radius: 999px; border: 1px solid var(--c-borda-2); color: var(--c-texto-2); font-weight: 600; }
+.chip-op[aria-pressed="true"] { background: var(--c-prim-suave); border-color: var(--c-prim); color: var(--c-texto); }
+.chip-op:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.bv-org { white-space: pre-line; }
+.bv-contato { display: flex; align-items: center; gap: .4rem; }
+/* DU-227: o passo pedido vem destacado no «Comece aqui» */
+.passo-equipe[data-destaque="1"] { outline: 2px solid var(--c-prim); outline-offset: 2px; border-radius: var(--r-p); }
+/* DU-134/DU-216: os botões de reenviar mostram a espera */
+.entrar-reenviar { font-variant-numeric: tabular-nums; }
+.campo-aceite .check-txt a { display: inline; }
+/* DU-315: o item que está sendo arrastado sobe um degrau de elevação */
+.arrastando, [aria-grabbed="true"] { box-shadow: var(--sombra-3); }
+/* DU-308: quem pede mais contraste no sistema — textos secundários viram o texto principal e as bordas sobem um degrau */
+@media (prefers-contrast: more) {
+  :root { --c-texto-2: var(--c-texto); --c-texto-3: var(--c-texto); --c-borda: var(--c-borda-2); --c-borda-2: var(--c-texto-3); }
+  .link, a.link { text-decoration-thickness: 2px; }
+}
+/* DU-321: a caixa de seleção dentro de tabela ganha a área de toque de 44 px (o rótulo cresce, a caixa continua 20) */
+@media (pointer: coarse) { .tabela .campo-check label, .tabela td > label:has(input[type="checkbox"]) { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; } }
+/* DU-316: link dentro de texto corrido sempre sublinhado (a cor da marca pode ficar perto da cor do texto) */
+.vista p a:not(.bt), .vista li a:not(.bt), .entrar p a:not(.bt) { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+/* DU-282: «Ir para o menu» ao lado do «Pular para o conteúdo» */
+.pular-menu:focus { left: 1rem; top: 3.4rem; }
+
+/* plano 2000d · DU-277: escolher os itens da barra de baixo */
+.opcao-check { display: flex; align-items: center; gap: .6rem; min-height: 44px; padding: 0 .25rem; border-radius: var(--r-p); cursor: pointer; }
+.opcao-check:hover { background: var(--c-hover); }
+.opcao-check input:disabled + .ic, .opcao-check input:disabled ~ span { opacity: var(--opac-desab); }
+/* plano 2000d · DU-286: ponto de novidade da versão na conta (some ao abrir as novidades) */
+.lat-conta { position: relative; }
+.lat-conta[data-novidade="1"]::after { content: ""; position: absolute; top: .45rem; left: 2.1rem; width: 9px; height: 9px; border-radius: 50%; background: var(--c-prim); box-shadow: 0 0 0 2px var(--c-sup); }

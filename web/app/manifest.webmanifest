@@ -7,7 +7,7 @@
   "scope": "/app/",
   "display": "standalone",
   "background_color": "#07090C",
-  "theme_color": "#07090C",
+  "theme_color": "#FAFAF8",
   "icons": [
     {
       "src": "icones/icon-192.png",
@@ -34,5 +34,32 @@
       "purpose": "any"
     }
   ],
-  "id": "/app/"
+  "id": "/app/",
+  "categories": [
+    "business",
+    "productivity"
+  ],
+  "shortcuts": [
+    {
+      "name": "Conversas",
+      "url": "/app/#/conversas"
+    },
+    {
+      "name": "CRM",
+      "url": "/app/#/crm"
+    },
+    {
+      "name": "Agenda",
+      "url": "/app/#/agenda"
+    }
+  ],
+  "share_target": {
+    "action": "/app/?compartilhar=1",
+    "method": "GET",
+    "params": {
+      "title": "titulo",
+      "text": "texto",
+      "url": "link"
+    }
+  }
 }

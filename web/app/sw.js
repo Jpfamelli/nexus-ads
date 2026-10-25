@@ -227,7 +227,8 @@ self.addEventListener("fetch", ev => {
 self.addEventListener("message", ev => {
   const d = ev.data || {};
   if (d.tipo === "pular") { self.skipWaiting(); return; }
-  if (d.tipo === "marca") { marcaOffline = { fundo: d.fundo, texto: d.texto, produto: d.produto }; return; }   // plano 1500c · UCC-049
+  // plano 1500c · UCC-049; plano 2000d · DU-251: o ícone da marca (https ou imagem embutida) também fica para os avisos de push
+  if (d.tipo === "marca") { marcaOffline = { fundo: d.fundo, texto: d.texto, produto: d.produto, icone: iconeSeguro(d.icone) }; return; }
   if (d.tipo === "precache" && Array.isArray(d.urls)) {
     ev.waitUntil((async () => {
       const cache = await caches.open(NOME_CACHE);
@@ -246,12 +247,34 @@ function hashDoAviso(data) {
   const h = data && typeof data.hash === "string" ? data.hash : "";
   return /^#\/[\w\-/?=&%.]*$/.test(h) ? h : "#/conversas";
 }
+self.hashDoAviso = hashDoAviso;   // plano 2000d · DU-267: testes
+/** plano 2000d · DU-251: ícone aceitável num aviso — https ou imagem embutida (png/jpeg/webp); o resto vira null. */
+function iconeSeguro(u) {
+  if (typeof u !== "string") return null;
+  if (/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(u) && u.length < 200000) return u;
+  return /^https:\/\/[^\s"'<>]+$/.test(u) ? u : null;
+}
+/** plano 2000d · DU-253: o id da conversa de um aviso (para «Marcar como lida»), só o formato de id. */
+function conversaDoAviso(data) {
+  const c = data && (data.conversa || data.conversa_id);
+  if (typeof c === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(c)) return c;
+  const m = /^#\/conversas\/([A-Za-z0-9_-]{1,64})/.exec(hashDoAviso(data));
+  return m ? m[1] : null;
+}
 self.addEventListener("notificationclick", ev => {
-  const hash = hashDoAviso(ev.notification && ev.notification.data);
+  const data = ev.notification && ev.notification.data;
+  const hash = hashDoAviso(data);
+  const acao = ev.action || "";
   try { ev.notification.close(); } catch (e) { /* ok */ }
   ev.waitUntil((async () => {
     const abertas = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     const doApp = abertas.find(c => { try { return dentroDoEscopo(new URL(c.url)); } catch (e) { return false; } });
+    // plano 2000d · DU-253: «Marcar como lida» não abre nada — a aba aberta (que tem a sessão) faz o pedido ao servidor
+    if (acao === "ler") {
+      const conversa = conversaDoAviso(data);
+      if (doApp && conversa) { try { doApp.postMessage({ tipo: "ler", conversa }); } catch (e) { /* ok */ } return; }
+      // sem aba aberta não há sessão para marcar: abre a conversa (o mesmo do toque no aviso)
+    }
     if (doApp) {
       try { doApp.postMessage({ tipo: "abrir", hash }); } catch (e) { /* ok */ }
       try { await doApp.focus(); } catch (e) { /* o navegador pode negar o foco */ }
@@ -263,12 +286,52 @@ self.addEventListener("notificationclick", ev => {
 
 /* plano 1500c · UCC-122: Web Push com o app fechado. O SW já sabe mostrar o aviso que chegar ({titulo, corpo, hash, tag});
    a inscrição (chave VAPID + nx_push_inscrever) depende do servidor — sem ela nada chega e nada muda. */
+/* plano 2000d · DU-251/DU-252/DU-253/DU-256: o aviso usa o ícone da marca (do servidor ou o guardado pela página), o badge monocromático do Android,
+   as ações «Marcar como lida»/«Abrir» quando é uma conversa e a tag POR CONVERSA; com mais de 3 conversas avisadas, vira um aviso-resumo. */
+const MAX_AVISOS_SOLTOS = 3, TAG_RESUMO = "nx-push-resumo";
+function opcoesDoAviso(d, { iconePadrao, badge } = {}) {
+  const conversa = conversaDoAviso(d);
+  const tag = String(d.tag || (conversa ? `nx-conv-${conversa}` : "nx-push")).slice(0, 80);
+  const o = {
+    body: String(d.corpo || "").slice(0, 200), tag, renotify: true,
+    icon: iconeSeguro(d.icone) || (marcaOffline && marcaOffline.icone) || iconePadrao,
+    badge, data: { hash: hashDoAviso(d), conversa },
+  };
+  if (conversa) o.actions = [{ action: "ler", title: "Marcar como lida" }, { action: "abrir", title: "Abrir" }];
+  return o;
+}
+self.opcoesDoAviso = opcoesDoAviso;   // testes
 self.addEventListener("push", ev => {
   let d = {};
   try { d = ev.data ? ev.data.json() : {}; } catch (e) { d = { corpo: ev.data ? ev.data.text() : "" }; }
   const titulo = String(d.titulo || "Mensagem nova").slice(0, 80);
-  ev.waitUntil(self.registration.showNotification(titulo, {
-    body: String(d.corpo || "").slice(0, 200), tag: String(d.tag || "nx-push"), renotify: true,
-    icon: new URL("icones/icon-192.png", ESCOPO).href, data: { hash: hashDoAviso(d) },
-  }));
+  const o = opcoesDoAviso(d, { iconePadrao: new URL("icones/icon-192.png", ESCOPO).href, badge: new URL("icones/badge-96.png", ESCOPO).href });
+  ev.waitUntil((async () => {
+    let abertos = [];
+    try { abertos = typeof self.registration.getNotifications === "function" ? await self.registration.getNotifications() : []; } catch (e) { abertos = []; }
+    const conversas = new Set(abertos.map(n => n && n.data && n.data.conversa).filter(Boolean));
+    if (o.data.conversa) conversas.add(o.data.conversa);
+    if (o.data.conversa && conversas.size > MAX_AVISOS_SOLTOS) {
+      // muitas conversas: os avisos soltos dão lugar a um só («5 conversas novas»), que abre a lista
+      for (const n of abertos) { try { if (n.data && n.data.conversa) n.close(); } catch (e) { /* ok */ } }
+      await self.registration.showNotification(`${conversas.size} conversas novas`, { body: "Toque para ver as conversas.", tag: TAG_RESUMO, renotify: true,
+        icon: o.icon, badge: o.badge, data: { hash: "#/conversas", conversas: [...conversas].slice(0, 50) } });
+      return;
+    }
+    await self.registration.showNotification(titulo, o);
+  })());
+});
+
+/* plano 2000d · DU-254: o navegador renovou (ou perdeu) a inscrição de push — reinscreve com a mesma chave e conta para a aba aberta gravar
+   no servidor (nx_push_inscrever precisa da sessão, que só a página tem). Sem aba aberta, a página regrava na próxima abertura. */
+self.addEventListener("pushsubscriptionchange", ev => {
+  ev.waitUntil((async () => {
+    let nova = ev.newSubscription || null;
+    try {
+      const chave = ev.oldSubscription && ev.oldSubscription.options ? ev.oldSubscription.options.applicationServerKey : null;
+      if (!nova && chave && self.registration.pushManager) nova = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: chave });
+    } catch (e) { nova = null; }
+    const abertas = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const c of abertas) { try { c.postMessage({ tipo: "push-renovar", inscricao: nova && typeof nova.toJSON === "function" ? nova.toJSON() : null }); } catch (e) { /* ok */ } }
+  })());
 });

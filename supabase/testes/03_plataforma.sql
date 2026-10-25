@@ -189,7 +189,9 @@ begin
   r := pg_temp.erro(format('select public.nx_senha_redefinir(%L, %L)', v_link, 'curta'));
   perform pg_temp.ok(r = 'senha_curta', 'redefinir curta → senha_curta'); casos := casos + 1;
   j := public.nx_senha_redefinir(v_link, 'senha-redefinida-1');
-  perform pg_temp.ok((j ->> 'ok')::boolean and not exists (select 1 from public.nx_sessoes where conta_id = k_atA), 'redefinir troca a senha e derruba as sessões'); casos := casos + 1;
+  -- plano 1500c: SC-001 redefinir derruba as sessões antigas e devolve UMA nova (a do token devolvido)
+  perform pg_temp.ok((j ->> 'ok')::boolean and (select count(*) from public.nx_sessoes where conta_id = k_atA) = 1
+                 and exists (select 1 from public.nx_sessoes where conta_id = k_atA and token_hash = public.nx_hash(j ->> 'token')), 'redefinir troca a senha e derruba as sessões'); casos := casos + 1;
   perform pg_temp.ok((select senha_hash = extensions.crypt('senha-redefinida-1', senha_hash) from public.nx_contas where id = k_atA), 'senha nova gravada (bcrypt)'); casos := casos + 1;
   r := pg_temp.erro(format('select public.nx_senha_redefinir(%L, %L)', v_link, 'outra-senha-9'));
   perform pg_temp.ok(r = 'link_invalido', 'link usado → link_invalido'); casos := casos + 1;

@@ -162,7 +162,7 @@ begin
   n := public.nx_relatorio_chamar('diario');
   perform pg_temp.ok(n >= 2 and pg_temp.disparos('%/nx-relatorio', '%' || cA::text || '%') = n0 + 1
                  and pg_temp.disparos('%/nx-relatorio', '%' || cB::text || '%') >= 1, 'um disparo do nx-relatorio por cliente apto (' || n || ')');
-  perform pg_temp.ok(pg_temp.erro($q$select public.nx_relatorio_chamar('semanal')$q$) = 'dados_invalidos|tipo', 'tipo inválido');
+  perform pg_temp.ok(pg_temp.erro($q$select public.nx_relatorio_chamar('anual')$q$) = 'dados_invalidos|tipo', 'tipo inválido');   -- plano 1500c: «semanal» virou tipo válido (AC-055)
   perform pg_temp.ok((select count(*) from cron.job where jobname in ('nx-relatorio-diario', 'nx-relatorio-diario-2') and command like '%nx_relatorio_chamar(''diario'')%') = 2
                  and (select count(*) from cron.job where jobname in ('nx-relatorio-mensal', 'nx-relatorio-mensal-2', 'nx-relatorio-mensal-3') and command like '%nx_relatorio_chamar(''mensal'')%') = 3,
     'crons dos relatórios declarados e chamando nx_relatorio_chamar');
