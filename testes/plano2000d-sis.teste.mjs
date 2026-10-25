@@ -955,7 +955,7 @@ test("DU-408 · o app instalado reabre na última tela principal (uma vez, só s
 
 const PP = P;
 test("DU-268 · horário silencioso: o número sobe, mas sem som nem aviso de tela (inclusive atravessando a meia-noite)", () => {
-  
+
   const em = (h, m) => new Date(2026, 2, 3, h, m);
   const s = { de: "20:00", ate: "08:00" };
   assert.equal(PP.emHorarioSilencioso(s, em(22, 0)), true); assert.equal(PP.emHorarioSilencioso(s, em(7, 59)), true);

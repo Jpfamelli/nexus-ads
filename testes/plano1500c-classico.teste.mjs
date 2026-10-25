@@ -308,7 +308,7 @@ test("AC-055 · resumo semanal (segunda-feira): 7 dias contra os 7 anteriores", 
 test("AC-058 · mensal lista os marcos do mês («O que mudamos no mês»)", () => {
   const M0 = montarDe({ metricas: serie(1, 120) });
   const m = ultimoMes(M0), d = N.isoDe(M0.dataDe(m.de + 4));
-  const M = montarDe({ metricas: serie(1, 120) }, { marcos: [{ d, t: "Troca de criativo" }, { d: dia(1), t: "fora do mês" }] });
+  const M = montarDe({ metricas: serie(1, 120) }, { marcos: [{ d, t: "Troca de criativo" }, { d: N.isoDe(M0.dataDe(m.de - 3)), t: "fora do mês" }] });   // dia(1) caía DENTRO do mês no dia 1º (CI dia1T03:05Z)
   const t = M.relMensal(ultimoMes(M));
   assert.match(t, new RegExp(`\\*O que mudamos no mês\\*\\n• ${M.ddmm(m.de + 4).replace("/", "\\/")} — Troca de criativo`));
   assert.doesNotMatch(t, /fora do mês/);

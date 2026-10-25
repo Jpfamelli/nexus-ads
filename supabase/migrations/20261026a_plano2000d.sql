@@ -1432,7 +1432,7 @@ declare
 begin
   -- plano 1000 (SV-063): + 'relatorio' (leitura de IA do relatório diário/mensal, pelo cron, sem pessoa)
   if p_cliente is null or p_acao is null or p_acao not in ('sugerir', 'resumir', 'automacao', 'relatorio', 'simular', 'reescrever', 'traduzir', 'transcrever')   -- plano 2000d · DS-169
-    
+
      or (p_conta is null and p_acao not in ('automacao', 'relatorio')) then
     return json_build_object('ok', false, 'erro', 'dados_invalidos');
   end if;
