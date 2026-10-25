@@ -50,7 +50,7 @@ export async function montarImportar(k, el) {
   function linhasDoMapa() {
     const chave = JSON.stringify(S.mapa);
     // plano 1000b · RB-068: com os campos, a opção da planilha («unimed») vira a oficial («Unimed»)
-    if (memo.dados !== S.dados || memo.mapa !== chave) memo = { dados: S.dados, mapa: chave, linhas: L.montarLinhas(S.dados.linhas, S.mapa, k.base.campos), problemas: null };
+    if (memo.dados !== S.dados || memo.mapa !== chave) memo = { dados: S.dados, mapa: chave, linhas: (L.aplicarResponsaveis || (x => x))(L.montarLinhas(S.dados.linhas, S.mapa, k.base.campos), k.base.usuarios), problemas: null };      // plano 2000d · DR-342: o responsável de cada linha
     return memo.linhas;
   }
   function problemasDoMapa() {
@@ -97,8 +97,12 @@ export async function montarImportar(k, el) {
 
   function desenharPassos() {
     ui.limpar(passosEl);
+    // plano 2000d · DR-199: os passos já feitos viram botões (voltar ao mapeamento sem vários «Voltar») — só antes de começar a gravar
+    const podeVoltar = !S.rodando && !S.terminou && !(S.feitas > 0);
     for (const p of PASSOS) {
-      passosEl.appendChild(h("li", { class: ["imp-passo", p.id < S.passo && "feito"], "aria-current": p.id === S.passo ? "step" : null }, p.rotulo));
+      const feito = p.id < S.passo;
+      passosEl.appendChild(h("li", { class: ["imp-passo", feito && "feito"], "aria-current": p.id === S.passo ? "step" : null },
+        feito && podeVoltar ? h("button", { type: "button", class: "imp-passo-bt", "aria-label": `Voltar ao passo ${p.id}: ${p.rotulo}`, on: { click: () => ir(p.id) } }, p.rotulo) : p.rotulo));
     }
   }
 
@@ -209,6 +213,15 @@ export async function montarImportar(k, el) {
         ui.toast("Não achamos linhas nessa planilha. A primeira linha precisa ser o cabeçalho (Nome, Telefone…).", { tipo: "erro", ms: 8000 });
         return;
       }
+      // plano 2000d · DR-409: abas exportadas e juntadas num CSV só — a linha igual ao cabeçalho no meio sai (com aviso), não vira um contato «Nome»
+      const rep = L.semCabecalhoRepetido ? L.semCabecalhoRepetido(d.cabecalho, d.linhas) : { linhas: d.linhas, repetidos: 0 };
+      if (rep.repetidos) {
+        const orig = d.linhas, nums0 = d.numeros || orig.map((_, i) => i + 2), fica = new Set(rep.linhas);
+        d.numeros = nums0.filter((_, i) => fica.has(orig[i]));
+        d.linhas = rep.linhas;
+        d.cabecalhosRepetidos = rep.repetidos;
+        ui.toast(`${rep.repetidos === 1 ? "1 linha igual ao cabeçalho foi pulada" : `${ui.num(rep.repetidos)} linhas iguais ao cabeçalho foram puladas`} (abas juntadas no mesmo arquivo).`, { tipo: "info", ms: 8000 });
+      }
       S.arquivo = info; S.dados = d;
       S.mapa = L.sugerirMapeamento(d.cabecalho, k.base.campos);
       const lembrado = (lerMapas()[L.assinaturaCabecalho(d.cabecalho)] || {}).mapa;
@@ -259,11 +272,8 @@ export async function montarImportar(k, el) {
       h("button", { type: "button", class: "link imp-modelo-bt", on: { click: baixarModelo } }, ui.icone("baixar"), "Baixar modelo (CSV)"),
       " — preencha no Excel e escolha o arquivo aqui.");
     function baixarModelo() {
-      const m = L.modeloImportacao(k.base.campos);
-      const url = URL.createObjectURL(new Blob([L.gerarCSV(m.cabecalho, m.linhas)], { type: "text/csv;charset=utf-8" }));
-      const a = h("a", { href: url, download: `modelo-${v.min("contatos")}.csv`, hidden: true });
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      const m = L.modeloImportacao(k.base.campos, { vertical: v.vertical });      // plano 2000d · DR-232: exemplos do ramo
+      L.baixarArquivo(L.gerarCSV(m.cabecalho, m.linhas), `modelo-${v.min("contatos")}.csv`, { h });      // plano 2000d · DR-339: um helper só; o link vive 60 s (antes 2 s: o iPhone baixava vazio)
     }
     corpo.append(h("h2", { class: "imp-tit" }, "Escolha a planilha"), entrada, solta, modelo, status, avisoAspas, avisoCortado, colarBloco);
     rodape.append(h("span"), continuar);
@@ -450,6 +460,8 @@ export async function montarImportar(k, el) {
       const dest = c.dest;
       // C7: telefone de fora com «+» aparece como «+1 2125551234» (não no formato brasileiro); sem DDD brasileiro e sem «+», como foi digitado (com o aviso)
       cols.push({ chave: dest, rotulo: c.rotulo, render: l => (dest === "telefone" && l.telefone ? L.telefoneImportado(l.telefone, { fmtBR: ui.telBR }).texto
+        // plano 2000d · DR-342: a coluna Responsável mostra quem da equipe vai receber (a linha já traz o dono_id)
+        : dest === "responsavel" ? (l.dono_id != null ? ((k.usuario && k.usuario(l.dono_id)) || (k.base.usuarios || []).find(u => String(u.id) === String(l.dono_id)) || {}).nome || null : null)
         : c.campo ? (l.campos && l.campos[c.campo]) || null : l[dest] || null) });
     }
     cols.push({ chave: "_sit", rotulo: "Situação", render: l => l._erros.length
@@ -476,10 +488,7 @@ export async function montarImportar(k, el) {
     const notaRuins = h("p", { class: "sub", hidden: true }, `Mostrando 100 de ${ui.num(ruins.length)}. Baixe a lista para ver todas.`);
     const btBaixarRuins = ruins.length ? botao("Baixar a lista de problemas", "fant", () => {
       const csv = L.gerarCSV(["linha", "problema"], ruins.map(l => [l._linha, l._erros.join(" · ")]));
-      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-      const a = h("a", { href: url, download: L.nomeArquivoImportacao ? L.nomeArquivoImportacao("problemas", S.arquivo && S.arquivo.nome, ui.hojeSP ? ui.hojeSP() : "") : "problemas-da-planilha.csv", hidden: true });      // plano 1500c · RX-069
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      L.baixarArquivo(csv, L.nomeArquivoImportacao ? L.nomeArquivoImportacao("problemas", S.arquivo && S.arquivo.nome, ui.hojeSP ? ui.hojeSP() : "") : "problemas-da-planilha.csv", { h });      // plano 1500c · RX-069      // plano 2000d · DR-339: um helper só; o link vive 60 s (antes 2 s: o iPhone baixava vazio)
     }) : null;
     // plano 1000 (CR-118): a mesma pessoa duas vezes na planilha (telefone com/sem 55 e 9, ou e-mail) — a 2ª linha só atualizaria a 1ª
     const dups = L.duplicadosPlanilha(linhasMontadas, d.numeros);
@@ -642,10 +651,12 @@ export async function montarImportar(k, el) {
           S.resumo = L.somarImportacao(S.resumo, r);
           const marco = L.marcoProgresso(i, i + lote.length, total);      // plano 1500c · RC-168
           i += lote.length; S.feitas = i;
+          // plano 2000d · DR-198: depois de encolher por tempo esgotado, volta a crescer (dobra a cada 3 lotes certos, até 100)
+          if (S.lote < 100) { const nl = L.loteDepoisDeOk(S.lote, (S.okSeguidos || 0) + 1, 100); S.lote = nl.lote; S.okSeguidos = nl.okSeguidos; }
           atualizarBarra();
           if (marco) ui.anunciar(`${marco}% importado.`);
         } catch (e) {
-          if (e && e.codigo === "tempo_esgotado" && S.lote > 10) { S.lote = L.metadeLote(S.lote); atualizarTexto(); continue; }
+          if (e && e.codigo === "tempo_esgotado" && S.lote > 10) { S.lote = L.metadeLote(S.lote); S.okSeguidos = 0; atualizarTexto(); continue; }
           if (offline() && S.vivo && !S.cancelado) { pausarSemRede(); continue; }      // plano 1500c · RC-332: a rede caiu no meio do lote — espera e reenvia o MESMO lote
           S.erroFatal = e;
           // plano 1000b · RB-127: erro ambíguo (rede caiu, 502–504) — o servidor pode ter aplicado ESTE lote; a tela diz quais linhas conferir
@@ -728,7 +739,9 @@ export async function montarImportar(k, el) {
           // plano 1000b · RB-132: o filtro mostra só os NOVOS — o rótulo diz isso («Ver os 3 novos»); sem novos, abre a lista inteira
           : s.criados ? h("a", { class: "bt bt-prim imp-ver-quem", href: `#/contatos?origem=importacao&criado_de=${encodeURIComponent(ui.hojeSP())}${o.etiquetas.length === 1 ? `&etiqueta=${encodeURIComponent(o.etiquetas[0])}` : ""}` },
             s.criados === 1 ? `Ver ${k.v.art("contato")} nov${k.v.art("contato")}` : `Ver ${k.v.art("contato")}s ${ui.num(s.criados)} nov${k.v.art("contato")}s`)
-            : h("a", { class: "bt bt-prim imp-ver-quem", href: "#/contatos" }, `Ver ${k.v.min("contatos")}`));
+            : h("a", { class: "bt bt-prim imp-ver-quem", href: "#/contatos" }, `Ver ${k.v.min("contatos")}`),
+        // plano 2000d · DR-413: o efeito da importação aparece no Início (os números já com a base nova)
+        !(S.erroFatal || S.parado) && (s.criados || s.atualizados) ? h("a", { class: "bt bt-sec imp-ver-inicio", href: "#/inicio" }, ui.icone("grafico"), "Ver o Início") : null);
       if (s.criados && s.atualizados) resultado.append(h("p", { class: "sub imp-nota-atual" },
         `${s.atualizados === 1 ? `${k.v.art("contato") === "a" ? "A" : "O"} atualizad${k.v.art("contato")} mantém` : `${k.v.art("contato") === "a" ? "As" : "Os"} ${ui.num(s.atualizados)} atualizad${k.v.art("contato")}s mantêm`} a origem de antes e não ${s.atualizados === 1 ? "aparece" : "aparecem"} nessa lista.`));
     }
@@ -737,18 +750,14 @@ export async function montarImportar(k, el) {
     function baixarIncertas(inc) {
       const cab = ["linha", "nome", "telefone", "email"];
       const csv = L.gerarCSV(cab, inc.linhas.map(l => [l._linha, l.nome || "", l.telefone || "", l.email || ""]));
-      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-      const a = h("a", { href: url, download: `linhas-${inc.de}-a-${inc.ate}-para-conferir.csv`, hidden: true });
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      L.baixarArquivo(csv, `linhas-${inc.de}-a-${inc.ate}-para-conferir.csv`, { h });      // plano 2000d · DR-339: um helper só; o link vive 60 s (antes 2 s: o iPhone baixava vazio)
     }
 
     function baixar(problemas) {
-      const csv = L.gerarCSV(["linha", "tipo", "motivo"], problemas.map(p => [p.linha, p.tipo, p.motivo]));
-      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-      const a = h("a", { href: url, download: L.nomeArquivoImportacao ? L.nomeArquivoImportacao("erros", S.arquivo && S.arquivo.nome, ui.hojeSP ? ui.hojeSP() : "") : "erros-da-importacao.csv", hidden: true });      // plano 1500c · RX-069
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      // plano 2000d · DR-197: com as colunas ORIGINAIS da planilha + o que corrigir — dá para corrigir no próprio arquivo e importar de novo
+      const m = L.csvErrosImportacao ? L.csvErrosImportacao(problemas, S.dados) : null;
+      const csv = m ? L.gerarCSV(m.cabecalho, m.linhas) : L.gerarCSV(["linha", "tipo", "motivo"], problemas.map(p => [p.linha, p.tipo, p.motivo]));
+      L.baixarArquivo(csv, L.nomeArquivoImportacao ? L.nomeArquivoImportacao("erros", S.arquivo && S.arquivo.nome, ui.hojeSP ? ui.hojeSP() : "") : "erros-da-importacao.csv", { h });      // plano 1500c · RX-069      // plano 2000d · DR-339: um helper só; o link vive 60 s (antes 2 s: o iPhone baixava vazio)
     }
 
     if (S.terminou) { atualizarBarra(); desenharResultado(); }

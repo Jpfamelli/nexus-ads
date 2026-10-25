@@ -511,13 +511,17 @@ const benignaPelaForma = e => /^[\d\s()+\-*/%.,]+$/.test(e) || /===|!==|>=|<=|[<
 // identificadores revisados (constantes, números, HTML já escapado na origem, cores validadas por hexValido)
 const IDENT_OK = new Set(["ys", "dAnt", "d", "tilt", "tela", "erro", "titulo", "texto", "botoes", "tocos", "notaParada", "W", "H", "ih", "rx", "base", "dl", "fx", "fora", "tend",
   "dentro", "vt", "a", "b", "acima", "msg", "tt", "l", "col", "cor", "q", "arcs", "t", "antes", "id", "sub", "depois", "linhas", "qtd", "u", "ativo", "env", "desde", "nomeR",
-  "pode", "radarChega", "ANIM", "sev", "ic", "REDUCE", "selo", "c", "novo", "canal", "secreto", "pend", "eu", "tem", "dica", "curto", "inv", "tk", "m", "ORBITA_URL"]);
+  "pode", "radarChega", "ANIM", "sev", "ic", "REDUCE", "selo", "c", "novo", "canal", "secreto", "pend", "eu", "tem", "dica", "curto", "inv", "tk", "m", "ORBITA_URL",
+  // plano 2000d: cabeçalho dos criativos montado por thC (rótulo e título passam por esc() lá dentro)
+  "cabCri"]);
 // expressões revisadas (constantes de tabela, números, enums do núcleo/estadoIntegracao/statusEnvio, booleanos usados em condição)
 const EXPR_OK = new Set(["30 + ((i * 37) % 55)", "c.receita", "S.plat", "S.dias", "P.l", "W - P.r", "P.l - 8", "W - P.r + 8", "maxC * k / 4", "P.t", "d.i", "mk.exemplo", "P.t + 15", "P.t - 7", "H - 9",
   "e.l", "e.s", "e.v", "r != null", "MES3[ult.m.mes]", "d.parcial", "d.proj", "d.m.ano", "d.m.mes", "d.c.fecharam", "MES3[d.m.mes]", "serv[1].n", "c.fecharam", "m.gasto", "ROT_CEL[k]",
   "\" no \" + nomePlat(S.plat)", "a4.regra.janela", "NOME_ETAPA[e]", "vd.semValor", "M.valorDe(L).semValor","q.atraso", "r.k.conversas", "r.k.agendadas", "r.k.compareceram", "r.k.fecharam", "c.semCampanha",
   "s.cor", "s.n", "f.on", "f.marcado", "f.falta", "f.t", "f.q", "f.v", "f.d", "s.k", "s.tique", "c.estado", "c.sync", "ESTADO[c.estado]", "S.demo", "S.varridoEm", "a.sev",
-  "SEV_NOME[a.sev]", "M.ICONE[a.sev]", "LEIGO_LINHA[id]", "SEV_NOME[r.sev]", "r.ativa", "r.id", "SEV_NOME[sev]", "d.nome", "d.curto", "e.ok"]);
+  "SEV_NOME[a.sev]", "M.ICONE[a.sev]", "LEIGO_LINHA[id]",
+  // plano 2000d: selo «dados parciais» (DA-004) — o title passa por esc() dentro de divergChip, o resto é constante
+  "divergChip(diverg[r.c.id])", "SEV_NOME[r.sev]", "r.ativa", "r.id", "SEV_NOME[sev]", "d.nome", "d.curto", "e.ok"]);
 
 test("P7 · escape: nenhuma interpolação nova sem esc()/formatador em HTML montado por string (painel.js)", () => {
   const achados = folhasHtml(JS);

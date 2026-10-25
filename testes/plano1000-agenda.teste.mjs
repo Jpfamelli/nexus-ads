@@ -682,7 +682,8 @@ test("CA-176 / CA-178 · «Avisar paciente» depois de remarcar e de desmarcar d
     T.reg.chamadas.length = 0;
     aviso.acao.fn();
     await esperar(10);
-    assert.deepEqual(T.reg.chamadas.map(c => c.nome), ["nx_contato_ver"], "só lê o contato");
+    // plano 2000d: DC-300 — a confirmação também diz de onde é: lê o nome/endereço da empresa (nx_cv_base, uma vez) além do contato
+    assert.deepEqual(T.reg.chamadas.map(c => c.nome), ["nx_cv_base", "nx_contato_ver"], "lê a empresa e o contato");
     assert.deepEqual(T.reg.navegou, ["#/conversas/901"]);
     const texto = T.rascunho.texto("conversa:901");
     assert.match(texto, /^Olá, Mariana! Sua consulta \(Avaliação\) está marcada para .* às 14:00\./);
@@ -812,9 +813,10 @@ test("CA-190 · dia por vir: só «consultas» e «encaixes» (sem os zeros de c
   const fut = "2026-10-20";
   const consultas = [consultaEm(fut, "10:00")];
   const el = A.montarPainelDia({ h, iso: fut, consultas, hoje: "2026-10-13" });
-  assert.deepEqual(el.querySelectorAll(".ag-kpi span").map(s => s.textContent), ["consulta", "encaixes"]);
+  // plano 2000d: DC-303 — sem encaixe no dia, nada de «0 encaixes» (só aparece quando há)
+  assert.deepEqual(el.querySelectorAll(".ag-kpi span").map(s => s.textContent), ["consulta"]);
   const hoje = A.montarPainelDia({ h, iso: fut, consultas, hoje: fut });
-  assert.equal(hoje.querySelectorAll(".ag-kpi").length, 4, "de hoje para trás, os quatro números");
+  assert.equal(hoje.querySelectorAll(".ag-kpi").length, 3, "plano 2000d: de hoje para trás, consultas, concluídas e faltas (encaixes só quando há)");
 });
 
 test("CA-191 · «Compareceu» oferece «Abrir negócio» no aviso (sem mover a etapa sozinho); «Faltou» não", async () => {

@@ -235,7 +235,7 @@ async function iniciar() {
     url: dados.SUPA_URL, chave: dados.CHAVE_PUBLICA,
     token: () => dados.lerToken(),
     cliente: () => (E.cliente ? E.cliente.id : null),
-    aoSessaoInvalida: () => sessaoCaiu(),
+    aoSessaoInvalida: e => sessaoCaiu(e),   // plano 2000d · DU-400: o motivo (hint) diz se foi o tempo ou alguém que encerrou
     rede: E.rede, contexto: true, retentar: true,
     cache: E.cache, conta: () => (E.sessao ? E.sessao.conta.id : LS.lerTxt(CHAVE_CONTA)), aoCache: ev => aoCacheEvento(ev),
     aoErro: e => aoErroApi(e),   // A4: cliente_pausado vira bloqueio honesto
@@ -577,6 +577,12 @@ function aplicarSomenteConsulta() {
 
 /* ---- plano 1000 (AS-174): Sair numa aba fecha as outras (computador compartilhado); entrar com outra conta noutra aba recarrega esta ---- */
 function ouvirOutrasAbas() {
+  // plano 2000d · DU-150: a marca salva noutra aba (o Configurações grava nx-marca-hash) repinta esta sem recarregar
+  addEventListener("storage", ev => {
+    if (!ev || ev.key !== "nx-marca-hash" || ev.oldValue === ev.newValue || !E.sessao) return;
+    E.sessaoPromessa = null;
+    lerSessao().then(() => aplicarMarcaCliente()).catch(() => { /* fica a marca de agora */ });
+  });
   addEventListener("storage", ev => {
     if (!ev || (ev.key !== "nx-token" && ev.key !== null)) return;
     if (ev.key === null && E.M.dados.lerToken()) return;            // localStorage.clear() de outra coisa, com o token ainda lá
@@ -780,7 +786,8 @@ async function atualizarManifestoApp() {
     const fundo = getComputedStyle(document.documentElement).getPropertyValue("--c-fundo").trim() || E.M.tema.FUNDOS_ESQUEMA.escuro;
     const m = E.marca;
     let raster = null;
-    try { raster = await P.rasterizarIcones({ origem: m.logo_cliente || m.favicon || m.logo || null, fundo }); }
+    // plano 2000d · DU-147: o ícone próprio do app (icone_app) vence o logo — logo largo fica ilegível no ícone do celular
+    try { raster = await P.rasterizarIcones({ origem: m.icone_app || m.logo_cliente || m.favicon || m.logo || null, fundo }); }
     catch (e) { raster = null; console.warn("ícones da marca indisponíveis; ficam os empacotados", e && e.message); }   // sem logo próprio ou imagem sem CORS
     if (seq !== manifestoEstado.seq) return;
     // plano 2000d · DU-261: atalhos do ícone pelos módulos da empresa (com o nome da vertical); DU-446: recebe «Compartilhar» do celular
@@ -1257,7 +1264,22 @@ function pedirArmazenamentoPersistente() {
  * falharam esperam por isso e se repetem com o token novo. A tela NÃO é desmontada e nada do que foi digitado se perde: abre por cima
  * uma janela «Sua sessão expirou» com o e-mail preenchido. Na abertura (ainda sem sessão) não há tela a preservar: volta ao login como antes.
  */
-function sessaoCaiu() {
+/** plano 2000d · DU-400: por que a sessão caiu — o servidor manda no hint (encerrada_admin, outro_aparelho, senha_trocada); sem motivo, «expirou». */
+const MOTIVOS_QUEDA = Object.freeze({
+  encerrada_admin: { titulo: "Sua sessão foi encerrada", texto: "Um administrador da empresa encerrou esta sessão. Entre de novo para continuar." },
+  outro_aparelho: { titulo: "Sua sessão foi encerrada", texto: "A sessão foi encerrada em outro aparelho (em «Sessões abertas»). Entre de novo para continuar." },
+  senha_trocada: { titulo: "Sua senha foi trocada", texto: "A senha desta conta mudou e as sessões antigas foram encerradas. Entre com a senha nova." },
+});
+function textoSessaoCaiu(e) {
+  const bruto = e && (e.hint || (e.detalhe && typeof e.detalhe === "object" && e.detalhe.motivo) || e.motivo);
+  const m = String(bruto || "").trim().toLowerCase().replace(/[^a-z_]/g, "");
+  const alias = { admin: "encerrada_admin", encerrada: "encerrada_admin", revogada: "encerrada_admin", sessao_encerrada: "encerrada_admin", senha: "senha_trocada" };
+  const chave = Object.hasOwn(MOTIVOS_QUEDA, m) ? m : alias[m];
+  if (chave) return { motivo: chave, ...MOTIVOS_QUEDA[chave] };
+  return { motivo: "expirou", titulo: "Sua sessão expirou", texto: "Entre para continuar de onde parou. O que você digitou fica guardado." };
+}
+function sessaoCaiu(e = null) {
+  E.motivoQueda = textoSessaoCaiu(e);   // plano 2000d · DU-400
   if (!E.sessao) { sessaoCaiuTotal(); return false; }
   if (!loginPendente) loginPendente = pedirLoginNaTela().finally(() => { loginPendente = null; });
   return loginPendente;
@@ -1271,9 +1293,10 @@ async function pedirLoginNaTela() {
     const form = ui.h("form", { class: "pilha", novalidate: true },
       ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", valor: antes.email || "", autocomplete: "username", obrigatorio: true, inputmode: "email" }),
       ui.campo({ rotulo: "Senha", nome: "senha", tipo: "senha", autocomplete: "current-password", obrigatorio: true }));
+    const queda = E.motivoQueda || (typeof textoSessaoCaiu === "function" ? textoSessaoCaiu(null) : { motivo: "expirou", titulo: "Sua sessão expirou", texto: "Entre para continuar de onde parou. O que você digitou fica guardado." });   // plano 2000d · DU-400
     const r = await ui.modal({
-      titulo: "Sua sessão expirou", largura: "p", fecharFora: false, protegerTexto: false,
-      descricao: "Entre para continuar de onde parou. O que você digitou fica guardado.",
+      titulo: queda.titulo, largura: "p", fecharFora: false, protegerTexto: false,
+      descricao: queda.motivo === "expirou" ? queda.texto : `${queda.texto} O que você digitou fica guardado.`,
       corpo: form,
       aoAbrir: a => { const s = a.el.querySelector("input[name=senha]"); if (s && !(typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches)) s.focus(); },
       acoes: [
@@ -1325,7 +1348,10 @@ function sessaoCaiuTotal() {
   if (E.pulso) E.pulso.parar();
   reiniciarCanais();                             // revisão: o aviso fixo de número caído não fica na tela de login
   desmontarAtual();
-  if (!_avisouSessao) { _avisouSessao = true; E.ui.toast("Sua sessão expirou. Entre de novo.", { tipo: "info" }); setTimeout(() => { _avisouSessao = false; }, 4000); }
+  // plano 2000d · DU-400: a tela de entrar diz o motivo (encerrada por um administrador, em outro aparelho, senha trocada)
+  const queda = E.motivoQueda || (typeof textoSessaoCaiu === "function" ? textoSessaoCaiu(null) : { motivo: "expirou", texto: "" });
+  E.motivoQueda = null;
+  if (!_avisouSessao) { _avisouSessao = true; E.ui.toast(queda.motivo === "expirou" ? "Sua sessão expirou. Entre de novo." : queda.texto, { tipo: queda.motivo === "expirou" ? "info" : "aten", ms: queda.motivo === "expirou" ? undefined : 12000 }); setTimeout(() => { _avisouSessao = false; }, 4000); }
   const r = E.M.rotas.rotear(location.hash);
   if (!ROTAS_PUBLICAS.has(r.modulo)) {
     try { sessionStorage.setItem("nx-app-destino", location.hash); } catch { /* ok */ }
@@ -1532,7 +1558,10 @@ async function escolherCliente(id, { remontar = true } = {}) {
   const lista = E.sessao ? E.sessao.clientes : [];
   const novo = lista.find(c => c.id === id) || null;
   const mudou = (E.cliente && E.cliente.id) !== (novo && novo.id);
+  const anterior = E.cliente && E.cliente.id;
   E.cliente = novo;
+  // plano 2000d · DU-345: trocou de empresa → o que o aparelho guardava da anterior sai (aparelho compartilhado entre empresas não acumula dados)
+  if (mudou && anterior && E.cache && typeof E.cache.apagarEmpresa === "function" && E.sessao && E.sessao.conta) E.cache.apagarEmpresa({ conta: E.sessao.conta.id, cliente: anterior }).catch(() => {});
   if (mudou) { E.naoLidasAnterior = null; reiniciarCanais(); }                              // A2/A10: a referência é por empresa
   if (mudou) E.faixasAbertas = false;   // plano 1500c · UCC-117: a outra empresa volta a mostrar uma faixa só
   if (novo && Array.isArray(novo.canais)) atualizarCanais({ canais: novo.canais }, "sessao");   // A10: a sessão já diz o estado dos números
@@ -2042,7 +2071,7 @@ async function montarNoShell(r, seq, doUsuario) {
   const acesso = acessoDaRota === "ok" && E.cliente && E.cliente.ativo === false && !equipe && !(def && def.semCliente) ? "pausado" : acessoDaRota;
   E.ultimaRota = r;
   // plano 2000d · DU-408: a última tela principal aberta (o app instalado reabre nela)
-  if (acesso === "ok" && E.sessao && /^[a-z-]{2,20}$/.test(String(r.modulo || "")) && r.modulo !== "inicio") LS.gravar(E.pwaMod && E.pwaMod.CHAVE_ULTIMA_ROTA || "nx-ultima-rota", `#/${r.modulo}`);
+  try { if (acesso === "ok" && E.sessao && /^[a-z-]{2,20}$/.test(String(r.modulo || "")) && r.modulo !== "inicio") LS.gravar(E.pwaMod && E.pwaMod.CHAVE_ULTIMA_ROTA || "nx-ultima-rota", `#/${r.modulo}`); } catch { /* lembrar a rota nunca atrapalha a tela */ }
   reiniciarSelo();
   marcarMenu(r.modulo);
   if (E.pulso) E.pulso.modo(r.modulo === "conversas" ? "conversas" : "normal");
@@ -2072,7 +2101,8 @@ async function montarNoShell(r, seq, doUsuario) {
   else {
     desmontarAtual();
     ui.limpar(vista);
-    vista.appendChild(ui.esqueleto(rotas.esqueletoDaRota(r.modulo, r.partes)));   // a forma da tela, não 4 cartões iguais
+    // a forma da tela, não 4 cartões iguais · plano 2000d · DU-360: depois de 5 s diz o que está carregando
+    vista.appendChild(ui.esqueleto(rotas.esqueletoDaRota(r.modulo, r.partes), { demorou: rotas.textoCarregandoDemorou ? rotas.textoCarregandoDemorou(r.modulo) : null }));
     try {
       mod = await arq(def.arquivo);
     } catch (e) {
@@ -2109,7 +2139,7 @@ async function montarNoShell(r, seq, doUsuario) {
   // plano 1500c · UCC-075: o foco vai ao título só quando a TELA mudou — abrir um item ou trocar de aba na mesma tela não tira o teclado do lugar
   if (doUsuario && trocouDeTela) focarTitulo(seq);
   // plano 2000d · DU-246: primeira visita a esta tela → o tour dela (depois do foco no título e dos dados chegarem)
-  if (trocouDeTela) setTimeout(() => { if (seq === E.montando) iniciarTourDaRota(r.modulo); }, 1800);
+  if (trocouDeTela) setTimeout(() => { try { if (seq === E.montando) iniciarTourDaRota(r.modulo); } catch { /* o tour nunca derruba a tela */ } }, 1800);
 }
 
 /* ============================================================
@@ -2228,7 +2258,7 @@ async function montarPublico(r, seq) {
     /** AS-185: o aparelho está marcado como compartilhado? (o login mostra «Lembrar neste aparelho» desmarcado) */
     aparelhoCompartilhado,
     /** depois de entrar/aceitar convite: guarda o token e abre o app. `compartilhado` (login): true = nada vai para o disco do aparelho. */
-    async aoEntrar(token, { cliente_id, compartilhado, expira_em, boasVindas, demo, tentativas } = {}) {
+    async aoEntrar(token, { cliente_id, compartilhado, expira_em, boasVindas, demo, tentativas, ativar2fa = false } = {}) {
       // plano 2000d · DU-222: houve tentativas erradas recentes nesta conta → aviso depois de abrir, com o caminho para as sessões
       E.tentativasRecentes = tentativas && typeof tentativas === "object" ? tentativas : null;
       if (typeof compartilhado === "boolean") definirAparelhoCompartilhado(compartilhado);
@@ -2248,6 +2278,8 @@ async function montarPublico(r, seq) {
       E.sessao = null; E.cliente = null;
       let destino = "#/";
       try { const d = sessionStorage.getItem("nx-app-destino"); sessionStorage.removeItem("nx-app-destino"); if (d && !/^#\/?(login|convite|senha|testar)/.test(d)) destino = d; } catch { /* ok */ }
+      // plano 2000d · DU-119: a empresa pede verificação em duas etapas → primeiro o Perfil, no passo de ligar (o config.js lê ?ativar2fa=1)
+      if (ativar2fa) { destino = "#/config/perfil?ativar2fa=1"; setTimeout(() => E.ui.toast("Esta empresa pede a verificação em duas etapas. Ligue agora para continuar usando.", { tipo: "aten", ms: 12000 }), 600); }
       navegar(destino, { substituir: true });
     },
     /** depois de trocar a senha obrigatória. */
@@ -2621,6 +2653,8 @@ function desenharEmpresa() {
   if (lista.length <= 1) {
     alvo.appendChild(ui.h("div", { class: "empresa-bt empresa-fixa" }, conteudo));
   } else {
+    // plano 2000d · DU-452: com mais de uma empresa, o celular mostra o nome curto ao lado do avatar (o nome inteiro some abaixo de 480 px)
+    conteudo.push(ui.h("span", { class: "emp-curto", "aria-hidden": "true" }, E.M.rotas.nomeCurtoEmpresa ? E.M.rotas.nomeCurtoEmpresa(cli.nome) : cli.nome));
     const bt = ui.h("button", { type: "button", class: "empresa-bt", "aria-haspopup": "dialog", "aria-expanded": "false", "aria-label": `Empresa ativa: ${cli.nome}. Trocar de empresa` },
       conteudo, ui.icone("seta-baixo"));
     bt.addEventListener("click", () => abrirSeletorEmpresa(bt));
@@ -2698,6 +2732,8 @@ function desenharConta() {
   const papelTxt = c.super ? "Plataforma" : c.papel === "gestor" ? "Gestor" : (E.cliente ? E.M.vocab.ROTULO_PAPEL[E.cliente.papel] : "");
   const abrirMenuConta = ancora => ui.menu(ancora, [
     { rotulo: "Perfil e senha", icone: "usuario", fn: () => navegar("#/config/perfil") },
+    // plano 2000d · DU-128: «Ficar ausente» leva direto aos avisos do Perfil (onde está a ausência)
+    E.cliente && E.cliente.modulos && E.cliente.modulos.includes("conversas") ? { rotulo: "Ficar ausente", icone: "relogio", fn: () => navegar("#/config/perfil?secao=avisos#cfg-pf-avisos") } : null,
     { rotulo: "Configurações", icone: "engrenagem", fn: () => navegar("#/config") },
     { rotulo: "Aparência", icone: { claro: "sol", escuro: "lua", marca: "pincel" }[esquemaPreferido()] || "sol", fn: () => abrirMenuTema(ancora) },
     { rotulo: novidadesPendentes() ? "Ajuda · há novidades" : "Ajuda", icone: "ajuda", fn: () => abrirMenuAjuda(ancora) },   // plano 2000d · DU-286
@@ -2735,7 +2771,7 @@ function desenharFerramentasTopo(dir) {
     const trocar = R.textoTrocarProdutos ? R.textoTrocarProdutos({ padrao: padraoMarca }) : "Trocar de produto";
     const btProdutos = ui.h("button", { type: "button", class: "topo-produtos", "aria-haspopup": "dialog", title: prodAberto ? resumoAberto : trocar,
       "aria-label": prodAberto ? `${R.nomeDoApp({ produto: E.produto, workspace: E.workspace }).name}: ${resumoAberto} Trocar de produto` : trocar },
-      ui.icone(R.iconeDoProduto(E.workspace, E.cliente ? E.M.vocab.vocab(E.cliente.vertical).icone_crm : "funil")), ui.h("span", null, prodAberto ? (nomesProd[E.workspace] || prodAberto.nome) : "Produtos"));
+      ui.icone(E.M.rotas.iconeDoProduto(E.workspace, E.cliente ? E.M.vocab.vocab(E.cliente.vertical).icone_crm : "funil")), ui.h("span", null, prodAberto ? (nomesProd[E.workspace] || prodAberto.nome) : "Produtos"));
     btProdutos.addEventListener("click", () => abrirSeletorProduto(btProdutos));
     dir.appendChild(btProdutos);
   }
@@ -3255,7 +3291,7 @@ function conferirMarcos(est, { ls = LS, ui = E.ui, cli = E.cliente } = {}) {
     if (!Number.isFinite(n)) continue;
     const m = antes ? E.M.rotas.marcoAtingido(antes[tipo], n) : null;
     const txt = m ? E.M.rotas.textoMarco(tipo, n) : null;
-    if (txt) { ditos.push(txt); ui.toast(txt, { tipo: "ok", icone: "estrela", ms: 9000 }); }
+    if (txt) { ditos.push(txt); ui.toast(txt, { tipo: "ok", ms: 9000 }); }
   }
   ls.gravar(chave, Object.fromEntries(["ia_respostas", "automacoes_execucoes", "conversas_respondidas"].map(t => [t, Number(cont[t]) || 0])));
   return ditos;
@@ -3992,7 +4028,9 @@ function tocarSomNaoLidas() {
   } catch { /* sem áudio */ }
 }
 function lerAvisosConversas() {
-  const p = LS.ler("nx-cv-avisos") || {};
+  // plano 2000d · DU-142: as preferências são por conta (nx-cv-avisos:<conta>, gravadas pelo Perfil); a chave antiga vale até a primeira gravação
+  const conta = E.sessao && E.sessao.conta ? E.sessao.conta.id : null;
+  const p = (conta && LS.ler(`nx-cv-avisos:${conta}`)) || LS.ler("nx-cv-avisos") || {};
   // plano 2000d · DU-268: o horário silencioso guardado no Perfil ({de, ate}) vai junto
   return { som: p.som !== false, tela: p.tela === true, silencio: p.silencio && typeof p.silencio === "object" ? p.silencio : null };
 }

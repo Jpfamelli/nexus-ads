@@ -103,7 +103,7 @@ test("AB-001/AB-227 · nota do balde só com as partes não zeradas e plural cer
   assert.match(A.textoBalde({ conversas: 1, agendadas: 1, fecharam: 2, utms: ["a", "b", "c", "d"] }, N.int), /^Inclui 1 conversa, 1 agendamento e 2 fechamentos .* — campanha no link: «a», «b», «c» e mais 1\.$/);
   assert.equal(A.textoBalde({ conversas: 0, agendadas: 0, fecharam: 0 }), "");
   assert.doesNotMatch(A.textoBalde({ conversas: 0, agendadas: 3 }, N.int), /0 conversas/);
-  assert.match(ADS, /const txtBalde = textoBalde\(balde, N\.int\);/);
+  assert.match(ADS, /const txtBalde = textoBalde\(balde, N\.int, vert\);/);   // plano 2000d: DA-396 — com a vertical
 });
 
 test("AB-192 · frase do herói sem jargão", () => {
@@ -241,7 +241,7 @@ test("AB-030 · ponto de cor do CPA com o nível em texto (sr-only)", () => {
   assert.deepEqual(Object.keys(A.TEXTO_NIVEL_CPA).sort(), ["aten", "bom", "neutro", "ruim"]);
   for (const nivel of ["bom", "aten", "ruim", "neutro"]) assert.ok(A.TEXTO_NIVEL_CPA[nivel]);
   assert.equal(A.TEXTO_NIVEL_CPA[L.nivelCpa(30, 20, 100)], "custo acima da meta");
-  assert.match(ADS, /h\("span", \{ class: "sr-only" \}, `\$\{TEXTO_NIVEL_CPA\[L\.nivelCpa\(r\.t\.cpa, meta, r\.t\.gasto\)\]/);
+  assert.match(ADS, /h\("span", \{ class: "sr-only" \}, `\$\{TEXTO_NIVEL_CPA\[L\.nivelCpa\(r\.t\.cpa, meta, r\.t\.gasto, minCor\)\]/);   // plano 2000d: DA-205 — o piso da cor pelo tamanho da conta
 });
 
 test("AB-214 · ordenar a tabela anuncia a nova ordem", () => {
@@ -314,7 +314,7 @@ test("AB-080 · erro de envio do WhatsApp em português (o original vai no title
   assert.equal(L.erroEnvioPt("whatsapp não configurado"), "whatsapp não configurado", "sem padrão conhecido: como veio");
   const p = L.statusEnvio({ enviado_em: new Date().toISOString(), destinos: ["5511", "5512"], erro: "5512: (#131026) Message undeliverable" });
   assert.equal(p.k, "parcial"); assert.match(p.erro, /não recebeu/);
-  assert.match(ADS, /title: st\.erroOriginal \|\| st\.erro \|\| st\.rotulo \}, antes, st\.rotulo,/);
+  assert.match(ADS, /title: tituloEnvio\(st, eGestor\(ctx\)\) \}, antes, st\.rotuloData \|\| st\.rotulo,/   /* plano 2000d: DA-140/DA-258 — o original só para quem gere; a data do envio */);
 });
 
 test("AB-048 · o motivo do aviso que não saiu fica visível na lista de avisos enviados", () => {
@@ -379,7 +379,7 @@ test("AB-185 · cabeçalhos e rótulos das tabelas em 12 px", () => {
 /* ============================================================ Relatórios */
 test("AB-201 · «Este mês» e «Mês passado» em Relatórios", () => {
   assert.deepEqual(RL.periodoMes("2026-10-14", -1), { de: "2026-09-01", ate: "2026-09-30" });
-  assert.deepEqual(RL.periodoMes("2026-10-14", 0), { de: "2026-10-01", ate: "2026-10-14" });
+  assert.deepEqual(RL.periodoMes("2026-10-14", 0), { de: "2026-10-01", ate: "2026-10-13" });   // plano 2000d: DA-210 — «Este mês» termina ontem, como os presets
   assert.deepEqual(RL.periodoMes("2026-03-31", -1), { de: "2026-02-01", ate: "2026-02-28" });
   assert.deepEqual(RL.periodoMes("2027-01-05", -1), { de: "2026-12-01", ate: "2026-12-31" });
   assert.equal(RL.atalhoMesAtivo({ preset: "per", de: "2026-09-01", ate: "2026-09-30" }, "2026-10-14"), "mesant");
@@ -411,12 +411,16 @@ test("AB-097 · Relatórios com o cache do shell ao alternar Vendas/Atendimento"
   assert.match(REL, /"nx_rel_vendas", \{ p_de: de, p_ate: ate, p_funil: P\.funil \|\| null \}, opcCache\)/);
   assert.match(REL, /"nx_rel_atendimento", \{ p_de: de, p_ate: ate, p_departamento: P\.dep \|\| null \}, opcCache\)/);
 });
-test("AB-091/AB-094/AB-258 · «mensagens» por extenso, CSV com o rótulo da tabela e a previsão ponderada explicada", () => {
+test("AB-091/AB-094/AB-258 · «mensagens» por extenso, CSV com o rótulo da tabela e a previsão ponderada explicada", async () => {
   assert.match(REL, /\$\{int\(f\.total\)\} \$\{\+f\.total === 1 \? "mensagem" : "mensagens"\}/);
   assert.doesNotMatch(REL, /msgs ·/);
   // plano 1500c: + «Conversão» (AC-159) — o CSV continua com o mesmo rótulo da tabela
-  assert.match(REL, /colunas: \["Responsável", "Criados", "Ganhos", "Conversão %", "Receita", "Ticket médio", "Abertos agora"\],/);
-  assert.match(REL, /Previsão ponderada = valor de cada negócio × chance de fechar da etapa em que ele está\./);
+  // plano 2000d: as colunas vêm de colunasDono(fem, csv) (NX-306) — no masculino, o mesmo rótulo da tabela, com «%» no CSV
+  const RLm = await import("../web/app/relatorios.js");
+  assert.deepEqual(RLm.colunasDono(false, true), ["Responsável", "Criados", "Ganhos", "Conversão %", "Receita", "Ticket médio", "Abertos agora"]);
+  assert.match(REL, /colunas: colunasDono\(fem, true\)/);
+  // plano 2000d: a explicação usa a palavra do vocabulário (NX-301/NX-302) — «valor de cada ${negSing} × chance … em que ele/ela está»
+  assert.match(REL, /Previsão ponderada = valor de cada \$\{negSing\} × chance de fechar da etapa em que \$\{fem \? "ela" : "ele"\} está\./);
 });
 
 /* ============================================================ Ajustes de anúncios e formulário */
@@ -1337,7 +1341,7 @@ test("AB-062/AB-071/AB-074 · modo do calor com estado; ordem do ranking por cli
   assert.match(ADSc, /k\.plat === "google" \? h\("span", \{ title: "O Google não informa frequência" \}, "não se aplica"\)/);
 });
 test("AB-219/AB-222/AB-225/AB-245 · prévia de outro dia, link para a regra, diário sugerido e ranking que abre a campanha", () => {
-  assert.deepEqual(A.diasPreviaDiario(100), [100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87]);
+  assert.deepEqual(A.diasPreviaDiario(100, 14), [100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87]);   // plano 2000d: DA-398 — o padrão agora é 45 dias
   assert.deepEqual(A.diasPreviaDiario(2), [2, 1, 0]);
   assert.match(ADSc, /texto: \(\) => M\.relDiario\(i\) \}\);/);
   assert.equal(A.idRegra("r1"), "ads-regra-r1");

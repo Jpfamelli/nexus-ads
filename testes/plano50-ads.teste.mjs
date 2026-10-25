@@ -227,7 +227,7 @@ test("49 · sparkline (DOM): sem graficos.sparkline desenha o fallback; com ela,
   const chamadas = [];
   const alvo2 = new No("span");
   A.desenharSparkline({ G: { sparkline: (a, o) => { chamadas.push(o); return { destruir() {} }; } }, L, alvo: alvo2, valores: [1, 2], rotulo: "r" });
-  assert.equal(chamadas.length, 1); assert.deepEqual(chamadas[0].valores, [1, 2]); assert.equal(chamadas[0].rotulo, "r");
+  assert.equal(chamadas.length, 1); assert.deepEqual(chamadas[0].valores, [1, 2]); assert.match(chamadas[0].rotulo, /^r: subiu/);   // plano 2000d: DA-147 — o rótulo diz a direção
   assert.equal(A.desenharSparkline({ G: {}, L, alvo: new No("span"), valores: [7] }), null);
 });
 
@@ -327,7 +327,7 @@ test("48 · barras por campanha (DOM): ordenadas pelo investimento, no máximo 8
 test("as telas usam as peças novas e a folha de estilo cobre celular, movimento reduzido e impressão", () => {
   // plano 100: os KPIs do Anúncios passaram para ui.kpi (a sparkline vem por `serie`); o desenharSparkline segue nos Relatórios
   const ads = ler("anuncios.js"), rel = ler("relatorios.js"), css = ler("relatorios.css");
-  for (const re of [/L\.serieTendencia\(M/, /criarGraficoTendencia\(alvoT/, /L\.funilPorPlataforma\(M/, /L\.calorSemanal\(M/, /typeof G\.donut === "function" \? G\.donut : G\.rosca/, /criarBarrasCampanhas\(\{ h, linhas/, /L\.semaforoRadar\(R, \{ semDados \}\)/, /const semDados = L\.semAnuncios\(M\);/, /L\.explicarRegra\(/, /botaoPng\(\{ h, alvo: alvoT/, /serie: k\.serie \? sparkDe\(k\.serie\)/]) assert.match(ads, re, String(re));
+  for (const re of [/L\.serieTendencia\(M/, /criarGraficoTendencia\(alvoT/, /L\.funilPorPlataforma\(M/, /L\.calorSemanal\(M/, /typeof G\.donut === "function" \? G\.donut : G\.rosca/, /criarBarrasCampanhas\(\{ h, linhas/, /L\.semaforoRadar\(R, \{ semDados, atrasado: /   /* plano 2000d: DA-225 — com a leitura atrasada */, /const semDados = L\.semAnuncios\(M\);/, /L\.explicarRegra\(/, /botaoPng\(\{ h, alvo: alvoT/, /serie: k\.serie \? sparkDe\(k\.serie\)/]) assert.match(ads, re, String(re));
   for (const re of [/import\(`\.\/anuncios\.js\?v=\$\{ctx\.versao\}`\)/, /X\.desenharSparkline\(/, /png: "vendas-dia-a-dia"/, /png: "atendimento-dia-a-dia"/, /L\.melhorDia\(serie/, /L\.faixasCalor\(m\)/, /window\.print\(\)/]) assert.match(rel, re, String(re));
   assert.match(css, /@media print \{[\s\S]*\.rel-filtros, \.rel-topo-acoes[\s\S]*display: none !important/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.rel \*, \.rel \*::before, \.rel \*::after \{ animation: none !important; transition: none !important; \}/);

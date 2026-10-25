@@ -510,9 +510,10 @@ test("AS-205 · pwa: versao.json com `notas` (até 3 linhas) mostra «o que mudo
   // a faixa: notas em lista e «Depois» depois do «Atualizar»
   let depois = 0;
   const f = PWA.criarFaixaVersao(U, "Órbita", () => {}, { notas: ["Agenda mais rápida"], aoDepois: () => { depois++; } });
-  assert.deepEqual(f.querySelectorAll("button").map(b => b.textContent), ["Atualizar", "Depois"]);
+  // plano 2000d: DU-257 — as notas ficam atrás de «Ver novidades» (aria-expanded)
+  assert.deepEqual(f.querySelectorAll("button").map(b => b.textContent), ["Ver novidades", "Atualizar", "Depois"]);
   assert.equal(f.querySelector(".faixa-versao-notas li").textContent, "Agenda mais rápida");
-  f.querySelectorAll("button")[1].click(); assert.equal(depois, 1);
+  f.querySelectorAll("button")[2].click(); assert.equal(depois, 1);   // plano 2000d: DU-257 — «Depois» é o 3º (depois de «Ver novidades»)
   assert.equal(PWA.criarFaixaVersao(U, "Órbita", () => {}).querySelectorAll("button").length, 1, "sem aoDepois: só «Atualizar» (como antes)");
 });
 

@@ -67,7 +67,8 @@ export function vocab(vertical) {
   const b = BASE[VERTICAIS.includes(vertical) ? vertical : "generico"];
   const v = { vertical: VERTICAIS.includes(vertical) ? vertical : "generico", ...b };
   // plano 1000b · RB-188: chave sem palavra não lança (s.charAt de undefined) — cai na própria chave, como v.min sempre fez
-  const minusc = s => { const t = String(s ?? ""); return t.charAt(0).toLowerCase() + t.slice(1); };
+  // plano 2000d · DR-146: sigla fica como está — v.min("crm") no genérico é «CRM» (antes «cRM»); só a 1ª letra de palavra comum desce
+  const minusc = s => { const t = String(s ?? ""); return /^[A-ZÀ-Ý]{2,}\b/.test(t) ? t : t.charAt(0).toLowerCase() + t.slice(1); };
   const palavra = chave => v[chave] ?? chave;
   // plano 1500c · RC-248: o gênero da vertical (g_*) e, fora dela, o da tabela GENERO_COMUM (minúsculas; «tarefas» → «tarefa»)
   const genero = chave => {
@@ -88,6 +89,29 @@ export function vocab(vertical) {
   v.novo = chave => (genero(chave) === "a" ? "Nova " : "Novo ") + minusc(palavra(chave));
   /** artigo: "a"/"o". */
   v.art = chave => genero(chave) === "a" ? "a" : "o";
+  /**
+   * plano 2000d · DR-147: «1 paciente» / «3 pacientes» / «0 pacientes» pelas formas do vocabulário (chave no singular ou no plural);
+   * chave sem plural no BASE ganha «s». v.plural(1, "contato") → «1 paciente».
+   */
+  v.plural = (n, chave) => {
+    const k = String(chave ?? "");
+    const sing = k.endsWith("s") && v[k.slice(0, -1)] ? k.slice(0, -1) : k;
+    const pl = v[sing + "s"] ?? `${palavra(sing)}s`;
+    const q = Number(n);
+    const num = Number.isFinite(q) ? q.toLocaleString("pt-BR") : String(n ?? "");
+    return `${num} ${minusc(Math.abs(q) === 1 ? palavra(sing) : pl)}`;
+  };
+  /**
+   * plano 2000d · DR-318: o adjetivo concorda com a palavra da vertical — v.adj("ganho", "negocio") na loja = «ganha» («Venda ganha», não
+   * «Venda ganho»); `n` ≠ 1 vai para o plural («ganhas»). Só adjetivo terminado em «o».
+   */
+  v.adj = (masc, chave, n = 1) => {
+    const base = String(masc ?? "");
+    const k = String(chave ?? "");
+    const sing = k.endsWith("s") && v[k.slice(0, -1)] ? k.slice(0, -1) : k;
+    const f = genero(sing) === "a" && /o$/.test(base) ? base.replace(/o$/, "a") : base;
+    return Number(n) === 1 ? f : `${f}s`;
+  };
   /** ícone do CRM no menu (dente, chave, sacola ou funil) */
   v.icone_crm = ICONE_CRM[v.vertical] || "funil";
   return Object.freeze(v);
@@ -99,6 +123,7 @@ export const ICONE_CRM = Object.freeze({ odonto: "dente", oficina: "chave", loja
 export const ROTULO_PAPEL = Object.freeze({
   super: "Plataforma", gestor: "Gestor", admin: "Administrador", supervisor: "Supervisor",
   atendente: "Atendente", leitura: "Somente leitura",
+  marketing: "Marketing",     // plano 2000d · DU-110 (pendência da frente sis): o papel novo (rotas.ROTULOS_PAPEL já tem)
 });
 
 export const ROTULO_STATUS = Object.freeze({

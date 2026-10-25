@@ -1462,3 +1462,118 @@ fieldset.crm-filtros-grupo > legend.rotulo { padding: 0; margin-bottom: .45rem; 
 .tf-desc a { color: inherit; text-decoration: underline; }
 /* plano 1500c · RX-078: «WhatsApp» da gaveta (sem o módulo Conversas) do tamanho dos outros botões */
 .ng-contato .ng-wa { flex: none; min-height: 44px; }
+
+/* ============================================================ plano 2000d · frente crm */
+/* plano 2000d · DR-007: «Sair da apresentação» sempre à vista no modo apresentação (sem tela cheia no iPhone, TV sem teclado) */
+.kb-sair-apres { position: fixed; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); z-index: 30; min-height: 44px; box-shadow: var(--sombra-2); }
+/* plano 2000d · DR-061/024: a contagem do recorte e o aviso do filtro local, discretos sob os chips */
+.crm-recorte { margin: 0; font-size: var(--fs-13); color: var(--c-texto-2); }
+/* plano 2000d · DR-032: o trecho achado pela busca */
+.kc-achado { background: var(--c-aten-suave); color: inherit; border-radius: 2px; padding: 0 1px; }
+.kc-tel-achado { font-variant-numeric: tabular-nums; }
+/* plano 2000d · DR-012: o nome na tabela «Por pessoa» é botão (filtra o quadro) */
+.crm-fr-pessoa { min-height: 32px; text-align: left; }
+@media (pointer: coarse) { .crm-fr-pessoa { min-height: 44px; } }
+/* plano 2000d · DR-023: «Este mês» / «Mês passado» */
+.crm-filtros-atalhos { flex-wrap: wrap; gap: .4rem; }
+.crm-filtros-atalhos .bt { min-height: 36px; }
+@media (pointer: coarse) { .crm-filtros-atalhos .bt { min-height: 44px; } }
+/* plano 2000d · DR-033: «2 em Pós-venda» quando a busca não achou neste funil */
+.kb-outros-funis { flex-wrap: wrap; gap: .5rem; justify-content: center; margin-top: .5rem; }
+/* plano 2000d · DR-066: a etapa com cartões fora do prazo avisa no cabeçalho */
+.kb-col-sla { flex: none; font-size: var(--fs-12); font-weight: 600; color: var(--c-ruim); background: var(--c-ruim-suave); border-radius: 999px; padding: 0 .5rem; }
+.kb-col-alerta .kb-col-cab { box-shadow: inset 0 -2px 0 var(--c-ruim); }
+/* plano 2000d · DR-067: «Etapa 3 de 10» sob a fita, só no celular (onde a fita aparece) */
+.kb-fita-pos { display: none; }
+@media (max-width: 760px) { .kb-fita-pos:not(:empty) { display: block; margin: -.3rem 0 0; font-size: var(--fs-12); color: var(--c-texto-2); text-align: right; } }
+/* plano 2000d · DR-072: lead que acabou de chegar */
+.kc-novo { box-shadow: inset 3px 0 0 var(--c-info); }
+.kc-novo-selo { flex: none; margin-left: auto; font-size: var(--fs-12); font-weight: 600; color: var(--c-info); background: var(--c-info-suave); border-radius: 999px; padding: 0 .45rem; }
+/* plano 2000d · DR-084/085: «Depois da venda» no modal de ganho */
+.crm-ganho-depois { border: 0; padding: 0; margin: 0; display: grid; gap: .5rem; }
+.crm-ganho-depois .crm-ck { display: flex; align-items: center; gap: .5rem; min-height: 44px; }
+/* plano 2000d · DR-081/090: e-mail que abre o app de e-mail; «Mensagem pronta» ao lado de «Ver ficha» */
+.ng-email { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.ng-msg-pronta { min-height: 36px; }
+@media (pointer: coarse) { .ng-msg-pronta { min-height: 44px; } }
+/* plano 2000d · DR-089: a conversa recente na gaveta (quando o servidor mandar) */
+.ng-msgs-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+.ng-msg { display: grid; gap: .1rem; padding: .4rem .6rem; border-radius: var(--r); background: var(--c-sup-2); max-width: 90%; }
+.ng-msg.saida { justify-self: end; background: var(--c-prim-suave); }
+.ng-msg small { color: var(--c-texto-2); font-size: var(--fs-12); }
+/* plano 2000d · DR-096: os campos opcionais vazios recolhidos */
+.ng-campos-vazios > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--c-texto-2); }
+/* plano 2000d · DR-121/126/130 */
+.tf-cadencia { min-height: 36px; }
+@media (pointer: coarse) { .tf-cadencia { min-height: 44px; } }
+.tfp-por-pessoa { margin: 0 0 .5rem; }
+.tf-contato-id { color: inherit; }
+/* plano 2000d · DR-091: quanto tempo ficou na etapa, ao lado do evento */
+.tempo-ficou { color: var(--c-texto-2); }
+/* plano 2000d · DR-162: título longo do negócio em no máximo 2 linhas no celular (o texto inteiro fica ao editar) */
+@media (max-width: 760px) { .ng-titulo-txt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; } }
+/* plano 2000d · DR-164: a jornada do negócio (chegou → agendou → fechou) */
+.ng-jornada { list-style: none; margin: .25rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: .25rem .5rem; font-size: var(--fs-13); }
+.ng-jornada-it { display: inline-flex; gap: .3rem; align-items: baseline; }
+.ng-jornada-it + .ng-jornada-it::before { content: "→"; color: var(--c-texto-2); margin-right: .2rem; }
+.ng-jornada-it small { color: var(--c-texto-2); }
+/* plano 2000d · DR-151/159/168/176 */
+.tempo-sistema { display: inline-flex; align-items: center; gap: .2rem; }
+.tempo-sistema .ic { width: 12px; height: 12px; }
+.tf-wa { color: inherit; }
+.fx-obs-lgpd { display: block; margin-top: .25rem; }
+.fx-neg-sit { margin-left: .25rem; }
+
+/* ============================================================
+   plano 2000d · lote crm-d4 — importação, ficha, quadro
+   ============================================================ */
+/* plano 2000d · DR-199: passo já feito vira botão (volta sem vários «Voltar») */
+.imp-passo-bt { min-height: 44px; padding: 0 .4rem; border: 0; background: transparent; color: inherit; font: inherit; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; border-radius: var(--r-p); }
+.imp-passo-bt:hover { color: var(--c-prim); }
+/* plano 2000d · DR-224: copiar o telefone ao lado do número */
+.fx-copiar-tel { min-width: 44px; min-height: 44px; vertical-align: middle; color: var(--c-texto-2); }
+/* plano 2000d · DR-240: «Criar também um negócio» no cadastro */
+.ct-criar-neg { display: flex; align-items: center; gap: .5rem; min-height: 44px; font-size: var(--fs-13); color: var(--c-texto-2); }
+/* plano 2000d · DR-345: faixa «cartões sem responsável» com o botão de distribuir */
+.kb-sem-dono { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.kb-sem-dono-txt { flex: 1 1 12rem; min-width: 0; }
+.kb-sem-dono-bt { min-height: 44px; }
+/* plano 2000d · DR-314: anel de foco comum nos controles do CRM (cartões, colunas, ficha, importação e configurações) */
+:is(.crm, .crm-cfg-crm, .imp-corpo, .imp-passos, .fx-cab, .kb-sem-dono) :is(button, a[href], [tabindex="0"], select):focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+/* plano 2000d · DR-316: com movimento reduzido, nada pulsa nem gira no CRM (o «salvando» do cartão fica parado) */
+@media (prefers-reduced-motion: reduce) {
+  .kc.salvando::after, .kc.chegou, .crm-chip, .ng-confirmando, .crm-fr-lista.anim .crm-fr-barra, .kb-col.alvo, .kb-lugar, .kc.kc-solto, .imp-barra.andando i, .tf-check input:checked + span::after { animation-name: none !important; }
+  .imp-passo-bt, .fx-copiar-tel { transition: none !important; }
+}
+
+/* ============================================================
+   plano 2000d · lote crm-d5 — tablet, zoom, toque, números, apresentação
+   ============================================================ */
+/* plano 2000d · DR-358: tablet na horizontal (e janela média) — colunas em rem um pouco mais estreitas: cabem 3 a 4 em vez de 2,7 */
+@media (min-width: 761px) and (max-width: 1180px) {
+  .kb { grid-auto-columns: minmax(15rem, 17.5rem); gap: .7rem; }
+}
+/* plano 2000d · DR-367: zoom de 200% / tela baixa — as faixas fixas soltam (o cabeçalho cobria metade da altura) */
+@media (max-height: 520px) {
+  .crm[data-tela="contatos"] .crm-fixa, .kb-fita, .crm-sel, .ng-abas { position: static; }
+}
+/* plano 2000d · DR-368: no toque, os botões do cartão têm área de 44 px (o selo de não lidas ganha a área invisível em volta) */
+@media (pointer: coarse) {
+  .kc-mover { width: 44px; height: 44px; }
+  button.kc-naolidas { position: relative; }
+  button.kc-naolidas::before { content: ""; position: absolute; inset: -10px; }
+}
+/* plano 2000d · DR-376: números com largura fixa onde se comparam valores */
+.crm-tot b, .kb-col-n, .kb-col-soma, .kc-valor, .ng-valor b, .ng-valor-cmp, .tfp-pn b, .fx-ltv, .ct-lista .mono, .imp-prog-txt { font-variant-numeric: tabular-nums; }
+/* plano 2000d · DR-390: no modo apresentação do quadro (TV/projeção) o contato e o telefone do cartão ficam borrados */
+.crm.kb-apresentacao .kc-s.dado-pessoal, .crm.kb-apresentacao .kc-tel-achado { filter: blur(6px); }
+@media (forced-colors: active) { .crm.kb-apresentacao .kc-s.dado-pessoal, .crm.kb-apresentacao .kc-tel-achado { filter: none; opacity: .2; } }
+/* plano 2000d · DR-417: contador do nome da etapa */
+.fe-nome-cont { font-size: var(--fs-12); color: var(--c-texto-2); font-variant-numeric: tabular-nums; }
+/* plano 2000d · DR-421/422: previsto × fechado no ganho */
+.ng-valor-cmp { display: block; font-size: var(--fs-12); color: var(--c-texto-2); }
+.ng-valor-cmp.desconto { color: var(--c-aten); }
+/* plano 2000d · DR-359: o cabeçalho do cartão na gaveta antes da leitura */
+.ng-previa { display: flex; flex-direction: column; gap: .35rem; margin-bottom: .8rem; }
+/* plano 2000d · DR-377: etiqueta de cor escura (azul-marinho) no tema escuro — a borda puxa para o tom do texto e não some no fundo */
+.kc-etq1 { border-color: color-mix(in srgb, var(--cor, var(--c-borda-2)) 70%, var(--c-texto-3)); }

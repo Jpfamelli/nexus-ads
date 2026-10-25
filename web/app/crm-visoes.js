@@ -17,7 +17,7 @@ export function controlesVisoes(k, { tipo, obterDados, aplicar } = {}) {
   const excluir = h("button", { type: "button", class: "bt bt-fant bt-p crm-visoes-excluir", hidden: true, disabled: true, on: { click: removerSelecionada } }, "Excluir filtro");
   // plano 1500c · RC-139: «Renomear» o filtro escolhido sem precisar salvar por cima
   const renomear = h("button", { type: "button", class: "bt bt-fant bt-p crm-visoes-renomear", hidden: true, on: { click: renomearSelecionada } }, "Renomear");
-  const raiz = h("div", { class: "crm-visoes", "aria-label": "Filtros salvos do CRM" }, seletor, salvar, renomear, excluir);
+  const raiz = h("div", { class: "crm-visoes", role: "group", "aria-label": "Filtros salvos do CRM" }, seletor, salvar, renomear, excluir);      // plano 2000d · DR-008: aria-label só vale com papel
 
   function dadosAtuais() {
     try { return obterDados(); } catch { return null; }
@@ -62,9 +62,13 @@ export function controlesVisoes(k, { tipo, obterDados, aplicar } = {}) {
       h("p", { class: "campo-ajuda" }, `Fica salvo somente neste dispositivo, para esta empresa e sua conta.${existente ? "" : ` ${visoes.length} de ${L.LIMITE_VISOES_CRM || 12} usados.`}`));
     await ui.modal({ titulo: existente ? "Atualizar filtro salvo" : "Salvar os filtros atuais", corpo: form, largura: "p", acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: null },
-      { rotulo: existente ? "Atualizar" : "Salvar filtro", tipo: "primario", fn: api => {
+      // plano 2000d · DR-045: com um filtro salvo já escolhido, «Salvar como novo» cria outro em vez de sobrescrever
+      ...(existente ? [{ rotulo: "Salvar como novo", tipo: "secundario", fn: api => gravar(api, null) }] : []),
+      { rotulo: existente ? "Atualizar" : "Salvar filtro", tipo: "primario", fn: api => gravar(api, existente?.id || null) },
+    ] });
+    function gravar(api, id) {
         const nome = ui.lerForm(form).nome;
-        const r = L.salvarVisaoCRM(visoes, tipo, { id: existente?.id || null, nome, dados: dadosAtuais() });
+        const r = L.salvarVisaoCRM(visoes, tipo, { id, nome, dados: dadosAtuais() });
         if (!r.ok) {
           const txt = r.codigo === "nome_invalido" ? "Use um nome de 2 a 32 caracteres."
             : r.codigo === "nome_duplicado" ? "Já existe um filtro salvo com esse nome."
@@ -75,8 +79,7 @@ export function controlesVisoes(k, { tipo, obterDados, aplicar } = {}) {
         if (!persistir(r.visoes)) return false;
         ui.toast(r.codigo === "atualizada" ? "Filtro atualizado neste dispositivo." : "Filtro salvo neste dispositivo.", { tipo: "ok" });
         return true;
-      } },
-    ] });
+    }
   }
 
   // plano 1500c · RC-138: atalho local e barato — exclui na hora e oferece «Desfazer» (volta à mesma posição), sem diálogo de confirmação
@@ -107,8 +110,15 @@ export function controlesVisoes(k, { tipo, obterDados, aplicar } = {}) {
     ] });
   }
 
+  // plano 2000d · DR-044: filtro salvo/excluído em OUTRA aba do mesmo aparelho aparece aqui sem recarregar (evento storage)
+  const aoStorage = ev => {
+    if (!ev || ev.key !== chave) return;
+    try { visoes = L.normalizarVisoesCRM(JSON.parse(ev.newValue || "[]"), tipo); } catch { visoes = []; }
+    render();
+  };
+  try { addEventListener("storage", aoStorage); } catch { /* sem janela */ }
   render();
-  return { el: raiz, atualizar: render };
+  return { el: raiz, atualizar: render, nomeAtual: () => (visoes.find(v => v.id === selecionada) || {}).nome || null /* plano 2000d · DR-046 */, desmontar: () => { try { removeEventListener("storage", aoStorage); } catch { /* ok */ } } };
 }
 
 /**

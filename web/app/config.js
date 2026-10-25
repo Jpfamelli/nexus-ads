@@ -77,10 +77,11 @@ export const PEND_CACHE_MS = 60_000;
 /** plano 1000 · AS-083: palavras extras de busca por seção (o título e a descrição já entram). */
 export const PALAVRAS_SECAO = Object.freeze({
   // plano 2000d · DU-172: palavras dos ajustes DENTRO das seções (rodízio, assinatura, 2 etapas, foto…)
-  perfil: "nome celular senha aparelhos sair avisos som notificação conta foto assinatura verificação duas etapas 2fa ausente sessões",
-  usuarios: "equipe convite convidar papel administrador atendente acesso pessoas rodízio rodizio vê colegas permissões exportar pausar férias 2 etapas lista csv",
-  empresa: "endereço telefone instagram fuso horário guarda retenção lgpd variáveis",
-  departamentos: "horário horario funcionamento expediente fora do horário setor rodízio", numeros: "whatsapp codewords meta api oficial número conectar modelos templates",
+  // plano 2000d · FX-051: sinônimos do dia a dia (zap, wpp, silencioso, função, avaliação, feriado)
+  perfil: "nome celular senha aparelhos sair avisos som notificação conta foto assinatura verificação duas etapas 2fa ausente sessões silencioso madrugada última tela",
+  usuarios: "equipe convite convidar papel administrador atendente acesso pessoas rodízio rodizio vê colegas permissões exportar pausar férias 2 etapas lista csv função funcionário suspender",
+  empresa: "endereço telefone instagram fuso horário guarda retenção lgpd variáveis avaliação google feriados minutos tempo poupado",
+  departamentos: "horário horario funcionamento expediente fora do horário setor rodízio", numeros: "whatsapp zap wpp whats codewords meta api oficial número conectar modelos templates",
   respostas: "atalho frases prontas barra mensagens", atendimento: "assinatura fila avisos preferências", ia: "inteligência artificial assistente robô bot memória tom",
   funis: "etapas pipeline kanban vendas", campos: "campos extras cadastro personalizados", etiquetas: "tags marcadores cores", motivos: "perda não fechou",
   agenda: "horários consultas dias fechados duração", anuncios: "meta google facebook instagram contas campanhas", formulario: "site formulário lead",
@@ -90,7 +91,8 @@ export const PALAVRAS_SECAO = Object.freeze({
 const semAcento = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 /** AS-083: ids das seções que casam com a busca (título + descrição + palavras-chave, sem acento; todas as palavras digitadas). */
 export function filtrarSecoes(secoes, termo) {
-  const ps = semAcento(termo).split(/\s+/).filter(Boolean);
+  // plano 2000d · FX-053: pontuação não atrapalha («2-etapas», «e-mail,» e «whatsapp?» acham a seção)
+  const ps = semAcento(termo).replace(/[^\p{L}\p{N}\s]+/gu, " ").split(/\s+/).filter(Boolean);
   return (secoes || []).filter(s => {
     const alvo = semAcento(`${s.titulo} ${s.desc || ""} ${s.grupo || ""} ${PALAVRAS_SECAO[s.id] || ""} ${s.palavras || ""}`);
     return ps.every(p => alvo.includes(p));
@@ -137,7 +139,8 @@ export function formatarArmazenamento(mb) {
 
 /** plano 1000b · UB-106/UB-108: o endereço como o servidor espera — sem espaço, minúsculo, sem protocolo, caminho nem ponto final. */
 export function normalizarHost(v) {
-  return String(v ?? "").trim().toLowerCase().replace(/^[a-z]+:\/\//, "").replace(/[/?#].*$/, "").replace(/:\d+$/, "").replace(/\.$/, "");
+  // plano 2000d · FX-064: espaço no meio (colado do e-mail: «crm .agencia.com.br») também sai
+  return String(v ?? "").replace(/\s+/g, "").toLowerCase().replace(/^[a-z]+:\/\//, "").replace(/[/?#].*$/, "").replace(/:\d+$/, "").replace(/\.$/, "");
 }
 export const RE_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 /**
@@ -146,6 +149,8 @@ export const RE_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z
  */
 export function erroHostDominio(host, hostAtual = "") {
   const x = normalizarHost(host);
+  // plano 2000d · FX-063: endereço com acento ou cedilha diz o porquê (antes caía no «Use algo como…» genérico)
+  if (/[^\x00-\x7f]/.test(x)) return "Use o endereço sem acento nem cedilha (ex.: crm.clinicasaojose.com.br). Se o domínio tem acento, use a versão que começa com «xn--».";
   if (!RE_HOST.test(x)) return "Use algo como crm.suaempresa.com.br.";
   if (/\.netlify\.app$/.test(x)) return "Esse é um endereço do Netlify, não um domínio próprio. Use um subdomínio seu, como crm.suaempresa.com.br.";
   if (hostAtual && x === normalizarHost(hostAtual)) return "Esse é o endereço em que o app já está aberto. Use um subdomínio seu, como crm.suaempresa.com.br.";
@@ -178,7 +183,8 @@ export function filtrarUsuarios(usuarios, termo) {
   const t = String(termo || "").normalize("NFD").replace(/[^\x00-\x7F]/g, "").toLowerCase().trim();
   const l = Array.isArray(usuarios) ? usuarios : [];
   if (!t) return l;
-  return l.filter(u => `${u.nome || ""} ${u.email || ""}`.normalize("NFD").replace(/[^\x00-\x7F]/g, "").toLowerCase().includes(t));
+  // plano 2000d · FX-032: o papel também entra na busca («supervisor», «somente leitura»)
+  return l.filter(u => `${u.nome || ""} ${u.email || ""} ${u.papel ? rotuloPapel(u.papel) : ""}`.normalize("NFD").replace(/[^\x00-\x7F]/g, "").toLowerCase().includes(t));
 }
 
 /** plano 1000 · AS-273: «online» = acesso nos últimos 5 minutos. */
@@ -251,7 +257,9 @@ export const RE_EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 /** plano 1500c · UCB-030: «a@b.com; c@d.com\nerrado» → {validos:[…], invalidos:[…]} (vírgula, ponto e vírgula ou linha; sem repetir). */
 export function separarEmails(texto) {
   const vistos = new Set(), validos = [], invalidos = [];
-  for (const p of String(texto || "").split(/[,;\n\r\t ]+/).map(x => x.trim()).filter(Boolean)) {
+  // plano 2000d · FX-035: «Ana Souza <ana@x.com>» (colado do Outlook/Gmail) vira só o e-mail — o nome não conta como inválido
+  const limpo = String(texto || "").replace(/(^|[,;\n\r])[^,;\n\r<>]*<([^<>\s]+)>/g, "$1$2");
+  for (const p of limpo.split(/[,;\n\r\t ]+/).map(x => x.trim().replace(/^mailto:/i, "")).filter(Boolean)) {
     const e = p.toLowerCase();
     if (vistos.has(e)) continue;
     vistos.add(e);
@@ -512,19 +520,26 @@ export const filtrarPorPapel = (us, papel) => (Array.isArray(us) ? us : []).filt
 export function csvEquipe(usuarios, departamentos = []) {
   const esc = v => { let s = v === null || v === undefined ? "" : String(v); if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   const nomeDep = id => ((departamentos || []).find(d => d && d.id === id) || {}).nome || "";
-  const linhas = (Array.isArray(usuarios) ? usuarios : []).filter(Boolean).map(u => [u.nome, u.email, u.gestor ? "Gestor" : rotuloPapel(u.papel),
+  // plano 2000d · FX-037: «Situação» (suspenso, pausado, ausente) e «2 etapas» (quando o servidor informa) — a auditoria de acesso completa
+  const lista = (Array.isArray(usuarios) ? usuarios : []).filter(Boolean);
+  const com2 = informa2Etapas(lista);
+  const linhas = lista.map(u => [u.nome, u.email, u.gestor ? "Gestor" : rotuloPapel(u.papel),
     Array.isArray(u.departamentos) && u.departamentos.length ? u.departamentos.map(nomeDep).filter(Boolean).join(", ") : "Todos",
-    u.ultimo_acesso ? String(u.ultimo_acesso).slice(0, 10) : "nunca entrou"]);
-  return "﻿" + [["Nome", "E-mail", "Papel", "Departamentos", "Último acesso"], ...linhas].map(l => l.map(esc).join(";")).join("\r\n");
+    u.ultimo_acesso ? String(u.ultimo_acesso).slice(0, 10) : "nunca entrou", situacaoAcesso(u),
+    ...(com2 ? [u.gestor ? "" : u.dois_fatores === true ? "sim" : "não"] : [])]);
+  return "﻿" + [["Nome", "E-mail", "Papel", "Departamentos", "Último acesso", "Situação", ...(com2 ? ["2 etapas"] : [])], ...linhas].map(l => l.map(esc).join(";")).join("\r\n");
 }
 
 /** plano 2000d · DU-132/DU-143: código de 6 dígitos (2 etapas, celular). */
-export const codigoValido = v => /^\d{6}$/.test(String(v ?? "").replace(/\s/g, ""));
+// plano 2000d · FX-017: o código colado como «123-456» ou «123.456» (como chega no WhatsApp) também vale
+export const limparCodigo = v => String(v ?? "").replace(/[\s.\-–]/g, "");
+export const codigoValido = v => /^\d{6}$/.test(limparCodigo(v));
 
 /** plano 2000d · DU-138: «Chrome · Windows · Taubaté» (sistema e cidade quando o servidor manda). */
 export function rotuloSessao(s) {
   const x = s || {};
-  return [x.navegador || "Navegador", x.sistema || null, x.cidade || null].filter(Boolean).join(" · ");
+  // plano 2000d · FX-085: o app instalado (PWA) se distingue da aba do navegador
+  return [x.navegador || "Navegador", x.instalado === true ? "app instalado" : null, x.sistema || null, x.cidade || null].filter(Boolean).join(" · ");
 }
 
 /** plano 2000d · DU-142: os avisos de mensagem nova por PESSOA (computador compartilhado) — chave com a conta, migrando a antiga. */
@@ -552,9 +567,12 @@ export function ajudaEmailPerfil({ trocarEmail = false, outrosAdmins = 0, gestor
 }
 
 /** plano 2000d · DU-145/DU-146/DU-147/DU-202: campos novos da marca da revenda (o servidor antigo recusa — a tela salva o resto e avisa). */
-export const CHAVES_MARCA_NOVAS = Object.freeze(["suporte_email", "site", "termos_url", "privacidade_url", "email_remetente", "email_rodape", "icone_app", "teste_aberto"]);
+// plano 2000d · DU-152 / FX-056: a janela de boas-vindas da agência (título, texto até 400) e o contato dela
+export const CHAVES_MARCA_NOVAS = Object.freeze(["suporte_email", "site", "termos_url", "privacidade_url", "email_remetente", "email_rodape", "icone_app", "teste_aberto",
+  "boas_vindas_titulo", "boas_vindas", "contato_agencia"]);
 const ROT_CHAVE_NOVA = { suporte_email: "e-mail de suporte", site: "site", termos_url: "link dos Termos", privacidade_url: "link da Política de Privacidade",
-  email_remetente: "nome do remetente", email_rodape: "rodapé dos e-mails", icone_app: "ícone do app", teste_aberto: "teste grátis pelo site" };
+  email_remetente: "nome do remetente", email_rodape: "rodapé dos e-mails", icone_app: "ícone do app", teste_aberto: "teste grátis pelo site",
+  boas_vindas_titulo: "título das boas-vindas", boas_vindas: "texto das boas-vindas", contato_agencia: "contato da agência" };
 export const rotuloChaveMarca = k => ROT_CHAVE_NOVA[k] || k;
 /** DU-145/DU-146: erros dos campos novos → [{campo, texto}] (links só https; e-mail válido; limites de tamanho). */
 export function validarLinksMarca(m) {
@@ -569,6 +587,10 @@ export function validarLinksMarca(m) {
   if (x.suporte_email && !RE_EMAIL.test(String(x.suporte_email).trim())) erros.push({ campo: "suporte_email", texto: "Esse e-mail não parece válido." });
   if (x.email_remetente && String(x.email_remetente).trim().length > 60) erros.push({ campo: "email_remetente", texto: "Até 60 caracteres." });
   if (x.email_rodape && String(x.email_rodape).trim().length > 200) erros.push({ campo: "email_rodape", texto: "Até 200 caracteres." });
+  // plano 2000d · DU-152 / FX-056
+  if (x.boas_vindas_titulo && String(x.boas_vindas_titulo).trim().length > 80) erros.push({ campo: "boas_vindas_titulo", texto: "Até 80 caracteres." });
+  if (x.boas_vindas && String(x.boas_vindas).trim().length > 400) erros.push({ campo: "boas_vindas", texto: "Até 400 caracteres." });
+  if (x.contato_agencia && String(x.contato_agencia).trim().length > 120) erros.push({ campo: "contato_agencia", texto: "Até 120 caracteres." });
   return erros;
 }
 /** DU-147: a imagem que vira o ícone do app instalado — o ícone próprio vence o logo (logo largo fica ilegível no celular). */
@@ -694,8 +716,15 @@ export const PRAZOS_GUARDA = Object.freeze([["", "Para sempre (padrão)"], ["12"
 /** → [{campo, texto}] */
 export function validarDadosEmpresa(d) {
   const x = d || {}, erros = [];
-  if (x.telefone_empresa && !telefoneValido(x.telefone_empresa)) erros.push({ campo: "telefone_empresa", texto: "Use DDD + número, ex.: (12) 3632-0000." });
-  if (x.instagram && !/^@?[a-z0-9._]{1,30}$/i.test(String(x.instagram).trim())) erros.push({ campo: "instagram", texto: "Só o usuário, ex.: @suaclinica." });
+  // plano 2000d · FX-025 / FX-102: 0800, 4004 e DDD que não existe
+  if (x.telefone_empresa && !telefoneEmpresaValido(x.telefone_empresa)) erros.push({ campo: "telefone_empresa", texto: "Use DDD + número, ex.: (12) 3632-0000 (ou 0800 / 4004)." });
+  else if (x.telefone_empresa && !dddValido(x.telefone_empresa)) erros.push({ campo: "telefone_empresa", texto: "Esse DDD não existe. Confira os dois primeiros números." });
+  // plano 2000d · FX-024: o link do perfil colado vira o usuário
+  if (x.instagram && !/^@?[a-z0-9._]{1,30}$/i.test(normalizarInstagram(x.instagram))) erros.push({ campo: "instagram", texto: "Só o usuário, ex.: @suaclinica." });
+  // plano 2000d · DU-095 / DU-036 / DU-072 (FX-020 / FX-021 / FX-022)
+  if (x.minutos_por_mensagem !== undefined && x.minutos_por_mensagem !== null && x.minutos_por_mensagem !== "" && Number.isNaN(lerMinutos(x.minutos_por_mensagem))) erros.push({ campo: "minutos_por_mensagem", texto: "De 0,5 a 30 minutos." });
+  if (x.link_avaliacao && !linkHttpsValido(completarHttps(x.link_avaliacao))) erros.push({ campo: "link_avaliacao", texto: "Cole o link completo da avaliação, ex.: https://g.page/r/…/review" });
+  if (x.feriados) { const f = separarFeriados(x.feriados); if (f.invalidos.length) erros.push({ campo: "feriados", texto: `Datas que não entendemos: ${f.invalidos.slice(0, 4).join(", ")}. Use 25/12, 20/01/2027 ou 2027-01-20.` }); }
   if (x.endereco && String(x.endereco).trim().length > 200) erros.push({ campo: "endereco", texto: "Até 200 caracteres." });
   if (x.fuso && !FUSOS_BR.some(([v]) => v === x.fuso)) erros.push({ campo: "fuso", texto: "Escolha um fuso da lista." });
   if (x.retencao_meses && !PRAZOS_GUARDA.some(([v]) => v === String(x.retencao_meses))) erros.push({ campo: "retencao_meses", texto: "Escolha um prazo da lista." });
@@ -704,10 +733,12 @@ export function validarDadosEmpresa(d) {
 /** DU-395: {endereco}, {telefone_empresa} e {instagram} trocados pelo cadastro (o que falta fica como está). */
 export function trocarVariaveisEmpresa(texto, d) {
   const x = d || {};
-  return String(texto || "").replace(/\{(endereco|telefone_empresa|instagram)\}/g, (t, k) => {
+  // plano 2000d · DU-036 / FX-021: {link_avaliacao} também
+  return String(texto || "").replace(/\{(endereco|telefone_empresa|instagram|link_avaliacao)\}/g, (t, k) => {
     const v = String(x[k] || "").trim();
     if (!v) return t;
-    return k === "instagram" ? `@${v.replace(/^@/, "")}` : v;
+    if (k === "link_avaliacao") return completarHttps(v);
+    return k === "instagram" ? `@${normalizarInstagram(v)}` : v;
   });
 }
 
@@ -720,6 +751,327 @@ export function nomeCurtoManifesto(produto, curto, max = 12) {
   const corte = p.slice(0, max + 1).lastIndexOf(" ");
   if (corte > 0) return p.slice(0, corte).trim();
   return c && c.length <= max ? c : p.slice(0, max);
+}
+
+/* ---------------------------------------------------------------- plano 2000d · complemento da frente config (FX) */
+/** plano 2000d · FX-001 / DU-128: as partes do Perfil que ?secao= abre (aceita «avisos#cfg-pf-avisos», o link do menu da conta). */
+export const PARTES_PERFIL = Object.freeze({ dados: "cfg-pf-dados", avisos: "cfg-pf-avisos", ausente: "cfg-pf-avisos", seguranca: "cfg-pf-seguranca", "2fa": "cfg-pf-seguranca",
+  senha: "cfg-pf-senha", sessoes: "cfg-pf-sessoes" });
+export function parteDoPerfil(secao) {
+  const s = String(secao || "").split("#")[0].trim().toLowerCase();
+  return Object.hasOwn(PARTES_PERFIL, s) ? PARTES_PERFIL[s] : null;
+}
+const RE_HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+/** plano 2000d · FX-003 / DU-268: horário silencioso — os dois vazios (desligado) ou os dois em HH:MM e diferentes (pode atravessar a meia-noite). */
+export function silencioValido(de, ate) {
+  const a = String(de || "").trim(), b = String(ate || "").trim();
+  if (!a && !b) return true;
+  return RE_HHMM.test(a) && RE_HHMM.test(b) && a !== b;
+}
+/** plano 2000d · FX-004: a frase do horário silencioso («Sem som nem aviso das 22:00 às 07:00, atravessando a meia-noite.»). */
+export function rotuloSilencio(s) {
+  if (!s || !RE_HHMM.test(String(s.de || "")) || !RE_HHMM.test(String(s.ate || "")) || s.de === s.ate) return "Sem horário silencioso: os avisos tocam a qualquer hora.";
+  return `Sem som nem aviso das ${s.de} às ${s.ate}${s.de > s.ate ? ", atravessando a meia-noite" : ""}.`;
+}
+/** plano 2000d · FX-005 / DU-408: «Abrir o app na última tela» (padrão ligado; "0" desliga — o app.js lê). */
+export const CHAVE_ABRIR_ULTIMA = "nx-abrir-ultima";
+export function lerAbrirUltima(arm) { try { return !arm || arm.getItem(CHAVE_ABRIR_ULTIMA) !== "0"; } catch { return true; } }
+export function gravarAbrirUltima(arm, ligado) {
+  try { if (ligado) arm.removeItem(CHAVE_ABRIR_ULTIMA); else arm.setItem(CHAVE_ABRIR_ULTIMA, "0"); return true; } catch { return false; }
+}
+/** plano 2000d · FX-009: nome sem espaço sobrando («  Ana   Souza » → «Ana Souza»). */
+export const limparNome = v => String(v ?? "").trim().replace(/\s+/g, " ");
+/** plano 2000d · FX-008: a repetição da senha conferida enquanto digita → {ok, texto} (ok null = ainda digitando um começo igual). */
+export function conferirRepeticao(nova, nova2) {
+  const a = String(nova || ""), b = String(nova2 || "");
+  if (!b) return { ok: null, texto: "" };
+  if (a === b) return { ok: true, texto: "As senhas conferem." };
+  if (a.startsWith(b)) return { ok: null, texto: "" };
+  return { ok: false, texto: "As duas senhas não são iguais." };
+}
+/** plano 2000d · FX-010: como a assinatura sai no fim de uma mensagem. */
+export function previaAssinatura(assinatura, mensagem = "Tem sim! Às 14h ou às 16h?") {
+  const a = String(assinatura || "").trim();
+  return a ? `${mensagem}\n${a}` : "";
+}
+/** plano 2000d · FX-102: DDD que existe no Brasil (com ou sem 55 na frente). Números especiais (0800/4004) e de fora passam. */
+const DDDS = new Set([11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 24, 27, 28, 31, 32, 33, 34, 35, 37, 38, 41, 42, 43, 44, 45, 46, 47, 48, 49, 51, 53, 54, 55,
+  61, 62, 63, 64, 65, 66, 67, 68, 69, 71, 73, 74, 75, 77, 79, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92, 93, 94, 95, 96, 97, 98, 99]);
+export function dddValido(v) {
+  const t = String(v ?? "").trim();
+  let d = t.replace(/\D/g, "");
+  if (!d || numeroEspecial(d)) return true;
+  if (t.startsWith("+") && !d.startsWith("55")) return true;
+  if (d.startsWith("55") && (d.length === 12 || d.length === 13)) d = d.slice(2);
+  if (d.length !== 10 && d.length !== 11) return true;
+  return DDDS.has(Number(d.slice(0, 2)));
+}
+/** plano 2000d · FX-012: parece telefone fixo (8 dígitos começando com 2 a 5 depois do DDD) — o WhatsApp precisa de celular. */
+export function pareceFixo(v) {
+  let d = String(v ?? "").replace(/\D/g, "");
+  if (d.startsWith("55") && (d.length === 12 || d.length === 13)) d = d.slice(2);
+  return d.length === 10 && /^[2-5]$/.test(d[2]);
+}
+/** plano 2000d · FX-025: 0800/0300 e 3003/4003/4004/4020/4062 (números de empresa sem DDD). */
+const numeroEspecial = d => /^0[3589]00\d{6,7}$/.test(d) || /^(3003|4003|4004|4020|4062)\d{4}$/.test(d);
+export function telefoneEmpresaValido(v) { const d = String(v ?? "").replace(/\D/g, ""); return numeroEspecial(d) || telefoneValido(v); }
+export function normalizarTelefoneEmpresa(v) { const d = String(v ?? "").replace(/\D/g, ""); return numeroEspecial(d) ? d : normalizarTelefone(v); }
+/** plano 2000d · FX-024: «https://www.instagram.com/clinica/?hl=pt» e «@clinica» → «clinica». */
+export function normalizarInstagram(v) {
+  const t = String(v ?? "").trim();
+  const m = /instagram\.com\/([^/?#\s]+)/i.exec(t);
+  return (m ? m[1] : t).replace(/^@+/, "").trim();
+}
+/** plano 2000d · FX-020 / DU-095: minutos por mensagem (0,5 a 30; aceita vírgula). null = vazio; NaN = fora da régua. */
+export function lerMinutos(v) {
+  if (v === null || v === undefined || String(v).trim() === "") return null;
+  const n = Number(String(v).trim().replace(",", "."));
+  return Number.isFinite(n) && n >= 0.5 && n <= 30 ? Math.round(n * 10) / 10 : NaN;
+}
+/** plano 2000d · FX-058: «suaagencia.com.br/termos» ganha o https:// (http:// também vira https://). */
+export function completarHttps(v) {
+  const t = String(v ?? "").trim();
+  if (!t) return "";
+  if (/^https:\/\//i.test(t)) return t;
+  if (/^http:\/\//i.test(t)) return `https://${t.slice(7)}`;
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+([/?#].*)?$/i.test(t) ? `https://${t}` : t;
+}
+const linkHttpsValido = v => { try { const u = new URL(String(v || "")); return u.protocol === "https:" && RE_HOST.test(u.hostname); } catch { return false; } };
+/** plano 2000d · FX-022 / DU-072: feriados da empresa — «25/12, 20/01/2027; 2027-03-04» → {lista: ["12-25", "2027-01-20", …], invalidos}. */
+export function separarFeriados(texto) {
+  const lista = new Set(), invalidos = [];
+  const valida = (a, m, d) => { const dt = new Date(Date.UTC(a, m - 1, d)); return m >= 1 && m <= 12 && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d; };
+  for (const p of String(texto || "").split(/[,;\n\r]+/).map(x => x.trim()).filter(Boolean)) {
+    let m;
+    const dois = n => String(n).padStart(2, "0");
+    if ((m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(p)) && valida(+m[1], +m[2], +m[3])) lista.add(`${m[1]}-${m[2]}-${m[3]}`);
+    else if ((m = /^(\d{2})-(\d{2})$/.exec(p)) && valida(2024, +m[1], +m[2])) lista.add(`${m[1]}-${m[2]}`);
+    else if ((m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(p)) && valida(+m[3], +m[2], +m[1])) lista.add(`${m[3]}-${dois(m[2])}-${dois(m[1])}`);
+    else if ((m = /^(\d{1,2})\/(\d{1,2})$/.exec(p)) && valida(2024, +m[2], +m[1])) lista.add(`${dois(m[2])}-${dois(m[1])}`);
+    else invalidos.push(p);
+  }
+  return { lista: [...lista].sort((a, b) => a.slice(-5).localeCompare(b.slice(-5)) || a.localeCompare(b)), invalidos };
+}
+/** plano 2000d · FX-022: a lista guardada de volta no campo («25/12, 20/01/2027»). */
+export const feriadosEmTexto = l => (Array.isArray(l) ? l : []).map(f => { const p = String(f).split("-"); return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : `${p[1]}/${p[0]}`; }).join(", ");
+/** plano 2000d · FX-023: os campos novos da empresa (o servidor de hoje pode recusar — a tela salva o resto e avisa). */
+export const CHAVES_EMPRESA_NOVAS = Object.freeze(["minutos_por_mensagem", "link_avaliacao", "feriados"]);
+export const ROTULO_CHAVE_EMPRESA = Object.freeze({ minutos_por_mensagem: "minutos por mensagem", link_avaliacao: "link de avaliação", feriados: "feriados" });
+/** plano 2000d · FX-026: as variáveis que os dados da empresa alimentam. */
+export const VARIAVEIS_EMPRESA = Object.freeze(["{endereco}", "{telefone_empresa}", "{instagram}", "{link_avaliacao}"]);
+/** plano 2000d · FX-027: o deslocamento (minutos) de um fuso numa data. */
+function deslocamentoFuso(tz, d) {
+  try {
+    const p = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(d);
+    const g = t => Number((p.find(x => x.type === t) || {}).value);
+    return Math.round((Date.UTC(g("year"), g("month") - 1, g("day"), g("hour"), g("minute")) - d.getTime()) / 60000);
+  } catch { return null; }
+}
+/** FX-027: o fuso da empresa tem outra hora que o deste aparelho agora? (Bahia e São Paulo têm a mesma hora: não avisa) */
+export function fusoDifere(fusoEmpresa, fusoAparelho, agora = new Date()) {
+  if (!fusoEmpresa || !fusoAparelho || fusoEmpresa === fusoAparelho) return false;
+  const a = deslocamentoFuso(fusoEmpresa, agora), b = deslocamentoFuso(fusoAparelho, agora);
+  return a !== null && b !== null && a !== b;
+}
+/** plano 2000d · FX-093: «Ver no mapa» do endereço. */
+export const linkMapa = endereco => (String(endereco || "").trim() ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(endereco).trim())}` : null);
+/** plano 2000d · FX-019 / DR-333: a chave do checklist (pulados) — sem conta não há chave («nx-onb:<cli>:-» não é mais lida). */
+export const chaveOnboardingCfg = (cliente, conta) => (cliente && conta ? `nx-onb:${cliente}:${conta}` : null);
+/** plano 2000d · FX-013: este aparelho primeiro, depois o uso mais recente. */
+export function ordenarSessoes(lista) {
+  const t = s => Date.parse((s && (s.ultimo_uso || s.criado_em)) || "") || 0;
+  return (Array.isArray(lista) ? lista : []).filter(Boolean).map((s, i) => ({ s, i })).sort((a, b) => (b.s.atual === true) - (a.s.atual === true) || t(b.s) - t(a.s) || a.i - b.i).map(x => x.s);
+}
+/** plano 2000d · FX-015: o arquivo dos códigos de recuperação (sem a marca da plataforma: o produto é o da marca em uso). */
+export function textoCodigosRecuperacao({ produto = "", email = "", codigos = [], data = "" } = {}) {
+  return [`Códigos de recuperação${produto ? ` — ${produto}` : ""}`, email ? `Conta: ${email}` : null, data ? `Gerados em ${data}` : null, "",
+    "Cada código vale uma vez, para entrar se você perder o celular.", "", ...(Array.isArray(codigos) ? codigos : []).map(String)].filter(x => x !== null).join("\n");
+}
+/** plano 2000d · FX-016: a chave do app autenticador em grupos de 4 («JBSW Y3DP EHPK»). */
+export const agruparSegredo = s => String(s || "").replace(/\s+/g, "").toUpperCase().replace(/(.{4})(?=.)/g, "$1 ");
+/** plano 2000d · FX-034 / FX-050: erro comum de digitação no domínio do e-mail → a sugestão (ou null). */
+const DOMINIOS_CERTOS = { "gmial.com": "gmail.com", "gmai.com": "gmail.com", "gmail.co": "gmail.com", "gamil.com": "gmail.com", "gmail.com.br": "gmail.com", "gmal.com": "gmail.com",
+  "hotmial.com": "hotmail.com", "hotmal.com": "hotmail.com", "hotmail.co": "hotmail.com", "hotmai.com": "hotmail.com", "homail.com": "hotmail.com",
+  "outlok.com": "outlook.com", "outlook.co": "outlook.com", "otlook.com": "outlook.com", "yaho.com": "yahoo.com", "yahoo.com.b": "yahoo.com.br",
+  "uol.com": "uol.com.br", "bol.com": "bol.com.br", "icloud.co": "icloud.com", "iclod.com": "icloud.com" };
+export function sugestaoEmail(email) {
+  const e = String(email || "").trim().toLowerCase();
+  const m = /^([^@\s]+)@([^@\s]+)$/.exec(e);
+  if (!m || !DOMINIOS_CERTOS[m[2]]) return null;
+  return `${m[1]}@${DOMINIOS_CERTOS[m[2]]}`;
+}
+/** plano 2000d · FX-036: «4 e-mails · 1 não parece e-mail» enquanto cola a lista. */
+export function resumoEmails(texto) {
+  const { validos, invalidos } = separarEmails(texto);
+  if (!validos.length && !invalidos.length) return "";
+  return [`${validos.length} ${validos.length === 1 ? "e-mail" : "e-mails"}`, invalidos.length ? `${invalidos.length} ${invalidos.length === 1 ? "não parece e-mail" : "não parecem e-mail"}` : null].filter(Boolean).join(" · ");
+}
+/** plano 2000d · FX-037 / SC-004: a situação do acesso da pessoa numa palavra. */
+export function situacaoAcesso(u, agora = Date.now()) {
+  if (u && u.suspenso === true) return "Suspenso";
+  if (acessoPausado(u, agora)) return `Pausado até ${dataCurta(u.pausado_ate)}`;
+  if (ausenteAte(u, agora)) return "Ausente";
+  return "Ativo";
+}
+/** plano 2000d · FX-038: nome de arquivo sem acento, espaço nem traço sobrando («Clínica São José!» → «clinica-sao-jose»). */
+export const nomeArquivo = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "empresa";
+/** plano 2000d · FX-039: quantas pessoas estão com o app aberto agora. */
+export const contarOnline = (us, agora = Date.now()) => (Array.isArray(us) ? us : []).filter(u => u && !u.gestor && estaOnline(u.ultimo_acesso, agora)).length;
+/** plano 2000d · FX-041: dias sem entrar (null para quem nunca entrou ou sem data). */
+export function diasSemEntrar(u, agora = Date.now()) {
+  const t = Date.parse((u && u.ultimo_acesso) || "");
+  const a = agora instanceof Date ? agora.getTime() : Number(agora);
+  return Number.isFinite(t) ? Math.max(0, Math.floor((a - t) / 86400000)) : null;
+}
+/** FX-041/FX-042: quem tem acesso e não entra há 30 dias ou mais (vaga do plano parada). */
+export const inativos = (us, dias = 30, agora = Date.now()) => (Array.isArray(us) ? us : []).filter(u => u && !u.gestor && !u.eu && (diasSemEntrar(u, agora) ?? -1) >= dias);
+/** plano 2000d · FX-033: convites aguardando — o que vence primeiro no topo. */
+export function ordenarConvites(l) {
+  const t = c => { const x = Date.parse((c && c.expira_em) || ""); return Number.isFinite(x) ? x : Infinity; };
+  return (Array.isArray(l) ? l : []).filter(Boolean).map((c, i) => ({ c, i })).sort((a, b) => t(a.c) - t(b.c) || a.i - b.i).map(x => x.c);
+}
+/** plano 2000d · FX-043: o texto do link de equipe para o WhatsApp (neutro, sem a marca da plataforma). */
+export const textoLinkEquipe = ({ cliente = "", produto = "" } = {}) => `Olá! Para entrar na equipe da ${cliente}${produto ? ` no ${produto}` : ""}, peça seu acesso por este link:`.replace(/\s+/g, " ");
+/** plano 2000d · FX-044: o link de equipe ainda serve? → "ativo" | "esgotado" | "vencido". */
+export function estadoLinkEquipe(le, agora = Date.now()) {
+  const x = le || {};
+  const a = agora instanceof Date ? agora.getTime() : Number(agora);
+  const exp = Date.parse(x.expira_em || "");
+  if (Number.isFinite(exp) && exp <= a) return "vencido";
+  if (Number(x.limite) > 0 && Number(x.usos || 0) >= Number(x.limite)) return "esgotado";
+  return "ativo";
+}
+/** plano 2000d · FX-101: o link de equipe não promete mais entradas do que as vagas do plano. → erro ou null. */
+export function erroLimiteLinkEquipe(limite, { uso = null, lim = null } = {}) {
+  const n = Math.floor(Number(limite));
+  if (!(n >= 1 && n <= 50)) return "De 1 a 50 pessoas.";
+  if (Number(lim) > 0 && Number.isFinite(Number(uso))) {
+    const vagas = Math.max(0, Number(lim) - Number(uso));
+    if (n > vagas) return vagas ? `O plano tem só ${vagas} ${vagas === 1 ? "vaga" : "vagas"} de usuário agora.` : "O plano não tem vagas de usuário agora.";
+  }
+  return null;
+}
+/** plano 2000d · FX-046: a matriz mudou? (só as caixas que a pessoa pode mexer contam) */
+export function permissoesIguais(a, b) {
+  const x = matrizPermissoes(a), y = matrizPermissoes(b);
+  return Object.keys(x).every(p => PERMISSOES.every(pm => x[p][pm.id] === y[p][pm.id]));
+}
+/** plano 2000d · FX-047: AAAA-MM-DD mais n dias (atalhos de pausa: 1 semana, 15 dias, 30 dias). */
+export function dataMaisDias(iso, n) {
+  const t = diaUTC(iso);
+  return Number.isFinite(t) ? new Date(t + Number(n) * 86400000).toISOString().slice(0, 10) : "";
+}
+/** plano 2000d · FX-054 / DU-150: impressão curta da marca salva (FNV-1a) — as outras abas repintam quando muda. */
+export function hashCurto(v) {
+  const s = typeof v === "string" ? v : JSON.stringify(v ?? null);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, "0");
+}
+/** plano 2000d · FX-055 / DU-322: o nome aproximado da cor («Azul petróleo #2B5A80») para o leitor de tela. */
+export function nomeCor(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
+  if (!m) return String(hex || "");
+  const n = parseInt(m[1], 16), r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  let hue = 0;
+  if (d) hue = max === r ? 60 * (((g - b) / d) % 6) : max === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+  if (hue < 0) hue += 360;
+  const cod = `#${m[1].toUpperCase()}`;
+  let nome;
+  if (s < 0.12) nome = l < 0.12 ? "Preto" : l > 0.92 ? "Branco" : l < 0.4 ? "Cinza-escuro" : l > 0.7 ? "Cinza-claro" : "Cinza";
+  else {
+    const base = hue < 15 || hue >= 345 ? "Vermelho" : hue < 40 ? (l < 0.35 ? "Marrom" : "Laranja") : hue < 65 ? (l < 0.35 ? "Oliva" : "Amarelo") : hue < 160 ? "Verde"
+      : hue < 195 ? "Azul petróleo" : hue < 250 ? "Azul" : hue < 290 ? "Roxo" : "Rosa";
+    nome = base === "Azul petróleo" || base === "Marrom" || base === "Oliva" ? base : l < 0.3 ? `${base}-escuro` : l > 0.75 ? `${base}-claro` : base;
+  }
+  return `${nome} ${cod}`;
+}
+/** plano 2000d · FX-057: o nome do produto que não cabe no ícone do celular avisa como fica. */
+export function avisoNomeCurto(produto) {
+  const p = String(produto || "").trim();
+  const curto = nomeCurtoManifesto(p, "");
+  return p && curto !== p ? `Na tela inicial do celular, aparece como «${curto}».` : "";
+}
+/** plano 2000d · FX-061: as três cores em texto (para mandar ao designer). */
+export function textoCoresMarca(c) {
+  const x = c || {};
+  return [["Primária", x.primaria], ["Secundária", x.secundaria], ["Fundo", x.fundo]].filter(([, v]) => v).map(([k, v]) => `${k}: ${String(v).toUpperCase()}`).join("\n");
+}
+/** plano 2000d · FX-087 / FX-088: o arquivo de imagem serve? → mensagem de erro ou null (antes de decodificar: 40 MB travava a aba). */
+export function erroArquivoImagem(f, { mb = 15 } = {}) {
+  if (!f) return "Nenhum arquivo escolhido.";
+  const tipo = String(f.type || "").toLowerCase(), nome = String(f.name || "").toLowerCase();
+  if (tipo === "image/svg+xml" || /\.svg$/.test(nome)) return "SVG não é aceito: exporte o logo como PNG (fundo transparente) e envie de novo.";
+  if (/heic|heif/.test(tipo) || /\.(heic|heif)$/.test(nome)) return "Foto HEIC do iPhone não é aceita: exporte como JPEG (ou tire um print) e envie de novo.";
+  if (tipo && !/^image\/(png|jpeg|webp)$/.test(tipo)) return "Use uma imagem PNG, JPEG ou WebP.";
+  if (Number(f.size) > mb * 1024 * 1024) return `A imagem tem mais de ${mb} MB. Reduza antes de enviar (um print da tela já serve).`;
+  return null;
+}
+/** plano 2000d · FX-066: domínios que precisam de atenção primeiro (parou de apontar, pendente, ativo), depois por nome. */
+export function ordenarDominios(l) {
+  const peso = { quebrado: 0, pendente: 1, ativo: 2 };
+  return (Array.isArray(l) ? l : []).filter(Boolean).slice().sort((a, b) => (peso[a.status] ?? 3) - (peso[b.status] ?? 3) || String(a.host).localeCompare(String(b.host)));
+}
+/** plano 2000d · FX-067: o endereço já está na lista? (a recusa vinha só do servidor, depois do toque) */
+export const hostJaCadastrado = (lista, host) => (Array.isArray(lista) ? lista : []).some(d => d && normalizarHost(d.host) === normalizarHost(host));
+/** plano 2000d · FX-095: o registro inteiro para mandar a quem cuida do DNS. */
+export function textoRegistroDns(host, alvo) {
+  return [`Tipo: CNAME`, `Nome: ${rotuloCname(host)} (endereço completo: ${normalizarHost(host)})`, `Valor: ${alvo || "o destino que a plataforma informar"}`,
+    "Se usar Cloudflare, deixe o proxy desligado (nuvem cinza)."].join("\n");
+}
+/** plano 2000d · FX-068: «R$ 300 em aberto em 2 faturas (1 atrasada)» → {aberto, n, atrasadas} ou null sem nada em aberto. */
+export function resumoFaturas(fs) {
+  const abertas = (Array.isArray(fs) ? fs : []).filter(f => f && f.status !== "paga");
+  if (!abertas.length) return null;
+  return { aberto: Math.round(abertas.reduce((s, f) => s + (Number(f.valor) || 0), 0) * 100) / 100, n: abertas.length, atrasadas: abertas.filter(f => f.status === "atrasada").length };
+}
+/** plano 2000d · FX-069: atrasadas primeiro, depois em aberto pelo vencimento, depois as pagas (mais recente primeiro). */
+export function ordenarFaturas(fs) {
+  const g = f => (f.status === "atrasada" ? 0 : f.status === "paga" ? 2 : 1);
+  return (Array.isArray(fs) ? fs : []).filter(Boolean).slice().sort((a, b) => g(a) - g(b) || (g(a) === 2 ? String(b.vencimento || "").localeCompare(String(a.vencimento || "")) : String(a.vencimento || "").localeCompare(String(b.vencimento || ""))));
+}
+/** plano 2000d · FX-096: dias de atraso de uma fatura (0 quando não venceu). */
+export function diasAtraso(vencimento, hoje) {
+  const a = diaUTC(vencimento), b = diaUTC(hoje);
+  return Number.isFinite(a) && Number.isFinite(b) ? Math.max(0, Math.round((b - a) / 86400000)) : 0;
+}
+/** plano 2000d · FX-071: «Sobram 2» / «No limite» / «1 acima do limite» ao lado da barra (null sem limite). */
+export function sobraLimite(uso, limite) {
+  const l = Number(limite), u = Math.max(0, Number(uso) || 0);
+  if (limite === null || limite === undefined || !(l > 0)) return null;
+  if (u < l) return `Sobram ${l - u}`;
+  return u === l ? "No limite" : `${u - l} acima do limite`;
+}
+/** plano 2000d · FX-072: variação em % de um mês para o outro (null sem base). */
+export function variacaoPct(atual, anterior) {
+  const a = Number(atual), b = Number(anterior);
+  return Number.isFinite(a) && Number.isFinite(b) && b > 0 ? Math.round(((a - b) / b) * 100) : null;
+}
+/** plano 2000d · FX-073: a mídia guardada passou de 90 % do limite? */
+export const midiaQuaseCheia = (mb, limite) => Number(limite) > 0 && (Number(mb) || 0) / Number(limite) >= 0.9;
+/** plano 2000d · FX-070: o pedido de cancelamento com «Outro motivo» precisa do texto. → erro ou null. */
+export function erroCancelamento(d) {
+  const x = d || {};
+  if (!x.motivo) return { campo: "motivo", texto: "Escolha um motivo." };
+  if (x.motivo === "outro" && String(x.faltou || "").trim().length < 3) return { campo: "faltou", texto: "Conte em poucas palavras o motivo." };
+  return null;
+}
+/** plano 2000d · FX-092: o histórico em CSV (auditoria de acesso para a LGPD). */
+export function csvAuditoria(evs) {
+  const esc = v => { let s = v === null || v === undefined ? "" : String(v); if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const linhas = (Array.isArray(evs) ? evs : []).filter(Boolean).map(e => [String(e.em || "").replace("T", " ").slice(0, 16), e.quem || "", textoEventoAuditoria(e)]);
+  return "﻿" + [["Quando", "Quem", "O que aconteceu"], ...linhas].map(l => l.map(esc).join(";")).join("\r\n");
+}
+/** plano 2000d · FX-091: os e-mails da lista (para mandar um comunicado). */
+export const emailsDe = us => [...new Set((Array.isArray(us) ? us : []).filter(u => u && !u.gestor && u.email).map(u => String(u.email).trim().toLowerCase()))].join(", ");
+/** plano 2000d · FX-100: a seção pedida não existe — a mais parecida pelo endereço («#/config/usuario» → Usuários e convites). */
+export function secaoParecida(secoes, pedida) {
+  const p = semAcento(pedida).replace(/[^a-z0-9]+/g, " ").trim();
+  if (p.length < 3) return null;
+  const l = Array.isArray(secoes) ? secoes : [];
+  return l.find(s => s.id.startsWith(p.slice(0, 4)) || p.startsWith(s.id.slice(0, 4))) || l.find(s => filtrarSecoes([s], p).length) || null;
 }
 
 let _podeSair = null, _pendente = null;      // plano 1000 · AS-082: a seção aberta diz se pode sair (alteração não salva → pergunta antes de trocar)
@@ -861,6 +1213,8 @@ export async function montar(ctx) {
   pintarPend();
   // plano 1000b · UB-081: Enter na busca abre a 1ª seção encontrada
   if (campoBusca) campoBusca.addEventListener("keydown", ev => {
+    // plano 2000d · FX-052: Esc limpa a busca (com ela vazia, o Esc segue para quem mais ouvir)
+    if (ev.key === "Escape" && campoBusca.value) { ev.preventDefault(); campoBusca.value = ""; campoBusca.dispatchEvent(new Event("input")); return; }
     if (ev.key !== "Enter") return;
     const a = [...lista.querySelectorAll("a.cfg-nav-item")].find(x => !x.hidden);
     if (!a) return;
@@ -932,7 +1286,9 @@ function pendenciasDoHub(ctx) {
     : ctx.api.rpcC("nx_onboarding_estado", {}).then(est => { _pendCache.set(ctx.cliente.id, { em: Date.now(), est }); return est; });
   return Promise.all([import(`./rel-logica.js?v=${encodeURIComponent(ctx.versao)}`), estado]).then(([L, est]) => {
     let pulados = [];
-    try { pulados = (JSON.parse(localStorage.getItem(`nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || "-"}`) || "{}").pulados) || []; } catch { /* sem storage */ }
+    // plano 2000d · FX-019 / DR-333: sem conta não há chave (a antiga «nx-onb:<cliente>:-» não é mais lida — o Início também não lê)
+    const chOnb = chaveOnboardingCfg(ctx.cliente.id, ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id);
+    if (chOnb) try { pulados = (JSON.parse(localStorage.getItem(chOnb) || "{}").pulados) || []; } catch { /* sem storage */ }
     return L.pendenciasConfig(est, { pulados }) || {};
   });
 }
@@ -1005,9 +1361,12 @@ async function montarSecao(ctx, sec, atual, pedida, vistas = [], todas = []) {
     const motivo = pedida ? motivoSecaoIndisponivel(ctx, (todas || []).find(s => s.id === pedida)) : null;
     // plano 2000d · DU-179: cita a revenda (quem cuida do plano), não «a equipe» genérica
     const textoMotivo = textoMotivoSecao(motivo, ctx.sessao && ctx.sessao.org ? ctx.sessao.org.nome : null);
+    // plano 2000d · FX-100: endereço que não existe (link velho, digitado) sugere a seção mais parecida que a pessoa VÊ
+    const parecida = pedida && motivo === "inexistente" ? secaoParecida(vistas, pedida) : null;
     sec.appendChild(ui.vazio({ titulo: pedida ? "Esta seção não está disponível." : "Nada para configurar por aqui.",
-      texto: textoMotivo, icone: "engrenagem",
-      acao: pedida ? { rotulo: "Ver as configurações", fn: () => ctx.navegar("#/config") } : null }));
+      texto: parecida ? `${textoMotivo} Você quis dizer «${parecida.titulo}»?` : textoMotivo, icone: "engrenagem",
+      acao: parecida ? { rotulo: `Abrir ${parecida.titulo}`, fn: () => ctx.navegar(`#/config/${parecida.id}`) }
+        : pedida ? { rotulo: "Ver as configurações", fn: () => ctx.navegar("#/config") } : null }));
     return;
   }
   ctx.titulo(tituloSecao(atual));      // plano 1000 · AS-275: «Departamentos e horários · Configurações»
@@ -1075,17 +1434,32 @@ async function secaoPerfil(ctx, alvo) {
       if (aj) aj.textContent = ajudaEmailPerfil({ trocarEmail: dd && dd.trocar_email === true, outrosAdmins: outros });
     }).catch(() => { /* fica a ajuda padrão */ });
   }
+  // plano 2000d · FX-012: número fixo não recebe WhatsApp — avisa enquanto digita (não impede salvar)
+  const inpTel = formDados.querySelector("input[name=telefone]");
+  const avisoFixo = h("small", { class: "campo-ajuda cfg-tel-fixo", role: "status", hidden: true }, "Parece um telefone fixo: os avisos pelo WhatsApp precisam de um celular.");
+  if (inpTel && inpTel.closest("[data-campo]")) inpTel.closest("[data-campo]").appendChild(avisoFixo);
+  const pintarFixo = () => { avisoFixo.hidden = !(inpTel && inpTel.value && pareceFixo(inpTel.value)); };
+  if (inpTel) { inpTel.addEventListener("input", pintarFixo); pintarFixo(); }
+  // plano 2000d · FX-010: como a assinatura sai numa mensagem, ao vivo
+  const inpAss = formDados.querySelector("[name=assinatura]");
+  const previaAss = h("p", { class: "cv-previa cfg-ass-previa", "aria-live": "polite", hidden: true });
+  if (inpAss && inpAss.closest("[data-campo]")) inpAss.closest("[data-campo]").appendChild(previaAss);
+  const pintarAss = () => { const t = previaAssinatura(inpAss && inpAss.value); previaAss.textContent = t; previaAss.hidden = !t; };
+  if (inpAss) { inpAss.addEventListener("input", pintarAss); pintarAss(); }
   // plano 2000d · DU-397: sair do Perfil com o nome/celular mexido e não salvo pergunta antes
   const estadoDados = () => { try { return JSON.stringify(ui.lerForm(formDados)); } catch { return ""; } };
   let dadosSalvos = estadoDados();
   formDados.addEventListener("submit", async ev => {
     ev.preventDefault();
     ui.marcarErro(formDados, null);
+    // plano 2000d · FX-011: sem mudança, não chama o servidor (e diz por quê)
+    if (estadoDados() === dadosSalvos) { ui.toast("Nada para salvar: os seus dados estão iguais aos salvos.", { tipo: "info" }); return; }
     const d = ui.lerForm(formDados);
-    // plano 1500c · UCB-112: a mesma frase do servidor (com o limite)
-    const nomeLimpo = String(d.nome || "").trim();
+    // plano 1500c · UCB-112: a mesma frase do servidor (com o limite) · plano 2000d · FX-009: espaços dobrados saem
+    const nomeLimpo = limparNome(d.nome);
     if (nomeLimpo.length < 2 || nomeLimpo.length > 80) return ui.marcarErro(formDados, "nome", "Informe o seu nome (2 a 80 letras).");
     if (d.telefone && !telefoneValido(d.telefone)) return ui.marcarErro(formDados, "telefone", "Use DDD + número, ex.: (12) 99830-3030.");
+    if (d.telefone && !dddValido(d.telefone)) return ui.marcarErro(formDados, "telefone", "Esse DDD não existe. Confira os dois primeiros números.");      // FX-102
     try {
       // plano 1500c · UCB-113: o celular vai só com dígitos (55 + DDD + número), como nos outros pontos
       const dadosPerfil = { nome: nomeLimpo, telefone: normalizarTelefone(d.telefone) };
@@ -1112,6 +1486,15 @@ async function secaoPerfil(ctx, alvo) {
       ui.campo({ rotulo: "Senha nova", nome: "nova", tipo: "senha", validar: "senha", autocomplete: "new-password", obrigatorio: true, ajuda: "Pelo menos 8 caracteres." }),
       ui.campo({ rotulo: "Repita a senha nova", nome: "nova2", tipo: "senha", autocomplete: "new-password", obrigatorio: true })),
     h("div", { class: "linha linha-fim" }, h("button", { type: "submit", class: "bt bt-prim" }, "Trocar senha")));
+  // plano 2000d · FX-008: a repetição é conferida enquanto digita (antes só no «Trocar senha»)
+  const inpNova2 = formSenha.querySelector("[name=nova2]");
+  const confere = h("small", { class: "campo-ajuda cfg-senha-confere", "aria-live": "polite" });
+  if (inpNova2 && inpNova2.closest("[data-campo]")) inpNova2.closest("[data-campo]").appendChild(confere);
+  const pintarConfere = () => {
+    const r = conferirRepeticao((formSenha.querySelector("[name=nova]") || {}).value, inpNova2 && inpNova2.value);
+    confere.textContent = r.texto; confere.dataset.ok = r.ok === null ? "" : String(r.ok);
+  };
+  for (const n of ["nova", "nova2"]) { const el = formSenha.querySelector(`[name=${n}]`); if (el) el.addEventListener("input", pintarConfere); }
   formSenha.addEventListener("submit", async ev => {
     ev.preventDefault();
     ui.marcarErro(formSenha, null);
@@ -1121,6 +1504,12 @@ async function secaoPerfil(ctx, alvo) {
     // plano 1000b · UB-084: trocar pela mesma senha não protege nada (e encerraria as outras sessões à toa)
     if (d.nova === d.atual) return ui.marcarErro(formSenha, "nova", "Use uma senha diferente da atual.");
     if (d.nova !== d.nova2) return ui.marcarErro(formSenha, "nova2", "As duas senhas não são iguais.");
+    // plano 2000d · FX-007 / UCB-044: a mesma régua de senha fácil do convite (e-mail, nome, empresa e produto) — sem o login.js, segue
+    try {
+      const L = await import(`./login.js?v=${encodeURIComponent(ctx.versao)}`);
+      if (typeof L.senhaFraca === "function" && L.senhaFraca(d.nova, { email: c.email, nome: c.nome, empresa: ctx.cliente ? ctx.cliente.nome : "",
+        produto: (() => { try { return ctx.shell.marcaEfetiva().produto; } catch { return ""; } })() })) return ui.marcarErro(formSenha, "nova", L.FRASE_SENHA_FRACA || "Essa senha é fácil de adivinhar.");
+    } catch { /* sem a régua: o servidor ainda confere o tamanho */ }
     try {
       const rs = await ui.carregando(formSenha.querySelector("[type=submit]"), api.rpc("nx_senha_trocar", { p_atual: d.atual, p_nova: d.nova }));
       formSenha.reset();
@@ -1138,8 +1527,12 @@ async function secaoPerfil(ctx, alvo) {
   const btTodas = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("sair"), "Sair de todos os aparelhos");
   btTodas.addEventListener("click", async () => {
     // plano 1000 · AS-091: desconecta todo mundo da conta — confirmação com destaque de perigo
+    // plano 2000d · FX-086: com a lista de sessões carregada, a confirmação diz quantos outros aparelhos saem
+    const outrosN = Number(sessoesEl.dataset.outros);
     const ok = await ui.confirmar({ titulo: "Sair de todos os aparelhos?", perigo: true, rotulo: "Sair de todos",
-      texto: "Você e qualquer outro aparelho conectado com a sua conta vão precisar entrar de novo, inclusive este." });
+      texto: Number.isFinite(outrosN) && sessoesEl.dataset.outros !== undefined && sessoesEl.dataset.outros !== ""
+        ? `Este aparelho e ${outrosN === 0 ? "nenhum outro" : outrosN === 1 ? "mais 1 aparelho" : `mais ${outrosN} aparelhos`} vão precisar entrar de novo.`
+        : "Você e qualquer outro aparelho conectado com a sua conta vão precisar entrar de novo, inclusive este." });
     if (!ok) return;
     // SV-128 (20261013e): nx_sessoes_encerrar(p_todas) derruba as OUTRAS sessões; esta sai logo depois pelo shell.sair().
     // Servidor anterior (sem a função): cai no nx_sair_todas antigo. Erro de verdade: avisa e NÃO sai (os outros aparelhos seguiriam conectados).
@@ -1160,28 +1553,47 @@ async function secaoPerfil(ctx, alvo) {
 
   // plano 1000 · AS-085: o papel na empresa ativa (e nas outras), em vez de «usuário da empresa»
   const papel = papelNaConta(ctx);
-  const avisos = blocoAvisos(ctx);
+  // plano 2000d · FX-002: «Ficar ausente» mora no cartão de avisos (é sobre receber conversas) — o «Ficar ausente» do menu da conta cai nele
+  const ausente = blocoAusente(ctx);
+  const avisos = blocoAvisos(ctx, { ausente });
+  const seguranca = blocoSeguranca(ctx);
   // plano 2000d · DU-177: índice no topo (Dados · Avisos · Senha · Sessões) — no celular o Perfil é uma rolagem longa
   const ancoras = [["cfg-pf-dados", "Dados"], avisos ? ["cfg-pf-avisos", "Avisos"] : null, ["cfg-pf-seguranca", "Segurança"], ["cfg-pf-senha", "Senha"], ["cfg-pf-sessoes", "Sessões"]].filter(Boolean);
+  const irPara = id => { const el = alvo.querySelector(`#${id}`); if (!el || el.hidden) return false; try { el.scrollIntoView({ block: "start" }); el.focus({ preventScroll: true }); } catch { /* ok */ } return true; };
   const indice = h("nav", { class: "cfg-pf-indice linha", "aria-label": "Partes do perfil" }, ancoras.map(([id, rot]) => {
     const a = h("a", { href: `#${id}`, class: "bt bt-fant bt-p" }, rot);
-    a.addEventListener("click", ev => { const el = alvo.querySelector(`#${id}`); if (!el) return; ev.preventDefault(); try { el.scrollIntoView({ block: "start" }); el.focus({ preventScroll: true }); } catch { /* ok */ } });
+    a.addEventListener("click", ev => { if (irPara(id)) ev.preventDefault(); });
     return a;
   }));
   if (avisos) { avisos.id = "cfg-pf-avisos"; avisos.setAttribute("tabindex", "-1"); }
+  // plano 2000d · FX-014 / FX-086: a lista de sessões diz quantas há (título) e guarda quantos outros aparelhos (confirmação do «Sair de todos»)
+  const sessoesEl = listaSessoes(ctx);
+  const titSessoes = h("h2", null, "Sessões em outros aparelhos");
+  sessoesEl.aoContar = n => { titSessoes.textContent = n > 0 ? `Sessões em outros aparelhos (${n})` : "Sessões em outros aparelhos"; };
   alvo.append(
     indice,
     h("div", { class: "cartao", id: "cfg-pf-dados", tabindex: "-1" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Seus dados"),
       h("p", { class: "sub cfg-papel" }, papel.frase),
       papel.outras.length ? h("p", { class: "fraco cfg-papel-outras" }, `Também tem acesso a: ${papel.outras.join(" · ")}.`) : null)),
-      blocoFoto(ctx), blocoAusente(ctx), formDados, blocoCelularVerificado(ctx)),
+      ...[blocoFoto(ctx), avisos ? null : ausente, formDados, blocoCelularVerificado(ctx)].filter(Boolean)),
     ...[avisos].filter(Boolean),
-    blocoSeguranca(ctx),
+    seguranca,
     h("div", { class: "cartao", id: "cfg-pf-senha", tabindex: "-1" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Senha"),
       h("p", { class: "sub" }, "Ao trocar, as sessões abertas em outros aparelhos são encerradas."))), formSenha),
-    h("div", { class: "cartao", id: "cfg-pf-sessoes", tabindex: "-1" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Sessões em outros aparelhos"),
+    blocoAparelho(ctx),
+    h("div", { class: "cartao", id: "cfg-pf-sessoes", tabindex: "-1" }, h("div", { class: "cartao-cab" }, h("div", null, titSessoes,
       // plano 1000b · UB-087: o título não promete uma lista de aparelhos que a tela não tem
-      h("p", { class: "sub" }, "Esqueceu a conta aberta num computador da recepção? Encerre todas as sessões de uma vez, inclusive esta."))), listaSessoes(ctx), btTodas));
+      h("p", { class: "sub" }, "Esqueceu a conta aberta num computador da recepção? Encerre todas as sessões de uma vez, inclusive esta."))), sessoesEl, btTodas));
+  // plano 2000d · FX-001 / DU-128: ?secao=avisos (o «Ficar ausente» do menu da conta), ?secao=senha… rola e foca a parte pedida
+  const q = (ctx.rota && ctx.rota.query) || {};
+  const parte = parteDoPerfil(q.secao);
+  if (parte && parte !== "cfg-pf-seguranca") irPara(parte);
+  // plano 2000d · FX-006 / DU-119: ?ativar2fa=1 (o aviso de «a empresa exige») abre direto o passo de ligar
+  if (String(q.ativar2fa || "").split("#")[0] === "1" || parte === "cfg-pf-seguranca") seguranca.aoCarregar = est => {
+    irPara("cfg-pf-seguranca");
+    const b = !est.ativo ? seguranca.querySelector(".cfg-2fa-ligar") : null;
+    if (b) try { b.focus(); } catch { /* ok */ }
+  };
   // DU-397: alteração não salva nos dados → pergunta antes de sair
   return {
     pendente: () => formDados.isConnected && estadoDados() !== dadosSalvos,
@@ -1216,6 +1628,9 @@ function blocoFoto(ctx) {
     const f = arquivo.files && arquivo.files[0];
     arquivo.value = "";
     if (!f) return;
+    // plano 2000d · FX-087 / FX-088: HEIC, SVG ou arquivo enorme dizem o que fazer antes de tentar decodificar
+    const errArq = erroArquivoImagem(f);
+    if (errArq) { erro.textContent = errArq; erro.hidden = false; return; }
     try { const r = await processarImagem(f, { W: 256, H: 256, quadrado: true }); await salvar(r.url, btEnviar); }
     catch (e) { erro.textContent = textoErroImagem(e); erro.hidden = false; }
   });
@@ -1276,7 +1691,7 @@ function blocoCelularVerificado(ctx) {
         ui.campo({ rotulo: "Código", nome: "codigo", inputmode: "numeric", autocomplete: "one-time-code", max: 6 }));
       const ok = await ui.modal({ titulo: "Verificar celular", corpo: fm, largura: "p", acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Verificar", tipo: "primario", fn: async () => {
         ui.marcarErro(fm, null);
-        const cod = String(ui.lerForm(fm).codigo || "").replace(/\s/g, "");
+        const cod = limparCodigo(ui.lerForm(fm).codigo);      // plano 2000d · FX-017
         if (!codigoValido(cod)) { ui.marcarErro(fm, "codigo", "Digite os 6 números do código."); return false; }
         try { await api.rpc("nx_celular_verificar_confirmar", { p_codigo: cod }); return true; }
         catch (e) { if (e && e.codigo === "codigo_invalido") { ui.marcarErro(fm, "codigo", "Código errado ou vencido."); return false; } throw e; }
@@ -1313,7 +1728,7 @@ function blocoSeguranca(ctx) {
       });
       corpo.append(h("p", { class: "linha" }, ui.pilula(`Ligada · ${est.metodo === "totp" ? "app autenticador" : "WhatsApp"}`, "ok", { icone: "check" }), est.exigido ? null : desligar));
     } else {
-      const bWa = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("whatsapp"), "Ligar com o WhatsApp");
+      const bWa = h("button", { type: "button", class: "bt bt-prim bt-p cfg-2fa-ligar" }, ui.icone("whatsapp"), "Ligar com o WhatsApp");
       const bApp = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("cadeado"), "Ligar com app autenticador");
       bWa.addEventListener("click", () => ativar("whatsapp", bWa));
       bApp.addEventListener("click", () => ativar("totp", bApp));
@@ -1340,13 +1755,15 @@ function blocoSeguranca(ctx) {
     const fm = h("form", { class: "pilha", novalidate: true },
       metodo === "totp"
         ? h("div", { class: "pilha-p" }, h("p", null, "No app autenticador (Google Authenticator, Microsoft Authenticator…), adicione uma conta pela chave abaixo e digite o código que aparecer."),
-          ini.segredo ? h("p", { class: "mono cfg-2fa-segredo" }, String(ini.segredo)) : null,
+          // plano 2000d · FX-016: a chave em grupos de 4 (digitar 32 letras seguidas no celular errava fácil); copiar leva sem espaços
+          ini.segredo ? h("p", { class: "linha" }, h("span", { class: "mono cfg-2fa-segredo" }, agruparSegredo(ini.segredo)),
+            h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => ui.copiar(String(ini.segredo).replace(/\s+/g, ""), { aviso: "Chave copiada." }) } }, ui.icone("copiar"), "Copiar chave")) : null,
           ini.otpauth ? h("a", { href: String(ini.otpauth).startsWith("otpauth://") ? ini.otpauth : "#", class: "bt bt-fant bt-p" }, "Abrir no app deste aparelho") : null)
         : h("p", null, "Mandamos um código de 6 dígitos para o celular do seu perfil pelo WhatsApp."),
       ui.campo({ rotulo: "Código", nome: "codigo", inputmode: "numeric", autocomplete: "one-time-code", max: 6 }));
     const r = await ui.modal({ titulo: "Ligar a verificação em duas etapas", corpo: fm, largura: "m", acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Confirmar", tipo: "primario", fn: async () => {
       ui.marcarErro(fm, null);
-      const cod = String(ui.lerForm(fm).codigo || "").replace(/\s/g, "");
+      const cod = limparCodigo(ui.lerForm(fm).codigo);      // plano 2000d · FX-017
       if (!codigoValido(cod)) { ui.marcarErro(fm, "codigo", "Digite os 6 números do código."); return false; }
       try { return (await api.rpc("nx_2fa_confirmar", { p_codigo: cod })) || {}; }
       catch (e) { if (e && e.codigo === "codigo_invalido") { ui.marcarErro(fm, "codigo", "Código errado ou vencido."); return false; } throw e; }
@@ -1358,7 +1775,13 @@ function blocoSeguranca(ctx) {
       const txt = cods.join("\n");
       await ui.modal({ titulo: "Guarde os códigos de recuperação", largura: "m", corpo: h("div", { class: "pilha" },
         h("p", null, "Cada código vale uma vez, para entrar se você perder o celular. Guarde num lugar seguro: eles não aparecem de novo."),
-        h("pre", { class: "mono cfg-2fa-cods" }, txt), h("div", { class: "linha" }, h("button", { type: "button", class: "bt bt-sec", on: { click: () => ui.copiar(txt, { aviso: "Códigos copiados." }) } }, ui.icone("copiar"), "Copiar os códigos"))),
+        h("pre", { class: "mono cfg-2fa-cods" }, txt), h("div", { class: "linha" }, h("button", { type: "button", class: "bt bt-sec", on: { click: () => ui.copiar(txt, { aviso: "Códigos copiados." }) } }, ui.icone("copiar"), "Copiar os códigos"),
+          // plano 2000d · FX-015: baixar como arquivo .txt (guardar fora do celular que pode se perder)
+          h("button", { type: "button", class: "bt bt-fant cfg-2fa-baixar", on: { click: () => {
+            const prod = (() => { try { return ctx.shell.marcaEfetiva().produto; } catch { return ""; } })();
+            const ok = baixarTexto(textoCodigosRecuperacao({ produto: prod, email: ctx.sessao.conta.email, codigos: cods, data: ui.hojeSP() }), `codigos-recuperacao-${nomeArquivo(prod || "conta")}.txt`, "text/plain");
+            ui.toast(ok ? "Códigos baixados. Guarde o arquivo num lugar seguro." : "O navegador não deixou baixar o arquivo.", { tipo: ok ? "ok" : "erro" });
+          } } }, ui.icone("baixar"), "Baixar (.txt)"))),
         acoes: [{ rotulo: "Já guardei", tipo: "primario", valor: true }] });
     }
     ui.toast("Verificação em duas etapas ligada. O próximo login pede o código.", { tipo: "ok" });
@@ -1366,6 +1789,8 @@ function blocoSeguranca(ctx) {
   Promise.resolve().then(() => api.rpc("nx_2fa_estado", {})).then(r => {
     if (!r || typeof r !== "object" || typeof r.ativo !== "boolean") return;
     est = r; cartao.hidden = false; pintar();
+    // plano 2000d · FX-006 / DU-119: quem abriu com ?ativar2fa=1 cai direto no passo de ligar
+    if (typeof cartao.aoCarregar === "function") try { cartao.aoCarregar(est); } catch { /* ok */ }
   }).catch(() => { /* servidor sem 2 etapas: o cartão fica escondido */ });
   return cartao;
 }
@@ -1382,6 +1807,11 @@ export function cartaoAuditoria(ctx, { tipo = "equipe", titulo = "Histórico de 
     if (!evs.length) lista.append(h("li", { class: "fraco" }, "Nada registrado ainda."));
     for (const ev of evs.slice(0, limite)) lista.append(h("li", { class: "linha linha-entre" }, h("span", null, textoEventoAuditoria(ev)),
       ev.em ? h("small", { class: "fraco", title: ui.dataHoraBR(ev.em) }, ui.relativo(ev.em)) : null));
+    // plano 2000d · FX-092: o histórico em CSV (pedido de auditoria / LGPD)
+    if (evs.length && !cartao.querySelector(".cfg-audit-csv")) cartao.append(h("div", { class: "linha linha-fim" }, h("button", { type: "button", class: "bt bt-fant bt-p cfg-audit-csv", on: { click: () => {
+      const ok = baixarTexto(csvAuditoria(evs.slice(0, limite)), `historico-${tipo}-${ui.hojeSP()}.csv`, "text/csv");
+      ui.toast(ok ? "Histórico baixado." : "O navegador não deixou baixar o arquivo.", { tipo: ok ? "ok" : "erro" });
+    } } }, ui.icone("baixar"), "Baixar histórico (CSV)")));
     cartao.hidden = false;
     return true;
   }).catch(() => { cartao.hidden = true; return false; });
@@ -1398,7 +1828,12 @@ export function listaSessoes(ctx) {
   const caixa = h("div", { class: "cfg-sessoes", hidden: true });
   const desenhar = lista => {
     ui.limpar(caixa);
-    const l = (Array.isArray(lista) ? lista : []).filter(s => s && s.id != null);
+    // plano 2000d · FX-013: este aparelho primeiro, depois o uso mais recente
+    const l = ordenarSessoes((Array.isArray(lista) ? lista : []).filter(s => s && s.id != null));
+    // plano 2000d · FX-014 / FX-086: quantos OUTROS aparelhos (o título e o «Sair de todos» usam)
+    const outros = l.filter(s => !s.atual).length;
+    caixa.dataset.outros = String(outros);
+    if (typeof caixa.aoContar === "function") try { caixa.aoContar(outros); } catch { /* ok */ }
     if (!l.length) { caixa.hidden = true; return; }
     caixa.hidden = false;
     caixa.append(h("ul", { class: "cfg-sessoes-lista" }, l.map(s => {
@@ -1450,7 +1885,7 @@ export function papelNaConta(ctx) {
  * plano 1000 · AS-090: os avisos de mensagem nova (som e aviso na área de trabalho) também no Perfil — a MESMA chave do menu «Avisos»
  * de Conversas (localStorage nx-cv-avisos: som ligado por padrão, aviso de tela só se a pessoa ligou). null sem o módulo Conversas.
  */
-function blocoAvisos(ctx) {
+function blocoAvisos(ctx, { ausente = null } = {}) {
   const { ui } = ctx;
   const h = ui.h;
   if (!ctx.cliente || (typeof ctx.temModulo === "function" && !ctx.temModulo("conversas"))) return null;
@@ -1488,8 +1923,53 @@ function blocoAvisos(ctx) {
     if (!gravar({ tela: inp.checked })) { inp.checked = !inp.checked; return; }
     ui.toast(inp.checked ? "Aviso na área de trabalho ligado." : "Aviso na área de trabalho desligado.", { tipo: "ok" });
   });
-  return h("div", { class: "cartao cfg-avisos" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Avisos de mensagem nova"),
-    h("p", { class: "sub" }, "Valem neste aparelho e são os mesmos do menu «Avisos» de Conversas."))), som, tela, nota);
+  // plano 2000d · FX-018: o navegador já bloqueou os avisos → a explicação aparece ao abrir (antes só depois de tentar ligar)
+  try { if (typeof Notification !== "undefined" && Notification.permission === "denied") nota.textContent = "O navegador está bloqueando os avisos deste site. Para ligar, libere em Configurações do site (cadeado ao lado do endereço)."; } catch { /* ok */ }
+  // plano 2000d · FX-003 / FX-004 / DU-268: horário silencioso (de/até) — o app.js já lê silencio {de, ate} e o pulso decide
+  const sil = p.silencio && typeof p.silencio === "object" ? p.silencio : null;
+  const formSil = h("form", { class: "pilha-p cfg-silencio", novalidate: true },
+    h("p", { class: "rotulo" }, "Horário silencioso"),
+    h("div", { class: "form-grade" }, ui.campo({ rotulo: "Sem som a partir de", nome: "sil_de", tipo: "hora", valor: (sil && sil.de) || "" }),
+      ui.campo({ rotulo: "até", nome: "sil_ate", tipo: "hora", valor: (sil && sil.ate) || "" })));
+  const frase = h("small", { class: "fraco cfg-silencio-frase", "aria-live": "polite" }, rotuloSilencio(sil));
+  const btSil = h("button", { type: "submit", class: "bt bt-sec bt-p" }, "Salvar horário");
+  const btTirar = h("button", { type: "button", class: "bt bt-fant bt-p", hidden: !sil }, "Sem horário silencioso");
+  formSil.append(frase, h("div", { class: "linha" }, btSil, btTirar));
+  const aplicarSil = (novo, aviso) => {
+    if (!gravar({ silencio: novo })) { ui.toast("Este navegador não deixou guardar a preferência.", { tipo: "erro" }); return; }
+    frase.textContent = rotuloSilencio(novo); btTirar.hidden = !novo;
+    ui.toast(aviso, { tipo: "ok" });
+  };
+  formSil.addEventListener("submit", ev => {
+    ev.preventDefault();
+    ui.marcarErro(formSil, null);
+    const d = ui.lerForm(formSil);
+    if (!silencioValido(d.sil_de, d.sil_ate)) { ui.marcarErro(formSil, "sil_ate", "Preencha os dois horários (diferentes) ou deixe os dois vazios."); return; }
+    const novo = d.sil_de && d.sil_ate ? { de: d.sil_de, ate: d.sil_ate } : null;
+    aplicarSil(novo, novo ? rotuloSilencio(novo) : "Horário silencioso desligado.");
+  });
+  btTirar.addEventListener("click", () => {
+    for (const n of ["sil_de", "sil_ate"]) { const el = formSil.querySelector(`[name=${n}]`); if (el) el.value = ""; }
+    aplicarSil(null, "Horário silencioso desligado.");
+  });
+  return h("div", { class: "cartao cfg-avisos" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, ausente ? "Avisos e disponibilidade" : "Avisos de mensagem nova"),
+    h("p", { class: "sub" }, "Valem neste aparelho e são os mesmos do menu «Avisos» de Conversas."))), ...[ausente, som, tela, nota, formSil].filter(Boolean));
+}
+
+/** plano 2000d · FX-005 / DU-408: «Neste aparelho» — abrir o app instalado na última tela (padrão) ou sempre no Início. */
+function blocoAparelho(ctx) {
+  const { ui } = ctx;
+  const h = ui.h;
+  const armaz = (() => { try { return localStorage; } catch { return null; } })();
+  if (!armaz) return null;
+  const sw = ui.campo({ tipo: "interruptor", nome: "abrir_ultima", rotulo: "Abrir o app na última tela usada", valor: lerAbrirUltima(armaz),
+    ajuda: "Vale para o app instalado no celular ou no computador. Desligado, ele sempre abre no Início." });
+  const inp = sw.querySelector("input");
+  if (inp) inp.addEventListener("change", () => {
+    if (!gravarAbrirUltima(armaz, inp.checked)) { inp.checked = !inp.checked; ui.toast("Este navegador não deixou guardar a preferência.", { tipo: "erro" }); return; }
+    ui.toast(inp.checked ? "O app abre na última tela usada." : "O app abre sempre no Início.", { tipo: "ok" });
+  });
+  return h("div", { class: "cartao cfg-aparelho", id: "cfg-pf-aparelho", tabindex: "-1" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Neste aparelho"))), sw);
 }
 
 /* ============================================================
@@ -1517,12 +1997,38 @@ async function secaoEmpresa(ctx, alvo) {
       ui.campo({ rotulo: "Fuso horário", nome: "fuso", tipo: "select", valor: d.fuso || "America/Sao_Paulo", opcoes: FUSOS_BR.map(([valor, rotulo]) => ({ valor, rotulo })),
         ajuda: "Lembretes, automações e o horário de funcionamento seguem este fuso." }),
       ui.campo({ rotulo: "Guardar as conversas por", nome: "retencao_meses", tipo: "select", valor: d.retencao_meses ? String(d.retencao_meses) : "", opcoes: PRAZOS_GUARDA.map(([valor, rotulo]) => ({ valor, rotulo })),
-        ajuda: "Passado o prazo, as conversas mais antigas são apagadas sozinhas (com aviso 30 dias antes). Contatos e negócios ficam." })),
+        ajuda: "Passado o prazo, as conversas mais antigas são apagadas sozinhas (com aviso 30 dias antes). Contatos e negócios ficam." }),
+      // plano 2000d · DU-036 / FX-021: o link de avaliação no Google (vira {link_avaliacao} nas mensagens de pós-atendimento)
+      ui.campo({ rotulo: "Link de avaliação (Google)", nome: "link_avaliacao", tipo: "url", valor: d.link_avaliacao || "", autocomplete: "off", placeholder: "https://g.page/r/…/review",
+        ajuda: "Vira {link_avaliacao}: as automações de pós-atendimento pedem a avaliação por ele." }),
+      // plano 2000d · DU-095 / FX-020: quanto tempo cada mensagem automática poupa (o «tempo poupado» das automações)
+      ui.campo({ rotulo: "Minutos por mensagem", nome: "minutos_por_mensagem", inputmode: "decimal", valor: d.minutos_por_mensagem != null ? String(d.minutos_por_mensagem).replace(".", ",") : "", placeholder: "2",
+        ajuda: "Quanto tempo a equipe levaria para escrever cada mensagem que o sistema manda sozinho (0,5 a 30). Usado no «tempo poupado»." }),
+      // plano 2000d · DU-072 / FX-022: os feriados da cidade/empresa (o «Respeitar horário» das automações não envia neles)
+      ui.campo({ rotulo: "Feriados da empresa", nome: "feriados", tipo: "textarea", linhas: 2, valor: feriadosEmTexto(d.feriados), placeholder: "20/01, 23/04, 08/12",
+        ajuda: "Separados por vírgula: 25/12 (todo ano) ou 20/01/2027 (só nesse ano). Automações com «respeitar horário» não enviam nesses dias." })),
     h("div", { class: "linha linha-fim" }, h("button", { type: "submit", class: "bt bt-prim" }, "Salvar dados da empresa")));
   // DU-395: a prévia de uma frase com as variáveis já trocadas
   const previa = h("p", { class: "cv-previa cfg-empresa-previa", "aria-live": "polite" });
-  const pintarPrevia = () => { previa.textContent = trocarVariaveisEmpresa("Estamos na {endereco}. Ligue {telefone_empresa} ou veja {instagram}.", ui.lerForm(form)); };
-  form.addEventListener("input", pintarPrevia); pintarPrevia();
+  // plano 2000d · FX-093 / FX-094: «Ver no mapa» do endereço e «Testar» o link de avaliação (abrem numa aba nova)
+  const mapa = h("a", { class: "bt bt-fant bt-p cfg-empresa-mapa", target: "_blank", rel: "noopener noreferrer", hidden: true }, ui.icone("externo"), "Ver no mapa");
+  const testarAval = h("a", { class: "bt bt-fant bt-p cfg-empresa-aval", target: "_blank", rel: "noopener noreferrer", hidden: true }, ui.icone("externo"), "Testar o link de avaliação");
+  // plano 2000d · FX-027: o fuso da empresa com outra hora que este aparelho avisa (lembretes saem pela hora da empresa)
+  const avisoFuso = h("p", { class: "aviso aviso-info cfg-empresa-fuso", role: "status", hidden: true });
+  const fusoAparelho = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();
+  const pintarPrevia = () => {
+    const x = ui.lerForm(form);
+    previa.textContent = trocarVariaveisEmpresa("Estamos na {endereco}. Ligue {telefone_empresa} ou veja {instagram}. Avalie: {link_avaliacao}", x);
+    const lm = linkMapa(x.endereco); mapa.hidden = !lm; if (lm) mapa.setAttribute("href", lm);
+    const la = completarHttps(x.link_avaliacao); const okA = !!la && linkHttpsValido(la); testarAval.hidden = !okA; if (okA) testarAval.setAttribute("href", la);
+    const dif = fusoDifere(x.fuso, fusoAparelho);
+    avisoFuso.hidden = !dif;
+    if (dif) avisoFuso.textContent = "Este aparelho está em outro fuso: lembretes e automações seguem a hora da empresa, não a deste aparelho.";
+  };
+  form.addEventListener("input", pintarPrevia); form.addEventListener("change", pintarPrevia); pintarPrevia();
+  // plano 2000d · FX-026: as variáveis à mão — um toque copia
+  const chips = h("div", { class: "linha cfg-empresa-vars", role: "group", "aria-label": "Copiar variável" }, VARIAVEIS_EMPRESA.map(v =>
+    h("button", { type: "button", class: "bt bt-fant bt-p mono", "aria-label": `Copiar ${v}`, on: { click: () => ui.copiar(v, { aviso: `${v} copiado.` }) } }, v)));
   const estado = () => { try { return JSON.stringify(ui.lerForm(form)); } catch { return ""; } };
   let salvo = estado();
   form.addEventListener("submit", async ev => {
@@ -1531,16 +2037,40 @@ async function secaoEmpresa(ctx, alvo) {
     const x = ui.lerForm(form);
     const erros = validarDadosEmpresa(x);
     if (erros.length) { for (const e of erros) ui.marcarErro(form, e.campo, e.texto); return; }
-    const p = { endereco: String(x.endereco || "").trim() || null, telefone_empresa: normalizarTelefone(x.telefone_empresa) || null,
-      instagram: String(x.instagram || "").trim().replace(/^@/, "") || null, fuso: x.fuso || "America/Sao_Paulo", retencao_meses: x.retencao_meses ? Number(x.retencao_meses) : null };
+    // plano 2000d · FX-024 / FX-025: Instagram pelo link do perfil e 0800/4004 sem o 55
+    const p = { endereco: String(x.endereco || "").trim() || null, telefone_empresa: normalizarTelefoneEmpresa(x.telefone_empresa) || null,
+      instagram: normalizarInstagram(x.instagram) || null, fuso: x.fuso || "America/Sao_Paulo", retencao_meses: x.retencao_meses ? Number(x.retencao_meses) : null };
+    // plano 2000d · FX-020/FX-021/FX-022: os campos novos só vão quando preenchidos (ou quando o servidor já os tinha)
+    const minutos = lerMinutos(x.minutos_por_mensagem);
+    if (minutos !== null || Object.hasOwn(d, "minutos_por_mensagem")) p.minutos_por_mensagem = minutos;
+    const aval = completarHttps(x.link_avaliacao);
+    if (aval || Object.hasOwn(d, "link_avaliacao")) p.link_avaliacao = aval || null;
+    const fer = separarFeriados(x.feriados).lista;
+    if (fer.length || Object.hasOwn(d, "feriados")) p.feriados = fer;
     if (p.retencao_meses && String(p.retencao_meses) !== String(d.retencao_meses || "") && !(await ui.confirmar({ titulo: `Guardar as conversas por ${p.retencao_meses} meses?`, perigo: true, rotulo: "Usar este prazo",
       texto: "As conversas mais antigas que o prazo serão apagadas de vez (com aviso 30 dias antes). Isso não pode ser desfeito." }))) return;
-    try { d = (await ui.carregando(form.querySelector("[type=submit]"), api.rpcC("nx_empresa_dados_salvar", { p_dados: p }))) || p; salvo = estado(); ui.toast("Dados da empresa salvos.", { tipo: "ok" }); }
+    const bt = form.querySelector("[type=submit]");
+    try {
+      let r, tiradas = [];
+      try { r = await ui.carregando(bt, api.rpcC("nx_empresa_dados_salvar", { p_dados: p })); }
+      catch (e) {
+        // plano 2000d · FX-023: o servidor de hoje recusa os campos novos — salva o resto e diz o que ficou de fora
+        const novas = CHAVES_EMPRESA_NOVAS.filter(k => k in p);
+        if (!novas.length || !(e && /dados_invalidos|chave_invalida/.test(String(e.codigo || "")))) throw e;
+        const resto = { ...p };
+        for (const k of novas) delete resto[k];
+        tiradas = novas;
+        r = await ui.carregando(bt, api.rpcC("nx_empresa_dados_salvar", { p_dados: resto }));
+      }
+      d = r || p; salvo = estado();
+      ui.toast(tiradas.length ? `Dados salvos, mas este servidor ainda não guarda: ${tiradas.map(k => ROTULO_CHAVE_EMPRESA[k]).join(", ")}.` : "Dados da empresa salvos.", { tipo: tiradas.length ? "info" : "ok" });
+    }
     catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
   });
   alvo.append(h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Dados da empresa"),
-    h("p", { class: "sub" }, "Usados nas mensagens, na IA e nas automações — escreva uma vez só."))), form,
-    h("p", { class: "rotulo" }, "Como fica numa mensagem"), previa));
+    h("p", { class: "sub" }, "Usados nas mensagens, na IA e nas automações — escreva uma vez só."))), avisoFuso, form,
+    h("div", { class: "linha" }, mapa, testarAval),
+    h("p", { class: "rotulo" }, "Como fica numa mensagem"), previa, chips));
   return {
     pendente: () => form.isConnected && estado() !== salvo,
     podeSair: async () => estado() === salvo || ui.confirmar({ titulo: "Sair sem salvar os dados da empresa?", rotulo: "Sair sem salvar", perigo: true, texto: "As mudanças ainda não foram salvas." }),
@@ -1568,6 +2098,7 @@ async function secaoUsuarios(ctx, alvo) {
   const { ui, api } = ctx;
   const h = ui.h;
   let dados = null;
+  let abriuConvite = false;      // plano 2000d · FX-028
   const pint = { convites: () => {}, uso: () => {} };      // plano 1500c · UCB-017: o desenho vivo da lista de convites e do uso
 
   async function carregar() {
@@ -1576,6 +2107,14 @@ async function secaoUsuarios(ctx, alvo) {
     try {
       dados = await api.rpcC("nx_usuarios_listar");
       desenhar();
+      // plano 2000d · FX-028 / UC-028: #/config/usuarios?convidar=1 (o atalho do Início e do checklist) já abre o convite — uma vez, com vaga
+      const q = (ctx.rota && ctx.rota.query) || {};
+      if (!abriuConvite && String(q.convidar || "").split("#")[0] === "1") {
+        abriuConvite = true;
+        const cheio = !!dados.limite && dados.uso >= dados.limite;
+        if (cheio) ui.toast("O plano não tem vagas de usuário agora: revogue um convite ou remova alguém para convidar.", { tipo: "info" });
+        else abrirConvite();
+      }
     } catch (e) {
       ui.limpar(alvo);
       alvo.appendChild(ui.erroCartao(e, carregar));
@@ -1586,6 +2125,7 @@ async function secaoUsuarios(ctx, alvo) {
   let termoUs = "";
   let soNunca = false;          // plano 1500c · UCB-033: chip «Nunca entraram»
   let papelFiltro = "", soSem2 = false;      // plano 2000d · DU-130 / DU-118
+  let soInativos = false;                    // plano 2000d · FX-042
   async function salvar(conta_id, mudanca, { desfazer = null, texto = "Acesso atualizado.", focoId = null } = {}) {
     try {
       dados = await api.rpcC("nx_usuario_salvar", { p_usuario: { conta_id, ...mudanca } });
@@ -1607,14 +2147,18 @@ async function secaoUsuarios(ctx, alvo) {
     const b = h("button", { type: "button", class: "bt bt-fant bt-p", "aria-label": `Departamentos de ${u.nome}: ${txt()}` }, txt(), ui.icone("seta-baixo"));
     b.addEventListener("click", () => {
       const lista = h("div", { class: "flut-lista" });
+      // plano 2000d · FX-049: «3 de 8 marcados» ao vivo (com a busca, os marcados fora da vista também contam)
+      const contagem = h("small", { class: "fraco cfg-deps-n", "aria-live": "polite" });
+      const pintarN = () => { contagem.textContent = sel.size ? `${sel.size} de ${deps.length} marcados` : "Nenhum marcado = todos"; };
       // plano 2000d · DU-116: com mais de 6 departamentos, busca e «Todos/Nenhum» (a pilha de caixas não cabia nem se achava)
       const pintarLista = (termo = "") => {
         ui.limpar(lista);
         const vis = filtrarDepartamentos(deps, termo);
         lista.append(...vis.map(d => h("label", { class: "flut-op" },
-          h("input", { type: "checkbox", checked: sel.has(d.id), value: d.id, on: { change: ev => { ev.target.checked ? sel.add(d.id) : sel.delete(d.id); } } }),
+          h("input", { type: "checkbox", checked: sel.has(d.id), value: d.id, on: { change: ev => { ev.target.checked ? sel.add(d.id) : sel.delete(d.id); pintarN(); } } }),
           ui.etiqueta({ nome: d.nome, cor: d.cor }))));
         if (!vis.length) lista.append(h("p", { class: "fraco" }, "Nenhum departamento com esse nome."));
+        pintarN();
       };
       pintarLista();
       const muitos = deps.length > 6;
@@ -1624,8 +2168,8 @@ async function secaoUsuarios(ctx, alvo) {
       const bTodos = muitos ? h("button", { type: "button", class: "bt bt-fant bt-p cfg-deps-todos", on: { click: () => marcarTodos(true) } }, "Todos") : null;
       const bNenhum = muitos ? h("button", { type: "button", class: "bt bt-fant bt-p cfg-deps-nenhum", on: { click: () => marcarTodos(false) } }, "Nenhum") : null;
       const ok = h("button", { type: "button", class: "bt bt-prim bt-p" }, "Aplicar");
-      const f = ui.flutuante(b, h("div", { class: "pilha-p" }, h("p", { class: "rotulo" }, "Departamentos"),
-        h("p", { class: "fraco" }, "Nenhum marcado = todos."), busca, muitos ? h("div", { class: "linha" }, bTodos, bNenhum) : null, lista, ok), { largura: 260 });
+      const f = ui.flutuante(b, h("div", { class: "pilha-p" }, ...[h("p", { class: "rotulo" }, "Departamentos"),
+        contagem, busca, muitos ? h("div", { class: "linha" }, bTodos, bNenhum) : null, lista, ok].filter(Boolean)), { largura: 260 });
       ok.addEventListener("click", () => {
         f.fechar();
         // plano 1000b · UB-090: «Aplicar» sem mudar nada só fecha (nada de chamada nem de «Acesso atualizado.»)
@@ -1685,7 +2229,9 @@ async function secaoUsuarios(ctx, alvo) {
     const lim = dados.limite;
     const comDono = us.some(x => typeof x.dono === "boolean");      // UCB-036: o servidor novo diz quem é o dono
     const com2Etapas = informa2Etapas(us);      // plano 2000d · DU-118
-    const textoUso = () => lim ? `${dados.uso} de ${lim} usuários do plano (convites pendentes contam).` : `${us.length} ${us.length === 1 ? "pessoa" : "pessoas"} com acesso.`;
+    // plano 2000d · FX-039: quantas estão com o app aberto agora
+    const online = contarOnline(us);
+    const textoUso = () => `${lim ? `${dados.uso} de ${lim} usuários do plano (convites pendentes contam).` : `${us.length} ${us.length === 1 ? "pessoa" : "pessoas"} com acesso.`}${online ? ` ${online} online agora.` : ""}`;
     const subUso = h("p", { class: "sub" }, textoUso());
     // plano 1500c · UCB-034: o uso de usuários também em barra (some sem limite)
     const caixaBarra = h("div", { class: "cfg-us-barra" });
@@ -1735,6 +2281,9 @@ async function secaoUsuarios(ctx, alvo) {
             h("small", null, u.email),
             // plano 2000d · DU-111 / DU-128 / DU-114: acesso pausado, ausente (fora do rodízio) e horário de acesso
             acessoPausado(u) ? ui.pilula(`Acesso pausado até ${ui.dataBR(u.pausado_ate)}`, "aten", { class: "cfg-us-pausado" }) : null,
+            // plano 2000d · FX-031 / SC-004: acesso suspenso (servidor que manda «suspenso») e FX-041: sem entrar há 30+ dias (vaga parada)
+            u.suspenso === true ? ui.pilula("Acesso suspenso", "ruim", { class: "cfg-us-suspenso" }) : null,
+            !u.gestor && !u.eu && (diasSemEntrar(u) ?? -1) >= 30 ? h("small", { class: "fraco cfg-us-inativo" }, `sem entrar há ${diasSemEntrar(u)} dias`) : null,
             ausenteAte(u) ? ui.pilula(`Ausente até ${ui.dataHoraBR(u.ausente_ate)}`, "neutra", { class: "cfg-us-ausente" }) : null,
             rotuloHorarioAcesso(u) ? h("small", { class: "fraco cfg-us-horario" }, rotuloHorarioAcesso(u)) : null)) },
         colPapel,
@@ -1774,6 +2323,9 @@ async function secaoUsuarios(ctx, alvo) {
             // plano 2000d · DU-111: pausar (férias) sem remover — servidor que anuncia dados.pausar_acesso
             dados.pausar_acesso === true && !u.eu ? (acessoPausado(u) ? { rotulo: "Liberar o acesso agora", icone: "play", fn: () => pausarAcesso(u, null) }
               : { rotulo: "Pausar acesso até…", icone: "pausa", desabilitado: ultimo, motivo: ultimo ? MOTIVO_ULTIMO_ADMIN : null, fn: () => pausarAcesso(u) }) : null,
+            // plano 2000d · FX-031 / SC-004: suspender sem data (o servidor que manda «suspenso» por pessoa tem nx_acesso_suspender)
+            typeof u.suspenso === "boolean" && !u.eu ? (u.suspenso ? { rotulo: "Reativar o acesso", icone: "play", fn: () => suspenderAcesso(u, false) }
+              : { rotulo: "Suspender acesso", icone: "cadeado", desabilitado: ultimo, motivo: ultimo ? MOTIVO_ULTIMO_ADMIN : null, fn: () => suspenderAcesso(u, true) }) : null,
             "-",
             // UCB-015: o último administrador não sai (o motivo aparece no próprio item)
             { rotulo: "Remover acesso", icone: "lixeira", perigo: true, desabilitado: ultimo, motivo: ultimo ? MOTIVO_ULTIMO_ADMIN : null, fn: () => remover(u) },
@@ -1797,10 +2349,14 @@ async function secaoUsuarios(ctx, alvo) {
     if (papelFiltro && !porPapel[papelFiltro]) papelFiltro = "";
     const semDois = com2Etapas ? sem2Etapas(usVis) : [];
     if (!semDois.length) soSem2 = false;
+    // plano 2000d · FX-042: «Sem entrar há 30+ dias (N)» — vagas do plano paradas
+    const parados = inativos(usVis);
+    if (!parados.length) soInativos = false;
     const filtrar = () => {
       let base = soNunca ? nuncaEntraram(usVis.filter(u => !u.gestor)) : usVis;
       if (papelFiltro) base = filtrarPorPapel(base, papelFiltro);
       if (soSem2) base = base.filter(u => !u.gestor && u.dois_fatores === false);
+      if (soInativos) base = inativos(base);
       return termoUs ? filtrarUsuarios(base, termoUs) : base;
     };
     // UB-088: o redesenho (depois de salvar) mantém o filtro digitado
@@ -1813,8 +2369,17 @@ async function secaoUsuarios(ctx, alvo) {
       const vis = filtrar();
       tab = montarTabela(vis);
       ui.limpar(caixaTab); caixaTab.appendChild(tab.el);
-      statusUs.textContent = termoUs.trim() || soNunca || papelFiltro || soSem2 ? `${vis.length} ${vis.length === 1 ? "pessoa encontrada" : "pessoas encontradas"}.` : "";
+      statusUs.textContent = termoUs.trim() || soNunca || papelFiltro || soSem2 || soInativos ? `${vis.length} ${vis.length === 1 ? "pessoa encontrada" : "pessoas encontradas"}.` : "";
     };
+    const chipInativos = parados.length ? h("button", { type: "button", class: "bt bt-fant bt-p cfg-us-inativos", "aria-pressed": String(soInativos) }, `Sem entrar há 30+ dias (${parados.length})`) : null;
+    if (chipInativos) chipInativos.addEventListener("click", () => { soInativos = !soInativos; chipInativos.setAttribute("aria-pressed", String(soInativos)); repintarTabela(); });
+    // plano 2000d · FX-091: os e-mails de quem está na lista (com os filtros) — para mandar um comunicado
+    const btEmails = h("button", { type: "button", class: "bt bt-fant bt-p cfg-us-emails" }, ui.icone("copiar"), "Copiar e-mails");
+    btEmails.addEventListener("click", () => {
+      const t = emailsDe(filtrar());
+      if (!t) { ui.toast("Ninguém na lista com e-mail.", { tipo: "info" }); return; }
+      ui.copiar(t, { aviso: `${t.split(", ").length} e-mails copiados.` });
+    });
     if (buscaUs) buscaUs.addEventListener("input", ui.debounce(() => { termoUs = buscaUs.value; repintarTabela(); }, 150));
     // plano 1500c · UCB-033: «Nunca entraram (N)» filtra quem ainda não usou o sistema
     const chipNunca = nunca.length ? h("button", { type: "button", class: "bt bt-fant bt-p cfg-us-nunca", "aria-pressed": String(soNunca) }, `Nunca entraram (${nunca.length})`) : null;
@@ -1836,7 +2401,8 @@ async function secaoUsuarios(ctx, alvo) {
     // plano 2000d · DU-131: a lista da equipe em CSV (auditoria de LGPD: quem tem acesso)
     const btCsv = h("button", { type: "button", class: "bt bt-fant bt-p cfg-us-csv" }, ui.icone("baixar"), "Baixar lista (CSV)");
     btCsv.addEventListener("click", () => {
-      const ok = baixarTexto(csvEquipe(us, dados.departamentos || []), `equipe-${(ctx.cliente && ctx.cliente.nome ? ctx.cliente.nome : "empresa").toLowerCase().normalize("NFD").replace(/[^\w]+/g, "-")}-${ui.hojeSP()}.csv`, "text/csv");
+      // plano 2000d · FX-038: o nome do arquivo sem traço sobrando nem acento
+      const ok = baixarTexto(csvEquipe(us, dados.departamentos || []), `equipe-${nomeArquivo(ctx.cliente && ctx.cliente.nome)}-${ui.hojeSP()}.csv`, "text/csv");
       ui.toast(ok ? "Lista da equipe baixada." : "O navegador não deixou baixar o arquivo.", { tipo: ok ? "ok" : "erro" });
     });
     // plano 1500c · UCB-032: o que cada papel pode fazer, recolhido acima da tabela (o seletor aponta para cá)
@@ -1849,7 +2415,12 @@ async function secaoUsuarios(ctx, alvo) {
     // plano 1000b · UB-092: revogar tira só o item da lista de convites — a tabela de usuários não some nem pisca com o esqueleto
     const caixaConv = h("div", { class: "cfg-conv-lista" });
     const titConv = h("h2", { tabindex: "-1" }, "Convites pendentes");
-    const pintarConvites = () => { ui.limpar(caixaConv); caixaConv.append(listaDeConvites()); };
+    // plano 2000d · FX-040: o título diz quantos aguardam
+    const pintarConvites = () => {
+      ui.limpar(caixaConv); caixaConv.append(listaDeConvites());
+      const n = (dados.convites || []).filter(c => c && !c.vencido).length;
+      titConv.textContent = n ? `Convites pendentes (${n})` : "Convites pendentes";
+    };
     pint.convites = pintarConvites;
     const itemConvite = cv => {
       const b = h("button", { type: "button", class: "bt bt-fant bt-p cfg-conv-revogar" }, "Revogar");
@@ -1890,7 +2461,8 @@ async function secaoUsuarios(ctx, alvo) {
     };
     const listaDeConvites = () => {
       const todos = dados.convites || [];
-      const ativos = todos.filter(c => !c.vencido), vencidos = todos.filter(c => c.vencido);
+      // plano 2000d · FX-033: o que vence primeiro no topo
+      const ativos = ordenarConvites(todos.filter(c => !c.vencido)), vencidos = todos.filter(c => c.vencido);
       return h("div", { class: "pilha-p" },
         ativos.length ? h("div", { class: "lista-convites" }, ativos.map(itemConvite)) : h("p", { class: "fraco" }, "Nenhum convite aguardando."),
         // plano 1500c · UCB-029: os que venceram sem uso (quando o servidor manda «vencido»)
@@ -1908,8 +2480,8 @@ async function secaoUsuarios(ctx, alvo) {
         chipDep,
         linkDeps,
         ajudaPapeis,
-        h("div", { class: "linha cfg-us-filtros" }, buscaUs ? h("label", { class: "busca cfg-us-busca" }, ui.icone("busca"), buscaUs) : null, chipNunca, ...chipsPapel, chipSem2,
-          h("span", { class: "marca-espaco" }), btCsv),
+        h("div", { class: "linha cfg-us-filtros" }, ...[buscaUs ? h("label", { class: "busca cfg-us-busca" }, ui.icone("busca"), buscaUs) : null, chipNunca, ...chipsPapel, chipSem2, chipInativos,
+          h("span", { class: "marca-espaco" }), btEmails, btCsv].filter(Boolean)),
         statusUs,
         caixaTab),
       h("div", { class: "cartao cfg-conv-cartao" },
@@ -1946,14 +2518,27 @@ async function secaoUsuarios(ctx, alvo) {
         return h("td", null, h("input", { type: "checkbox", checked: mat[p][pm.id], disabled: fixo, dataset: { papel: p, perm: pm.id }, "aria-label": `${pm.rotulo} — ${rotuloPapel(p)}` }));
       })))));
     const bt = h("button", { type: "button", class: "bt bt-prim bt-p" }, "Salvar permissões");
+    const lerTela = () => { const nova = matrizPermissoes({}); for (const cb of tab.querySelectorAll("input[type=checkbox]")) nova[cb.dataset.papel][cb.dataset.perm] = !!cb.checked; return matrizPermissoes(nova); };
+    // plano 2000d · FX-046: «Salvar» só vale com mudança (aria-disabled: o Tab ainda alcança e o clique diz o porquê)
+    const pintarBt = () => bt.setAttribute("aria-disabled", String(permissoesIguais(lerTela(), dados.permissoes)));
+    tab.addEventListener("change", pintarBt);
     bt.addEventListener("click", async () => {
-      const nova = matrizPermissoes({});
-      for (const cb of tab.querySelectorAll("input[type=checkbox]")) nova[cb.dataset.papel][cb.dataset.perm] = !!cb.checked;
-      try { await ui.carregando(bt, api.rpcC("nx_permissoes_salvar", { p_permissoes: matrizPermissoes(nova) })); dados.permissoes = matrizPermissoes(nova); ui.toast("Permissões salvas. Valem no próximo carregamento de cada pessoa.", { tipo: "ok" }); }
+      if (bt.getAttribute("aria-disabled") === "true") { ui.toast("Nada para salvar: as permissões estão iguais às salvas.", { tipo: "info" }); return; }
+      const nova = lerTela();
+      try { await ui.carregando(bt, api.rpcC("nx_permissoes_salvar", { p_permissoes: nova })); dados.permissoes = nova; pintarBt(); ui.toast("Permissões salvas. Valem no próximo carregamento de cada pessoa.", { tipo: "ok" }); }
       catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
     });
+    // plano 2000d · FX-045: voltar à tabela padrão (na tela; só vale ao salvar)
+    const padrao = h("button", { type: "button", class: "bt bt-fant bt-p cfg-perm-padrao" }, "Voltar ao padrão");
+    padrao.addEventListener("click", () => {
+      const p = matrizPermissoes({});
+      for (const cb of tab.querySelectorAll("input[type=checkbox]")) cb.checked = !!p[cb.dataset.papel][cb.dataset.perm];
+      pintarBt();
+      ui.toast("Permissões padrão na tela. Só valem ao salvar.", { tipo: "info" });
+    });
+    pintarBt();
     return h("details", { class: "cartao cfg-perm" }, h("summary", null, h("b", null, "Permissões por papel"), h("small", { class: "fraco" }, " · exportar, excluir, ver valores, automações e anúncios")),
-      h("div", { class: "cfg-perm-rolagem" }, tab), h("div", { class: "linha linha-fim" }, bt));
+      h("div", { class: "cfg-perm-rolagem" }, tab), h("div", { class: "linha linha-fim" }, padrao, bt));
   }
 
   /** plano 2000d · DU-124: link de equipe reutilizável (QR na recepção) — dados.link_equipe (null = o servidor tem, mas não há link). */
@@ -1968,9 +2553,15 @@ async function secaoUsuarios(ctx, alvo) {
         try { dados = (await ui.carregando(desligar, api.rpcC("nx_link_equipe_salvar", { p_ativo: false }))) || { ...dados, link_equipe: null }; desenhar(); }
         catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
       });
-      corpo.append(ui.blocoLink(linkCompleto(ctx, le.link, dados && dados.dominio_ativo), { rotulo: "Link de equipe" }),
+      // plano 2000d · FX-044: esgotado ou vencido não fica parecendo que funciona
+      const est = estadoLinkEquipe(le);
+      // plano 2000d · FX-043: o texto pronto para mandar no grupo da equipe (neutro, com o produto da marca)
+      const prod = (() => { try { return ctx.shell.marcaEfetiva().produto; } catch { return ""; } })();
+      corpo.append(...[est !== "ativo" ? h("p", { class: "aviso aviso-aten cfg-link-equipe-fim", role: "status" }, ui.icone("alerta"),
+        h("span", null, est === "vencido" ? "Este link venceu: quem abrir não consegue mais pedir acesso. Desligue e crie outro." : "Este link já foi usado o número máximo de vezes. Desligue e crie outro para mais pessoas.")) : null,
+        ui.blocoLink(linkCompleto(ctx, le.link, dados && dados.dominio_ativo), { rotulo: "Link de equipe", textoWhats: textoLinkEquipe({ cliente: ctx.cliente ? ctx.cliente.nome : "", produto: prod }) }),
         h("p", { class: "fraco" }, [`Entra como ${rotuloPapel(le.papel || "atendente", { minusculo: true })}`, le.limite ? `${le.usos || 0} de ${le.limite} usos` : null, le.expira_em ? `vale até ${ui.dataBR(le.expira_em)}` : null].filter(Boolean).join(" · ")),
-        h("div", { class: "linha" }, desligar));
+        h("div", { class: "linha" }, desligar)].filter(Boolean));
     } else {
       const criar = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("link"), "Criar link de equipe");
       criar.addEventListener("click", async () => {
@@ -1981,7 +2572,9 @@ async function secaoUsuarios(ctx, alvo) {
         const r = await ui.modal({ titulo: "Link de equipe", corpo: fm, largura: "p", acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Criar link", tipo: "primario", fn: async () => {
           const d = ui.lerForm(fm);
           const lim = Math.floor(Number(d.limite));
-          if (!(lim >= 1 && lim <= 50)) { ui.marcarErro(fm, "limite", "De 1 a 50 pessoas."); return false; }
+          // plano 2000d · FX-101: não promete mais entradas que as vagas do plano
+          const erroLim = erroLimiteLinkEquipe(d.limite, { uso: dados.uso, lim: dados.limite });
+          if (erroLim) { ui.marcarErro(fm, "limite", erroLim); return false; }
           return api.rpcC("nx_link_equipe_salvar", { p_ativo: true, p_papel: d.papel, p_limite: lim, p_dias: Number(d.dias) || 7 });
         } }] });
         if (r) { dados = r.usuarios ? r : { ...dados, link_equipe: r }; desenhar(); ui.toast("Link de equipe criado. Cada entrada aparece aqui para você aprovar.", { tipo: "ok" }); }
@@ -2006,6 +2599,9 @@ async function secaoUsuarios(ctx, alvo) {
     if (ateDado === undefined) {
       const fm = h("form", { class: "pilha", novalidate: true }, ui.campo({ rotulo: "Volta em", nome: "ate", tipo: "data", valor: "", obrigatorio: true,
         ajuda: "Até lá a pessoa não entra e sai do rodízio. Conversas e registros dela ficam. Na data, o acesso volta sozinho." }));
+      // plano 2000d · FX-047: atalhos de férias (1 semana, 15 dias, 30 dias) preenchem a data
+      fm.append(h("div", { class: "linha cfg-pausa-atalhos", role: "group", "aria-label": "Atalhos de prazo" }, [[7, "1 semana"], [15, "15 dias"], [30, "30 dias"]].map(([n, rot]) =>
+        h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { const i = fm.querySelector("[name=ate]"); if (i) { i.value = dataMaisDias(ui.hojeSP(), n); i.dispatchEvent(new Event("input")); } } } }, rot))));
       ate = await ui.modal({ titulo: `Pausar o acesso de ${u.nome}`, corpo: fm, largura: "p", acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Pausar acesso", tipo: "primario", fn: async () => {
         const d = String(ui.lerForm(fm).ate || "");
         if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d <= ui.hojeSP()) { ui.marcarErro(fm, "ate", "Escolha uma data a partir de amanhã."); return false; }
@@ -2016,11 +2612,28 @@ async function secaoUsuarios(ctx, alvo) {
     return salvar(u.conta_id, { pausado_ate: ate }, { texto: ate ? `Acesso de ${u.nome} pausado até ${ui.dataBR(ate)}.` : `Acesso de ${u.nome} liberado.` });
   }
 
+  /** plano 2000d · FX-031 / SC-004: suspender (sem data) ou reativar — nx_acesso_suspender(p_cliente, p_conta, p_suspenso). */
+  async function suspenderAcesso(u, suspenso) {
+    if (suspenso && !(await ui.confirmar({ titulo: `Suspender o acesso de ${u.nome}?`, perigo: true, rotulo: "Suspender acesso",
+      texto: "A pessoa não entra mais até você reativar e sai do rodízio. Conversas e registros dela ficam, e a vaga do plano continua ocupada." }))) return;
+    try {
+      const r = await api.rpcC("nx_acesso_suspender", { p_cliente: ctx.cliente.id, p_conta: u.conta_id, p_suspenso: !!suspenso });
+      if (r && Array.isArray(r.usuarios)) dados = r;
+      else { const x = (dados.usuarios || []).find(y => y.conta_id === u.conta_id); if (x) x.suspenso = !!suspenso; }
+      ui.toast(suspenso ? `Acesso de ${u.nome} suspenso.` : `Acesso de ${u.nome} reativado.`, { tipo: "ok" });
+      desenhar();
+    } catch (e) { ui.toast(semFuncaoRpc(e) ? "Este servidor ainda não suspende acessos." : api.mensagemErro(e), { tipo: "erro" }); }
+  }
+
   /** plano 2000d · DU-114: «Pode entrar de… até…» (vazio = sem limite). */
   async function horarioAcesso(u) {
     const hz = u.horario_acesso || {};
     const fm = h("form", { class: "pilha", novalidate: true }, h("p", { class: "fraco" }, "Fora deste horário o login é recusado com uma mensagem clara. Deixe vazio para não limitar."),
       h("div", { class: "form-grade" }, ui.campo({ rotulo: "Pode entrar de", nome: "de", tipo: "hora", valor: hz.de || "" }), ui.campo({ rotulo: "até", nome: "ate", tipo: "hora", valor: hz.ate || "" })));
+    // plano 2000d · FX-048: «Horário comercial» (08:00–18:00) e «Sem limite» de um toque
+    const pore = (de, ate) => () => { for (const [n, v] of [["de", de], ["ate", ate]]) { const i = fm.querySelector(`[name=${n}]`); if (i) i.value = v; } };
+    fm.append(h("div", { class: "linha cfg-horario-atalhos" }, h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: pore("08:00", "18:00") } }, "Horário comercial"),
+      h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: pore("", "") } }, "Sem limite")));
     const r = await ui.modal({ titulo: `Horário de acesso de ${u.nome}`, corpo: fm, largura: "p", acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Salvar horário", tipo: "primario", fn: async () => {
       ui.marcarErro(fm, null);
       const d = ui.lerForm(fm);
@@ -2052,11 +2665,15 @@ async function secaoUsuarios(ctx, alvo) {
   async function trocarEmail(u) {
     const form = h("form", { class: "pilha", novalidate: true },
       ui.campo({ rotulo: "E-mail novo", nome: "email", tipo: "email", valor: u.email || "", autocomplete: "off", ajuda: "É o login da pessoa. As sessões abertas dela são encerradas." }));
+    let avisado = null;      // plano 2000d · FX-050
     const r = await ui.modal({ titulo: `Trocar o e-mail de ${u.nome}`, corpo: form, largura: "p", acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Trocar e-mail", tipo: "primario", fn: async () => {
       ui.marcarErro(form, null);
       const email = normEmail(ui.lerForm(form).email);
       if (!RE_EMAIL.test(email)) { ui.marcarErro(form, "email", "Esse e-mail não parece válido."); return false; }
       if (email === normEmail(u.email)) { ui.marcarErro(form, "email", "É o mesmo e-mail de agora."); return false; }
+      // plano 2000d · FX-050: «gmial.com» pergunta uma vez (o segundo toque usa como está)
+      const sug = sugestaoEmail(email);
+      if (sug && avisado !== email) { avisado = email; ui.marcarErro(form, "email", `Você quis dizer ${sug}? Corrija ou toque de novo para usar como está.`); return false; }
       try { return (await api.rpcC("nx_usuario_email_trocar", { p_conta: u.conta_id, p_email: email })) || { ok: true }; }
       catch (e) { if (e && e.codigo === "email_em_uso") { ui.marcarErro(form, "email", "Esse e-mail já é de outra conta."); return false; } throw e; }
     } }] });
@@ -2109,6 +2726,15 @@ async function secaoUsuarios(ctx, alvo) {
     let r;
     try {
       r = await ui.carregando(botao, (async () => {
+        // plano 2000d · FX-030 / SC-005: o servidor novo gera o link novo do MESMO convite (nx_convite_regerar); sem a função, revoga e cria outro
+        try {
+          const rg = await api.rpcC("nx_convite_regerar", { p_cliente: ctx.cliente.id, p_convite: cv.id });
+          if (rg && rg.link) {
+            dados.convites = (dados.convites || []).filter(x => x.id !== cv.id);
+            if (!cv.vencido && typeof dados.uso === "number" && dados.uso > 0) dados.uso--;
+            return rg;
+          }
+        } catch (e) { if (!semFuncaoRpc(e)) throw e; }
         if (!cv.vencido) await api.rpcC("nx_convite_revogar", { p_convite: cv.id });
         dados.convites = (dados.convites || []).filter(x => x.id !== cv.id);
         if (!cv.vencido && typeof dados.uso === "number" && dados.uso > 0) dados.uso--;
@@ -2136,6 +2762,14 @@ async function secaoUsuarios(ctx, alvo) {
       ui.campo({ rotulo: "E-mail (opcional)", nome: "email", tipo: "email", autocomplete: "off", ajuda: "Se preencher, só este e-mail poderá aceitar o convite." }));
     const caixaVarios = h("div", { class: "pilha-p", hidden: true },
       ui.campo({ rotulo: "E-mails", nome: "emails", tipo: "textarea", linhas: 4, autocomplete: "off", ajuda: "Um por linha, ou separados por vírgula ou ponto e vírgula. Cada pessoa recebe um link próprio." }));
+    // plano 2000d · FX-036: a contagem enquanto cola a lista («6 e-mails · 1 não parece e-mail»)
+    const contaEmails = h("small", { class: "fraco cfg-conv-conta", "aria-live": "polite" });
+    caixaVarios.append(contaEmails);
+    const txtEmails = caixaVarios.querySelector("[name=emails]");
+    if (txtEmails) txtEmails.addEventListener("input", () => { contaEmails.textContent = resumoEmails(txtEmails.value); });
+    // plano 2000d · FX-029 / DU-249: convidar pela FUNÇÃO (Recepção, Gerente, Sócio…) — o papel vem junto (rotas.FUNCOES_EQUIPE)
+    let funcoes = [], papelDaFuncao = null;
+    try { const R = await import(`./rotas.js?v=${encodeURIComponent(ctx.versao)}`); if (Array.isArray(R.FUNCOES_EQUIPE)) { funcoes = R.FUNCOES_EQUIPE; papelDaFuncao = R.papelDaFuncao; } } catch { /* sem a lista: só o papel */ }
     const btVarios = h("button", { type: "button", class: "bt bt-fant bt-p cfg-conv-varios", "aria-pressed": "false" }, ui.icone("convidar"), "Convidar várias pessoas de uma vez");
     btVarios.addEventListener("click", () => {
       varios = !varios;
@@ -2152,6 +2786,8 @@ async function secaoUsuarios(ctx, alvo) {
     const swEmail = comEmail ? ui.campo({ tipo: "interruptor", nome: "enviar_email", rotulo: "Mandar o convite por e-mail agora", valor: true,
       ajuda: "Sai com a marca da sua empresa para o e-mail preenchido. Sem e-mail, só o link." }) : null;
     const form = h("form", { class: "pilha", novalidate: true },
+      ...(funcoes.length ? [ui.campo({ rotulo: "O que a pessoa faz (opcional)", nome: "funcao", tipo: "select", valor: "",
+        opcoes: [{ valor: "", rotulo: "Escolher o papel direto" }, ...funcoes.map(f => ({ valor: f.id, rotulo: f.rotulo }))], ajuda: "Escolhe o papel certo para a função." })] : []),
       ui.campo({ rotulo: "Papel", nome: "papel", tipo: "select", valor: papelIni, opcoes: PAPEIS_EMPRESA.map(p => ({ valor: p.valor, rotulo: p.rotulo })) }),
       h("p", { class: "campo-ajuda", id: idAjudaPapel }, (PAPEIS_EMPRESA.find(p => p.valor === papelIni) || PAPEIS_EMPRESA[2]).ajuda),
       caixaUm, caixaVarios, h("div", { class: "linha" }, btVarios),
@@ -2169,7 +2805,13 @@ async function secaoUsuarios(ctx, alvo) {
     // UB-093: a explicação do papel faz parte da descrição do seletor — trocar o papel, o leitor de tela lê o que ele pode fazer
     selPapel.setAttribute("aria-describedby", [...new Set([...(selPapel.getAttribute("aria-describedby") || "").split(" ").filter(Boolean), idAjudaPapel])].join(" "));
     selPapel.addEventListener("change", () => { const p = PAPEIS_EMPRESA.find(x => x.valor === selPapel.value); form.querySelector(`#${idAjudaPapel}`).textContent = p ? p.ajuda : ""; });
-    let criado = null, repetirPendente = null;
+    // FX-029: a função escolhida põe o papel (dá para trocar depois no seletor do papel)
+    const selFuncao = form.querySelector("select[name=funcao]");
+    if (selFuncao && papelDaFuncao) selFuncao.addEventListener("change", () => {
+      const p = papelDaFuncao(selFuncao.value);
+      if (p && PAPEIS_EMPRESA.some(x => x.valor === p)) { selPapel.value = p; selPapel.dispatchEvent(new Event("change")); }
+    });
+    let criado = null, repetirPendente = null, avisadoEmail = null, adminConfirmado = false;
     await ui.modal({
       titulo: "Convidar para a equipe", corpo: form, largura: "m",
       acoes: [
@@ -2181,9 +2823,18 @@ async function secaoUsuarios(ctx, alvo) {
           gravarPapelPreferido(armaz, contaId, ctx.cliente && ctx.cliente.id, d.papel);      // DU-125
           const base = { papel: d.papel, departamentos: d.departamentos || [], dias: Number(d.dias) || Number(DIAS_CONVITE_PADRAO) };
           if (comEmail && d.enviar_email) base.enviar_email = true;      // DU-121: só o servidor que anuncia recebe a chave
+          // plano 2000d · FX-090: convite de ADMINISTRADOR (acesso total, inclusive usuários) pede confirmação uma vez
+          if (d.papel === "admin" && !adminConfirmado) {
+            if (!(await ui.confirmar({ titulo: "Convidar como administrador?", rotulo: "Convidar como administrador",
+              texto: "Quem entrar por este convite vê e muda tudo da empresa, inclusive usuários, números e configurações." }))) return false;
+            adminConfirmado = true;
+          }
           if (varios) return criarVarios(m, form, d, base);
           const email = normEmail(d.email);
           if (email && !RE_EMAIL.test(email)) { ui.marcarErro(form, "email", "Esse e-mail não parece válido."); return false; }
+          // plano 2000d · FX-034: «ana@gmial.com» pergunta uma vez (o segundo toque usa como está)
+          const sug = sugestaoEmail(email);
+          if (sug && avisadoEmail !== email) { avisadoEmail = email; ui.marcarErro(form, "email", `Você quis dizer ${sug}? Corrija ou toque de novo para usar como está.`); return false; }
           // plano 1500c · UCB-014: e-mail de quem já tem acesso não gasta vaga; com convite aguardando, pergunta antes
           const dup = conviteDuplicado(dados, email);
           if (dup === "membro") { ui.marcarErro(form, "email", "Essa pessoa já tem acesso a esta empresa."); return false; }
@@ -2191,7 +2842,7 @@ async function secaoUsuarios(ctx, alvo) {
             if (!(await ui.confirmar({ titulo: "Já há um convite para esse e-mail", rotulo: "Gerar outro", texto: "Gerar outro cria mais um link (e ocupa mais uma vaga do plano até ser usado ou revogado). Gerar assim mesmo?" }))) return false;
             repetirPendente = email;
           }
-          const pd = { ...base, nome: d.nome || null, email: email || null };
+          const pd = { ...base, nome: limparNome(d.nome) || null, email: email || null };      // plano 2000d · FX-089
           let r;
           // plano 1500c · UCB-016: cada erro do servidor vai para o seu campo e o modal continua aberto
           try { r = await api.rpcC("nx_convite_criar", { p_dados: pd, p_org: null }); }
@@ -2575,6 +3226,9 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     for (const k of chaves) {
       let v = typeof m[k] === "string" ? m[k].trim() : "";
       if (k === "suporte_wa") v = v.replace(/\D/g, "");
+      // plano 2000d · FX-058: link sem https:// ganha o https:// · FX-059: e-mail de suporte em minúsculas
+      if (k === "site" || k === "termos_url" || k === "privacidade_url") v = completarHttps(v);
+      if (k === "suporte_email") v = v.toLowerCase();
       if (v) r[k] = v;
     }
     if (!soTema && m.teste_aberto === true) r.teste_aberto = true;      // plano 2000d · DU-202
@@ -2602,6 +3256,11 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
         ui.campo({ rotulo: "Nome do produto", nome: "produto", valor: m.produto, max: T.LIMITES_MARCA.produto, placeholder: T.PADRAO.produto, ajuda: "Aparece no menu, na aba do navegador e na tela de entrada." }),
         ui.campo({ rotulo: "Assinatura", nome: "assinatura", valor: m.assinatura, max: T.LIMITES_MARCA.assinatura, placeholder: "Equipe Sorriso", ajuda: "Usada pela IA e nos textos automáticos." })));
   }
+  // plano 2000d · FX-057: o nome que não cabe embaixo do ícone do celular diz como fica
+  const avisoCurto = h("small", { class: "campo-ajuda cfg-nome-curto", "aria-live": "polite", hidden: true });
+  const inpProduto = form.querySelector("input[name=produto]");
+  if (inpProduto && inpProduto.closest("[data-campo]")) inpProduto.closest("[data-campo]").appendChild(avisoCurto);
+  const pintarCurto = () => { const t = soTema ? "" : avisoNomeCurto(m.produto); avisoCurto.textContent = t; avisoCurto.hidden = !t; };
   const formEntrada = h("form", { class: "pilha", novalidate: true });
   formEntrada.addEventListener("submit", ev => ev.preventDefault());
   // plano 1000 · AS-109: prévia do link do «Falar com o suporte» (o número errado abria conversa com outra pessoa)
@@ -2622,13 +3281,20 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
   };
   if (!soTema) {
     formEntrada.append(
-      ui.campo({ rotulo: "Título da tela de entrada", nome: "login_titulo", valor: m.login_titulo, max: T.LIMITES_MARCA.login_titulo, placeholder: "Anúncio, conversa e venda na mesma órbita." }),
+      // plano 2000d · FX-062: o exemplo não cita a marca da plataforma (a revenda copiava a frase com «órbita»)
+      ui.campo({ rotulo: "Título da tela de entrada", nome: "login_titulo", valor: m.login_titulo, max: T.LIMITES_MARCA.login_titulo, placeholder: "Atendimento, vendas e agenda num lugar só." }),
       ui.campo({ rotulo: "Texto de apoio", nome: "login_texto", tipo: "textarea", linhas: 2, valor: m.login_texto, max: T.LIMITES_MARCA.login_texto, placeholder: "Entre com o e-mail e a senha que você recebeu." }),
       ui.campo({ rotulo: "WhatsApp de suporte", nome: "suporte_wa", tipo: "tel", valor: m.suporte_wa, placeholder: "5512999998888", ajuda: "Só números, com 55 e DDD. Aparece em \"Esqueci a senha\" e nos avisos de teste e suspensão." }),
       h("div", { class: "linha cfg-wa-linha" }, previaWa, testarWa), avisoSemWa,
       // plano 2000d · DU-202: o teste grátis pelo site (/app/?org=slug#/testar) — a revenda liga aqui
       ui.campo({ tipo: "interruptor", nome: "teste_aberto", rotulo: "Teste grátis pelo site", valor: m.teste_aberto === true,
-        ajuda: "Liga o «Testar grátis» na tela de entrada: quem chega pelo seu link cria uma conta de teste de 14 dias sozinho." }));
+        ajuda: "Liga o «Testar grátis» na tela de entrada: quem chega pelo seu link cria uma conta de teste de 14 dias sozinho." }),
+      // plano 2000d · DU-152 / FX-056: a janela de boas-vindas que o administrador do cliente vê no primeiro acesso (o app.js já mostra)
+      h("p", { class: "rotulo cfg-boas-vindas-tit" }, "Boas-vindas ao cliente novo"),
+      ui.campo({ rotulo: "Título das boas-vindas", nome: "boas_vindas_titulo", valor: m.boas_vindas_titulo, max: 80, autocomplete: "off", placeholder: "Bem-vindo! Vamos deixar tudo pronto?" }),
+      ui.campo({ rotulo: "Texto das boas-vindas", nome: "boas_vindas", tipo: "textarea", linhas: 3, valor: m.boas_vindas, max: 400, placeholder: "Comece conectando o seu WhatsApp. Qualquer dúvida, chame a gente." }),
+      ui.campo({ rotulo: "Contato da agência", nome: "contato_agencia", valor: m.contato_agencia, max: 120, autocomplete: "off", placeholder: "Ana · (12) 99999-0000 · seg a sex, 9h às 18h",
+        ajuda: "Aparece nas boas-vindas para o cliente saber quem procurar." }));
   }
   // plano 2000d · DU-145/DU-146: contato, site, Termos e Política de Privacidade (LGPD) e os e-mails que o sistema manda
   const formLegal = h("form", { class: "pilha", novalidate: true });
@@ -2664,7 +3330,8 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     if (!cores.length) return;
     sugestoes.append(h("span", { class: "rotulo" }, "Cores do logo"));
     for (const c of cores) {
-      const b = h("button", { type: "button", class: "cor-op", style: { "--cor": ui.corOk(c) }, "aria-label": `Usar a cor ${c} do logo`, title: c });
+      // plano 2000d · FX-055 / DU-322: o nome da cor para o leitor de tela e aria-pressed na que já é a primária
+      const b = h("button", { type: "button", class: "cor-op", style: { "--cor": ui.corOk(c) }, "aria-label": `Usar a cor ${nomeCor(c)} do logo`, title: nomeCor(c), dataset: { cor: String(T.normalizarHex(c) || c) }, "aria-pressed": "false" });
       b.addEventListener("click", () => ui.menu(b, [
         { rotulo: "Usar como primária", icone: "pincel", fn: () => usarCor("primaria", c) },
         { rotulo: "Usar como secundária", icone: "pincel", fn: () => usarCor("secundaria", c) },
@@ -2672,6 +3339,12 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
       ]));
       sugestoes.append(b);
     }
+    pintarSugestoesPressionadas();
+  }
+  /** FX-055: a amostra igual a uma das cores em uso fica «pressionada». */
+  function pintarSugestoesPressionadas() {
+    const usadas = new Set(["primaria", "secundaria", "fundo"].map(k => String(T.normalizarHex(m.cores[k]) || "").toUpperCase()));
+    for (const b of sugestoes.querySelectorAll(".cor-op")) b.setAttribute("aria-pressed", String(usadas.has(String(b.dataset.cor || "").toUpperCase())));
   }
   let colarLogo = null;         // AS-110: Ctrl+V de uma imagem no editor vai para o logo
   function controleImagem({ chave, rotulo, ajuda, claro = false, favicon = false, icone = false }) {
@@ -2719,6 +3392,9 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     async function usarArquivo(f) {
       if (!f) return;
       esconderErro();
+      // plano 2000d · FX-087 / FX-088: SVG, HEIC ou arquivo enorme → a mensagem certa antes de decodificar
+      const errArq = erroArquivoImagem(f);
+      if (errArq) { mostrarErro(errArq); return; }
       try {
         // plano 2000d · DU-147: o ícone do app é quadrado (até 512 px)
         const r = await ui.carregando(btEnviar, processarImagem(f, favicon ? { W: 64, H: 64, limite: LIMITE_FAVICON, quadrado: true, png: true }
@@ -2936,6 +3612,8 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     // plano 1000 · AS-104: sem mudança não há o que salvar — plano 1000b · UB-261: aria-disabled (o Tab ainda alcança) e o clique diz o porquê
     btSalvar.setAttribute("aria-disabled", String(!s));
     if (!soTema) pintarPreviaWa();
+    pintarCurto();      // plano 2000d · FX-057
+    pintarSugestoesPressionadas();      // plano 2000d · FX-055
     if (appInteiro) ctx.shell.pintarMarca(ef);
   }
   btApp.addEventListener("click", () => {
@@ -3576,10 +4254,4 @@ async function secaoPlano(ctx, alvo) {
         : h("p", { class: "fraco plano-storage" }, ui.icone("clipe"), `Mídia guardada: ${formatarArmazenamento(r.storage_mb)}`)),
     cartaoComparar,
     cartaoFaturas(ctx),
-    // plano 2000d · DU-165: cancelar pelo app com 3 perguntas e oferta de pausa (só com o servidor que anuncia r.pode_cancelar)
-    r.pode_cancelar === true ? cartaoCancelar(ctx, { nomeCli, quem }) : null,
-    historicoIA(ctx),
-    agencia ? h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Sua agência"),
-      h("p", { class: "sub" }, "Soma de todos os clientes da revenda."))),
-      h("div", { class: "adm-uso" }, agencia.map(x => ui.barraUso(x.rotulo, x.uso, x.limite)))) : null].filter(Boolean));
-}
+    // plano 2000d · DU-165: cancelar pelo app com 3 perguntas e oferta de pausa (só com o servidor que anu

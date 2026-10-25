@@ -406,8 +406,12 @@ test("DU-109/111/112/113/114/115/117/118/119/124/127/130/131 Usuários: matriz, 
     const cb = raiz.querySelector(".cfg-perm-tab input[data-papel=atendente][data-perm=exportar]");
     assert.equal(cb.checked, false);
     assert.equal(raiz.querySelector(".cfg-perm-tab input[data-papel=admin][data-perm=excluir]").disabled, true);
+    // plano 2000d: FX-046 — salvar sem mudança não chama o servidor; muda uma caixa antes
+    const cbAn = raiz.querySelector(".cfg-perm-tab input[data-papel=atendente][data-perm=anuncios]");
+    cbAn.checked = true; cbAn.dispatchEvent(new d.Evento("change"));
     clicar(d, botaoTexto(raiz.querySelector(".cfg-perm"), /Salvar permissões/)); await tique(4);
     assert.equal(t.chamadas.find(c => c[0] === "nx_permissoes_salvar")[1].p_permissoes.atendente.exportar, false);
+    assert.equal(t.chamadas.find(c => c[0] === "nx_permissoes_salvar")[1].p_permissoes.atendente.anuncios, true);
     // DU-113: o histórico de acessos
     assert.match(textoDe(raiz.querySelector(".cfg-audit")), /Ana removeu o acesso de Duda\./);
     // DU-119: «Exigir verificação em duas etapas»

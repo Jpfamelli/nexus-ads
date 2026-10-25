@@ -90,7 +90,8 @@ test("marca · cada arquivo da frente ads traz o comentário «plano 1500c»", (
 test("AC-077 · nome do CSV com as datas ISO reais e a plataforma depois das datas", () => {
   assert.equal(L.nomeArquivoExport("anuncios", "2026-09-21", "2026-10-20", "csv", "", "meta"), "orbita-anuncios-2026-09-21-a-2026-10-20-meta.csv");
   assert.equal(L.nomeArquivoExport("anuncios", "2026-09-21", "2026-10-20", "csv"), "orbita-anuncios-2026-09-21-a-2026-10-20.csv");
-  assert.match(ADS, /L\.nomeArquivoExport\("campanhas", N\.isoDe\(M\.dataDe\(P\.de\)\), N\.isoDe\(M\.dataDe\(P\.ate\)\), "csv", ctx\.cliente\.nome, S\.plat\)/);
+  // plano 2000d: DA-336 — a agência configurada vai junto (marcaAgencia())
+  assert.match(ADS, /L\.nomeArquivoExport\("campanhas", N\.isoDe\(M\.dataDe\(P\.de\)\), N\.isoDe\(M\.dataDe\(P\.ate\)\), "csv", ctx\.cliente\.nome, S\.plat, marcaAgencia\(\)\)/);
 });
 test("AC-078/AC-163 · CSV sem casas infinitas nem notação científica", () => {
   const s = L.csv(["v"], [[0.1 + 0.2], [1e-7], [12.499999], [-0.004], [3]]).slice(1).split("\r\n");
@@ -159,7 +160,7 @@ test("AC-086/AC-134 · comparação com CTR, CPM e custo por agendamento; o venc
   assert.match(ADS, /ads-comp-melhor/); assert.match(ADS, /em até 3 campanhas da tabela/);
 });
 test("AC-112 · CPA/CTR/CPM com <abbr> e glossário", () => {
-  assert.match(A.GLOSSARIO.CTR, /cliques ÷ impressões/);
+  assert.match(A.GLOSSARIO.CTR, /quantas clicaram/);   // plano 2000d: DA-162 — frase do dono no lugar de «cliques ÷ impressões»
   assert.match(ADS, /h\("abbr", \{ title: GLOSSARIO\[m\[1\]\] \}, m\[1\]\)/);
 });
 test("AC-110 · campanhas vazias: o botão amplia o período ou volta para todas as plataformas", () => {
@@ -294,8 +295,9 @@ test("AC-119 · resumo do período pronto para o WhatsApp", () => {
 test("AC-094 · «Apresentar»: slides números → funil → criativos → próximos passos, com teclado", () => {
   const P = { t: { gasto: 1000 }, c: { conversas: 10, agendadas: 4, receita: 3000 }, rotulo: { titulo: "Últimos 30 dias" } };
   const s = A.slidesApresentacao({ P, funil: [{ rot: "Conversas", v: 10, taxa: null }], criativos: [{ pos: 1, k: { nome: "V" }, c: { receita: 900, fecharam: 1 } }], proximos: ["Subir verba"] });
-  assert.deepEqual(s.map(x => x.titulo), ["Últimos 30 dias", "Do anúncio à venda", "Criativos que mais trouxeram resultado", "Próximos passos"]);
-  assert.deepEqual(s[3].linhas, ["Subir verba"]);
+  // plano 2000d: DA-355 — o criativo que vendeu ganha o slide «Anúncio campeão» antes do ranking
+  assert.deepEqual(s.map(x => x.titulo), ["Últimos 30 dias", "Do anúncio à venda", "Anúncio campeão", "Criativos que mais trouxeram resultado", "Próximos passos"]);
+  assert.deepEqual(s[4].linhas, ["Subir verba"]);
   assert.deepEqual(A.slidesApresentacao({}), []);
   assert.match(ADS, /\["ArrowRight", "PageDown", " "\]\.includes\(e\.key\)/); assert.match(ADS, /role: "dialog", "aria-modal": "true"/);
   assert.match(CSS, /\.ads-apr \{ position: fixed; inset: 0;/);
@@ -411,8 +413,8 @@ test("AC-159 · por responsável: ordem por fechamentos e a conversão", () => {
   assert.deepEqual(l.map(d => [d.nome, d.conversao_pct]), [["Bia", 50], ["Ana", 20], ["Caio", null]]);
 });
 test("AC-160 · parados com valor (quando o servidor manda) e a soma", () => {
-  assert.deepEqual(RL.resumoParados([{ qtd: 2, valor: 100 }, { qtd: 1, valor: null }]), { temValor: true, qtd: 3, valor: 100 });
-  assert.deepEqual(RL.resumoParados([{ qtd: 2 }]), { temValor: false, qtd: 2, valor: null });
+  assert.deepEqual(RL.resumoParados([{ qtd: 2, valor: 100 }, { qtd: 1, valor: null }]), { temValor: true, qtd: 3, valor: 100, diasMax: null });   // plano 2000d: DA-245 — diasMax (null sem o campo)
+  assert.deepEqual(RL.resumoParados([{ qtd: 2 }]), { temValor: false, qtd: 2, valor: null, diasMax: null });   // plano 2000d: DA-245
 });
 test("AC-161/AC-191 · 1ª resposta no CSV com 1 casa e em horas", () => {
   assert.equal(RL.minCsv(4.23333), 4.2); assert.equal(RL.minCsv(null), "");
@@ -426,7 +428,7 @@ test("AC-167 · sem dados nos 7/30 dias, o vazio oferece o período maior", () =
 test("AC-171 · a mesma resposta vale 60 s (Vendas ↔ Atendimento não refaz o pedido)", () => {
   const memo = new Map([["k", { t: 1000, r: { ok: 1 } }]]);
   assert.deepEqual(RL.memoFresco(memo, "k", 1000 + 59000), { ok: 1 });
-  assert.equal(RL.memoFresco(memo, "k", 1000 + 61000), null); assert.equal(RL.memoFresco(memo, "x", 1000), null);
+  assert.equal(RL.memoFresco(memo, "k", 1000 + RL.MEMO_MS + 1000), null); assert.equal(RL.memoFresco(memo, "x", 1000), null);   // plano 2000d: DA-239 — a validade passou a 5 min
   assert.match(REL, /const fresco = doBotao \? null : memoFresco\(memo, chaveMemo\);/);
 });
 test("AC-172 · no celular a hora da carga desce (antes sumia)", () => {

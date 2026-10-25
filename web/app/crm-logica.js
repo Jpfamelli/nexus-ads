@@ -45,7 +45,10 @@ export function dadosDuplicar(n, contato = null) {
 
 /** plano 1500c · RC-098: a mensagem do telefone recusado — número de outro país provável sugere o «+código». */
 export function textoTelefoneInvalido(v) {
-  return telefoneSemPais(v) ? "Número de outro país? Comece com + e o código do país (ex.: +1 212 555 1234)." : "Telefone inválido. Use DDD + número.";
+  if (telefoneSemPais(v)) return "Número de outro país? Comece com + e o código do país (ex.: +1 212 555 1234).";
+  // plano 2000d · DR-140/190: celular sem o 9 ganha a sugestão; o resto, o exemplo do formato
+  const s = sugestaoNonoDigito(v);
+  return s ? `Telefone inválido. Faltou o 9? Ex.: ${s}.` : "Telefone inválido. Use DDD + número, por exemplo (12) 99830-3030.";
 }
 
 /** plano 1500c · RC-097: atalhos da previsão de fechamento a partir do dia de SP → [{id, rotulo, valor AAAA-MM-DD}] (15 dias, fim do mês, fim do próximo mês). */
@@ -351,6 +354,57 @@ export function csvTarefas(itens, { nomeDono = () => "", prazo = iso => String(i
   return { cabecalho, linhas };
 }
 /** Linhas → texto CSV com BOM (acentos certos no Excel). */
+/**
+ * plano 2000d · DR-340: o dia (AAAA-MM-DD) de São Paulo — o fallback ÚNICO do CRM quando ui.hojeSP falta (antes 9 telas caíam no UTC,
+ * que depois das 21h já é amanhã).
+ */
+export function hojeSP(d = new Date()) {
+  const t = new Date(d);
+  return fmtDiaSP.format(Number.isFinite(t.getTime()) ? t : new Date());
+}
+/**
+ * plano 2000d · DR-339: baixa um arquivo e só revoga o link depois de 60 s (ou ao sair da página) — com 2 s o Safari do iPhone e a rede lenta
+ * baixavam o arquivo vazio. Um helper para todos os downloads do CRM. → a URL do blob.
+ */
+export const ESPERA_REVOGAR_DOWNLOAD = 60000;
+export function baixarArquivo(conteudo, nome, { tipo = "text/csv;charset=utf-8", h = null, doc = globalThis.document, URLx = globalThis.URL,
+  agendar = globalThis.setTimeout, janela = globalThis.window } = {}) {
+  const blob = typeof Blob !== "undefined" && conteudo instanceof Blob ? conteudo : new Blob([conteudo], { type: tipo });
+  const url = URLx.createObjectURL(blob);
+  const a = h ? h("a", { href: url, download: nome, hidden: true }) : Object.assign(doc.createElement("a"), { href: url, download: nome, hidden: true });
+  doc.body.appendChild(a); a.click(); a.remove();
+  let feito = false;
+  const revogar = () => {
+    if (feito) return; feito = true;
+    try { URLx.revokeObjectURL(url); } catch { /* já revogado */ }
+    try { if (janela && janela.removeEventListener) janela.removeEventListener("pagehide", revogar); } catch { /* ok */ }
+  };
+  if (typeof agendar === "function") agendar(revogar, ESPERA_REVOGAR_DOWNLOAD);
+  try { if (janela && janela.addEventListener) janela.addEventListener("pagehide", revogar); } catch { /* ok */ }
+  return url;
+}
+/** plano 2000d · DR-343: id do servidor dentro de um seletor [data-x="…"] — CSS.escape quando existe; senão escapa aspas e barra. */
+export function escaparCss(v) {
+  const s = String(v ?? "");
+  if (typeof CSS !== "undefined" && CSS && typeof CSS.escape === "function") return CSS.escape(s);
+  return s.replace(/["\\\n\r]/g, c => (c === "\n" ? "\\a " : c === "\r" ? "\\d " : "\\" + c));
+}
+/**
+ * plano 2000d · DR-341: nome da cópia do funil — corta a BASE (não o sufixo) para caber em max; se «X (cópia)» já existe, numera
+ * («X (cópia 2)»…) comparando sem acento/maiúscula.
+ */
+export function nomeCopiaFunil(nome, existentes = [], max = 60) {
+  const base0 = String(nome ?? "").replace(/\s*\(c[oó]pia(?: \d+)?\)\s*$/i, "").trim() || "Funil";
+  const usados = new Set((existentes || []).map(x => semAcento(String(x ?? "").trim())));
+  for (let n = 1; n < 1000; n++) {
+    const suf = n === 1 ? " (cópia)" : ` (cópia ${n})`;
+    const nomeN = base0.slice(0, Math.max(1, max - suf.length)).trimEnd() + suf;
+    if (!usados.has(semAcento(nomeN))) return nomeN;
+  }
+  return base0.slice(0, max - 8) + " (cópia)";
+}
+/** plano 2000d · DR-235: o lembrete da LGPD ao baixar uma planilha com dados pessoais. */
+export const TEXTO_LGPD_EXPORTAR = "Esse arquivo tem dados pessoais (nomes, telefones, e-mails). Guarde com cuidado, não envie por grupos e apague quando não precisar mais.";
 export function gerarCSV(cabecalho, linhas) {
   return "﻿" + [cabecalho, ...linhas].map(l => l.map(csvCampo).join(";")).join("\r\n");
 }
@@ -359,11 +413,20 @@ export function gerarCSV(cabecalho, linhas) {
  * plano 1000 (CR-239): planilha-modelo da importação — os cabeçalhos que sugerirMapeamento reconhece sozinho (reimportar o modelo não pede mapa)
  * + os campos personalizados de contato (pelo rótulo) e 2 linhas de exemplo. → {cabecalho, linhas}
  */
-export function modeloImportacao(campos = []) {
+export function modeloImportacao(campos = [], { vertical = null } = {}) {
   const extra = (campos || []).filter(c => c && c.entidade === "contato" && c.ativo !== false && c.rotulo);
   // plano 1000b · RB-073: também Empresa, CPF/CNPJ e as colunas do negócio (Título, Valor, Etapa) — todas com nome que o mapa reconhece sozinho
   const cabecalho = ["Nome", "Telefone", "E-mail", "Empresa", "CPF/CNPJ", "Cidade", "UF", "Nascimento", "Origem", "Etiquetas", "Observação", "Título", "Valor", "Etapa", ...extra.map(c => c.rotulo)];
   const vazio = extra.map(() => "");
+  // plano 2000d · DR-232: com a vertical, a 1ª linha de exemplo é do ramo (título «Implante superior», etiquetas «Implante; Urgência»)
+  if (vertical) {
+    const ex = exemplosVertical(vertical);
+    const etq = String(ex.etiquetas || "").split(",").map(x => x.trim()).filter(Boolean).join("; ");
+    return { cabecalho, linhas: [
+      ["Ana Souza", "(12) 99830-3030", "ana@exemplo.com.br", "", "", "Taubaté", "SP", "02/03/1990", "Indicação", etq, "Prefere horário de manhã", ex.titulo, "1.500,00", "", ...vazio],
+      ["Carlos Lima", "(12) 3456-7890", "", "", "", "São José dos Campos", "SP", "", "WhatsApp", "", "", "", "", "", ...vazio],
+    ] };
+  }
   return { cabecalho, linhas: [
     ["Ana Souza", "(12) 99830-3030", "ana@exemplo.com.br", "", "", "Taubaté", "SP", "02/03/1990", "Indicação", "VIP; Retorno", "Prefere horário de manhã", "", "", "", ...vazio],
     ["Carlos Lima", "(12) 3456-7890", "", "", "", "São José dos Campos", "SP", "", "WhatsApp", "", "", "", "", "", ...vazio],
@@ -388,6 +451,11 @@ export const DESTINOS_IMPORTACAO = Object.freeze([
   { chave: "negocio_titulo", rotulo: "Título do negócio" },
   { chave: "negocio_valor", rotulo: "Valor do negócio" },
   { chave: "estagio", rotulo: "Etapa (nome)" },
+  // plano 2000d · DR-195/196: consentimento de marketing (sim/não) e a data do cadastro original (o servidor grava quando aceitar as chaves)
+  { chave: "optin_marketing", rotulo: "Aceita marketing (sim/não)" },
+  { chave: "criado_em", rotulo: "Cadastrado em (data)" },
+  // plano 2000d · DR-342: a carteira de cada vendedor (quem migra do Pipedrive/RD) — nome ou e-mail de alguém da equipe
+  { chave: "responsavel", rotulo: "Responsável (nome ou e-mail)" },
 ]);
 
 const SINONIMOS = [
@@ -395,6 +463,11 @@ const SINONIMOS = [
   ["nome", ["nome", "nome completo", "cliente", "paciente", "contato", "name", "full name", "razao social", "first name", "primeiro nome", "given name",
     "nome do lead", "lead name", "person name", "contact name", "contato principal"]],
   ["sobrenome", ["sobrenome", "last name", "family name", "surname", "ultimo nome"]],
+  // plano 2000d · DR-195/196
+  ["optin_marketing", ["aceita marketing", "aceita receber", "aceita receber mensagens", "opt-in", "optin", "consentimento", "autoriza contato", "marketing"]],
+  ["criado_em", ["data de cadastro", "cadastrado em", "criado em", "created at", "date created", "data de criacao", "cadastro"]],
+  // plano 2000d · DR-342
+  ["responsavel", ["responsavel", "vendedor", "vendedora", "dono", "owner", "owner name", "proprietario", "consultor", "consultora", "usuario responsavel", "responsible"]],
   ["telefone", ["telefone", "celular", "whatsapp", "whats", "fone", "tel", "telefone 1", "celular 1", "phone", "mobile", "numero", "zap",
     "celular do lead", "telefone do lead", "person phone", "mobile phone", "work phone", "telefone celular", "telefone comercial"]],
   ["email", ["email", "e-mail", "e mail", "mail", "correio eletronico", "email do lead", "e mail do lead", "person email", "work email", "email comercial"]],
@@ -500,9 +573,30 @@ export function opcoesUnicas(lista) {
 }
 
 /** Aplica o mapeamento: linhas do CSV → linhas no formato de nx_contatos_importar. `campos` (opcional): opção/multi viram a opção oficial (RB-068). */
+/**
+ * plano 2000d · DR-200: o formato das datas de UMA coluna — "mdy" quando algum valor só pode ser mês/dia («12/31/1990») e nenhum só pode
+ * ser dia/mês («31/12/1990»); senão "dmy" (o padrão brasileiro). Planilha exportada em inglês deixava de perder todas as datas.
+ */
+export function formatoDatasColuna(valores) {
+  let mdy = 0, dmy = 0;
+  for (const v of valores || []) {
+    const r = /^\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})\b/.exec(String(v ?? ""));
+    if (!r) continue;
+    const a = +r[1], b = +r[2];
+    if (a >= 1 && a <= 12 && b > 12 && b <= 31) mdy++;
+    else if (a > 12 && a <= 31 && b >= 1 && b <= 12) dmy++;
+  }
+  return mdy > 0 && dmy === 0 ? "mdy" : "dmy";
+}
 export function montarLinhas(linhas, mapa, campos = null) {
+  // plano 2000d · DR-200: colunas de data no formato americano (nascimento, data do cadastro e campos do tipo data)
+  const ehData = dest => dest === "nascimento" || dest === "criado_em"
+    || (typeof dest === "string" && dest.startsWith("campo:") && Array.isArray(campos) && campos.some(c => c && c.chave === dest.slice(6) && c.tipo === "data"));
+  const colMdy = new Set();
+  (mapa || []).forEach((dest, i) => { if (dest && ehData(dest) && formatoDatasColuna((linhas || []).map(l => l && l[i])) === "mdy") colMdy.add(i); });
   return (linhas || []).map(l => {
     const o = {};
+    let datasEUA = false;
     (mapa || []).forEach((dest, i) => {
       if (!dest) return;
       // o ' que o csvCampo põe na frente de "fórmula" sai na volta (exportar → importar sem perda)
@@ -513,16 +607,22 @@ export function montarLinhas(linhas, mapa, campos = null) {
         // plano 1000b · RB-068: «unimed» na planilha grava «Unimed» (a opção como foi cadastrada)
         const def = Array.isArray(campos) ? campos.find(c => c && c.chave === chave) : null;
         let val = v;
-        if (def && def.tipo === "opcao") val = opcaoOficial(def.opcoes, v) ?? v;
+        if (colMdy.has(i)) { const dt = lerData(v, { mdy: true }); if (dt) { val = dt; datasEUA = true; } }      // plano 2000d · DR-200
+        else if (def && def.tipo === "opcao") val = opcaoOficial(def.opcoes, v) ?? v;
         else if (def && def.tipo === "multi") val = v.split(";").map(x => x.trim()).filter(Boolean).map(x => opcaoOficial(def.opcoes, x) ?? x).join(";");
         (o.campos || (o.campos = {}))[chave] = val;
         return;
       }
       if (o[dest] !== undefined && dest === "obs") { o.obs += " · " + v; return; }
+      // plano 2000d · DR-195/196: «Sim/Não» vira true/false; a data do cadastro em AAAA-MM-DD — ilegível não vai (não inventa data)
+      if (dest === "optin_marketing") { const b = lerSimNao(v); if (b !== null && o.optin_marketing === undefined) o.optin_marketing = b; return; }
+      if (dest === "criado_em") { const dt = lerData(v, { passado: true, mdy: colMdy.has(i) }); if (dt && o.criado_em === undefined) { o.criado_em = dt; if (colMdy.has(i)) datasEUA = true; } return; }
+      if (dest === "nascimento" && colMdy.has(i) && o.nascimento === undefined) { const dt = lerData(v, { passado: true, mdy: true }); o.nascimento = dt || v; if (dt) datasEUA = true; return; }      // plano 2000d · DR-200
       // plano 1000 (CR-129): «São Paulo» vira SP e «Indicação»/«Whats» viram a origem certa (antes viravam aviso e a linha perdia o dado)
       // plano 1000b · RB-249: nascimento legível vai em AAAA-MM-DD já com o século certo («05/03/28» → 1928-03-05); ilegível fica como veio (a prévia avisa)
       if (o[dest] === undefined) o[dest] = dest === "uf" ? ufDaPlanilha(v) : dest === "origem" ? origemDaPlanilha(v) : dest === "nascimento" ? (lerData(v, { passado: true }) || v) : v;
     });
+    if (datasEUA) Object.defineProperty(o, "_datasEUA", { value: true, enumerable: false, configurable: true });      // plano 2000d · DR-200
     return arrumarLinhaPlanilha(o);
   });
 }
@@ -539,7 +639,9 @@ export function telefoneDaCelula(v) {
   const semRamal = s => String(s).replace(/\s*(?:ramal|ext\.?|r\.)\s*:?\s*\d+.*$/i, "").trim();
   const txt = String(v ?? "").trim();
   const ramal = /(?:ramal|ext\.?|r\.)\s*:?\s*\d/i.test(txt);
-  const partes = txt.split(/\s*(?:\/|;|\||,|\bou\b|\se\s)\s*/i)      // plano 1500c · RX-013: «12 99830-3030 e 12 98888-1111» também são dois números.map(semRamal).filter(p => p.replace(/\D/g, "").length >= 8);
+  // plano 1500c · RX-013: «12 99830-3030 e 12 98888-1111» também são dois números
+  // plano 2000d · DR-411: «:::» do Google Contatos também separa — e o .map/.filter, que estava engolido pelo comentário da linha, voltou a valer
+  const partes = txt.split(/\s*(?::::|\/|;|\||,|\bou\b|\se\s)\s*/i).map(semRamal).filter(p => p.replace(/\D/g, "").length >= 8);
   if (partes.length < 2) return { telefone: semRamal(txt), extras: [], ramal };
   const i = Math.max(0, partes.findIndex(p => normalizarTelefone(p)));
   return { telefone: partes[i], extras: partes.filter((_, j) => j !== i), ramal };
@@ -557,6 +659,13 @@ export function emailDaCelula(v) {
 }
 function arrumarLinhaPlanilha(o) {
   const avisos = [];
+  // plano 2000d · DR-200: a prévia diz que as datas foram lidas como mês/dia
+  if (o._datasEUA) { delete o._datasEUA; avisos.push("Data no formato americano (mês/dia): lida como mês/dia"); }
+  // plano 2000d · DR-234: valor que não é número («a combinar») não vai ao servidor (lá virava 0) — a linha entra sem valor e a prévia avisa
+  if (o.negocio_valor !== undefined && lerNumero(o.negocio_valor) === null) {
+    avisos.push(`Valor «${String(o.negocio_valor).slice(0, 30)}» não é número: entra sem valor`);
+    delete o.negocio_valor;
+  }
   const obsExtra = [];
   // plano 1500c · RC-007: «Nome» + «Sobrenome» em colunas separadas viram o nome inteiro
   if (o.sobrenome !== undefined) { o.nome = [o.nome, o.sobrenome].filter(Boolean).join(" "); delete o.sobrenome; }
@@ -651,6 +760,102 @@ export function checarLinha(o, { campos = [], agora = Date.now() } = {}) {
   return erros;
 }
 
+/**
+ * plano 2000d · DR-342: quem da equipe é o «Responsável» da planilha — e-mail igual, nome igual (sem acento/maiúscula) ou o primeiro nome
+ * quando só uma pessoa tem esse primeiro nome. Pessoa desativada não recebe. → id | null
+ */
+export function responsavelDaPlanilha(texto, usuarios = []) {
+  const t = semAcento(String(texto ?? "").trim()).replace(/\s+/g, " ");
+  if (!t) return null;
+  const ativos = (usuarios || []).filter(u => u && u.id != null && u.ativo !== false);
+  const porEmail = ativos.find(u => u.email && semAcento(String(u.email).trim()) === t);
+  if (porEmail) return porEmail.id;
+  const porNome = ativos.filter(u => u.nome && semAcento(String(u.nome).trim()).replace(/\s+/g, " ") === t);
+  if (porNome.length === 1) return porNome[0].id;
+  if (porNome.length > 1) return null;
+  const prim = ativos.filter(u => u.nome && semAcento(String(u.nome).trim()).split(" ")[0] === t);
+  return prim.length === 1 ? prim[0].id : null;
+}
+/**
+ * plano 2000d · DR-342: troca a coluna «Responsável» de cada linha pelo dono_id; quem não casa fica com o responsável do lote e a prévia avisa.
+ * Muda as próprias linhas (as de montarLinhas) e as devolve.
+ */
+export function aplicarResponsaveis(linhas, usuarios = []) {
+  for (const o of linhas || []) {
+    if (!o || o.responsavel === undefined) continue;
+    const txt = String(o.responsavel).trim();
+    delete o.responsavel;
+    if (!txt) continue;
+    const id = responsavelDaPlanilha(txt, usuarios);
+    if (id != null) { o.dono_id = id; continue; }
+    const aviso = `Responsável «${txt.slice(0, 40)}» não está na equipe: fica com o responsável escolhido para a importação`;
+    if (Array.isArray(o._avisos)) o._avisos.push(aviso);
+    else Object.defineProperty(o, "_avisos", { value: [aviso], enumerable: false });
+  }
+  return linhas;
+}
+
+/**
+ * plano 2000d · DR-345: os cartões CARREGADOS em etapas abertas sem responsável (lead do anúncio que chegou sem dono) → [id].
+ * O servidor ainda não distribui sozinho; o quadro mostra a conta e o supervisor reparte em rodízio com um toque.
+ */
+export function cartoesSemDono(colunas, estagios) {
+  const tipo = new Map((estagios || []).map(e => [String(e.id), e.tipo]));
+  const ids = [];
+  for (const col of colunas || []) {
+    if ((tipo.get(String(col && col.estagio_id)) || "aberto") !== "aberto") continue;
+    for (const c of (col && col.itens) || []) if (c && (c.dono_id === null || c.dono_id === undefined || c.dono_id === "")) ids.push(c.id);
+  }
+  return ids;
+}
+
+/**
+ * plano 2000d · DR-409: CSV de várias abas juntadas — linhas iguais ao cabeçalho no meio do arquivo (sem acento/maiúscula/espaços) saem.
+ * → {linhas, repetidos}
+ */
+export function semCabecalhoRepetido(cabecalho, linhas) {
+  const n = x => (x || []).map(c => semAcento(String(c ?? "").trim())).join("\u0001");
+  const alvo = n(cabecalho);
+  let repetidos = 0;
+  const fora = (linhas || []).filter(l => { if ((cabecalho || []).length > 1 && n(l) === alvo) { repetidos++; return false; } return true; });
+  return { linhas: fora, repetidos };
+}
+/** plano 2000d · DR-424: o tamanho máximo do serviço — o mesmo na gaveta, no novo negócio e no pós-venda. */
+export const LIMITE_SERVICO = 120;
+/**
+ * plano 2000d · DR-423: o serviço digitado que já existe com outra grafia («implante » → «Implante») volta para a grafia existente — sem isso
+ * o relatório por serviço quebrava em variações. → o nome existente | null
+ */
+export function servicoExistente(lista, valor) {
+  const alvo = semAcento(String(valor ?? "").replace(/\s+/g, " ").trim());
+  if (!alvo) return null;
+  return (lista || []).find(x => semAcento(String(x ?? "").replace(/\s+/g, " ").trim()) === alvo) || null;
+}
+/**
+ * plano 2000d · DR-421/422: no ganho, o previsto × o fechado — «desconto de 8%» (fechou abaixo) ou «acima do previsto». Sem os dois → null.
+ * → {tipo: 'desconto'|'acima'|'igual', pct, diferenca}
+ */
+export function comparaPrevistoFechado(previsto, fechado) {
+  const p = Number(previsto), f = Number(fechado);
+  if (previsto === null || previsto === undefined || fechado === null || fechado === undefined || !Number.isFinite(p) || !Number.isFinite(f) || p <= 0) return null;
+  const dif = f - p;
+  const pct = Math.round(Math.abs(dif) / p * 100);
+  return { tipo: Math.abs(dif) < 0.005 ? "igual" : dif < 0 ? "desconto" : "acima", pct, diferenca: Math.round(dif * 100) / 100 };
+}
+/** plano 2000d · DR-393: quantos dos cartões são de quem não quer marketing (optin_marketing false no cartão ou no contato dele). */
+export function contarSemMarketing(cards) {
+  return (cards || []).filter(c => c && (c.optin_marketing === false || (c.contato && c.contato.optin_marketing === false))).length;
+}
+/** plano 2000d · DR-381: «25/10» no ano corrente e «25/10/2024» quando é de outro ano (o dia de São Paulo). */
+export function dataCurtaComAno(iso, hoje = null) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const dia = hojeSP(new Date(t));
+  const [y, m, d] = dia.split("-");
+  const anoHoje = String(hoje || hojeSP()).slice(0, 4);
+  return `${d}/${m}${y !== anoHoje ? `/${y}` : ""}`;
+}
+
 /** Divide em lotes de n (padrão 100). */
 export function lotes(lista, n = 100) {
   const out = [];
@@ -728,7 +933,8 @@ export function dinheiroInvalido(s) {
  * "31/12/1990" | "1990-12-31" → "1990-12-31"; inválido → null.
  * plano 1000 (CR-119): também DD-MM-AAAA, DD.MM.AAAA, ano com 2 dígitos (≥ 30 → 19xx, senão 20xx) e o número de série do Excel (20000–80000).
  */
-export function lerData(s, { passado = false, agora = new Date() } = {}) {
+// plano 2000d · DR-200: mdy = a coluna está no formato americano (MM/DD/AAAA) — ver formatoDatasColuna
+export function lerData(s, { passado = false, agora = new Date(), mdy = false } = {}) {
   const t = String(s ?? "").trim();
   let a, m, d;
   // plano 1500c · RX-008: também «2026/10/21» (planilha exportada de sistema) e «21/10/2026 14:30» (data com hora) — a hora é ignorada
@@ -736,6 +942,7 @@ export function lerData(s, { passado = false, agora = new Date() } = {}) {
   if (r) { a = +r[1]; m = +r[3]; d = +r[4]; }
   else if ((r = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})(?:,?\s+\d{1,2}:\d{2}(?::\d{2})?h?)?$/.exec(t))) {
     d = +r[1]; m = +r[2]; a = +r[3];
+    if (mdy) [d, m] = [m, d];      // plano 2000d · DR-200
     // plano 1000b · RB-249: data que só pode estar no passado (nascimento): ano de 2 dígitos acima do ano atual é do século passado («05/03/28» → 1928)
     if (r[3].length === 2) a += passado ? (a > new Date(agora).getUTCFullYear() % 100 ? 1900 : 2000) : (a >= 30 ? 1900 : 2000);
   } else if (/^\d{5}$/.test(t) && (passado ? +t >= 10000 : (+t > 20000 && +t < 80000))) {
@@ -844,7 +1051,8 @@ export function gestoMover(g, x, y, t = g.t0) {
   let s = gestoTempo(g, t);
   const levantou = s.acao === "levantar";
   if (s.estado === "espera") {
-    if (dist2(s.x0, s.y0, x, y) > TOQUE.LIMIAR_ROLAGEM) return { ...s, estado: "rolando", acao: "rolar" };
+    // plano 2000d · DR-036: rolagem vertical lenta (dedo descendo devagar, < 10 px no total antes dos 350 ms) também é rolagem — 8 px na vertical já bastam
+    if (dist2(s.x0, s.y0, x, y) > TOQUE.LIMIAR_ROLAGEM || Math.abs(y - s.y0) > 8) return { ...s, estado: "rolando", acao: "rolar" };
     return s;
   }
   if (s.estado === "levantado") {
@@ -1145,7 +1353,7 @@ export function contarDeAnuncio(col) {
 /* plano 100 · C9: clique no cabeçalho da lista de contatos ↔ p_ordem do servidor (nome A–Z; último contato do mais recente).
    plano 1000b · RB-214: clicar de novo na ordem que já está ativa NÃO troca para «Cadastrados por último» (com o padrão «último contato», o 1º clique
    no cabeçalho mudava a ordem sem a pessoa pedir) — fica como está. */
-export const ORDEM_COLUNA = Object.freeze({ nome: "nome", ultimo_contato_em: "ultimo_contato" });
+export const ORDEM_COLUNA = Object.freeze({ nome: "nome", ultimo_contato_em: "ultimo_contato", criado_em: "recentes" /* plano 2000d · DR-166 */ });
 export function ordemAoClicar(chave, atual) {
   const alvo = ORDEM_COLUNA[chave];
   if (!alvo) return atual;
@@ -1350,6 +1558,11 @@ function filtroDaVisao(f, tela) {
     if ([3, 7, 15, 30, 60, 90].includes(Number(f.parado_dias))) o.parado_dias = Number(f.parado_dias);
     if (dataISOVisao(f.criado_de)) o.criado_de = f.criado_de;
     if (dataISOVisao(f.criado_ate)) o.criado_ate = f.criado_ate;
+    // plano 2000d · DR-024/025/027: os filtros novos vão e voltam com a visão salva e com o link
+    if (f.nao_lidas === true) o.nao_lidas = true;
+    if (typeof f.servico === "string" && f.servico.trim()) o.servico = f.servico.trim().slice(0, 120);
+    if (["quente", "morno", "frio"].includes(f.temperatura)) o.temperatura = f.temperatura;
+    if (typeof f.campanha === "string" && f.campanha.trim()) o.campanha = f.campanha.trim().slice(0, 160);      // plano 2000d · DR-026
   } else {
     if (dataISOVisao(f.criado_de)) o.criado_de = f.criado_de;
     if (dataISOVisao(f.criado_ate)) o.criado_ate = f.criado_ate;
@@ -1544,8 +1757,9 @@ export function funisPermitidos(funis, funilAtual, status) {
 
 /* ------------------------------------------------------------ campos personalizados */
 export const TIPOS_CAMPO = Object.freeze({
-  texto: "Texto", texto_longo: "Texto longo", numero: "Número", moeda: "Moeda", data: "Data", opcao: "Opção",
-  multi: "Múltipla escolha", sim_nao: "Sim/Não", telefone: "Telefone", email: "E-mail", url: "Link",
+  // plano 2000d · DR-238: nomes de quem usa, não de quem programa («Texto grande», «Sim ou não», «Lista: uma opção / várias opções»)
+  texto: "Texto curto", texto_longo: "Texto grande (vários parágrafos)", numero: "Número", moeda: "Dinheiro (R$)", data: "Data", opcao: "Lista: uma opção",
+  multi: "Lista: várias opções", sim_nao: "Sim ou não", telefone: "Telefone", email: "E-mail", url: "Link",
 });
 
 function vazioCampo(v) {
@@ -1959,7 +2173,7 @@ export function textoChipEtiquetas(op, nomes) {
 const EXEMPLOS_VERTICAL = Object.freeze({
   // plano 1500c · RC-160: camposContato/campoContato — os exemplos dos campos de CONTATO também são da vertical (antes «convênio» para todos)
   odonto: { titulo: "Implante superior", campos: "dentista responsável, dentes", campo: "Dentista responsável", etiquetas: "Implante, Urgência", camposContato: "convênio, como conheceu, preferência de horário", campoContato: "Convênio" },
-  oficina: { titulo: "Troca de embreagem", campos: "placa, quilometragem", campo: "Placa do veículo", etiquetas: "Revisão, Urgente", camposContato: "placa, modelo do carro, ano", campoContato: "Modelo do carro" },
+  oficina: { titulo: "Gol 2015 — troca de embreagem" /* plano 2000d · DR-148: veículo no título */, campos: "placa, quilometragem", campo: "Placa do veículo", etiquetas: "Revisão, Urgente", camposContato: "placa, modelo do carro, ano", campoContato: "Modelo do carro" },
   loja: { titulo: "Kit presente", campos: "tamanho, forma de entrega", campo: "Tamanho", etiquetas: "Presente, Atacado", camposContato: "tamanho, preferência de contato, aniversário do cliente", campoContato: "Tamanho" },
   generico: { titulo: "Proposta mensal", campos: "prazo de entrega, plano escolhido", campo: "Plano escolhido", etiquetas: "Prioridade, Retorno", camposContato: "como conheceu, cargo, preferência de horário", campoContato: "Como conheceu" },
 });
@@ -2876,8 +3090,10 @@ export function conferirPlanilha(linhas, { estagios = [], etiquetas = [] } = {})
       if (nome && !existentes.has(norm(nome))) novas.set(norm(nome), nome);
     }
   }
-  const avisos = etapasFechadas.size ? [{ codigo: "etapa_fechada", etapas: [...etapasFechadas.values()],
-    texto: `Etapas de fechamento não entram pela planilha (${[...etapasFechadas.values()].map(x => `«${x}»`).join(", ")}); essas linhas vão para a 1ª etapa aberta.` }] : [];
+  // plano 2000d · DR-412: diz QUANTAS linhas e o que acontece com elas
+  const nFechadas = etapasFechadas.size ? (linhas || []).filter(l => l && l.estagio && fechadas.has(norm(l.estagio)) && !abertas.has(norm(l.estagio))).length : 0;
+  const avisos = etapasFechadas.size ? [{ codigo: "etapa_fechada", etapas: [...etapasFechadas.values()], linhas: nFechadas,
+    texto: `${nFechadas === 1 ? "1 linha" : `${nFechadas} linhas`} com etapa de fechamento (${[...etapasFechadas.values()].map(x => `«${x}»`).join(", ")}): etapas de fechamento não entram pela planilha — ${nFechadas === 1 ? "essa linha entra" : "essas linhas entram"} na 1ª etapa aberta, e o ganho ou a perda se marca depois no quadro.` }] : [];
   return { etapasDesconhecidas: [...etapas.values()], etiquetasNovas: [...novas.values()], etiquetasComVirgula: comVirgula, etapasFechadas: [...etapasFechadas.values()], avisos };
 }
 
@@ -2917,6 +3133,8 @@ export function dadosTitular(d, { geradoEm = null, vocab = null, brl = v => `R$ 
     atendimentos: lista(d.conversas).map(x => so(x, ["id", "protocolo", "status", "aberta_em"])),
     // plano 1000b · RB-111: o histórico vai como frase — os `dados` crus levavam ids de contas da equipe (para, de) e outros dados internos
     historico: lista(d.tempo).map(t => so({ tipo: t.tipo, quando: t.em, texto: textoTempo(t, { vocab, brl, motivos }) }, ["tipo", "quando", "texto"])),
+    // plano 2000d · DR-175: as mensagens trocadas (quando nx_contato_exportar_titular as manda)
+    ...(Array.isArray(d.mensagens) ? { mensagens: d.mensagens.map(m => so(m, ["em", "de", "tipo", "texto", "protocolo"])) } : {}),
   };
 }
 
@@ -3176,4 +3394,298 @@ export function camposDeOutrosFunis(campos, funilId, valores = {}) {
     out.push({ chave: c.chave, rotulo: c.rotulo || c.chave, texto: textoValorCampo(c, v) });      // plano 1500c · RC-029: pelo tipo do campo
   }
   return out;
+}
+
+/* ============================================================ plano 2000d · frente crm */
+/** plano 2000d · DR-024/025/027: filtros que o servidor ainda não aplica — «só com não lida», serviço e temperatura (pontuação) — conferidos nos cartões carregados. */
+export const CHAVES_FILTRO_LOCAL = Object.freeze(["nao_lidas", "servico", "temperatura", "campanha"]);
+/** plano 2000d · DR-026: a campanha do cartão (quando nx_negocios_kanban manda: campanha_nome/campanha/utm_campaign). */
+export function campanhaDoCard(c) {
+  const r = (c && c.rastreio) || {};
+  return String((c && (c.campanha_nome || c.campanha || c.campanha_ext)) || r.utm_campaign || "").trim();
+}
+export function temFiltroLocal(f) { return !!f && CHAVES_FILTRO_LOCAL.some(c => f[c] !== undefined && f[c] !== null && f[c] !== "" && f[c] !== false); }
+export function filtroLocal(itens, f = {}) {
+  const serv = f.servico ? semAcento(String(f.servico).trim()) : "";
+  const camp = f.campanha ? semAcento(String(f.campanha).trim()) : "";
+  return (itens || []).filter(c => {
+    if (f.nao_lidas && !(Number(c && c.nao_lidas) > 0)) return false;
+    if (serv && semAcento(String((c && c.servico) || "").trim()) !== serv) return false;
+    if (camp && semAcento(campanhaDoCard(c)) !== camp) return false;
+    if (f.temperatura) { const p = pontuacao(c); const faixa = p ? { alta: "quente", media: "morno", baixa: "frio" }[p.faixa] : null; if (faixa !== f.temperatura) return false; }
+    return true;
+  });
+}
+/** plano 2000d · DR-024/025/027: aplica os filtros locais às colunas do quadro → {colunas, parcial} (parcial = havia cartões não carregados). */
+export function aplicarFiltroLocal(colunas, f = {}) {
+  if (!temFiltroLocal(f)) return { colunas, parcial: false };
+  let parcial = false;
+  const out = (colunas || []).map(c => {
+    const itens = filtroLocal(c.itens, f);
+    if ((Number(c.total) || 0) > (c.itens || []).length) parcial = true;
+    const soma = (k, l) => l.reduce((s, x) => s + (Number(x[k]) || 0), 0);
+    return { ...c, itens, total: itens.length, soma_previsto: soma("valor_previsto", itens), soma_valor: itens.reduce((s, x) => s + (Number(x.valor ?? x.valor_previsto) || 0), 0) };
+  });
+  return { colunas: out, parcial };
+}
+/** plano 2000d · DR-025: os serviços distintos dos cartões carregados (para o seletor do filtro), em ordem alfabética. */
+export function servicosDoQuadro(colunas, de = x => x && x.servico) {
+  const m = new Map();
+  for (const c of colunas || []) for (const x of c.itens || []) { const s = String(de(x) || "").trim(); if (s && !m.has(semAcento(s))) m.set(semAcento(s), s); }
+  return [...m.values()].sort((a, b) => a.localeCompare(b, "pt-BR"));
+}
+/** plano 2000d · DR-023: «Este mês» / «Mês passado» → {de, ate} em AAAA-MM-DD a partir do dia de hoje (SP) «AAAA-MM-DD». */
+export function periodoAtalho(tipo, hoje) {
+  const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(String(hoje || ""));
+  if (!m) return null;
+  let a = Number(m[1]), mes = Number(m[2]);
+  if (tipo === "mes_passado") { mes--; if (!mes) { mes = 12; a--; } } else if (tipo !== "mes") return null;
+  const ult = new Date(Date.UTC(a, mes, 0)).getUTCDate();
+  const p = n => String(n).padStart(2, "0");
+  return { de: `${a}-${p(mes)}-01`, ate: `${a}-${p(mes)}-${p(ult)}` };
+}
+/** plano 2000d · DR-011: ganhos, valor ganho, perdidos e taxa por responsável — das colunas fechadas carregadas. */
+export function fechadosPorPessoa(colunas, estagios) {
+  const tipo = new Map((estagios || []).map(e => [e.id, e.tipo]));
+  const m = new Map();
+  for (const c of colunas || []) {
+    const t = tipo.get(c && c.estagio_id);
+    if (t !== "ganho" && t !== "perdido") continue;
+    for (const x of c.itens || []) {
+      const id = x && x.dono_id != null && x.dono_id !== "" ? x.dono_id : null;
+      const r = m.get(String(id)) || { dono_id: id, ganhos: 0, perdidos: 0, valorGanho: 0 };
+      if (t === "ganho") { r.ganhos++; r.valorGanho += Number(x.valor ?? x.valor_previsto) || 0; } else r.perdidos++;
+      m.set(String(id), r);
+    }
+  }
+  for (const r of m.values()) r.taxa = r.ganhos + r.perdidos ? r.ganhos / (r.ganhos + r.perdidos) : null;
+  return m;
+}
+/** plano 2000d · DR-040: rodízio — cada cartão recebe o próximo responsável da lista (a ordem da seleção). → [{id, dono_id}] */
+export function rodizio(ids, donos) {
+  const d = (donos || []).filter(x => x !== null && x !== undefined && x !== "");
+  if (!d.length) return [];
+  return (ids || []).map((id, i) => ({ id, dono_id: d[i % d.length] }));
+}
+/** plano 2000d · DR-034: idade curta do selo «atualizado» — «há 5 min», «há 2 h», «há 3 dias». */
+export function idadeCurta(min) {
+  const m = Math.max(0, Math.floor(Number(min) || 0));
+  if (m < 1) return "agora";      // plano 2000d · DR-382: nada de «há 0 min»
+  if (m < 60) return `há ${m} min`;
+  const hrs = Math.floor(m / 60);
+  if (hrs < 24) return `há ${hrs} h`;
+  const d = Math.floor(hrs / 24);
+  return `há ${d} ${d === 1 ? "dia" : "dias"}`;
+}
+/** plano 2000d · DR-016: «aplicada a 9 cartões (3 já tinham)». */
+export function textoLoteEtiqueta(nome, alterados, jaTinham, verbo = "posta em") {
+  const n = Number(alterados) || 0, j = Number(jaTinham) || 0;
+  const base = n ? `Etiqueta «${nome}» ${verbo} ${n} ${n === 1 ? "cartão" : "cartões"}` : `Nenhum cartão mudou: ${j === 1 ? "o selecionado já tinha" : "todos já tinham"} a etiqueta «${nome}»`;
+  return `${base}${n && j ? ` (${j} já ${j === 1 ? "tinha" : "tinham"})` : ""}.`;
+}
+/** plano 2000d · DR-066: quantos cartões da coluna passaram do prazo da etapa (sla_horas). */
+export function contarSla(itens, slaHoras, agora = new Date()) {
+  if (!slaHoras) return 0;
+  return (itens || []).filter(c => c && slaEstourado(c.estagio_em, slaHoras, agora)).length;
+}
+/** plano 2000d · DR-072: lead que chegou nas últimas `horas` (padrão 24 h) e ainda não saiu da 1ª etapa em que entrou. */
+export function leadNovo(c, agora = Date.now(), horas = 24) {
+  if (!c || !c.criado_em) return false;
+  const t = Date.parse(c.criado_em);
+  if (!Number.isFinite(t) || Number(agora) - t > horas * 3600000 || Number(agora) < t) return false;
+  const e = c.estagio_em ? Date.parse(c.estagio_em) : NaN;
+  return !Number.isFinite(e) || Math.abs(e - t) < 60000;
+}
+/**
+ * plano 2000d · DR-075: o filtro de um link (?f=) conferido com a base desta empresa — responsável, etiquetas e campo que não existem aqui
+ * (link copiado em outra empresa, ou apagados depois) saem, e a tela avisa. → {filtro, ignorados: ["responsável"|"etiquetas"|"campo"]}
+ */
+export function filtroDoLinkNaBase(f, { temDono = () => true, temEtiqueta = () => true, campos = null } = {}) {
+  const o = { ...(f || {}) };
+  const ignorados = [];
+  if (o.dono != null && o.dono !== "eu" && o.dono !== "sem" && !temDono(o.dono)) { delete o.dono; ignorados.push("responsável"); }
+  if (o.etiquetas && Array.isArray(o.etiquetas.ids)) {
+    const ids = o.etiquetas.ids.filter(id => temEtiqueta(id));
+    if (ids.length !== o.etiquetas.ids.length) ignorados.push("etiquetas");
+    if (ids.length) o.etiquetas = { ...o.etiquetas, ids }; else delete o.etiquetas;
+  }
+  if (o.campo) { const fc = filtroCampoLimpo(o.campo, campos); if (fc) o.campo = fc; else { delete o.campo; ignorados.push("campo"); } }
+  return { filtro: o, ignorados };
+}
+/** plano 2000d · DR-110: a chance da etapa (a salva ou a padrão do tipo) → número 0–100. */
+export function chanceDaEtapa(e) {
+  if (!e) return null;
+  return Number.isFinite(Number(e.probabilidade)) && e.probabilidade !== null && e.probabilidade !== "" ? Number(e.probabilidade) : probPadrao(e.tipo);
+}
+/** plano 2000d · DR-092: o ganho é de um mês anterior ao de hoje (SP)? Mudar o valor final muda a receita daquele mês. */
+export function ganhoDeMesPassado(fechadoEm, hojeISO) {
+  const f = String(fechadoEm || "").slice(0, 7), h = String(hojeISO || "").slice(0, 7);
+  return /^\d{4}-\d{2}$/.test(f) && /^\d{4}-\d{2}$/.test(h) && f < h;
+}
+/** plano 2000d · DR-082: o aviso de «sem contato» só fala do anúncio quando o negócio veio de anúncio. */
+export function textoSemContato(n, vocab) {
+  const v = vocab || {};
+  const min = typeof v.min === "function" ? v.min : x => x;
+  const art = typeof v.art === "function" ? v.art("negocio") : "o";
+  const doAnuncio = !!(n && (n.plataforma || n.origem === "anuncio" || n.anuncio === true));
+  return `Sem ${min("contato")} ligado${doAnuncio ? ` (o cadastro foi removido). Os números d${art} ${min("negocio")} continuam no retorno do anúncio.` : "."}`;
+}
+/**
+ * plano 2000d · DR-090: mensagens prontas a partir do negócio (retomar, confirmar o compromisso, pedir indicação) — com o primeiro nome e o serviço.
+ * → [{id, rotulo, texto}]
+ */
+export function mensagensProntas(n, contato, { compromisso = "consulta", quando = "", linkAvaliacao = null } = {}) {
+  const nome = String((contato && contato.nome) || "").trim().split(/\s+/)[0] || "";
+  const oi = nome ? `Oi, ${nome}! ` : "Oi! ";
+  const srv = n && n.servico ? String(n.servico).trim() : "";
+  const lista = [
+    { id: "retomar", rotulo: "Retomar a conversa", texto: `${oi}Tudo bem? Passando para saber se ficou alguma dúvida${srv ? ` sobre ${srv.toLowerCase()}` : ""}. Posso ajudar?` },
+  ];
+  if (n && n.consulta_em) lista.push({ id: "confirmar", rotulo: `Confirmar a ${compromisso}`, texto: `${oi}Confirmando a sua ${compromisso}${quando ? ` ${quando}` : ""}. Podemos contar com você?` });
+  if (n && n.status === "ganho") lista.push({ id: "indicacao", rotulo: "Pedir indicação", texto: `${oi}Que bom ter você com a gente! Se conhecer alguém que também precise${srv ? ` de ${srv.toLowerCase()}` : ""}, pode indicar? Vamos cuidar com o mesmo carinho.` });
+  // plano 2000d · DR-137: pedir a avaliação (com o link da empresa no Google, quando configurado)
+  if (n && n.status === "ganho") lista.push({ id: "avaliacao", rotulo: "Pedir avaliação", texto: `${oi}Obrigado pela confiança! Se puder, conte como foi a sua experiência${linkAvaliacao ? `: ${linkAvaliacao}` : " na nossa página do Google"}. Ajuda muito!` });
+  return lista;
+}
+/** plano 2000d · DR-118: resultados da ligação concluída. */
+export const RESULTADOS_LIGACAO = Object.freeze([["atendeu", "Atendeu"], ["nao_atendeu", "Não atendeu"], ["caixa_postal", "Caixa postal"], ["retorno", "Pediu retorno"]]);
+/** plano 2000d · DR-118: o texto da nota — «Ligação: não atendeu.» / «Ligação: pediu retorno — ligar depois das 18h». */
+export function textoResultadoLigacao(resultado, detalhe = "") {
+  const r = (RESULTADOS_LIGACAO.find(([v]) => v === resultado) || [null, "feita"])[1].toLowerCase();
+  const d = String(detalhe || "").trim().replace(/\s+/g, " ").slice(0, 500);
+  return `Ligação: ${r}${d ? ` — ${d}` : "."}`;
+}
+/** plano 2000d · DR-121: a cadência pronta de follow-up (amanhã, em 3 e em 7 dias). */
+export function passosCadencia(nome = "") {
+  const q = String(nome || "").trim().slice(0, 100);
+  const sufixo = q ? ` — ${q}` : "";
+  return [
+    { dias: 1, tipo: "whatsapp", titulo: `Follow-up 1: mandar mensagem${sufixo}` },
+    { dias: 3, tipo: "ligacao", titulo: `Follow-up 2: ligar${sufixo}` },
+    { dias: 7, tipo: "whatsapp", titulo: `Follow-up 3: última tentativa${sufixo}` },
+  ];
+}
+/** plano 2000d · DR-126: quantas tarefas por responsável (mais primeiro; sem responsável no fim). → [{dono_id, n}] */
+export function contarPorDono(itens) {
+  const m = new Map();
+  for (const t of itens || []) {
+    const id = t && t.dono_id != null && t.dono_id !== "" ? t.dono_id : (t && t.dono && t.dono.id != null ? t.dono.id : null);
+    const c = String(id);
+    const r = m.get(c) || { dono_id: id, n: 0 };
+    r.n++; m.set(c, r);
+  }
+  return [...m.values()].sort((a, b) => (a.dono_id == null) - (b.dono_id == null) || b.n - a.n);
+}
+/** plano 2000d · DR-101: e-mail para conferir duplicado (minúsculo, válido) → texto | null. */
+export function emailDuplicado(v) {
+  const t = String(v ?? "").trim().toLowerCase();
+  return /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(t) ? t : null;
+}
+/** plano 2000d · DR-101: o cadastro com o MESMO e-mail (sem diferença de maiúsculas), fora o próprio. */
+export function acharDuplicadoEmail(itens, email, { ignorarId = null } = {}) {
+  const m = emailDuplicado(email);
+  if (!m) return null;
+  return (itens || []).find(c => c && String(c.id) !== String(ignorarId) && String(c.email || "").trim().toLowerCase() === m) || null;
+}
+/**
+ * plano 2000d · DR-091: quanto tempo o negócio ficou em cada etapa — para cada mudança de etapa da linha do tempo, o tempo desde a mudança anterior
+ * do mesmo negócio. → Map(evento → «ficou 3 dias em «Nova»» | «ficou 2 dias na etapa anterior» | «no mesmo dia»)
+ */
+const TIPOS_MUDA_ETAPA = new Set(["negocio_criado", "estagio", "ganho", "perdido", "reaberto"]);
+export function permanenciaEtapas(itens) {
+  const r = new Map();
+  const porNeg = new Map();
+  for (const it of itens || []) {
+    if (!it || it.fonte === "nota" || it.fonte === "tarefa" || !TIPOS_MUDA_ETAPA.has(it.tipo) || !Number.isFinite(Date.parse(it.em))) continue;
+    const ch = String(it.negocio_id ?? (it.dados && it.dados.negocio_id) ?? "_");
+    if (!porNeg.has(ch)) porNeg.set(ch, []);
+    porNeg.get(ch).push(it);
+  }
+  for (const lista of porNeg.values()) {
+    lista.sort((a, b) => Date.parse(a.em) - Date.parse(b.em));
+    for (let i = 1; i < lista.length; i++) {
+      const it = lista[i];
+      if (it.tipo === "negocio_criado") continue;
+      const d = diasEntre(lista[i - 1].em, it.em);
+      if (d === null) continue;
+      const de = it.dados && it.dados.de_nome;
+      r.set(it, d <= 0 ? "no mesmo dia" : `ficou ${d} ${d === 1 ? "dia" : "dias"} ${de ? `em «${de}»` : "na etapa anterior"}`);
+    }
+  }
+  return r;
+}
+/** plano 2000d · DR-168: negócios da ficha — abertos primeiro; dentro de cada grupo, o mais recente (atualizado, fechado ou criado) primeiro. */
+export function ordenarNegociosFicha(negocios) {
+  const t = n => Date.parse(n.atualizado_em || n.fechado_em || n.criado_em || "") || 0;
+  return (Array.isArray(negocios) ? negocios.slice() : []).sort((a, b) => ((b.status || "aberto") === "aberto") - ((a.status || "aberto") === "aberto") || t(b) - t(a));
+}
+/** plano 2000d · DR-174 (LGPD): por que o cadastro foi excluído — «titular» fica registrado no servidor como pedido do titular. */
+export const MOTIVOS_EXCLUSAO = Object.freeze([["titular", "Pedido da própria pessoa (LGPD)"], ["duplicado", "Cadastro repetido ou errado"], ["outro", "Outro motivo"]]);
+/** plano 2000d · DR-176 (LGPD): o aviso do campo de observação — saúde na clínica; dado sensível em geral nas outras verticais. */
+export function avisoDadoSensivel(vertical) {
+  return vertical === "odonto"
+    ? "Toda a equipe vê este campo: não anote diagnóstico, tratamento ou outros dados de saúde aqui."
+    : "Toda a equipe vê este campo: evite dados sensíveis (saúde, religião, documentos).";
+}
+/** plano 2000d · DR-140: telefone de celular sem o 9 («(12) 9830-3030», 10 dígitos com 6–9 depois do DDD) → a sugestão com o 9; senão null. */
+export function sugestaoNonoDigito(v) {
+  let d = String(v ?? "").replace(/\D/g, "");
+  if (d.length === 12 && d.startsWith("55")) d = d.slice(2);
+  if (d.length !== 10 || !/^[1-9][1-9][6-9]/.test(d)) return null;
+  const n = `${d.slice(0, 2)}9${d.slice(2)}`;
+  return `(${n.slice(0, 2)}) ${n.slice(2, 7)}-${n.slice(7)}`;
+}
+/**
+ * plano 2000d · DR-197: o CSV de erros da importação com as colunas ORIGINAIS da planilha + a observação — dá para corrigir e importar de novo.
+ * problemas = [{linha, tipo, motivo}]; dados = {cabecalho, linhas, numeros} (o que a leitura da planilha devolveu). Uma linha por linha da planilha.
+ */
+export function csvErrosImportacao(problemas, dados) {
+  const cab = (dados && Array.isArray(dados.cabecalho)) ? dados.cabecalho.map(String) : [];
+  const porLinha = new Map();
+  (dados && Array.isArray(dados.linhas) ? dados.linhas : []).forEach((l, i) => porLinha.set(Number((dados.numeros && dados.numeros[i]) || i + 2), l));
+  const juntos = new Map();
+  for (const p of problemas || []) {
+    const n = Number(p.linha) || 0;
+    const j = juntos.get(n) || { linha: n, tipos: new Set(), motivos: [] };
+    j.tipos.add(p.tipo || "Erro"); j.motivos.push(p.motivo || "");
+    juntos.set(n, j);
+  }
+  const linhas = [...juntos.values()].sort((a, b) => a.linha - b.linha).map(j => {
+    const orig = porLinha.get(j.linha) || [];
+    return [j.linha, ...cab.map((_, i) => (orig[i] ?? "")), [...j.tipos].join(" e "), j.motivos.filter(Boolean).join(" · ")];
+  });
+  return { cabecalho: ["linha", ...cab, "situação", "o que corrigir"], linhas };
+}
+/** plano 2000d · DR-198: depois de encolher por tempo esgotado, o lote volta a dobrar a cada 3 lotes certos, até o tamanho original. */
+export function loteDepoisDeOk(lote, okSeguidos, max = 100) {
+  const n = Math.max(1, Number(lote) || max);
+  if (n >= max || okSeguidos < 3) return { lote: Math.min(n, max), okSeguidos };
+  return { lote: Math.min(max, n * 2), okSeguidos: 0 };
+}
+/** plano 2000d · DR-135: o prazo de retorno do serviço (dias) do mapa da base ({«Limpeza»: 180}) — sem acento/maiúscula; fora de 1–730 → null. */
+export function recompraDoServico(mapa, servico) {
+  if (!mapa || typeof mapa !== "object" || !servico) return null;
+  const alvo = semAcento(String(servico).trim());
+  const ch = Object.keys(mapa).find(x => semAcento(String(x).trim()) === alvo);
+  const n = ch ? Math.round(Number(mapa[ch])) : NaN;
+  return n >= 1 && n <= 730 ? n : null;
+}
+/** plano 2000d · DR-139: a justificativa da perda com «Perdeu para: X» no fim (até 500 caracteres no total). */
+export function juntarPerdeuPara(texto, perdeuPara) {
+  const t = String(texto || "").trim(), p = String(perdeuPara || "").trim().replace(/\s+/g, " ").slice(0, 80);
+  return [t, p ? `Perdeu para: ${p}` : ""].filter(Boolean).join(" · ").slice(0, 500);
+}
+/**
+ * plano 2000d · DR-164: a jornada do negócio em marcos com data — chegou (criado_em, com a origem), agendou (1ª mudança para uma etapa
+ * «agendada» na linha do tempo, ou a data da consulta), fechou/perdeu (fechado_em). → [{chave, rotulo, em}] em ordem.
+ */
+export function jornadaNegocio(n, tempo = [], { origem = null } = {}) {
+  if (!n) return [];
+  const ms = [];
+  if (n.criado_em) ms.push({ chave: "chegou", rotulo: origem ? `Chegou · ${origem}` : "Chegou", em: n.criado_em });
+  const ag = (tempo || []).filter(t => t && t.tipo === "estagio" && t.dados && (t.dados.para_marco === "agendada" || /agend/i.test(String(t.dados.para_nome || ""))))
+    .sort((a, b) => Date.parse(a.em) - Date.parse(b.em))[0];
+  if (ag) ms.push({ chave: "agendou", rotulo: "Agendou", em: ag.em });
+  if (n.fechado_em && (n.status === "ganho" || n.status === "perdido")) ms.push({ chave: n.status, rotulo: n.status === "ganho" ? "Fechou" : "Não fechou", em: n.fechado_em });
+  return ms.filter(m => Number.isFinite(Date.parse(m.em))).sort((a, b) => Date.parse(a.em) - Date.parse(b.em));
 }

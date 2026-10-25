@@ -347,6 +347,8 @@ function validarConfig(gat, c, ix) {
       const p = palavrasUnicas(c.palavras);     // plano 1500c · UCA-023: «preço, Preço, preco» conta uma vez
       if (p.length > LIMITES.palavras) return `use até ${LIMITES.palavras} palavras`;
       if (p.some(x => x.length > LIMITES.palavra)) return `cada palavra pode ter até ${LIMITES.palavra} caracteres`;
+      // plano 2000d · AX-084: «?» ou «!!» sozinhos casariam com quase toda mensagem
+      { const so = p.find(x => !/[\p{L}\p{N}]/u.test(x)); if (so) return `a palavra «${so}» não tem letra nem número: troque por uma palavra de verdade`; }
       if (!opcionalOk("canais", c.canal_id)) return "o número escolhido em «Quando» não existe mais";
       return null;
     }
@@ -527,6 +529,11 @@ function validarAcao(ac, n, ix, ligar, total) {
       const v = texto(ac.valor).trim();
       if (!v) return `${p}: escreva o valor`;
       if (v.length > LIMITES.valor_campo) return `${p}: o valor pode ter até ${LIMITES.valor_campo} caracteres`;
+      // plano 2000d · AX-085: a pontuação vai de 0 a 100 (a IA e o funil leem como número)
+      const soVariavel = /^\{[a-z_:0-9]+\}$/.test(v);
+      if (ac.campo === CAMPO_SCORE.chave && !soVariavel) { const n = numeroBR(v); if (n == null || n < 0 || n > 100) return `${p}: a pontuação é um número de 0 a 100`; }
+      // plano 2000d · AX-086: campo do tipo número recebe número («1.500» vale; «abc» não)
+      else if (ix && ix.temBase && !soVariavel) { const cp = ix.camposAtualizar.get(ac.campo); if (cp && cp.tipo === "numero" && numeroBR(v) == null) return `${p}: «${cp.rotulo || ac.campo}» é um campo de número`; }
       return null;
     }
     case "nota": {
@@ -698,7 +705,109 @@ export function avisosEstruturaDetalhados(auto, vocab = null, opcoes = {}) {
     add("Quem não tiver WhatsApp no cadastro não recebe a mensagem (a execução aparece com erro). Confira os telefones antes de ligar.", iMsg, "sem_telefone");
   // plano 1500c · UCA-019: condições que nunca valem juntas
   for (const x of condicoesContraditorias(conds)) add(`As condições ${x.i + 1} e ${x.j + 1} nunca valem juntas (${x.motivo}): a automação não vai rodar.`, null, "contraditorias");
+  for (const x of avisosComplementares(a, acoes, conds, c, tl, vv, opcoes || {})) add(x.texto, x.indice, x.tipo);   // plano 2000d · AX-012..AX-094
   return avisos;
+}
+
+/** plano 2000d · AX: domínios de link encurtado (o WhatsApp marca como suspeito e o número pode ser bloqueado). */
+const RE_ENCURTADOR = /\b(?:bit\.ly|tinyurl\.com|goo\.gl|cutt\.ly|t\.co|is\.gd|ow\.ly|encurtador\.com\.br|rebrand\.ly|shorturl\.at)\/\S+/i;
+/** plano 2000d · AX-016: etiquetas que querem dizer «não mandar mensagem» (opt-out). */
+const RE_NAO_ENVIAR = /^(nao enviar|nao perturbe|nao mandar|sem mensagens?|opt.?out|descadastrad[oa]|pediu para (parar|sair))$/;
+/** plano 2000d · AX-092/093/094: variáveis que dependem de dado que nem todo registro tem. */
+const VARS_DE_CONVERSA = ["protocolo", "atendente"];
+
+/**
+ * plano 2000d · AX-012..AX-094: os avisos que faltavam (repetição, segurança de envio, passos sem efeito, horário). Não impedem salvar.
+ * opcoes.base (etiquetas, canais, departamentos) deixa o aviso citar o que existe nesta empresa.
+ */
+function avisosComplementares(a, acoes, conds, c, tl, vv, opcoes) {
+  const out = [];
+  const add = (texto, indice = null, tipo = "") => out.push({ texto, indice, tipo });
+  const b = opcoes.base || null;
+  const msgs = acoes.map((x, i) => ({ x, i })).filter(({ x, i }) => ehMensagem(x) && !tl[i].inalcancavel);
+  const textoDe = x => [x.texto].concat(Array.isArray(x.parametros) ? x.parametros : []).filter(v => typeof v === "string").join(" ");
+  // AX-012: a mesma condição duas vezes (só atrapalha a leitura)
+  const vistas = new Map();
+  conds.forEach((cd, i) => {
+    if (!cd || !cd.campo || !cd.op) return;
+    const k = `${cd.campo}|${cd.op}|${normalizar(cd.valor)}`;
+    if (vistas.has(k)) add(`A condição ${i + 1} repete a condição ${vistas.get(k) + 1}: tire uma delas.`, null, "cond_repetida");
+    else vistas.set(k, i);
+  });
+  // AX-013: duas mensagens iguais seguidas (sem espera no meio) — o cliente recebe o mesmo texto duas vezes
+  for (let k = 1; k < msgs.length; k++) {
+    const p = msgs[k - 1], q = msgs[k];
+    const entre = acoes.slice(p.i + 1, q.i).some(y => y && y.tipo === "esperar");
+    if (!entre && p.x.tipo === q.x.tipo && normalizar(textoDe(p.x)) && normalizar(textoDe(p.x)) === normalizar(textoDe(q.x)) && p.x.template_id === q.x.template_id)
+      add(`Os passos ${p.i + 1} e ${q.i + 1} mandam a mesma mensagem, um logo depois do outro: o cliente recebe duas vezes.`, q.i, "msg_repetida");
+  }
+  for (const { x, i } of msgs) {
+    const t = textoDe(x);
+    // AX-014: link encurtado — o WhatsApp desconfia e o número pode ser bloqueado
+    if (RE_ENCURTADOR.test(t)) add(`A mensagem do passo ${i + 1} tem link encurtado: o WhatsApp costuma marcar como suspeito. Use o link completo do seu site.`, i, "link_encurtado");
+    // AX-015: texto todo em maiúsculas parece grito (e propaganda) — mais denúncias, mais risco para o número
+    const letras = texto(x.texto).replace(/\{[^}]*\}/g, "").replace(/[^A-Za-zÀ-ÿ]/g, "");
+    if (letras.length >= 20 && letras.replace(/[^A-ZÀ-Þ]/g, "").length / letras.length > 0.7)
+      add(`A mensagem do passo ${i + 1} está quase toda em MAIÚSCULAS: soa como grito e aumenta as denúncias de spam. Escreva normal e destaque com *negrito*.`, i, "maiusculas");
+    // AX-087: {{1}} é dos modelos da Meta — no texto livre ele chega cru
+    if (x.tipo === "enviar_mensagem" && /\{\{\d+\}\}/.test(texto(x.texto)))
+      add(`A mensagem do passo ${i + 1} usa {{1}}, que só vale em modelo da Meta: aqui o cliente veria «{{1}}». Use {primeiro_nome}, {data_consulta}…`, i, "chave_dupla");
+    // AX-100: mensagem que é só a variável («{primeiro_nome}») — o cliente recebe o próprio nome solto
+    if (x.tipo === "enviar_mensagem" && /\{[a-z_:0-9]+\}/.test(texto(x.texto)) && texto(x.texto).replace(/\{[^}]*\}/g, "").replace(/[^\p{L}\p{N}]/gu, "").length < 3)
+      add(`A mensagem do passo ${i + 1} só tem variável: o cliente receberia só o nome, sem contexto. Escreva o recado.`, i, "so_variavel");
+    // AX-092: {valor} sai vazio quando o registro não tem valor
+    if (/\{valor\}/.test(t)) add(`A mensagem do passo ${i + 1} usa {valor}: quem não tiver valor preenchido recebe esse trecho em branco.`, i, "valor_vazio");
+    // AX-093/AX-094: {protocolo} e {atendente} são da conversa — gatilho de CRM pode não ter conversa
+    const daConversa = VARS_DE_CONVERSA.filter(v => t.includes(`{${v}}`));
+    if (daConversa.length && GATILHOS_SEM_CONVERSA.includes(a.gatilho))
+      add(`A mensagem do passo ${i + 1} usa ${daConversa.map(v => `{${v}}`).join(" e ")}, que vem da conversa: sem conversa aberta com o cliente, sai em branco.`, i, "var_conversa");
+  }
+  // AX-016: a empresa tem etiqueta de quem pediu para não receber, e esta automação manda mensagem sem pular essa etiqueta
+  const optOut = ((b && b.etiquetas) || []).filter(t => t && RE_NAO_ENVIAR.test(normalizar(t.nome)));
+  const poeOptOut = acoes.some(x => x && (x.tipo === "etiquetar" || x.tipo === "etiqueta_adicionar") && !x.remover && (optOut.some(t => t.id === x.etiqueta_id) || RE_NAO_ENVIAR.test(normalizar(x.etiqueta_nome))));
+  if (msgs.length && optOut.length && !poeOptOut && !conds.some(cd => cd && cd.campo === "etiqueta" && (cd.op === "diferente" || cd.op === "nao_contem") && optOut.some(t => t.id === cd.valor)))
+    add(`Quem tem a etiqueta «${optOut[0].nome}» também recebe esta mensagem. Acrescente a condição «etiqueta não é ${optOut[0].nome}».`, msgs[0].i, "opt_out");
+  // AX-017: «Todo dia» de madrugada (antes das 7h ou depois das 21h) mandando mensagem, sem respeitar o horário
+  if (a.gatilho === "agendado" && msgs.length && !a.respeitar_horario && RE_HORA.test(texto(c.horario))) {
+    const hh = Number(texto(c.horario).slice(0, 2));
+    if (hh < 7 || hh >= 21) add(`A mensagem sai às ${c.horario}, fora do horário comercial: o cliente pode se incomodar. Mude o horário ou ligue «Respeitar horário».`, msgs[0].i, "madrugada");
+  }
+  // AX-050: «hoje»/«amanhã» no texto de «Depois da data» — o dia já mudou quando a mensagem sai
+  if (a.gatilho === "apos_data") {
+    const h = inteiro(c.horas);
+    for (const { x, i } of msgs) {
+      const t = normalizar(textoDe(x));
+      if (h != null && h >= 12 && /\bhoje\b/.test(t)) add(`A mensagem do passo ${i + 1} diz «hoje», mas sai ${formatarHoras(h)} depois da data: no dia seguinte, «hoje» fica errado. Use «no dia {data_consulta}».`, i, "palavra_de_tempo");
+      else if (/\bamanha\b/.test(t)) add(`A mensagem do passo ${i + 1} diz «amanhã», mas sai depois da data marcada. Confira se o texto faz sentido.`, i, "palavra_de_tempo");
+    }
+  }
+  acoes.forEach((x, i) => {
+    if (!x || tl[i].inalcancavel) return;
+    // AX-051: esperar e logo depois «Parar» — a espera não faz nada
+    if (x.tipo === "esperar" && acoes[i + 1] && acoes[i + 1].tipo === "parar")
+      add(`A espera do passo ${i + 1} vem logo antes de «Parar»: ela não muda nada. Tire a espera ou ponha um passo entre as duas.`, i, "espera_inutil");
+    // AX-052: mover para a mesma etapa que dispara a automação
+    if (x.tipo === "mover_estagio" && x.estagio_id && a.gatilho === "negocio_estagio" && c.estagio_id === x.estagio_id)
+      add(`O passo ${i + 1} move para a mesma etapa que dispara esta automação: não muda nada.`, i, "sem_efeito");
+    // AX-053: pôr a etiqueta que acabou de ser posta (gatilho «Etiqueta adicionada»)
+    if ((x.tipo === "etiqueta_adicionar" || (x.tipo === "etiquetar" && !x.remover)) && a.gatilho === "etiqueta_adicionada" && x.etiqueta_id && x.etiqueta_id === c.etiqueta_id)
+      add(`O passo ${i + 1} põe a mesma etiqueta que dispara esta automação: ela já está lá.`, i, "sem_efeito");
+    // AX-054: resolver a conversa e depois mandar mensagem — a resposta do cliente reabre a conversa resolvida
+    if (x.tipo === "resolver_conversa") {
+      const k = acoes.findIndex((y, j) => j > i && ehMensagem(y) && !tl[j].inalcancavel);
+      if (k >= 0) add(`O passo ${i + 1} resolve a conversa antes da mensagem do passo ${k + 1}: se o cliente responder, ela volta a abrir. Ponha «Resolver a conversa» por último.`, i, "resolver_antes");
+    }
+  });
+  // AX-090: lembrete de poucas horas com «Respeitar horário» — num horário marcado cedo, a mensagem espera a abertura e sai depois
+  if (a.gatilho === "antes_da_data" && a.respeitar_horario && msgs.length && inteiro(c.horas) != null && inteiro(c.horas) <= 3)
+    add(`Com «Respeitar horário», o lembrete ${formatarHoras(c.horas)} antes de um horário marcado cedo (ex.: 8h) espera a abertura e pode sair em cima da hora. Para lembretes curtos, desligue «Respeitar horário».`, msgs[0].i, "lembrete_curto");
+  // AX-091: só o número oficial (Meta) — texto livre depois de uma espera de 24 h ou mais cai fora da janela e não sai
+  const prov = new Set(((b && b.canais) || []).map(x => x && x.provedor).filter(Boolean));
+  if (prov.size && !prov.has("codewords") && prov.has("meta")) {
+    const k = acoes.findIndex((x, i) => x && x.tipo === "enviar_mensagem" && !tl[i].inalcancavel && tl[i].antes >= 1440);
+    if (k >= 0) add(`A mensagem do passo ${k + 1} sai ${formatarDuracao(tl[k].antes)} depois: no número oficial, texto livre só sai até 24 h da última mensagem do cliente. Use «Enviar modelo» aprovado.`, k, "janela_meta");
+  }
+  return out;
 }
 
 /** plano 1500c · UCA-020: gatilhos em que existe o texto de uma mensagem do cliente. */
@@ -728,6 +837,11 @@ export function condicoesContraditorias(conds) {
       const ma = a.op === "maior" ? a : b, me = a.op === "maior" ? b : a;
       const x = numeroBR(ma.valor), y = numeroBR(me.valor);
       if (x != null && y != null && x >= y) motivo = `nenhum número é maior que ${x} e menor que ${y} ao mesmo tempo`;
+    } else if (tem("maior", "igual") || tem("menor", "igual")) {
+      // plano 2000d · AX-010/AX-011: «maior que 5.000» com «igual a 3.000» (ou «menor que 100» com «igual a 200») nunca valem juntas
+      const lim = a.op === "igual" ? b : a, ig = a.op === "igual" ? a : b;
+      const x = numeroBR(lim.valor), y = numeroBR(ig.valor);
+      if (x != null && y != null && (lim.op === "maior" ? y <= x : y >= x)) motivo = `${y} não é ${lim.op === "maior" ? "maior" : "menor"} que ${x}`;
     }
     if (motivo) out.push({ i, j, motivo });
   }
@@ -760,7 +874,7 @@ export function limpar(auto) {
   const a = auto || {};
   const g = GATILHO[a.gatilho];
   const out = {
-    nome: texto(a.nome).trim(),
+    nome: texto(a.nome).replace(/\s+/g, " ").trim(),   // plano 2000d · AX-018: nome colado com quebra de linha ou espaços duplos vira uma linha só
     gatilho: a.gatilho,
     config: {},
     condicoes: [],
@@ -806,7 +920,8 @@ export function limpar(auto) {
         if (f.tipo === "sim_nao") { if (f.gravaSempre) x[nome] = v == null ? !!f.padrao : !!v; else if (v) x[nome] = true; continue; }
         if (f.tipo === "parametros") { x[nome] = (v || []).map(y => texto(y)); continue; }
         if (f.quando && Object.entries(f.quando).some(([k, val]) => valorCampo(ac, k) !== val)) continue;
-        if (!vazio(v)) x[nome] = typeof v === "string" ? v.trim() : v;
+        // plano 2000d · AX-019: texto colado do Windows (\r\n) e espaços no fim da linha não vão para o cliente
+        if (!vazio(v)) x[nome] = typeof v === "string" ? v.replace(/\r\n?/g, "\n").replace(/[ \t]+\n/g, "\n").trim() : v;
       }
       if (ac.tipo === "etiquetar" && vazio(ac.etiqueta_id) && !vazio(ac.etiqueta_nome)) x.etiqueta_nome = texto(ac.etiqueta_nome).trim();
       if (ac.tipo === "enviar_template" && vazio(ac.template_id) && !vazio(ac.template_nome)) x.template_nome = texto(ac.template_nome).trim();
@@ -873,7 +988,7 @@ function fraseQuando(a, ix, vv) {
     case "conversa_nova": return `quando chegar uma conversa nova${noCanal}${noDep}`;
     case "conversa_resolvida": return `quando uma conversa for resolvida${noCanal}${noDep}`;
     case "mensagem_recebida": {
-      const p = (c.palavras || []).filter(Boolean);
+      const p = palavrasUnicas(c.palavras);   // plano 2000d · AX-005: «preço, Preço» uma vez só (e a lista em texto da IA também vale)
       // plano 1000b · UB-281: «(e mais 3)» — diz quantas ficaram de fora
       return `quando chegar mensagem${p.length ? ` com ${listaFrase(p.slice(0, 4).map(aspas), "ou")}${p.length > 4 ? ` (e mais ${p.length - 4})` : ""}` : ""}${noCanal}`;
     }
@@ -883,7 +998,8 @@ function fraseQuando(a, ix, vv) {
       return `quando uma conversa${noDep} ficar sem resposta há ${Number(c.minutos) > 0 ? formatarDuracao(c.minutos) : "(escolha o tempo)"}${c.so_no_horario ? " (contando só no horário de atendimento)" : ""}`;
     case "negocio_criado": return `quando ${vv.um("negocio")} ${vv.min("negocio")} for criad${vv.art("negocio")}${noFunil}`;
     case "negocio_estagio": return `quando ${neg} entrar em ${etapa(c.estagio_id)}`;
-    case "tempo_no_estagio": return `quando ${neg} ficar parad${vv.art("negocio")} em ${etapa(c.estagio_id)} por ${formatarHoras(c.horas)}`;
+    // plano 2000d · AX-002: sem o tempo escolhido não vira «por na hora»
+    case "tempo_no_estagio": return `quando ${neg} ficar parad${vv.art("negocio")} em ${etapa(c.estagio_id)} por ${Number(c.horas) > 0 ? formatarHoras(c.horas) : "(escolha o tempo)"}`;
     case "negocio_ganho": return `quando ${neg} for marcad${vv.art("negocio")} como ${aspas(vv.v.ganhar)}${noFunil}`;
     case "negocio_perdido": return `quando ${neg} for marcad${vv.art("negocio")} como ${aspas(vv.v.perder)}${noFunil}`;
     case "etiqueta_adicionada": return `quando a etiqueta ${aspas(nomeDe(ix, "etiquetas", c.etiqueta_id, "escolhida") || "escolhida")} for adicionada`;
@@ -895,11 +1011,12 @@ function fraseQuando(a, ix, vv) {
     }
     case "antes_da_data": {
       const alvo = c.campo === "previsao_fechamento" ? "da previsão de fechamento" : `da ${palavraConsulta(vv.vertical)}`;
-      return `${formatarHoras(c.horas)} antes ${alvo}${noFunil}`;
+      // plano 2000d · AX-003: sem a antecedência não vira «na hora antes da consulta»
+      return `${Number(c.horas) > 0 ? formatarHoras(c.horas) : "(escolha quanto tempo)"} antes ${alvo}${noFunil}`;
     }
     case "apos_data": {
       const alvo = c.campo === "previsao_fechamento" ? "da previsão de fechamento" : `da ${palavraConsulta(vv.vertical)}`;
-      return `${formatarHoras(c.horas)} depois ${alvo}${noFunil}`;
+      return `${Number(c.horas) > 0 ? formatarHoras(c.horas) : "(escolha quanto tempo)"} depois ${alvo}${noFunil}`;   // plano 2000d · AX-004
     }
     case "agendado": {
       // plano 1500c · UCA-121: com mais de um funil e sem o funil escolhido, a frase diz de qual funil é a etapa
@@ -997,7 +1114,8 @@ function fraseAcao(ac, ix, vv) {
   if (!ac || !ACAO[ac.tipo]) return null;
   switch (ac.tipo) {
     case "criar_tarefa": {
-      const prazo = Number(ac.vence_em_horas ?? 24);
+      // plano 2000d · AX-006: prazo apagado («») é o padrão de 24 h (o limpar não grava), não «para já»
+      const prazo = ac.vence_em_horas == null || String(ac.vence_em_horas).trim() === "" || !Number.isFinite(Number(ac.vence_em_horas)) ? 24 : Number(ac.vence_em_horas);
       return `criar tarefa ${aspas(cortar(ac.titulo || "sem título", 60))} para ${quemTarefa(ac.dono || "responsavel", ix)}${prazo === 0 ? " para já" : ` com prazo de ${formatarHoras(prazo)}`}`;   // plano 1000b · UB-065: «em 24 h» soava como agendamento
     }
     case "mover_estagio": return `mover para ${aspas(nomeDe(ix, "estagios", ac.estagio_id, "etapa escolhida") || "etapa escolhida")}`;
@@ -1009,7 +1127,7 @@ function fraseAcao(ac, ix, vv) {
       const f = ac.funil_id ? ` no funil ${aspas(nomeDe(ix, "funis", ac.funil_id, "escolhido"))}` : "";
       return `criar ${vv.um("negocio")} ${vv.min("negocio")}${f}`;
     }
-    case "enviar_mensagem": return `enviar a mensagem ${aspas(cortar(ac.texto, 48))}`;
+    case "enviar_mensagem": return `enviar a mensagem ${aspas(cortar(ac.texto, 48) || "…")}`;   // plano 2000d · AX-007: nunca «»
     case "enviar_template": {
       const t = ac.template_id ? ix.templates.get(ac.template_id) : null;
       const nome = t ? t.nome : (ac.template_nome || "escolhido");
@@ -1038,16 +1156,17 @@ function fraseAcao(ac, ix, vv) {
     }
     case "nota": return `anotar ${aspas(cortar(ac.texto, 48) || "…")}`;
     case "notificar": {
-      if (ac.para === "responsavel") return "avisar o responsável";
-      if (ac.para === "admins") return "avisar os administradores";
-      if (ac.para === "departamento") return `avisar o departamento ${aspas(nomeDe(ix, "departamentos", ac.departamento_id, "escolhido") || "escolhido")}`;
-      return `avisar ${aspas(nomeDe(ix, "usuarios", ac.para, "pessoa escolhida") || "pessoa escolhida")}`;
+      const sufixo = "";
+      if (ac.para === "responsavel") return `avisar o responsável${sufixo}`;
+      if (ac.para === "admins") return `avisar os administradores${sufixo}`;
+      if (ac.para === "departamento") return `avisar o departamento ${aspas(nomeDe(ix, "departamentos", ac.departamento_id, "escolhido") || "escolhido")}${sufixo}`;
+      return `avisar ${aspas(nomeDe(ix, "usuarios", ac.para, "pessoa escolhida") || "pessoa escolhida")}${sufixo}`;
     }
     case "resolver_conversa": return "resolver a conversa";
     case "esperar": return `esperar ${formatarDuracao(ac.minutos)}${ac.cancelar_se_cliente_responder ? " (parando se o cliente responder)" : ""}`;
     case "parar": return "parar por aqui";
     case "ia_decidir": return FRASE_IA[ac.tarefa] ? FRASE_IA[ac.tarefa](vv) : "pedir à IA para decidir";
-    case "alerta_whatsapp": return "avisar no WhatsApp do gestor";
+    case "alerta_whatsapp": { const t = cortar(ac.texto, 40); return `avisar no WhatsApp do gestor${t ? ` ${aspas(t)}` : ""}`; }   // plano 2000d · AX-008
     default: return null;
   }
 }
@@ -1090,6 +1209,8 @@ export function aplicarVariaveis(txt, dados = {}) {
     data_consulta: data, hora_consulta: hora,
     // plano 2000d · DU-017/DU-035/DU-036: as variáveis novas (o servidor troca quando anunciar o recurso)
     dia_semana_consulta: diaSemana, profissional: texto(d.profissional), link_avaliacao: texto(d.link_avaliacao), proxima_abertura: texto(d.proxima_abertura),
+    // plano 2000d · AX-076: os dados da empresa (o Instagram sempre com «@», como o config.trocarVariaveisEmpresa)
+    endereco: texto(d.endereco), telefone_empresa: texto(d.telefone_empresa), instagram: texto(d.instagram).trim() ? `@${texto(d.instagram).trim().replace(/^@/, "")}` : "",
   };
   const campos = d.campos && typeof d.campos === "object" ? d.campos : {};
   // plano 2000d · DU-034: {campo:placa} → o valor do campo personalizado (no exemplo, o que a prévia tiver)
@@ -1138,6 +1259,10 @@ export function avisoVariavelVazia(txt, base) {
     return "O link de avaliação ainda não foi cadastrado: preencha em Configurações → Empresa → Link de avaliação no Google, senão a mensagem sai sem ele.";
   if (/\{profissional\}/.test(t) && base && Array.isArray(base.usuarios) && !base.usuarios.length)
     return "Ninguém da equipe aparece como profissional da agenda: a variável {profissional} sairia vazia.";
+  // plano 2000d · AX-076: endereço, telefone ou Instagram da empresa ainda não preenchidos (quando a base diz o que tem)
+  const de = base && (base.empresa_dados || base.dados_empresa);
+  if (de && typeof de === "object") for (const [k, rot] of [["endereco", "o endereço"], ["telefone_empresa", "o telefone"], ["instagram", "o Instagram"]])
+    if (t.includes(`{${k}}`) && !texto(de[k]).trim()) return `A empresa ainda não tem ${rot} cadastrado: preencha em Configurações → Empresa, senão a mensagem sai com esse trecho em branco.`;
   return null;
 }
 
@@ -1547,10 +1672,82 @@ export const MODELOS = Object.freeze([
     texto: () => "Quem tem a etiqueta «Pesquisa NPS» e responde com uma nota de 0 a 6 ganha a etiqueta «Detrator» e os administradores recebem um aviso para ligar.",
     aviso: "Só vale para quem recebeu a pesquisa (etiqueta «Pesquisa NPS»); ligue a receita «Depois da consulta → pesquisa de 0 a 10» antes.",
     auto: { nome: "Nota baixa na pesquisa", gatilho: "mensagem_recebida", config: { palavras: ["0", "1", "2", "3", "4", "5", "6"] },
-      condicoes: [{ campo: "etiqueta", op: "igual", valor_etiqueta: "Pesquisa NPS" }],
+      // plano 2000d · AX-028: o motor casa por trecho — «10» contém «1» e «0»; sem esta condição, quem deu nota máxima virava detrator
+      condicoes: [{ campo: "etiqueta", op: "igual", valor_etiqueta: "Pesquisa NPS" }, { campo: "texto", op: "nao_contem", valor: "10" }],
       acoes: [
         { tipo: "etiquetar", etiqueta_nome: "Detrator", alvo: "contato" },
         { tipo: "notificar", para: "admins", titulo: "Nota baixa na pesquisa: {nome}", texto: "Respondeu a pesquisa com nota de 0 a 6. Vale ligar hoje." },
+      ],
+      respeitar_horario: false } },
+  // ---- plano 2000d · AX-059..AX-066: receitas do complemento (segurança de envio, reclamação, pedido de atendente e uma por segmento)
+  { id: "pediu_parar", categoria: "whatsapp", icone: "parar", destaque: [], ocultar: [],   // plano 2000d · AX-059
+    titulo: () => "Pediu para não receber mais → etiqueta «Não enviar»",
+    texto: () => "Quem escreve «não quero mais receber», «pare de mandar» ou «descadastrar» ganha a etiqueta «Não enviar», uma nota no histórico e uma confirmação educada. Respeitar esse pedido protege o seu número de denúncias.",
+    aviso: "Para valer em todas, as automações que mandam mensagem precisam da condição «etiqueta não é Não enviar» (o editor avisa quais faltam).",
+    auto: { nome: "Pediu para não receber mais", gatilho: "mensagem_recebida",
+      config: { palavras: ["não quero mais receber", "parar de receber", "pare de mandar", "descadastrar", "remover meu número", "sair da lista"] }, condicoes: [],
+      acoes: [
+        { tipo: "etiquetar", etiqueta_nome: "Não enviar", alvo: "contato" },
+        { tipo: "nota", texto: "Pediu para não receber mensagens automáticas." },
+        { tipo: "enviar_mensagem", texto: ASSINA("Tudo bem, {primeiro_nome}. Não vamos mais mandar mensagens automáticas. Se precisar de algo, é só chamar aqui.") },
+      ],
+      respeitar_horario: false } },
+  { id: "reclamacao", categoria: "equipe", icone: "alerta", destaque: [], ocultar: [],   // plano 2000d · AX-060
+    titulo: () => "Mensagem com reclamação → avisar o gestor na hora",
+    texto: () => "Quem escreve «reclamação», «insatisfeito», «péssimo» ou «Procon» ganha a etiqueta «Atenção» e os administradores recebem um aviso para responder pessoalmente. Nada sai sozinho para o cliente.",
+    auto: { nome: "Reclamação: avisar o gestor", gatilho: "mensagem_recebida",
+      config: { palavras: ["reclamação", "reclamar", "insatisfeito", "insatisfeita", "péssimo", "péssima", "absurdo", "procon"] }, condicoes: [],
+      acoes: [
+        { tipo: "etiquetar", etiqueta_nome: "Atenção", alvo: "contato" },
+        { tipo: "notificar", para: "admins", titulo: "Possível reclamação: {nome}", texto: "O cliente escreveu algo que parece reclamação. Vale responder pessoalmente, sem resposta pronta." },
+      ],
+      respeitar_horario: false } },
+  { id: "pediu_atendente", categoria: "equipe", icone: "sino", destaque: [], ocultar: [],   // plano 2000d · AX-061
+    titulo: () => "Pediu para falar com uma pessoa → rodízio e aviso",
+    texto: () => "Quem escreve «atendente», «falar com alguém» ou «falar com uma pessoa» vai para a próxima pessoa do rodízio, que recebe um aviso no sino.",
+    auto: { nome: "Pediu atendente", gatilho: "mensagem_recebida",
+      config: { palavras: ["atendente", "falar com alguém", "falar com uma pessoa", "falar com alguem", "humano"] }, condicoes: [],
+      acoes: [
+        { tipo: "atribuir", dono: "rodizio" },
+        { tipo: "notificar", para: "responsavel", titulo: "{nome} pediu para falar com uma pessoa", texto: "Responda assim que puder: o cliente pediu atendimento de alguém da equipe." },
+      ],
+      respeitar_horario: false } },
+  { id: "inicio_tratamento", categoria: "equipe", icone: "calendario", destaque: [], ocultar: ["oficina", "loja"],   // plano 2000d · AX-062
+    titulo: vv => `${vv.v.negocio} marcad${vv.art("negocio")} como «${vv.v.ganhar}» → agendar o início do tratamento`,
+    texto: () => "Assim que o paciente aprova o orçamento, a recepção ganha a tarefa de marcar a primeira sessão em 24 h e fica uma nota no histórico. Paciente que aprova e não é chamado esfria.",
+    auto: { nome: "Agendar o início do tratamento", gatilho: "negocio_ganho", config: {}, condicoes: [],
+      acoes: [
+        { tipo: "nota", texto: "Orçamento aprovado: marcar o início do tratamento." },
+        { tipo: "criar_tarefa", titulo: "Marcar a 1ª sessão do tratamento de {primeiro_nome}", tipo_tarefa: "whatsapp", vence_em_horas: 24, dono: "responsavel" },
+      ],
+      respeitar_horario: false } },
+  { id: "carro_recebido", categoria: "whatsapp", icone: "check", destaque: [], ocultar: ["odonto", "loja"], pedeEtapa: true,   // plano 2000d · AX-063
+    titulo: () => "Carro entrou na oficina → avisar o cliente que recebemos",
+    texto: () => "Quando o carro entra na etapa de diagnóstico/serviço, o cliente recebe a confirmação de que o carro chegou e que o orçamento vai por aqui. Se o funil não tiver essa etapa, escolha qual é.",
+    aviso: "As mensagens respeitam o horário de funcionamento.",
+    auto: { nome: "Carro recebido: avisar o cliente", gatilho: "negocio_estagio", config: { estagio_nome: "receb|entrad|diagnost|em servico|execu" }, condicoes: [],
+      acoes: [{ tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Recebemos o seu carro e já vamos começar o diagnóstico. Te mandamos o orçamento por aqui antes de fazer qualquer serviço.") }],
+      respeitar_horario: true } },
+  { id: "pagamento_confirmado", categoria: "whatsapp", icone: "check", destaque: [], ocultar: ["odonto", "oficina"], pedeEtapa: true,   // plano 2000d · AX-064
+    titulo: () => "Pagamento confirmado → avisar que o pedido está sendo separado",
+    texto: () => "Quando o pedido entra na etapa de pago, o cliente recebe a confirmação do pagamento e o aviso de que o pedido já está sendo separado. Se o funil não tiver essa etapa, escolha qual é.",
+    aviso: "As mensagens respeitam o horário de funcionamento.",
+    auto: { nome: "Pagamento confirmado: avisar", gatilho: "negocio_estagio", config: { estagio_nome: "pago|pagament" }, condicoes: [],
+      acoes: [{ tipo: "enviar_mensagem", texto: ASSINA("Oi, {primeiro_nome}! Pagamento confirmado. Já estamos separando o seu pedido e te avisamos por aqui quando sair.") }],
+      respeitar_horario: true } },
+  { id: "motivo_perda", categoria: "equipe", icone: "tarefa", destaque: [], ocultar: [],   // plano 2000d · AX-065
+    titulo: vv => `${vv.v.negocio} marcad${vv.art("negocio")} como «${vv.v.perder}» → anotar o motivo`,
+    texto: () => "Quando um negócio é perdido, o responsável ganha a tarefa de anotar o motivo (preço, prazo, concorrente…) em 24 h. Com os motivos, dá para ver onde as vendas escapam.",
+    auto: { nome: "Anotar o motivo da perda", gatilho: "negocio_perdido", config: {}, condicoes: [],
+      acoes: [{ tipo: "criar_tarefa", titulo: "Anotar por que {primeiro_nome} não fechou", tipo_tarefa: "tarefa", vence_em_horas: 24, dono: "responsavel" }],
+      respeitar_horario: false } },
+  { id: "etiqueta_urgente", categoria: "equipe", icone: "sino", destaque: [], ocultar: [], pedeEscolha: true,   // plano 2000d · AX-066
+    titulo: () => "Etiqueta «Urgente» → avisar os administradores e tarefa em 1 h",
+    texto: () => "Quando alguém da equipe põe a etiqueta «Urgente», os administradores recebem um aviso e o responsável ganha uma tarefa com prazo de 1 hora. Sem a etiqueta, escolha qual usar.",
+    auto: { nome: "Urgente: avisar e tarefa em 1 h", gatilho: "etiqueta_adicionada", config: { etiqueta_nome: "Urgente" }, condicoes: [],
+      acoes: [
+        { tipo: "notificar", para: "admins", titulo: "Urgente: {nome}", texto: "Marcaram como urgente. Confira agora." },
+        { tipo: "criar_tarefa", titulo: "Resolver o caso urgente de {primeiro_nome}", tipo_tarefa: "tarefa", vence_em_horas: 1, dono: "responsavel" },
       ],
       respeitar_horario: false } },
   // ---- dependem do servidor (aparecem só quando ele anuncia o recurso)
@@ -1678,6 +1875,8 @@ export function aplicarModelo(modelo, base, vocab, opcoes = {}) {
     a.config.estagio_id = e ? e.id : "";
   }
   const etiquetaDoNome = nome => (b.etiquetas || []).find(x => normalizar(x.nome) === normalizar(nome)) || null;
+  // plano 2000d · AX-067: o gatilho «Etiqueta adicionada» da receita vem pelo NOME da etiqueta (a desta empresa); sem ela, fica a escolher
+  if (a.config && a.config.etiqueta_nome) { const t = etiquetaDoNome(a.config.etiqueta_nome); delete a.config.etiqueta_nome; a.config.etiqueta_id = t ? t.id : ""; }
   a.condicoes = (a.condicoes || []).flatMap(cd => {
     // plano 2000d · DU-002/DU-361: condição de etiqueta pelo nome (a etiqueta desta empresa); sem ela: some (opcional) ou fica a escolher
     if (cd.valor_etiqueta) {
@@ -1731,7 +1930,10 @@ export function tomFormal(txt) {
   return texto(txt)
     .replace(/^Oi, /, "Olá, ").replace(/^Oi /, "Olá ")
     .replace(/, tudo bem[?]/g, ", como vai?").replace(/um tempinho/g, "algum tempo")
-    .replace(/Te esperamos/g, "Aguardamos você").replace(/para a gente/g, "para nós").replace(/indicar a gente/g, "nos indicar").replace(/que a gente/g, "que nós").replace(/É só responder/g, "Basta responder").replace(/é só responder/g, "basta responder");
+    .replace(/Te esperamos/g, "Aguardamos você").replace(/para a gente/g, "para nós").replace(/indicar a gente/g, "nos indicar").replace(/que a gente/g, "que nós").replace(/É só responder/g, "Basta responder").replace(/é só responder/g, "basta responder")
+    // plano 2000d · AX-068: as outras gírias das receitas novas («Vi que você», «Me diga», «Pode vir buscar», «a gente»)
+    .replace(/Vi que você/g, "Notamos que você").replace(/Me diga/g, "Informe").replace(/Pode vir buscar/g, "Pode retirá-lo").replace(/a gente/g, "nós")
+    .replace(/Tudo certo com/g, "Está tudo certo com").replace(/Não quero te incomodar/g, "Não queremos incomodar");
 }
 
 /* ---------- rascunho do editor: o que ainda não foi salvo fica guardado na aba (sessionStorage) ---------- */
@@ -1809,8 +2011,10 @@ export function mover(lista, de, para) {
 /** Resumo do histórico de execuções para o cartão: "12 execuções · 1 erro". */
 export function resumoExecucoes(item) {
   const e = Number(item && item.execucoes) || 0, r = Number(item && item.erros) || 0;
-  const pe = e === 1 ? "1 execução" : `${e} execuções`;
-  return r ? `${pe} · ${r === 1 ? "1 erro" : `${r} erros`}` : pe;
+  // plano 2000d · AX-045: milhar com ponto («1.234 execuções»), como o resto da tela
+  const f = n => n.toLocaleString("pt-BR");
+  const pe = e === 1 ? "1 execução" : `${f(e)} execuções`;
+  return r ? `${pe} · ${r === 1 ? "1 erro" : `${f(r)} erros`}` : pe;
 }
 
 /* ------------------------------------------------------------------ formato da IA (nx-ia → automacao_montar) */
@@ -1848,10 +2052,40 @@ export function deFormatoIA(x, base) {
     if (!ACAO[f.tipo]) { avisos.push(`A IA sugeriu um passo que não existe (${texto(f.tipo).slice(0, 40) || "sem nome"}); ele foi deixado de fora.`); continue; }
     acoes.push(f);
   }
+  // plano 2000d · AX-022: passos acima do limite saem com aviso (antes o editor abria com um erro que a pessoa não entendia)
+  if (acoes.length > LIMITES.acoes) { avisos.push(`A IA montou ${acoes.length} passos; o limite é ${LIMITES.acoes}. Os últimos ${acoes.length - LIMITES.acoes} ficaram de fora: confira o fim da sequência.`); acoes.length = LIMITES.acoes; }
   const condicoes = [];
   for (const cd of Array.isArray(src.condicoes) ? src.condicoes : []) {
     const f = flat(cd);
     if (f) condicoes.push(f);
+  }
+  // plano 2000d · AX-023: o mesmo para as condições
+  if (condicoes.length > LIMITES.condicoes) { avisos.push(`A IA montou ${condicoes.length} condições; o limite é ${LIMITES.condicoes}. As últimas ficaram de fora.`); condicoes.length = LIMITES.condicoes; }
+  // plano 2000d · AX-024: palavras-chave em texto («preço, valor») viram a lista que o editor mostra em chips
+  if (config && typeof config.palavras === "string") config.palavras = palavrasUnicas(config.palavras);
+  // plano 2000d · AX-104: «esperar» que veio em horas ou dias (a IA às vezes escreve assim) vira minutos
+  for (const f of acoes) if (f.tipo === "esperar" && f.minutos == null) {
+    const hh = numeroBR(f.horas), dd = numeroBR(f.dias);
+    if (dd != null) f.minutos = Math.round(dd * 1440); else if (hh != null) f.minutos = Math.round(hh * 60);
+    delete f.horas; delete f.dias;
+  }
+  // plano 2000d · AX-105/AX-106: etapa e etiqueta pelo NOME (a IA escreve «Agendada», não o id) viram o id desta empresa
+  const bIA = base || {};
+  const etapaPorNome = n => { const k = normalizar(n); for (const fu of bIA.funis || []) for (const e of fu.estagios || []) if (normalizar(e.nome) === k) return e.id; return null; };
+  const etiquetaPorNome = n => { const t = (bIA.etiquetas || []).find(x => normalizar(x.nome) === normalizar(n)); return t ? t.id : null; };
+  if (config && typeof config.estagio_id === "string" && config.estagio_id && !ehUuid(config.estagio_id)) config.estagio_id = etapaPorNome(config.estagio_id) || "";
+  if (config && typeof config.etiqueta_id === "string" && config.etiqueta_id && !ehUuid(config.etiqueta_id)) config.etiqueta_id = etiquetaPorNome(config.etiqueta_id) || "";
+  for (const cd of condicoes) {
+    if (typeof cd.valor !== "string" || !cd.valor || ehUuid(cd.valor)) continue;
+    if (cd.campo === "estagio_id") cd.valor = etapaPorNome(cd.valor) || "";
+    else if (cd.campo === "etiqueta") cd.valor = etiquetaPorNome(cd.valor) || "";
+  }
+  for (const f of acoes) {
+    if ((f.tipo === "mover_estagio" || f.tipo === "mover_funil" || f.tipo === "criar_negocio") && typeof f.estagio_id === "string" && f.estagio_id && !ehUuid(f.estagio_id)) f.estagio_id = etapaPorNome(f.estagio_id) || "";
+    if ((f.tipo === "etiquetar" || f.tipo === "etiqueta_adicionar" || f.tipo === "etiqueta_remover") && typeof f.etiqueta_id === "string" && f.etiqueta_id && !ehUuid(f.etiqueta_id)) {
+      const id = etiquetaPorNome(f.etiqueta_id);
+      if (id) f.etiqueta_id = id; else { if (f.tipo === "etiquetar") f.etiqueta_nome = f.etiqueta_id; f.etiqueta_id = ""; }
+    }
   }
   const auto = {
     nome: texto(src.nome).trim().slice(0, LIMITES.nome),
@@ -1862,6 +2096,8 @@ export function deFormatoIA(x, base) {
     ativo: false,
   };
   if (!gatilhoOk) auto.config = novaAutomacao(auto.gatilho).config;
+  // plano 2000d · AX-021: a IA não deu nome → o nome sugerido pelo gatilho e o 1º passo (o editor não abre com «dê um nome»)
+  if (!auto.nome && gatilhoOk) auto.nome = sugestaoNome(auto, base, null).slice(0, LIMITES.nome);
   // enviar_template sem modelo e etiqueta por nome: o mesmo acabamento das receitas
   const b = base || {};
   for (const ac of auto.acoes) {
@@ -2129,8 +2365,7 @@ export function erroAutomacao(e, mensagemPadrao, usuarios = null) {
   if (c === "tempo_esgotado") return "O servidor demorou a responder. Tente de novo em instantes.";
   if (c === "automacao_nao_encontrada") return "Essa automação foi excluída por outra pessoa. Volte para a lista.";
   if (c === "limite_plano" || c === "limite_atingido") return "Seu plano chegou ao limite de automações. Desligar não libera vaga: exclua uma que não usa mais ou fale com o suporte para aumentar.";
-  if (c === "sem_permissao") return `Seu acesso não permite mudar automações. ${frasePedirAdmin(usuarios)}`;
-  return mensagemPadrao;
+  if (c === "sem_permissao") return `Seu acesso não permite mudar automações. ${frasePedirAdmin(usuarios)}`;  return mensagemPadrao;
 }
 
 /* ------------------------------------------------------------------ rótulos para a tela */
@@ -2186,6 +2421,11 @@ export function exemploVariaveis({ empresa = "Sua empresa", atendente = "Ana", a
   r.profissional = "Dra. Paula";
   r.link_avaliacao = texto(base && base.link_avaliacao) || "https://g.page/r/sua-empresa/review";
   r.proxima_abertura = "amanhã às 08:00";
+  // plano 2000d · AX-076: os dados da empresa quando a base traz (Configurações → Empresa); senão um exemplo neutro
+  const de = (base && (base.empresa_dados || base.dados_empresa)) || base || {};
+  r.endereco = texto(de.endereco) || "Rua Exemplo, 100 – Centro";
+  r.telefone_empresa = texto(de.telefone_empresa) || "(12) 3333-4444";
+  r.instagram = texto(de.instagram) || "suaempresa";
   const campos = { placa: "ABC1D23", rastreio: "BR123456789BR", modelo: "Onix 2020", dentista: "Dra. Paula" };
   for (const c of [].concat((base && base.campos) || [], (base && base.campos_negocio) || [])) if (c && c.chave && !(c.chave in campos)) campos[c.chave] = texto(c.exemplo) || texto(c.rotulo) || c.chave;
   r.campos = campos;
@@ -2211,11 +2451,12 @@ export function avisoDataHoraConsulta(a, vertical) {
   const acoes = Array.isArray(a && a.acoes) ? a.acoes : [];
   const textos = acoes.flatMap(x => (x && x.tipo === "enviar_mensagem" ? [texto(x.texto)] : x && x.tipo === "enviar_template" ? (x.parametros || []).map(texto) : []));
   const hora = textos.some(t => /\{hora_consulta\}/.test(t));
-  const data = textos.some(t => /\{data_consulta\}/.test(t));
+  const data = textos.some(t => /\{data_consulta\}|\{dia_semana_consulta\}/.test(t));   // plano 2000d · AX-049: o dia da semana também depende da data marcada
   if (!hora && !data) return null;
   const pc = palavraConsulta(vertical);
   const porData = a.gatilho === "antes_da_data" || a.gatilho === "apos_data";
-  if (!porData) return `A mensagem usa ${hora && data ? "{data_consulta} e {hora_consulta}" : hora ? "{hora_consulta}" : "{data_consulta}"}: quem não tiver ${pc} marcada (ou só a data, sem a hora) recebe o texto com esse trecho em branco. Prefira o gatilho «Antes» ou «Depois» da ${pc} marcada.`;
+  const usadas = ["data_consulta", "dia_semana_consulta", "hora_consulta"].filter(k => textos.some(t => t.includes(`{${k}}`))).map(k => `{${k}}`);   // plano 2000d · AX-049
+  if (!porData) return `A mensagem usa ${listaFrase(usadas)}: quem não tiver ${pc} marcada (ou só a data, sem a hora) recebe o texto com esse trecho em branco. Prefira o gatilho «Antes» ou «Depois» da ${pc} marcada.`;
   return hora ? `A mensagem usa {hora_consulta}: quem tiver só a data (sem a hora) da ${pc} recebe esse trecho em branco. Confira se a frase faz sentido assim.` : null;
 }
 
@@ -2574,12 +2815,17 @@ export function perguntasDosAvisos(avisos, base) {
     [/\b(pessoa|responsavel|atendente|usuario|equipe)\b/, nomes(b.usuarios)],
     [/\b(numero|canal|whatsapp)\b/, nomes(b.canais)],
     [/\bdepartamentos?\b/, nomes(b.departamentos)],
+    // plano 2000d · AX-071: a IA pergunta o horário → chips com horários comuns
+    [/\b(horario|que horas|hora do dia)\b/, ["08:00", "09:00", "12:00", "14:00", "18:00"]],
+    // plano 2000d · AX-072: a IA pergunta quanto tempo esperar → chips de prazo
+    [/\b(quanto tempo|quantos dias|prazo|quantas horas|depois de quanto)\b/, ["1 hora", "1 dia", "2 dias", "3 dias", "7 dias"]],
   ];
   const out = [];
   for (const a of Array.isArray(avisos) ? avisos : []) {
     const p = texto(a).trim();
     if (!p || out.length >= 8) continue;
     const n = normalizar(p);
+    if (out.some(q => normalizar(q.pergunta) === n)) continue;   // plano 2000d · AX-103: o mesmo aviso repetido pela IA vira uma pergunta só
     const r = regras.find(([re, ops]) => re.test(n) && ops.length);
     out.push({ id: `p${out.length}`, pergunta: p.slice(0, 240), opcoes: (r ? r[1] : ["Sim", "Não"]).slice(0, 6) });
   }
@@ -2644,14 +2890,16 @@ function distancia(a, b) {
 }
 
 /** AS-035: a variável conhecida mais parecida com a digitada ({primeironome} → primeiro_nome); null se nenhuma chega perto. */
-export function sugestaoVariavel(nome) {
+export function sugestaoVariavel(nome, base = null) {
   // plano 1500c · UCA-007: «Primeiro_Nome», « nome », «primeiro nome» → a grafia certa direto
+  // plano 2000d · AX-073: com a base, as variáveis novas que o servidor anuncia ({dia_semana_consulta}, {profissional}…) também são sugeridas
+  const todas = variaveisAceitas(base);   // só as que o servidor desta empresa troca (sugerir uma que ele não troca não resolve)
   const direto = normalizar(nome).replace(/\s+/g, "_");
-  if (VARIAVEIS.some(([k]) => k === direto)) return direto;
+  if (todas.some(([k]) => k === direto)) return direto;
   const alvo = texto(nome).toLowerCase();
   const semTraco = alvo.replace(/_/g, "");
   let melhor = null, dist = Infinity;
-  for (const [k] of VARIAVEIS) {
+  for (const [k] of todas) {
     const d = Math.min(distancia(alvo, k), distancia(semTraco, k.replace(/_/g, "")));
     if (d < dist) { dist = d; melhor = k; }
   }
@@ -2668,7 +2916,7 @@ export function variaveisDosPassos(auto, base = null) {
     const textos = d.campos.filter(f => f.variaveis).map(f => ac[f.nome]);
     if (ac.tipo === "enviar_template") textos.push(...(Array.isArray(ac.parametros) ? ac.parametros : []));
     const desconhecidas = variaveisDesconhecidas(textos.filter(x => typeof x === "string").join("\n"), base);
-    if (desconhecidas.length) out.push({ indice, desconhecidas, sugestoes: desconhecidas.map(sugestaoVariavel) });
+    if (desconhecidas.length) out.push({ indice, desconhecidas, sugestoes: desconhecidas.map(k => sugestaoVariavel(k, base)) });   // plano 2000d · AX-073
   });
   return out;
 }
@@ -2713,8 +2961,9 @@ export function cadeiasDeAutomacao(auto, itens, base) {
       if (ac.tipo === "criar_negocio") {
         const fid = ac.funil_id || (ac.estagio_id && ix.estagios.get(ac.estagio_id) ? ix.estagios.get(ac.estagio_id).funil_id : funilPadrao());
         const id = ac.estagio_id || primeiraEtapa(fid);
-        if (id) ef.push({ i, tipo: "estagio", id });
-        ef.push({ i, tipo: "criado", funil: fid });
+        // plano 2000d · AX-055/AX-056: o registro é NOVO — se ele cai no próprio gatilho, roda de novo para ele, sem precisar desfazer nada
+        if (id) ef.push({ i, tipo: "estagio", id, novo: true });
+        ef.push({ i, tipo: "criado", funil: fid, novo: true });
       }
       if (ac.tipo === "etiqueta_adicionar" || (ac.tipo === "etiquetar" && !ac.remover)) {
         const id = ac.etiqueta_id || (ac.etiqueta_nome ? idEtiquetaPorNome(ac.etiqueta_nome) : null);
@@ -2789,7 +3038,7 @@ export function cadeiasDeAutomacao(auto, itens, base) {
     const desfez = todos.some(x => x.i < ef.i && (
       (ef.tipo === "etiqueta" && x.tipo === "tira_etiqueta" && x.id && x.id === (ef.id || c0.etiqueta_id)) ||
       (ef.tipo === "estagio" && x.tipo === "estagio" && x.id !== ef.id)));
-    if (!desfez) continue;
+    if (!desfez && !ef.novo) continue;   // plano 2000d · AX-055/AX-056
     out.push({ indice: ef.i, outra: { id: atual.id ?? null, nome: nomeDeAuto(atual) }, por: porDe(ef), laco: true, autoLaco: true, caminho: [nomeDeAuto(atual)] });
   }
   return out;
@@ -2801,7 +3050,10 @@ export function fraseLaco(cadeia) {
   if (cadeia.autoLaco) return `Esta automação dispara a si mesma (por ${cadeia.por}): ela pode rodar sem parar.`;
   const cam = Array.isArray(cadeia.caminho) && cadeia.caminho.length > 1 ? cadeia.caminho : null;
   if (!cam) return `«${cadeia.outra.nome}» dispara esta de volta: as duas podem rodar sem parar.`;
-  return `Laço: ${cam.map(n => `«${n}»`).join(" → ")} → volta para esta. Elas podem rodar sem parar.`;
+  // plano 2000d · AX-079: caminho comprido (até 10) mostra o começo e o fim — «A → B → … (mais 5) → J»
+  const nomes = cam.map(n => `«${n}»`);
+  const mostrar = nomes.length > 5 ? [...nomes.slice(0, 3), `… (mais ${nomes.length - 4})`, nomes[nomes.length - 1]] : nomes;
+  return `Laço: ${mostrar.join(" → ")} → volta para esta. Elas podem rodar sem parar.`;
 }
 
 /** AS-277: texto da confirmação ao desligar com gente no meio da sequência; null quando ninguém está esperando. */
@@ -2809,7 +3061,7 @@ export function avisoDesligarEspera(item) {
   const n = nat(item && item.em_espera);
   if (!n) return null;
   return n === 1 ? "1 pessoa está no meio da sequência e não vai receber os próximos passos."
-    : `${n} pessoas estão no meio da sequência e não vão receber os próximos passos.`;
+    : `${n.toLocaleString("pt-BR")} pessoas estão no meio da sequência e não vão receber os próximos passos.`;   // plano 2000d · AX-101: milhar
 }
 
 /**
@@ -2822,11 +3074,15 @@ export function contarAoLigar(auto) {
   return enviaMensagem(a) && (GATILHOS_TEMPO.includes(a.gatilho) || a.gatilho === "agendado");
 }
 /** plano 2000d · DU-040: a frase do diálogo de ligar com o total simulado + se é preciso digitar o número (acima de 50). null sem total. */
-export function fraseQuemRecebe(total) {
+export function fraseQuemRecebe(total, { auto = null } = {}) {
   const n = Number(total);
   if (!Number.isFinite(n) || n < 0) return null;
+  // plano 2000d · AX-057: «Todo dia» não manda em 15 minutos — manda no próximo dia e horário escolhidos
+  const c = (auto && auto.config) || {};
+  const quando = auto && auto.gatilho === "agendado" && RE_HORA.test(texto(c.horario))
+    ? `no próximo horário escolhido (${frasePeriodo(c.dias_semana)}, às ${c.horario})` : "nos próximos 15 minutos";
   const t = n === 0 ? "Agora ninguém se encaixa: só quem entrar na situação daqui para frente vai receber."
-    : `Ao ligar, ${n === 1 ? "1 pessoa recebe" : `${n.toLocaleString("pt-BR")} pessoas recebem`} a mensagem nos próximos 15 minutos.`;
+    : `Ao ligar, ${n === 1 ? "1 pessoa recebe" : `${n.toLocaleString("pt-BR")} pessoas recebem`} a mensagem ${quando}.`;
   return { texto: t, digitar: n > LIMITE_DIGITAR_AO_LIGAR ? String(n) : null, massa: n > LIMITE_DIGITAR_AO_LIGAR };
 }
 /** plano 2000d · DU-018: a IA de atendimento das Conversas está ligada? (o servidor manda base.ia_atendimento_ligada ou base.ia.atendimento_ligada). */
@@ -2844,7 +3100,8 @@ export function linhaCotaIA(cota) {
   const usadas = nat(cota.usadas), limite = nat(cota.limite);
   const pct = usadas / limite;
   // plano 1000b · UB-062: a cota soma sugestões, resumos e passos de IA — não só as montagens
-  return { texto: `${usadas} de ${limite} usos de IA este mês (sugestões, resumos e montagens)`, tom: pct >= 1 ? "ruim" : pct >= 0.8 ? "aten" : "neutra", esgotada: usadas >= limite };
+  // plano 2000d · AX-077: «1.234 de 2.000» (milhar com ponto, como o resto da tela)
+  return { texto: `${usadas.toLocaleString("pt-BR")} de ${limite.toLocaleString("pt-BR")} usos de IA este mês (sugestões, resumos e montagens)`, tom: pct >= 1 ? "ruim" : pct >= 0.8 ? "aten" : "neutra", esgotada: usadas >= limite };
 }
 
 /** AS-037: contador do texto do passo — «1.234 / 4.096», amarelo a partir de 90 % e vermelho acima do teto. */
@@ -2858,7 +3115,7 @@ export function contadorTexto(valor, max, { assinatura = "" } = {}) {
 
 /** plano 2000d · DU-048: ««A», «B», «C» e mais 7» — até `max` nomes, o resto em número (toast de lote legível). */
 export function listaNomesCurta(nomes, max = 3) {
-  const l = (Array.isArray(nomes) ? nomes : []).map(x => `«${texto(x)}»`);
+  const l = (Array.isArray(nomes) ? nomes : []).map(x => `«${texto(x).trim() || "sem nome"}»`);   // plano 2000d · AX-078: nunca «»
   if (l.length <= max) return listaFrase(l);
   return `${l.slice(0, max).join(", ")} e mais ${l.length - max}`;
 }
@@ -2876,8 +3133,8 @@ export function decomporHoras(horas) {
   return { n: hh || "", un: "horas" };
 }
 export function comporHoras(n, un) {
-  const x = Number(String(n).replace(",", "."));
-  if (!Number.isFinite(x) || x <= 0) return null;
+  const x = numeroBR(n);     // plano 2000d · AX-020: «1.000» horas é mil (antes virava 1), a mesma régua do comporDuracao
+  if (x == null || !Number.isFinite(x) || x <= 0) return null;
   const hh = un === "dias" ? x * 24 : x;
   return Number.isInteger(hh) ? hh : Math.round(hh);
 }
@@ -2917,6 +3174,10 @@ export function dadosPessoaisNoPedido(txt) {
   const anoLimite = new Date().getFullYear() - 10;
   const regras = [
     // plano 1500c · UCA-100: CNPJ (com máscara ou 14 dígitos) e data de nascimento completa (ano há mais de 10 anos)
+    // plano 2000d · AX-099: número de cartão (16 dígitos, em grupos de 4 ou colado)
+    ["cartão", /\b\d{4}[\s.-]?\d{4}[\s.-]?\d{4}[\s.-]?\d{4}\b/g],
+    // plano 2000d · AX-098: RG com a palavra «RG» na frente (sem ela, 9 dígitos soltos seriam qualquer número)
+    ["RG", /\bRG:?\s*\d{1,2}\.?\d{3}\.?\d{3}-?[\dXx]\b/gi],
     ["CNPJ", /\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b|\b\d{14}\b/g],
     ["data de nascimento", /\b(0?[1-9]|[12]\d|3[01])\/(0?[1-9]|1[0-2])\/(19\d{2}|20\d{2})\b/g],
     ["CPF", /\b\d{3}\.\d{3}\.\d{3}-\d{2}\b|\b\d{11}\b/g],
@@ -2924,6 +3185,8 @@ export function dadosPessoaisNoPedido(txt) {
     ["telefone", /(?:\+?55\s?)?\(?\b[1-9]{2}\)?\s?9?\d{4}[-\s]?\d{4}\b/g],
     // plano 1000b · UB-027: celular sem DDD («98765-4321», «9 8765 4321») também é telefone (isolado: não pega pedaço de outro número)
     ["telefone", /(?<![\d(.-])\b9\s?\d{4}[-\s]?\d{4}\b(?![\d.-]\d)/g],
+    // plano 2000d · AX-046: placa de carro (antiga «ABC-1234» e Mercosul «ABC1D23») identifica o cliente da oficina
+    ["placa", /\b[A-Z]{3}-?\d[A-Z0-9]\d{2}\b/g],
   ];
   const out = [], vistos = [];
   for (const [tipo, re] of regras) for (const m of t.matchAll(re)) {
@@ -2976,9 +3239,14 @@ export function sugestaoNome(auto, base, vocab) {
   const ix = indexarBase(base);
   const c = a.config || {};
   const etapa = c.estagio_id && ix.estagios.get(c.estagio_id) ? ix.estagios.get(c.estagio_id).nome : null;
+  // plano 2000d · AX-044: nas datas, o nome diz a antecedência («24 h antes da consulta»), não só «Antes da data marcada»
+  const pc = palavraConsulta(voc(vocab).vertical);
+  const dataTxt = c.campo === "previsao_fechamento" ? "da previsão" : `da ${pc}`;
   let ini = a.gatilho === "negocio_estagio" && etapa ? `Etapa ${etapa}`
     : a.gatilho === "tempo_no_estagio" && etapa ? `Parado em ${etapa}`
-      : rotuloGatilho(a.gatilho, vocab);
+      : a.gatilho === "antes_da_data" && Number(c.horas) > 0 ? `${formatarHoras(c.horas)} antes ${dataTxt}`
+        : a.gatilho === "apos_data" && Number(c.horas) > 0 ? `${formatarHoras(c.horas)} depois ${dataTxt}`
+          : rotuloGatilho(a.gatilho, vocab);
   const ac = (a.acoes || []).find(x => x && x.tipo && x.tipo !== "esperar" && x.tipo !== "parar");
   if (!ac && !etapa) return "";
   if (ac) { const r = rotuloAcao(ac.tipo, vocab); ini += ` → ${r.charAt(0).toLowerCase()}${r.slice(1)}`; }
@@ -2987,9 +3255,10 @@ export function sugestaoNome(auto, base, vocab) {
 
 /** AS-023: outra automação (não esta) com o mesmo nome, sem diferença de acento/maiúscula; null quando não há. */
 export function nomeRepetido(nome, itens, idProprio = null) {
-  const n = normalizar(nome);
+  const k = s => normalizar(s).replace(/\s+/g, " ");   // plano 2000d · AX-043: «Lembrete  24 h» e «Lembrete 24 h» são o mesmo nome
+  const n = k(nome);
   if (!n) return null;
-  return (Array.isArray(itens) ? itens : []).find(x => x && x.id !== idProprio && normalizar(x.nome) === n) || null;
+  return (Array.isArray(itens) ? itens : []).find(x => x && x.id !== idProprio && k(x.nome) === n) || null;
 }
 
 /** AS-015: busca por nome (sem acento) e ordem da lista. ordem: "criacao" | "nome" | "recente" | "erros". */
@@ -3013,10 +3282,13 @@ export function listaMudou(naTela, doServidor, ignorar = null) {
 export function listaAutomacoes(itens, { termo = "", ordem = "criacao", frase = null } = {}) {
   const t = normalizar(termo);
   // plano 1500c · UCA-093: a observação interna (quando o servidor mandar `descricao`) também entra na busca
-  const casa = x => normalizar(x && x.nome).includes(t) || normalizar(x && x.descricao).includes(t) || (typeof frase === "function" && normalizar(frase(x)).includes(t));
+  // plano 2000d · AX-041: cada palavra do termo vale sozinha («lembrete whatsapp» acha «Lembrete por mensagem» que manda WhatsApp)
+  const toks = t.split(/\s+/).filter(Boolean);
+  const casa = x => { const tudo = [normalizar(x && x.nome), normalizar(x && x.descricao), typeof frase === "function" ? normalizar(frase(x)) : "", enviaMensagem(x) ? "whatsapp mensagem" : ""].join(" "); return toks.every(k => tudo.includes(k)); };
   const l = (Array.isArray(itens) ? itens : []).filter(x => !t || casa(x));
   const quando = x => { const d = x && x.ultima_execucao_em ? Date.parse(x.ultima_execucao_em) : NaN; return Number.isFinite(d) ? d : -Infinity; };
-  if (ordem === "nome") return [...l].sort((a, b) => texto(a.nome).localeCompare(texto(b.nome), "pt-BR", { sensitivity: "base" }));
+  // plano 2000d · AX-040: «Lembrete 2» antes de «Lembrete 10» (ordem numérica dentro do nome)
+  if (ordem === "nome") return [...l].sort((a, b) => texto(a.nome).localeCompare(texto(b.nome), "pt-BR", { sensitivity: "base", numeric: true }));
   if (ordem === "recente") return [...l].sort((a, b) => quando(b) - quando(a));
   // plano 1500c · UCA-026: «Com erro primeiro» na régua do resumo (30 dias quando o servidor manda) — 5 erros de 6 meses atrás não passam na frente
   if (ordem === "erros") { const per = periodoDoResumo(itens); const er = x => (per === "30d" ? taxaSucesso(x, { periodo: per }).erros : nat(x && x.erros)); return [...l].sort((a, b) => er(b) - er(a) || quando(b) - quando(a)); }
@@ -3190,6 +3462,10 @@ export function dicaDoErro(texto) {
     [/fora do horario/, "A mensagem esperou o horário de atendimento. Ajuste os horários se precisar.", "#/config/departamentos", "Horários"],
     [/janela|24 ?h/, "Fora da janela de 24 h da Meta só sai modelo aprovado: troque o passo por «Enviar modelo».", null, null],
     [/etapa .*nao existe|etiqueta .*nao existe|nao existe mais/, "Algo escolhido no passo foi apagado: abra a automação e escolha de novo.", null, null],
+    // plano 2000d · AX-047: número bloqueado/banido pelo WhatsApp — diminuir o volume antes de religar
+    [/bloquead|banid|restrit|spam/, "O WhatsApp limitou o número (muitas mensagens ou denúncias). Pause os envios, diminua o volume e só mande para quem conversou com vocês.", "#/config/numeros", "Ver os números"],
+    // plano 2000d · AX-048: o contato pediu para não receber — não insista
+    [/pediu para (nao receber|parar|sair)|opt.?out|descadastr/, "O contato pediu para não receber mensagens automáticas: respeite (use uma condição de etiqueta para pular quem pediu).", null, null],
   ];
   for (const [re, dica, href, rotulo] of regras) if (re.test(t)) return { dica, href, rotulo };
   return null;
@@ -3253,7 +3529,7 @@ export function comandosDasAutomacoes(itens, { podeEditar = false, max = 40 } = 
  */
 export function nomeDaCopia(nome, existentes = []) {
   const usados = new Set((Array.isArray(existentes) ? existentes : []).map(n => normalizar(n)));
-  const m = /^(.*?)\s*\(cópia(?:\s+(\d+))?\)$/i.exec(texto(nome).trim());
+  const m = /^(.*?)\s*\(c[óo]pia(?:\s+(\d+))?\)$/i.exec(texto(nome).trim());   // plano 2000d · AX-042: «(copia)» digitado sem acento também conta
   const base = (m ? m[1] : texto(nome).trim()) || "Automação";
   let n = m ? (Number(m[2]) || 1) + 1 : 1;
   const montar = k => { const suf = k === 1 ? " (cópia)" : ` (cópia ${k})`; return `${base.slice(0, 80 - suf.length).trimEnd()}${suf}`; };
@@ -3267,7 +3543,9 @@ export function nomeDaCopia(nome, existentes = []) {
  */
 export function resumoDiferencas(guardado, atual) {
   const a = guardado || {}, b = atual || {};
-  const j = x => JSON.stringify(x === undefined ? null : x);
+  // plano 2000d · AX-009: compara sem depender da ordem das chaves ({horas, campo} = {campo, horas}) — antes o rascunho dizia «o gatilho mudou» à toa
+  const ordenar = x => (Array.isArray(x) ? x.map(ordenar) : x && typeof x === "object" ? Object.fromEntries(Object.keys(x).sort().map(k => [k, ordenar(x[k])])) : x);
+  const j = x => JSON.stringify(ordenar(x === undefined ? null : x));
   const partes = [];
   if (texto(a.nome).trim() !== texto(b.nome).trim()) partes.push("o nome");
   if (a.gatilho !== b.gatilho || j(a.config || {}) !== j(b.config || {})) partes.push("o gatilho");
@@ -3642,14 +3920,17 @@ export function tempoEconomizado(itens, { minutosPorMensagem = 2, minutosPorTare
   if (!l.some(x => x && x.mensagens_30d != null)) return null;
   const min = l.reduce((s, x) => s + nat(x && x.mensagens_30d) * minutosPorMensagem + nat(x && x.tarefas_30d) * minutosPorTarefa, 0);
   if (!min) return null;
-  return { minutos: min, texto: min < 60 ? `${min} min` : `${Math.round(min / 60)} h` };
+  // plano 2000d · AX-029: «1 h 30 min» (antes «2 h» — 90 min arredondava para cima); de 1 dia para cima, em horas («26 h»)
+  const m = Math.round(min);
+  return { minutos: min, texto: m < 1440 ? formatarDuracao(m) : `${Math.round(m / 60)} h` };
 }
 
 /** plano 1500c · UCA-106: a frase + o passo a passo em texto simples, para mandar ao cliente aprovar. */
 export function textoParaCompartilhar(auto, base, vocab) {
   const passos = passosEmFrases(auto, base, vocab).filter(p => !p.inalcancavel);
   const nl = String.fromCharCode(10);
-  const linhas = [`${texto(auto && auto.nome).trim() || "Automação"}`, descrever(auto, base, vocab)];
+  // plano 2000d · AX-080: quem recebe o texto para aprovar sabe se ela já está rodando
+  const linhas = [`${texto(auto && auto.nome).trim() || "Automação"} (${auto && auto.ativo ? "ligada" : "desligada"})`, descrever(auto, base, vocab)];
   if (passos.length) linhas.push("", "Passo a passo:", ...passos.map((p, k) => `${k + 1}. ${p.quando}: ${p.frase}`));
   return linhas.join(nl);
 }
@@ -3661,7 +3942,9 @@ export function estimativaDiaria(serie, { unidade = "mensagens" } = {}) {
   const media = Math.round(l.reduce((s, n) => s + n, 0) / l.length);
   const pico = Math.max(...l);
   if (!pico) return { media: 0, pico: 0, texto: "" };
-  return { media, pico, texto: `cerca de ${media} ${unidade} por dia (pico de ${pico})` };
+  // plano 2000d · AX-025: «cerca de 1 mensagem por dia» (singular), com milhar
+  const un = n => (n === 1 ? ({ mensagens: "mensagem", "execuções": "execução", tarefas: "tarefa", pessoas: "pessoa" }[unidade] || unidade) : unidade);
+  return { media, pico, texto: `cerca de ${media.toLocaleString("pt-BR")} ${un(media)} por dia (pico de ${pico.toLocaleString("pt-BR")})` };
 }
 
 /* ================================================================== plano 2000d · frente auto (lotes d2 e d3) */
@@ -3685,8 +3968,12 @@ export function importarAutomacoes(json, base, vocab = null) {
   let src = json;
   if (typeof src === "string") { try { src = JSON.parse(src); } catch { return []; } }
   if (!src || typeof src !== "object") return [];
-  if (FORMATOS_VARIAS.includes(src.formato) && Array.isArray(src.itens))
-    return src.itens.slice(0, 50).map(x => importarAutomacao({ formato: FORMATO_AUTOMACAO, versao: 1, auto: x && x.auto, vertical: src.vertical }, base, vocab)).filter(r => r.auto);
+  if (FORMATOS_VARIAS.includes(src.formato) && Array.isArray(src.itens)) {
+    const l = src.itens.slice(0, 50).map(x => importarAutomacao({ formato: FORMATO_AUTOMACAO, versao: 1, auto: x && x.auto, vertical: src.vertical }, base, vocab)).filter(r => r.auto);
+    // plano 2000d · AX-031: acima de 50, quantas ficaram de fora (a tela avisa em vez de cortar calada)
+    l.cortadas = Math.max(0, src.itens.length - 50);
+    return l;
+  }
   const r = importarAutomacao(src, base, vocab);
   return r.auto ? [r] : [];
 }
@@ -3708,7 +3995,8 @@ export function pilulaEstadoPasso(estado) {
 
 /** plano 2000d · DU-063: telefone no meio do texto vira «(12) 9••••-••30» (para mandar o resultado do teste a quem não é da empresa). */
 export function mascararTelefone(t) {
-  return texto(t).replace(/(\(?\d{2}\)?\s?)(9?\d{4})[-\s]?(\d{2})(\d{2})\b/g, (m, ddd, a, b, c) => `${ddd}${a.charAt(0)}${"•".repeat(Math.max(0, a.length - 1))}-••${c}`);
+  // plano 2000d · AX-030: com o +55 na frente («+55 12 98765-4321») o código do país sai antes de mascarar (antes o «55» virava o DDD)
+  return texto(t).replace(/(?<!\d)\+?55[\s.-]?(?=\(?\d{2}\)?[\s.-]?9?\d{4}[-\s]?\d{4}\b)/g, "").replace(/(\(?\d{2}\)?\s?)(9?\d{4})[-\s]?(\d{2})(\d{2})\b/g, (m, ddd, a, b, c) => `${ddd}${a.charAt(0)}${"•".repeat(Math.max(0, a.length - 1))}-••${c}`);
 }
 /** plano 2000d · DU-063: o resultado do teste em texto simples (nomes só com o primeiro nome, telefones mascarados, os passos). */
 export function textoDoTeste(sim, auto = null) {
@@ -3716,9 +4004,9 @@ export function textoDoTeste(sim, auto = null) {
   const nl = String.fromCharCode(10);
   const linhas = [`${texto(auto && auto.nome).trim() || "Automação"} — teste sem enviar nada`, `Quem se encaixa agora: ${nat(s.total)}`];
   for (const a of (Array.isArray(s.alvos) ? s.alvos : []).slice(0, 25)) {
-    const nome = mascararTelefone(texto(a.titulo).trim().split(/\s+/).slice(0, 1).join(" ") + (/\s/.test(texto(a.titulo).trim()) ? " …" : ""));
+    const nome = mascararEmail(mascararTelefone(texto(a.titulo).trim().split(/\s+/).slice(0, 1).join(" ") + (/\s/.test(texto(a.titulo).trim()) ? " …" : "")));   // plano 2000d · AX-081
     linhas.push("", `• ${nome}${a.ignorado && a.motivoIgnorado ? ` (${a.motivoIgnorado})` : ""}`);
-    for (const p of a.passos || []) linhas.push(`   ${pilulaEstadoPasso(p.estado).texto}: ${mascararTelefone(p.rotulo)}${p.quando ? ` (${p.quando})` : ""}`);
+    for (const p of a.passos || []) linhas.push(`   ${pilulaEstadoPasso(p.estado).texto}: ${mascararEmail(mascararTelefone(p.rotulo))}${p.quando ? ` (${p.quando})` : ""}`);
   }
   return linhas.join(nl);
 }
@@ -3740,7 +4028,13 @@ export function semRodarHa(item, agora = Date.now()) {
   const ref = Date.parse(x.ultima_execucao_em || x.ativado_em || x.atualizado_em || x.criado_em || "");
   if (!Number.isFinite(ref)) return null;
   const dias = Math.floor((Number(agora) - ref) / 86400000);
-  return dias >= 7 ? { dias, texto: `Sem rodar há ${dias} dias` } : null;
+  // plano 2000d · AX-058: «Todo dia» que roda só às segundas é normal ficar 7 dias sem rodar — o limite é 7 dias além do maior intervalo
+  let folga = 0;
+  if (x.gatilho === "agendado") {
+    const d = normalizarDias(x.config && x.config.dias_semana);
+    if (d.length) folga = Math.max(...d.map((v, k) => ((d[(k + 1) % d.length] - v + 7) % 7) || 7)) - 1;
+  }
+  return dias >= 7 + folga ? { dias, texto: `Sem rodar há ${dias} dias` } : null;
 }
 
 /** plano 2000d · DU-068: execuções da última semana × a anterior (série de 14 dias, a mais antiga primeiro) → {atual, anterior, pct, texto}. */
@@ -3749,7 +4043,7 @@ export function tendencia(serie) {
   if (l.length < 14) return null;
   const ult = l.slice(-7).reduce((s, n) => s + n, 0), ant = l.slice(-14, -7).reduce((s, n) => s + n, 0);
   if (!ant && !ult) return { atual: 0, anterior: 0, pct: null, texto: "" };
-  if (!ant) return { atual: ult, anterior: 0, pct: null, texto: `${ult} execuções nesta semana (na anterior, nenhuma)` };
+  if (!ant) return { atual: ult, anterior: 0, pct: null, texto: `${ult === 1 ? "1 execução" : `${ult.toLocaleString("pt-BR")} execuções`} nesta semana (na anterior, nenhuma)` };   // plano 2000d · AX-082
   const pct = Math.round(((ult - ant) / ant) * 100);
   return { atual: ult, anterior: ant, pct, texto: pct === 0 ? "O mesmo número de execuções da semana anterior" : `${pct > 0 ? "+" : "−"}${Math.abs(pct)} % de execuções vs. a semana anterior` };
 }
@@ -3801,7 +4095,16 @@ export function textoSelecao(marcadas, visiveis) {
 const OBJETIVO_RECEITA = { lembrete_consulta_texto: "Lembretes", lembrete_consulta: "Lembretes", lembrete_2h: "Lembretes", lembrete_equipe_consulta: "Lembretes", confirmacao_agendamento: "Lembretes",
   confirmou_sim: "Lembretes", faltou_remarcar: "Lembretes", followup_orcamento: "Vendas", orcamento: "Vendas", orcamento_24h_oficina: "Vendas", lead_anuncio: "Vendas", lead_frio_2d: "Vendas",
   reativar_30_dias: "Vendas", reengajar_perdido: "Vendas", recompra_30: "Vendas", valor_alto: "Vendas", pos_atendimento: "Relacionamento", agradecer_indicar: "Relacionamento",
-  nps: "Relacionamento", pos_venda: "Relacionamento", retorno_6_meses: "Relacionamento", revisao_6_meses: "Relacionamento", garantia_90: "Relacionamento", aniversario: "Relacionamento" };
+  nps: "Relacionamento", pos_venda: "Relacionamento", retorno_6_meses: "Relacionamento", revisao_6_meses: "Relacionamento", garantia_90: "Relacionamento", aniversario: "Relacionamento",
+  // plano 2000d · AX-026: as receitas da rodada 2000d também têm objetivo (antes caíam em «Equipe» pelo gatilho)
+  carro_pronto: "Relacionamento", cuidados_pos: "Relacionamento", pedido_enviado: "Relacionamento", troca_7_dias: "Relacionamento", nps_detrator: "Relacionamento",
+  produto_chegou: "Vendas", cliente_vip: "Relacionamento", boas_vindas: "Vendas", fora_do_horario: "Relacionamento",
+  manutencao_mensal: "Lembretes", ficha_primeira_vez: "Lembretes", retirada_pendente: "Lembretes",
+  orcamento_aprovado: "Equipe", patio_parado: "Equipe", site_sem_resposta: "Vendas", sem_resposta: "Equipe", preco: "Vendas", pediu_desmarcar: "Lembretes",
+  tarefa_atrasada: "Equipe", ia_classificar_etapa: "Equipe", ia_resumo_conversa: "Equipe",
+  // plano 2000d · AX-059..AX-066: as receitas novas deste complemento
+  pediu_parar: "Relacionamento", reclamacao: "Relacionamento", pediu_atendente: "Equipe", inicio_tratamento: "Vendas", carro_recebido: "Relacionamento",
+  pagamento_confirmado: "Relacionamento", motivo_perda: "Vendas", etiqueta_urgente: "Equipe" };
 export const OBJETIVOS = Object.freeze(["Lembretes", "Vendas", "Relacionamento", "Equipe"]);
 export function objetivoDe(x) {
   if (x && x.modelo && OBJETIVO_RECEITA[x.modelo]) return OBJETIVO_RECEITA[x.modelo];
@@ -3809,6 +4112,8 @@ export function objetivoDe(x) {
   if (g === "antes_da_data") return "Lembretes";
   if (["negocio_criado", "negocio_perdido", "tempo_no_estagio"].includes(g) && enviaMensagem(x)) return "Vendas";
   if (["negocio_ganho", "apos_data"].includes(g)) return "Relacionamento";
+  // plano 2000d · AX-027: o resto que manda mensagem ao cliente é relacionamento — «Equipe» é o que fica dentro do sistema
+  if (enviaMensagem(x)) return "Relacionamento";
   return "Equipe";
 }
 /** plano 2000d · DU-082: a lista em grupos por objetivo, na ordem de OBJETIVOS: [{grupo, itens}]. */
@@ -3889,7 +4194,7 @@ export function resumoRascunhoNova(auto, vocab = null) {
   const a = auto || {};
   const n = Array.isArray(a.acoes) ? a.acoes.length : 0;
   const g = GATILHO[a.gatilho] ? rotuloGatilho(a.gatilho, vocab) : "sem gatilho";
-  return `${texto(a.nome).trim() ? `«${texto(a.nome).trim()}»: ` : ""}gatilho «${g}», ${n === 1 ? "1 passo" : `${n} passos`}`;
+  return `${texto(a.nome).trim() ? `«${texto(a.nome).trim()}»: ` : ""}gatilho «${g}», ${n === 0 ? "nenhum passo ainda" : n === 1 ? "1 passo" : `${n} passos`}`;   // plano 2000d · AX-083: «nenhum passo ainda», não «0 passos»
 }
 
 /** plano 2000d · DU-107: volta ao texto da receita de origem, mantendo id, nome e o ligado/desligado da que está aberta. null sem receita. */
@@ -3940,12 +4245,50 @@ export function montarParametrosTemplate(corpo) {
     const n = Number(m[1]);
     if (out.some(x => x.n === n)) continue;
     const antes = normalizar(t.slice(Math.max(0, m.index - 24), m.index));
-    const sug = /(ola|oi|bom dia|boa tarde|caro|cara|prezad[oa]),?\s*$/.test(antes) ? "{primeiro_nome}"
-      : /\b(as|a partir das)\s*$/.test(antes) ? "{hora_consulta}"
+    // plano 2000d · AX-069: tratamento («Sr.», «Sra.», «Dra.», «querida», «boa noite») também pede o nome
+    // plano 2000d · AX-070: «horário:» / «hora:» pede a hora
+    const sug = /(ola|oi|bom dia|boa tarde|boa noite|caro|cara|querid[oa]|prezad[oa]|sra?\.?|dra?\.?),?\s*$/.test(antes) ? "{primeiro_nome}"
+      : /\b(as|a partir das|horario|hora):?\s*$/.test(antes) ? "{hora_consulta}"
       : /\b(em|dia|para|no dia|data)\s*$/.test(antes) ? "{data_consulta}"
       : /\b(protocolo|atendimento)\s*$/.test(antes) ? "{protocolo}"
       : /\b(r\$|valor|total)\s*$/.test(antes) ? "{valor}" : "";
     out.push({ n, trecho: trechoParametro(t, n), sugestao: sug });
   }
   return out.sort((a, b) => a.n - b.n);
+}
+
+/* ================================================================== plano 2000d · frente auto (complemento AX) */
+
+/** plano 2000d · AX-032: quantas automações ainda cabem no plano ({usadas, limite} do nx_automacoes_listar). Infinity sem limite. */
+export function vagasNoPlano(lim) {
+  const l = lim || {};
+  if (l.limite == null || !Number.isFinite(Number(l.limite))) return Infinity;
+  return Math.max(0, Math.floor(Number(l.limite)) - Math.max(0, Math.floor(Number(l.usadas) || 0)));
+}
+
+/**
+ * plano 2000d · AX-034: roda `fn(item, i)` para cada item, no máximo `concorrencia` ao mesmo tempo (ligar 200 automações não espera uma a uma
+ * nem dispara 200 chamadas juntas). Devolve [{item, ok, valor?, erro?}] na ORDEM da lista; `aoProgresso(feitas, total)` a cada término.
+ */
+export async function emLotes(lista, fn, { concorrencia = 4, aoProgresso = null } = {}) {
+  const l = Array.isArray(lista) ? lista : [];
+  const out = new Array(l.length);
+  let prox = 0, feitas = 0;
+  const n = Math.max(1, Math.min(Math.floor(Number(concorrencia)) || 1, l.length || 1));
+  const trabalhador = async () => {
+    while (prox < l.length) {
+      const i = prox++;
+      try { out[i] = { item: l[i], ok: true, valor: await fn(l[i], i) }; }
+      catch (erro) { out[i] = { item: l[i], ok: false, erro }; }
+      feitas += 1;
+      if (typeof aoProgresso === "function") { try { aoProgresso(feitas, l.length); } catch { /* o progresso é um extra */ } }
+    }
+  };
+  await Promise.all(Array.from({ length: n }, trabalhador));
+  return out;
+}
+
+/** plano 2000d · AX-081: e-mail no meio do texto vira «m•••@gmail.com» (o resultado do teste pode ir para quem não é da empresa). */
+export function mascararEmail(t) {
+  return texto(t).replace(/([^\s@<>()«»,;:]+)@([^\s@<>()«»,;:]+\.[a-z]{2,})/gi, (m, u, d) => `${u.charAt(0)}•••@${d}`);
 }

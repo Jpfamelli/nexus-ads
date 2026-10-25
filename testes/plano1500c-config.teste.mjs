@@ -490,7 +490,8 @@ test("UCB-014 + UCB-016 + UCB-017 + UCB-027 + UCB-028 + UCB-029 + UCB-030 + UCB-
     const ordem = t.chamadas.length;
     clicar(d, raiz.querySelector(".cfg-conv-logo .cfg-conv-novo")); await tique(8);
     const seq = t.chamadas.slice(ordem).map(c => c[0]);
-    assert.deepEqual(seq.filter(n => /convite/.test(n)), ["nx_convite_revogar", "nx_convite_criar"]);
+    // plano 2000d: FX-030/SC-005 tenta antes o nx_convite_regerar; sem link na resposta (servidor de hoje), revoga e cria como antes
+    assert.deepEqual(seq.filter(n => /convite/.test(n)), ["nx_convite_regerar", "nx_convite_revogar", "nx_convite_criar"]);
     assert.equal(t.chamadas.slice(ordem).find(c => c[0] === "nx_convite_criar")[1].p_dados.email, "logo@x.com");
     // UCB-038: revogar → o foco vai ao próximo «Revogar» do cartão
     clicar(d, raiz.querySelectorAll(".cfg-conv-revogar")[0]); await tique(6);

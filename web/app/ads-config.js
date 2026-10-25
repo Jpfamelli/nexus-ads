@@ -32,22 +32,47 @@ export const REGRAS = [["r1", "Custo por conversa alto"], ["r2", "Campanha sem c
 // plano 100 (decisão 5): nada de fee inventado — gestão 0 até a Nexus preencher (igual ao CFG_PADRAO do núcleo)
 // plano 1000 (AD-001/AD-072): metas também não — sem valor salvo o campo fica VAZIO (com placeholder) e salvar não grava 15/1500 inventados
 export const PADRAO = { cpaAlvo: null, orcamento: null, fee: 0, assinatura: "" };
+/** Plano 2000d · DA-335: a cor da agência — só #RRGGBB (nada de CSS livre no relatório); vazio = a do Órbita. */
+export function lerCorAgencia(bruto) {
+  const s = String(bruto == null ? "" : bruto).trim();
+  if (!s) return { ok: true, valor: "" };
+  const m = /^#?([0-9a-f]{6})$/i.exec(s);
+  return m ? { ok: true, valor: `#${m[1].toUpperCase()}` } : { ok: false, msg: "Use a cor em 6 dígitos, como 1F6FEB (ou deixe vazio)." };
+}
+/** Plano 2000d · DA-361: a meta de fechamentos do mês (inteiro positivo) — vazio = sem meta. */
+export function lerMetaFechamentos(bruto) {
+  const s = String(bruto == null ? "" : bruto).trim();
+  if (!s) return { ok: true, valor: null };
+  const n = Number(s.replace(/\./g, ""));
+  return Number.isInteger(n) && n > 0 && n <= 100000 ? { ok: true, valor: n } : { ok: false, msg: "A meta de fechamentos precisa ser um número inteiro maior que zero (ou fique vazia)." };
+}
+/** Plano 2000d · DA-191: a meta de custo com um exemplo de conta (antes só a definição). */
+export const EXEMPLO_META_CUSTO = "Ex.: meta de R$ 20 — se R$ 600 investidos trouxeram 25 conversas (R$ 24 cada), está 20% acima, ainda sem aviso; a R$ 28 (40% acima), o radar avisa.";
 /** Plano 1500c · AC-146: a assinatura que o resumo do mês usa quando o cliente nunca salvou uma (a mesma do núcleo, CFG_PADRAO). */
 export const ASSINATURA_PADRAO = "Equipe Nexus · gestão de tráfego";
 /** Plano 1500c · AC-146: o que o campo mostra ao abrir — a assinatura EFETIVA (a salva, ou a padrão quando não há nenhuma) e se o
     cliente escolheu ficar sem (vazio salvo de propósito, AB-021). Antes o campo abria vazio e «Salvar» gravava "" em silêncio. */
 export function assinaturaInicial(cfg = {}) {
-  const s = cfg && cfg.assinatura;
-  if (typeof s !== "string") return { valor: ASSINATURA_PADRAO, sem: false };
-  return s.trim() ? { valor: s, sem: false } : { valor: ASSINATURA_PADRAO, sem: true };
+  const s = cfg && cfg.assinatura, padrao = assinaturaPadraoDe(cfg);   // plano 2000d · DA-184
+  if (typeof s !== "string") return { valor: padrao, sem: false };
+  return s.trim() ? { valor: s, sem: false } : { valor: padrao, sem: true };
+}
+/** Plano 2000d · DA-184: com a agência parceira configurada (cfg.agenciaNome), a assinatura padrão é a DELA — o cliente da agência
+    Alfa não recebe «Equipe Nexus». Sem agência, continua a da Nexus (decisão do integrador, AB-022). */
+export function assinaturaPadraoDe(cfg = {}, agencia = null) {
+  const a = String((agencia != null ? agencia : cfg && cfg.agenciaNome) || "").trim().slice(0, 60);
+  return a ? `Equipe ${a} · gestão de tráfego` : ASSINATURA_PADRAO;
 }
 /** Plano 1500c · AC-146: o valor a gravar. «Sem assinatura» marcado → "" (sem linha). Cliente sem assinatura salva e o campo ainda com a
     padrão → `undefined` (a chave nem vai: o servidor MESCLA o cfg e o núcleo segue usando a padrão). Campo apagado sem marcar «sem»
     → volta a valer a padrão (undefined, quando nunca houve uma salva; senão a padrão por escrito). */
-export function assinaturaParaSalvar({ cfg = {}, valor = "", sem = false } = {}) {
+export function assinaturaParaSalvar({ cfg = {}, valor = "", sem = false, agencia = null } = {}) {
   if (sem) return "";
   const v = String(valor ?? "").trim().slice(0, 120);
   const tinha = cfg && typeof cfg.assinatura === "string";
+  // plano 2000d · DA-184: com agência, a assinatura dela vai POR ESCRITO (o padrão do núcleo continua sendo a da Nexus)
+  const daAgencia = assinaturaPadraoDe(cfg, agencia);
+  if (daAgencia !== ASSINATURA_PADRAO && (!v || v === ASSINATURA_PADRAO || v === daAgencia)) return daAgencia;
   if (!v || v === ASSINATURA_PADRAO) return tinha ? ASSINATURA_PADRAO : undefined;
   return v;
 }
@@ -64,7 +89,8 @@ export function validarAjustes({ cpa = null, cpaG = null, orc = null, orcPlat = 
   return null;
 }
 /** Plano 1500c · AC-120: orçamento do mês por plataforma — "" vira null; número ilegível ou negativo é erro no campo. */
-export function lerOrcPlat({ meta = "", google = "" } = {}, ler = s => (String(s).trim() === "" ? null : Number(String(s).replace(/\./g, "").replace(",", ".")))) {
+// plano 2000d · DA-185: o mesmo leitor pt-BR do resto da tela (lerReais) — antes «15.5» virava 155 (todo ponto era milhar)
+export function lerOrcPlat({ meta = "", google = "" } = {}, ler = s => (String(s).trim() === "" ? null : (n => (n == null ? NaN : n))(lerReais(s)))) {
   const out = {};
   for (const [k, campo, nome] of [["meta", "orcMeta", "do Meta"], ["google", "orcGoogle", "do Google"]]) {
     const v = ler(k === "meta" ? meta : google);
@@ -150,6 +176,8 @@ export function confirmacaoEnvio({ tipo, cfg = {}, sujo = false, gastoDia = null
   const lst = nums.map(formatarWa), quais = lst.length > 1 ? `${lst.slice(0, -1).join(", ")} e ${lst[lst.length - 1]}` : lst[0];
   const onde = `no WhatsApp de ${dest} ${dest === 1 ? "destino" : "destinos"} (${quais})`;
   if (tipo === "mensal") return { titulo: "Enviar o resumo do mês?", texto: `Ele sai agora ${onde}, mesmo que o resumo deste mês já tenha sido enviado.` };
+  // plano 2000d · DA-198: o semanal reenviado pelo histórico tem a própria confirmação (antes caía no texto do diário)
+  if (tipo === "semanal") return { titulo: "Enviar o resumo da semana?", texto: `Ele sai agora ${onde}, mesmo que o resumo desta semana já tenha sido enviado.` };
   const zerado = gastoDia != null && !(gastoDia > 0);
   return { titulo: "Enviar o relatório do dia?", texto: `Ele sai agora ${onde}, mesmo que já tenha sido enviado hoje.` +
     (zerado ? ` Atenção: ${dataDia ? `em ${dataDia} ` : "no dia "}não houve investimento em anúncios — o relatório vai sair zerado (R$ 0).` : "") };
@@ -764,10 +792,12 @@ async function secaoAnuncios(ctx, alvo) {
       ui.campo({ nome: "assinatura", rotulo: "Assinatura do resumo do mês", valor: assin0.valor, max: 120, ajuda: "Última linha do resumo do mês no WhatsApp." }),
       ui.campo({ tipo: "interruptor", nome: "semAssinatura", rotulo: "Sem assinatura no resumo do mês", valor: assin0.sem }),
       ui.campo({ nome: "cpaAlvo", rotulo: "Meta de custo por conversa (R$)", tipo: "moeda", valor: reaisOuVazio(cfg.cpaAlvo), placeholder: "sem meta",
-        ajuda: "Conversa no WhatsApp (Meta). O radar avisa quando passa de 35% acima. Vazio: sem meta e sem esse aviso." }),
+        ajuda: `Conversa no WhatsApp (Meta). O radar avisa quando passa de 35% acima. ${EXEMPLO_META_CUSTO} Vazio: sem meta e sem esse aviso.` }),   // plano 2000d · DA-191
       // AD-010: a conversão do Google costuma custar 2–3× a conversa — meta própria, opcional
       ui.campo({ nome: "cpaAlvoGoogle", rotulo: "Meta de custo por conversão no Google (R$)", tipo: "moeda", valor: reaisOuVazio(cfg.cpaAlvoGoogle), placeholder: "opcional",
         ajuda: "Opcional. Vazio: as campanhas do Google ficam fora do aviso de custo alto." }),
+      // plano 2000d · DA-361: o dono pensa em vendas — a meta de fechamentos do mês vira barra de progresso no topo do Anúncios
+      ui.campo({ nome: "metaFechamentos", rotulo: "Meta de fechamentos no mês", tipo: "numero", valor: cfg.metaFechamentos || "", placeholder: "opcional", ajuda: "Quantas vendas por anúncio no mês. O Anúncios mostra quanto já foi." }),
       ui.campo({ nome: "orcamento", rotulo: "Orçamento de anúncios do mês (R$)", tipo: "moeda", valor: reaisOuVazio(cfg.orcamento), placeholder: "não definido",
         ajuda: "Vazio ou zero: sem projeção contra o orçamento e sem aviso de ritmo." }),
       ui.campo({ nome: "fee", rotulo: "Gestão mensal (R$)", tipo: "moeda", valor: +(cfg.fee ?? PADRAO.fee), ajuda: "Deixe 0 se o cliente não paga gestão: o retorno conta só os anúncios. Com valor, vira “Retorno total” (anúncios + gestão) e o painel mostra quanto é gestão." }),
@@ -779,6 +809,9 @@ async function secaoAnuncios(ctx, alvo) {
       h("div", { class: "form-grade" },
         ui.campo({ nome: "logoUrl", tipo: "url", rotulo: "Logo do cliente (endereço https)", valor: cfg.logoUrl || "", placeholder: "https://…/logo.png", ajuda: "Sai no topo do relatório impresso ou em PDF." }),
         ui.campo({ nome: "agenciaNome", rotulo: "Nome da agência (rodapé do relatório)", valor: cfg.agenciaNome || "", max: 60, placeholder: "ex.: Nexus" }),
+        // plano 2000d · DA-333/DA-335: o logo e a cor da agência no papel, no PDF e na apresentação (white-label)
+        ui.campo({ nome: "agenciaLogoUrl", tipo: "url", rotulo: "Logo da agência (endereço https)", valor: cfg.agenciaLogoUrl || "", placeholder: "https://…/logo.png", ajuda: "PNG, JPG ou WebP. Sai no relatório impresso e na capa da apresentação." }),
+        ui.campo({ nome: "agenciaCor", rotulo: "Cor da agência", valor: cfg.agenciaCor || "", max: 7, placeholder: "ex.: 1F6FEB", ajuda: "Código de 6 dígitos (com ou sem o símbolo da cerquilha). Pinta os detalhes do relatório impresso e da apresentação; vazio = a cor do Órbita." }),
         ui.campo({ nome: "painelUrl", tipo: "url", rotulo: "Link do painel (fim dos textos do WhatsApp)", valor: cfg.painelUrl || cfg.painel_url || "", placeholder: "https://…", ajuda: "Só endereço https completo." }))),
     h("div", { class: "pilha" }, h("p", { class: "rotulo" }, `Valor de cada ${servicoRot.toLowerCase()}`),
       h("p", { class: "sub" }, "Opcional. Sem valor aqui, a receita conta só o valor informado em cada negócio — nada é estimado. Com valor, o fechamento sem valor entra como estimativa (marcada como estimada). O nome casa sem diferenciar maiúsculas e acentos."),
@@ -859,11 +892,16 @@ async function secaoAnuncios(ctx, alvo) {
     if (san) return ui.marcarErro(form, san.campo, san.msg);
     // plano 1500c · AC-128/AC-148: só endereço https
     const urls = {};
-    for (const [campo, rot] of [["logoUrl", "O endereço do logo"], ["painelUrl", "O link do painel"]]) {
+    for (const [campo, rot] of [["logoUrl", "O endereço do logo"], ["painelUrl", "O link do painel"], ["agenciaLogoUrl", "O endereço do logo da agência"]]) {   // plano 2000d · DA-333
       const u = urlHttpsOuVazio(reais(campo));
       if (!u.ok) { const el = form.querySelector(`[name="${campo}"]`); const d = el && el.closest ? el.closest("details") : null; if (d) d.open = true; return ui.marcarErro(form, campo, `${rot} precisa começar com https:// (ou ficar vazio).`); }
       urls[campo] = u.valor;
     }
+    // plano 2000d · DA-335/DA-361: a cor só em #RRGGBB; a meta de fechamentos, inteiro de 1 a 100000 (ou vazio)
+    const corAg = lerCorAgencia(v.agenciaCor);
+    if (!corAg.ok) { const el = form.querySelector('[name="agenciaCor"]'); const d = el && el.closest ? el.closest("details") : null; if (d) d.open = true; return ui.marcarErro(form, "agenciaCor", corAg.msg); }
+    const metaF = lerMetaFechamentos(v.metaFechamentos);
+    if (!metaF.ok) return ui.marcarErro(form, "metaFechamentos", metaF.msg);
     const numeros = s => [...new Set(String(s || "").split(/[\n,;]+/).map(soDigitos).filter(n => n.length >= 10 && n.length <= 13))];
     for (const campo of ["waGestor", "waCliente"]) {
       const brutos = String(v[campo] || "").split(/[\n,;]+/).map(x => x.trim()).filter(Boolean);
@@ -890,9 +928,10 @@ async function secaoAnuncios(ctx, alvo) {
     const regrasOff = REGRAS.map(([id]) => id).filter(id => !v[`rg_${id}`]);
     const novo = { nomeCurto: v.nomeCurto || "", cpaAlvo: cpa, cpaAlvoGoogle: cpaG, orcamento: orc, fee,
                    ticket, waGestor: numeros(v.waGestor), waCliente: numeros(v.waCliente), regrasOff, radar,
-                   orcamentoPlat: op.orcamentoPlat, logoUrl: urls.logoUrl, painelUrl: urls.painelUrl, agenciaNome: String(v.agenciaNome || "").trim().slice(0, 60) };
+                   orcamentoPlat: op.orcamentoPlat, logoUrl: urls.logoUrl, painelUrl: urls.painelUrl, agenciaNome: String(v.agenciaNome || "").trim().slice(0, 60),
+                   agenciaLogoUrl: urls.agenciaLogoUrl, agenciaCor: corAg.valor, metaFechamentos: metaF.valor };   // plano 2000d · DA-333/DA-335/DA-361
     // plano 1500c · AC-146: assinatura não tocada (cliente sem assinatura salva) nem vai no pacote — a padrão continua valendo
-    const assin = assinaturaParaSalvar({ cfg, valor: v.assinatura, sem: !!v.semAssinatura });
+    const assin = assinaturaParaSalvar({ cfg, valor: v.assinatura, sem: !!v.semAssinatura, agencia: v.agenciaNome });   // plano 2000d · DA-184
     if (assin !== undefined) novo.assinatura = assin;
     // plano 1500c · AC-148: as campanhas marcadas como remarketing (as salvas que saíram da semana continuam)
     if (campanhas7.length) novo.remarketing = remarketingSalvo(campanhas7.filter(c => v[`rmk_${c.id}`]).map(c => c.id), cfg.remarketing, campanhas7.map(c => c.id));

@@ -26,10 +26,12 @@ export function previaSemana(horario, intervalos = []) {
   const pausas = (Array.isArray(intervalos) ? intervalos : []).map(f => [paraHoras(f && f[0]), paraHoras(f && f[1])]).filter(([a, b]) => a !== null && b !== null && b > a);
   const dias = [];
   let total = 0;
+  // plano 2000d · DC-281: a faixa que passa da meia-noite (22:00–02:00) fica até as 24 h no dia e o resto (00–02) entra no dia seguinte
+  const brutasDe = id => (horario && Array.isArray(horario[id]) ? horario[id] : []).map(f => [paraHoras(f && f[0]), paraHoras(f && f[1])]).filter(([a, b]) => a !== null && b !== null && a !== b);
   for (let i = 1; i <= 7; i++) {
-    const id = String(i % 7);
-    const brutas = horario && Array.isArray(horario[id]) ? horario[id] : [];
-    const faixas = brutas.map(f => [paraHoras(f && f[0]), paraHoras(f && f[1])]).filter(([a, b]) => a !== null && b !== null && b > a);
+    const id = String(i % 7), ontem = String((i + 6) % 7);
+    const faixas = [...brutasDe(ontem).filter(([a, b]) => b < a && b > 0).map(([, b]) => [0, b]),
+      ...brutasDe(id).map(([a, b]) => (b < a ? [a, 24] : [a, b]))].filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
     let horas = faixas.reduce((s, [a, b]) => s + (b - a), 0);
     for (const [pa, pb] of pausas) for (const [a, b] of faixas) horas -= Math.max(0, Math.min(b, pb) - Math.max(a, pa));   // a pausa só desconta o que cai dentro da faixa
     total += horas;
@@ -139,7 +141,10 @@ export function mensagemBloqueio(e) {
   return null;
 }
 /** Plano 1500c · CC-230: as consultas que ficam FORA do novo horário (dia desligado ou fora das faixas), para avisar antes de salvar. */
-export function consultasForaDoHorario(consultas, horario, duracao = 30) {
+export function consultasForaDoHorario(consultas, horario, duracao = 30, intervalos = []) {
+  // plano 2000d · DC-282: a consulta que cai numa pausa (o almoço novo) também fica fora do atendimento
+  const minP = s => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || "")); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+  const pausas = (Array.isArray(intervalos) ? intervalos : []).map(f => [minP(f && f[0]), minP(f && f[1])]).filter(([a, b]) => a !== null && b !== null && b > a);
   if (!horario || typeof horario !== "object") return [];
   const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23", weekday: "short" });
   const DS = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
@@ -152,7 +157,7 @@ export function consultasForaDoHorario(consultas, horario, duracao = 30) {
     const tf = Date.parse(c.fim);
     const fim = ini + Math.max(5, Number.isFinite(tf) && tf > t ? Math.round((tf - t) / 60000) : Number(duracao) || 30);
     const faixas = (Array.isArray(horario[String(DS[p.weekday])]) ? horario[String(DS[p.weekday])] : []).map(f => [min(f && f[0]), min(f && f[1])]).filter(f => f[0] !== null && f[1] !== null);
-    return !faixas.some(([a, b]) => ini >= a && fim <= b);
+    return !faixas.some(([a, b]) => ini >= a && fim <= b) || pausas.some(([a, b]) => ini < b && fim > a);
   });
 }
 /** Plano 1500c · CC-233: feriados do estado de São Paulo (Revolução Constitucionalista, 9 de julho) — a Consciência Negra já é nacional. */
@@ -215,20 +220,35 @@ function listaFaixas(h, ui, dia, faixas, habilitado, aoEsvaziar = null) {
     const linha = h("div", { class: "agc-faixa" }, inicio, h("span", null, "até"), fim, remover);
     linhas.appendChild(linha);
   }
+  // plano 2000d · DC-283: com 2 faixas o «Adicionar horário» fica indisponível e diz o porquê
+  const travarAdd = () => {
+    const cheio = linhas.querySelectorAll(".agc-faixa").length >= MAX_FAIXAS_DIA;
+    add.setAttribute("aria-disabled", String(cheio));
+    add.title = cheio ? `No máximo ${MAX_FAIXAS_DIA} faixas por dia. Para o almoço, use as Pausas.` : "";
+  };
+  const add = h("button", { type: "button", class: "bt bt-fant bt-p agc-add-faixa", on: { click: () => {
+    if (add.getAttribute("aria-disabled") === "true") { if (ui.toast) ui.toast(add.title, { tipo: "info" }); return; }
+    adicionar(); travarAdd();
+  } } }, ui.icone("mais"), "Adicionar horário");
+  linhas.addEventListener("click", () => setTimeout(travarAdd, 0));   // remover uma faixa destrava
   for (const faixa of faixas) adicionar(faixa);
-  const add = h("button", { type: "button", class: "bt bt-fant bt-p agc-add-faixa", on: { click: () => adicionar() } }, ui.icone("mais"), "Adicionar horário");
+  travarAdd();
   const botoes = h("div", { class: "agc-faixas-bts" }, add);
   caixa.append(linhas, botoes);
   return { caixa, botoes, adicionar,
     ler: () => [...caixa.querySelectorAll(".agc-faixa")].map(l => [l.querySelector("input").value, l.querySelectorAll("input")[1].value]),
     /** CA-208: troca as faixas do dia pelas de outro (copiar para os dias úteis). */
-    definir: novas => { ui.limpar(linhas); for (const f of novas || []) adicionar(f); } };
+    definir: novas => { ui.limpar(linhas); for (const f of novas || []) adicionar(f); travarAdd(); } };
 }
 
+/** Plano 2000d · DC-283: quantas faixas um dia aceita (o nx_agenda_config_salvar recusa a 3ª). */
+export const MAX_FAIXAS_DIA = 2;
 /** Plano 1000 · CA-279: o que está errado nas faixas de um dia ligado → {indice, campo: "inicio"|"fim"|null, msg} ou null (tudo certo). */
 export function problemaDasFaixas(faixas) {
   const lista = Array.isArray(faixas) ? faixas : [];
   if (!lista.length) return { indice: -1, campo: null, msg: "adicione pelo menos uma faixa de horário ou desligue o dia." };
+  // plano 2000d · DC-283: o servidor aceita no máximo 2 faixas por dia — o aviso vem antes de salvar (e o «Adicionar horário» trava na 2ª)
+  if (lista.length > MAX_FAIXAS_DIA) return { indice: MAX_FAIXAS_DIA, campo: "inicio", msg: `no máximo ${MAX_FAIXAS_DIA} faixas por dia (use as Pausas para o intervalo).` };
   for (const [i, f] of lista.entries()) {
     const [a, b] = Array.isArray(f) ? f : [];
     if (!a) return { indice: i, campo: "inicio", msg: "preencha o início de cada faixa." };
@@ -244,6 +264,31 @@ export function avisoPassoDuracao(passo, duracao) {
   return `Os horários saem a cada ${p} min, mas a consulta padrão dura ${d} min: sobram ${p - d} min sem horário oferecido entre uma consulta e outra.`;
 }
 
+/** Plano 2000d · DC-387: o mês do início do bloqueio em São Paulo («2026-11»), a conta por mês e o nome («Novembro de 2026»). */
+export function mesDoBloqueio(b) { const t = Date.parse(b && b.inicio); return Number.isFinite(t) ? _diaSP.format(new Date(t)).slice(0, 7) : ""; }
+export function contarPorMes(bloqueios) {
+  const m = new Map();
+  for (const b of Array.isArray(bloqueios) ? bloqueios : []) { const k = mesDoBloqueio(b); if (k) m.set(k, (m.get(k) || 0) + 1); }
+  return m;
+}
+const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+export function nomeMes(am) { const [a, m] = String(am || "").split("-").map(Number); return a && m ? `${MESES[m - 1]} de ${a}` : ""; }
+/** Plano 2000d · DC-349/DC-433: os pontos facultativos móveis (pela Páscoa): Carnaval (segunda e terça) e Corpus Christi. */
+export function pontosFacultativos(ano) {
+  const p = pascoa(ano);
+  return [{ data: somarDias(p, -48), nome: "Carnaval (segunda)" }, { data: somarDias(p, -47), nome: "Carnaval (terça)" }, { data: somarDias(p, 60), nome: "Corpus Christi" }];
+}
+/** Plano 2000d · DC-350: em novembro e dezembro, os feriados do ano seguinte ao próximo (o bloqueio em lote vai até dez do ano que vem)
+    ainda sem bloqueio? → «Os feriados de 2028 ainda não estão bloqueados.» ou null. Só para quem já usa o bloqueio de feriados. */
+export function avisoRenovarFeriados(hoje, bloqueios = []) {
+  const ano = Number(String(hoje).slice(0, 4)), mes = Number(String(hoje).slice(5, 7));
+  if (!Number.isInteger(ano) || mes < 11) return null;
+  const lista = Array.isArray(bloqueios) ? bloqueios : [];
+  const nomes = new Set(feriadosNacionais(ano + 1).map(f => f.nome));
+  if (!lista.some(b => b && nomes.has(String(b.motivo || "").trim()))) return null;     // nunca bloqueou feriado: nada a lembrar
+  const proximo = feriadosParaBloquear(`${ano + 1}-01-01`, lista).filter(f => f.data.startsWith(String(ano + 1)));
+  return proximo.length ? `Os feriados de ${ano + 1} ainda não estão bloqueados.` : null;
+}
 /* CA-258: feriados nacionais (lei 662/1949, 6.802/1980, 14.759/2023 e a Sexta-feira Santa, móvel). Carnaval e Corpus Christi são ponto
    facultativo e ficam de fora (cada clínica decide). */
 const FERIADOS_FIXOS = [["01-01", "Confraternização Universal"], ["04-21", "Tiradentes"], ["05-01", "Dia do Trabalho"], ["09-07", "Independência do Brasil"],
@@ -264,7 +309,7 @@ export function feriadosNacionais(ano) {
 }
 const _diaSP = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" });
 /** CA-258: os feriados de hoje até 31/12 do ano seguinte que ainda não têm bloqueio tocando o dia (nenhum duplicado). */
-export function feriadosParaBloquear(hoje, bloqueios = [], { estado = null, cidade = null } = {}) {
+export function feriadosParaBloquear(hoje, bloqueios = [], { estado = null, cidade = null, facultativos = false } = {}) {
   const ano = Number(String(hoje).slice(0, 4));
   if (!Number.isInteger(ano)) return [];
   const dias = (Array.isArray(bloqueios) ? bloqueios : []).map(b => {
@@ -272,7 +317,8 @@ export function feriadosParaBloquear(hoje, bloqueios = [], { estado = null, cida
     return Number.isFinite(i) && Number.isFinite(f) && f > i ? [_diaSP.format(new Date(i)), _diaSP.format(new Date(f - 1))] : null;
   }).filter(Boolean);
   // plano 1500c · CC-233: com estado = "SP", o 9 de julho; com cidade = {md: "MM-DD", nome}, o feriado da cidade (data fixa), nos dois anos
-  const extras = a => [...(estado === "SP" ? feriadosEstaduaisSP(a) : []),
+  // plano 2000d · DC-349: com facultativos, Carnaval (seg e ter) e Corpus Christi
+  const extras = a => [...(estado === "SP" ? feriadosEstaduaisSP(a) : []), ...(facultativos ? pontosFacultativos(a) : []),
     ...(cidade && /^\d{2}-\d{2}$/.test(String(cidade.md || "")) ? [{ data: `${a}-${cidade.md}`, nome: String(cidade.nome || "Feriado da cidade").slice(0, 60) }] : [])];
   const todos = [...feriadosNacionais(ano), ...extras(ano), ...feriadosNacionais(ano + 1), ...extras(ano + 1)].sort((x, y) => (x.data < y.data ? -1 : x.data > y.data ? 1 : 0));
   const vistos = new Set();
@@ -359,7 +405,8 @@ async function secaoAgenda(ctx, alvo) {
       return { id, el: h("label", { class: "agc-copiar-dia" }, chk, h("span", null, nome)), chk };
     });
     const ok = await ui.modal({ titulo: `Copiar o horário de ${origem.nome}`, largura: "p",
-      corpo: h("div", { class: "pilha" }, h("p", null, "Para quais dias?"), h("div", { class: "agc-copiar-dias", role: "group", "aria-label": "Dias de destino" }, caixas.map(x => x.el))),
+      corpo: h("div", { class: "pilha" }, h("p", null, "Para quais dias?"), h("div", { class: "agc-copiar-dias", role: "group", "aria-label": "Dias de destino" }, caixas.map(x => x.el)),
+        h("p", { class: "campo-ajuda agc-copiar-nota" }, "Copia só as faixas de atendimento. As pausas valem para todos os dias.")),   // plano 2000d · DC-389
       acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: false }, { rotulo: "Copiar", tipo: "primario", valor: true }] });
     if (!ok) return;
     const alvos = caixas.filter(x => x.chk.checked).map(x => x.id);
@@ -563,6 +610,7 @@ async function secaoAgenda(ctx, alvo) {
   });
   const limparInvalidos = () => { for (const el of form.querySelectorAll("[aria-invalid]")) el.removeAttribute("aria-invalid"); };
   let horarioConferido = "";     // plano 1500c · CC-230
+  let avisouFonte = false;       // plano 2000d · DC-396
   form.addEventListener("submit", ev => salvarAgenda(ev));
   // plano 1500c · GX-058: Ctrl/⌘+S salva a agenda (sem o navegador abrir «Salvar página como…»)
   form.addEventListener("keydown", ev => {
@@ -663,6 +711,11 @@ async function secaoAgenda(ctx, alvo) {
     }
     for (const l of vazias) l.remove();
     if (Object.keys(duracoesSalvas).length > 30) return ui.toast("A agenda aceita até 30 durações por serviço.", { tipo: "erro" });
+    // plano 2000d · DC-396: desligar «horários nesta agenda» apaga a semana que estava aqui — avisa uma vez; o 2º «Salvar» grava assim
+    if (!fonteAgenda.checked && cfg.horario && typeof cfg.horario === "object" && Object.values(cfg.horario).some(l => Array.isArray(l) && l.length) && !avisouFonte) {
+      avisouFonte = true;
+      return ui.toast("Os horários desta agenda não serão usados (vale o do departamento) e somem ao salvar. Toque em «Salvar agenda» de novo para salvar assim.", { tipo: "info" });
+    }
     const cfgNova = {
       duracao_min: duracao, capacidade, antecedencia_horas: antecedencia, dias_a_frente: dias,
       passo_min: passoTxt, horario: fonteAgenda.checked ? horario : null,
@@ -676,7 +729,7 @@ async function secaoAgenda(ctx, alvo) {
         let fora = [];
         try {
           const ag = await api.rpcC("nx_agenda_dia", { p_data: ui.hojeSP(), p_dias: 31 });
-          fora = consultasForaDoHorario(ag && Array.isArray(ag.consultas) ? ag.consultas.filter(c => Date.parse(c.inicio) > Date.now()) : [], horario, duracao);
+          fora = consultasForaDoHorario(ag && Array.isArray(ag.consultas) ? ag.consultas.filter(c => Date.parse(c.inicio) > Date.now()) : [], horario, duracao, pausasSalvas);   // plano 2000d · DC-282: as pausas também
         } catch { fora = []; /* sem a leitura: salva */ }
         horarioConferido = chaveHor;
         if (fora.length) {
@@ -717,9 +770,18 @@ async function secaoAgenda(ctx, alvo) {
     ui.limpar(listaBloqueios);
     const todos = (estado.bloqueios || []).filter(b => b.fim && new Date(b.fim) > new Date() && !ocultos.has(b.id));
     contBloq.textContent = todos.length ? ` (${todos.length})` : "";   // plano 1500c · GX-063: quantos bloqueios futuros há (a lista pagina de 30 em 30)
+    // plano 2000d · DC-387: em ordem de data e com o mês no meio («Novembro de 2026 · 3»), não na ordem do servidor
+    todos.sort((a, b) => Date.parse(a.inicio) - Date.parse(b.inicio));
     const futuros = todos.slice(0, mostrar);
     if (!futuros.length) listaBloqueios.appendChild(h("p", { class: "sub" }, "Nenhum bloqueio futuro."));
+    const porMes = contarPorMes(todos);
+    let mesAtual = "";
     for (const b of futuros) {
+      const mes = mesDoBloqueio(b);
+      if (mes && mes !== mesAtual) {
+        mesAtual = mes;
+        listaBloqueios.appendChild(h("h4", { class: "agc-bloq-mes", role: "presentation" }, `${nomeMes(mes)} · ${porMes.get(mes) || 0}`));
+      }
       const excluir = h("button", { type: "button", class: "bt bt-fant bt-p", "aria-label": `Remover bloqueio de ${ui.dataHoraBR(b.inicio)}`, on: { click: () => removerBloqueio(b, excluir) } }, ui.icone("lixeira"), "Remover");
       // plano 1000b · CB-161: «Editar» abre a mesma janela preenchida (o servidor atualiza pelo id; o aviso de consultas vale igual)
       const editar = h("button", { type: "button", class: "bt bt-fant bt-p agc-editar-bloqueio", "aria-label": `Editar bloqueio de ${ui.dataHoraBR(b.inicio)}`, on: { click: () => criarBloqueio(b) } }, "Editar");
@@ -768,9 +830,14 @@ async function secaoAgenda(ctx, alvo) {
 
   const btBloqueio = h("button", { type: "button", class: "bt bt-sec", on: { click: criarBloqueio } }, ui.icone("mais"), "Bloquear horário");
   const btFeriados = h("button", { type: "button", class: "bt bt-fant agc-feriados", on: { click: bloquearFeriados } }, ui.icone("calendario"), "Bloquear feriados nacionais");
+  // plano 2000d · DC-350: em novembro, o lembrete de renovar os feriados do ano que vem
+  const txtRenovar = avisoRenovarFeriados(typeof ui.hojeSP === "function" ? ui.hojeSP() : _diaSP.format(new Date()), estado.bloqueios || []);
+  const avisoRenovar = txtRenovar ? h("p", { class: "aviso aviso-info agc-renovar-feriados", role: "status" }, txtRenovar, " ",
+    h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => bloquearFeriados() } }, "Bloquear agora")) : null;
   raiz.append(form, h("section", { class: "cartao pilha" },
     h("div", { class: "cartao-cab" }, h("div", null, h("h3", { class: "titulo-sec" }, "Bloqueios futuros", contBloq), h("p", { class: "sub" }, "Feche um dia inteiro ou só algumas horas: feriado, folga, manutenção.")),
       h("div", { class: "linha agc-bloq-acoes" }, btFeriados, btBloqueio)),
+    avisoRenovar,
     listaBloqueios));
 
   /** CA-258: os feriados nacionais de hoje até o fim do ano que vem viram bloqueios do dia inteiro (com o nome como motivo); os já bloqueados ficam. */
@@ -779,6 +846,8 @@ async function secaoAgenda(ctx, alvo) {
     const ate = `dez/${Number(hoje.slice(0, 4)) + 1}`;
     // plano 1500c · CC-233: «Incluir feriado de SP» (9 de julho) e «Feriado da cidade» (data fixa, ex.: aniversário da cidade) no mesmo fluxo
     const chkSP = h("input", { type: "checkbox", name: "feriado_sp", class: "agc-feriado-sp" });
+    // plano 2000d · DC-349: os pontos facultativos (quase toda clínica fecha na terça de Carnaval) como opção, desmarcada
+    const chkFac = h("input", { type: "checkbox", name: "feriado_facultativos", class: "agc-feriado-fac" });
     const cidadeData = ui.campo({ rotulo: "Feriado da cidade (opcional)", nome: "cidade_data", tipo: "data" });
     const cidadeNome = ui.campo({ rotulo: "Nome do feriado da cidade", nome: "cidade_nome", max: 60, placeholder: "Ex.: Aniversário de Taubaté" });
     const dm = iso => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
@@ -786,7 +855,7 @@ async function secaoAgenda(ctx, alvo) {
     let lista = [], caixas = [];
     const opcoes = () => {
       const d = cidadeData.querySelector("input").value;
-      return { estado: chkSP.checked ? "SP" : null, cidade: d ? { md: d.slice(5, 10), nome: cidadeNome.querySelector("input").value.trim() || "Feriado da cidade" } : null };
+      return { estado: chkSP.checked ? "SP" : null, facultativos: chkFac.checked, cidade: d ? { md: d.slice(5, 10), nome: cidadeNome.querySelector("input").value.trim() || "Feriado da cidade" } : null };
     };
     // plano 1500c · CC-234: cada feriado com a caixa marcada — quem abre na Consciência Negra desmarca e pronto
     const pintarLista = () => {
@@ -797,6 +866,7 @@ async function secaoAgenda(ctx, alvo) {
       if (!lista.length) listaEl.appendChild(h("li", { class: "sub" }, `Os feriados até ${ate} já estão bloqueados.`));
     };
     chkSP.addEventListener("change", pintarLista);
+    chkFac.addEventListener("change", pintarLista);   // plano 2000d · DC-349
     cidadeData.querySelector("input").addEventListener("change", pintarLista);
     cidadeNome.querySelector("input").addEventListener("change", pintarLista);
     pintarLista();
@@ -805,13 +875,14 @@ async function secaoAgenda(ctx, alvo) {
       corpo: h("div", { class: "pilha" },
         h("p", null, `Os feriados até ${ate} que ainda não têm bloqueio ficam fechados o dia inteiro — para a equipe e para a IA. Desmarque os dias em que vai abrir.`),
         h("label", { class: "agc-copiar-dia" }, chkSP, h("span", null, "Incluir o feriado do estado de São Paulo (9 de julho)")),
+        h("label", { class: "agc-copiar-dia" }, chkFac, h("span", null, "Incluir Carnaval (segunda e terça) e Corpus Christi")),
         h("div", { class: "form-grade" }, cidadeData, cidadeNome),
         // plano 1500c · GX-065: marcar ou desmarcar os ~20 feriados de uma vez (quem só fecha 2 ou 3 não desmarca um a um)
         h("div", { class: "agc-feriados-todos", role: "group", "aria-label": "Seleção dos feriados" },
           h("button", { type: "button", class: "bt bt-fant bt-p agc-feriados-marcar", on: { click: () => { for (const c of caixas) c.checked = true; } } }, "Marcar todos"),
           h("button", { type: "button", class: "bt bt-fant bt-p agc-feriados-desmarcar", on: { click: () => { for (const c of caixas) c.checked = false; } } }, "Desmarcar todos")),
         listaEl,
-        h("p", { class: "campo-ajuda" }, "Carnaval e Corpus Christi são ponto facultativo e ficam de fora.")),
+        h("p", { class: "campo-ajuda" }, "Carnaval e Corpus Christi são ponto facultativo: entram só com a caixa acima marcada.")),
       acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: false }, { rotulo: "Bloquear os marcados", tipo: "primario", valor: true }] });
     if (!ok) return;
     const escolhidos = lista.filter((f, i) => caixas[i] && caixas[i].checked !== false);
@@ -947,8 +1018,10 @@ async function secaoAgenda(ctx, alvo) {
       desenharBloqueios();
       const n = r._dias || 1;
       const texto = ed ? "Bloqueio atualizado." : n > 1 ? `${n} bloqueios salvos (um por dia).` : "Bloqueio salvo.";
-      if (!ed && n > 1 && Array.isArray(r._criados) && r._criados.length && typeof ui.acaoComDesfazer === "function") {
-        const ids = r._criados.slice();
+      // plano 2000d · DC-385: um bloqueio só também tem «Desfazer» (antes só o grupo de vários dias)
+      const idsNovos = Array.isArray(r._criados) && r._criados.length ? r._criados.slice() : r.id != null ? [r.id] : [];
+      if (!ed && idsNovos.length && typeof ui.acaoComDesfazer === "function") {
+        const ids = idsNovos;
         ui.acaoComDesfazer({ texto, reverter: async () => {     // um «Desfazer» só para o grupo
           let erros = 0;
           for (const id of ids) { try { const rr = await api.rpcC("nx_agenda_bloqueio_excluir", { p_id: id }); if (rr && Array.isArray(rr.bloqueios)) estado = rr; } catch { erros++; } }

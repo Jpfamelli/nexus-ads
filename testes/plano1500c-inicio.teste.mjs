@@ -298,7 +298,8 @@ test("RC-180 + RC-275: validarMetas — «1.000» = 1000 consultas; «2,5», «1
   assert.equal(I.validarMetas({ consultas: "2,5" }).erros.meta_consultas, "Use um número inteiro maior que zero.");
   assert.equal(I.validarMetas({ vendas: "R$ 10.000,00" }, CL.lerNumero).vendas, 10000);
   assert.equal(I.validarMetas({ vendas: "1.234,56" }, CL.lerNumero).vendas, 1234.56);
-  assert.deepEqual(I.validarMetas({ vendas: "", consultas: "" }), { vendas: null, consultas: null, erros: {} });
+  // plano 2000d: DR-298 — a resposta traz também a meta de leads (null quando vazia)
+  assert.deepEqual(I.validarMetas({ vendas: "", consultas: "" }), { vendas: null, consultas: null, leads: null, erros: {} });
 });
 
 test("RC-181: «Falta 1» no singular (consultas e moeda); «Faltam» acima de 1", () => {
@@ -357,7 +358,8 @@ test("RC-196: textoDiferenca — «+R$ 8.100 a mais», «−R$ 800 a menos», «
   const brl = v => `R$ ${v.toLocaleString("pt-BR")}`;
   assert.equal(I.textoDiferenca(28400, 20300, brl), "+R$ 8.100 a mais que no mesmo período");
   assert.equal(I.textoDiferenca(1000, 1800, brl), "−R$ 800 a menos que no mesmo período");
-  assert.equal(I.textoDiferenca(5, 5, brl), "igual ao mesmo período");
+  // plano 2000d: DR-296 — «igual» diz o número, não só que empatou
+  assert.equal(I.textoDiferenca(5, 5, brl), "igual: R$ 5 nos dois períodos");
   assert.equal(I.textoDiferenca(null, 5, brl), "");
 });
 
@@ -616,7 +618,10 @@ test("RC-202 (DOM): a consulta de amanhã sem confirmação mostra o selo e «Pe
     const t = await montarTela(ANTIGO(), { dom, agenda: ag });
     const item = t.raiz.querySelector(".ini-prox-naoconf");
     assert.ok(item, "o selo de não confirmada"); assert.match(texto(item), /não confirmada/);
-    assert.equal(botao(t.raiz, "px-conf-801").getAttribute("href"), "#/conversas?contato=501");
+    // plano 2000d: DR-292 — a conversa já abre com o pedido de confirmação escrito
+    const href = botao(t.raiz, "px-conf-801").getAttribute("href");
+    assert.ok(href.startsWith("#/conversas?contato=501&texto="), href);
+    assert.match(decodeURIComponent(href.split("texto=")[1]), /confirmar a sua consulta amanhã às 10:00/);
   } finally { dom.fim(); }
 });
 
@@ -814,10 +819,12 @@ test("RC-219 + RC-325 + RC-338 + RC-339 (DOM): equipe (admin), desde que começo
     const t = await montarTela(d, { dom });
     const eq = t.raiz.querySelector("details.ini-mais .ini-equipe");
     assert.ok(eq, "equipe recolhida em «Mais detalhes»");
-    assert.deepEqual(eq.querySelectorAll("tbody th").map(x => texto(x)), ["1º Bia", "Ana"]);
+    // plano 2000d: DR-355 — quem não é o 1º vê quanto falta para chegar lá
+    assert.deepEqual(eq.querySelectorAll("tbody th").map(x => texto(x)), ["1º Bia", "Ana · a R$ 6.000 do 1º lugar"]);
     assert.match(texto(t.raiz.querySelector(".ini-desde")), /abril de 2026 × agora/);
     assert.match(texto(t.raiz.querySelector(".ini-aniv")), /Faz aniversário hoje.*Lia Prado/);
-    assert.equal(botao(t.raiz, "aniv-5").getAttribute("href"), "#/conversas/77");
+    // plano 2000d: DR-256 — a conversa abre com os parabéns escritos
+    assert.ok(botao(t.raiz, "aniv-5").getAttribute("href").startsWith("#/conversas/77?texto="));
     const ef = t.raiz.querySelector(".ini-esfr");
     assert.match(texto(ef), /7 sem mensagem nem tarefa há 7\+ dias/); assert.match(texto(ef), /parado há 12 dias/);
     assert.equal(botao(t.raiz, "ef-todos").getAttribute("href"), "#/crm?parados=7");
@@ -988,9 +995,11 @@ test("RC-254: linhasResumoMes — só o que o servidor manda; retorno dos anúnc
   const brl = v => `R$ ${Math.round(v).toLocaleString("pt-BR")}`;
   const l = I.linhasResumoMes(NOVO(), { brl, voc: VOC_ODONTO });
   const ids = l.map(x => x.id);
-  assert.deepEqual(ids, ["receita", "ganhos", "vs", "leads", "leads7", "prazo", "conv", "aberto"]);
+  // plano 2000d: DR-253/254 — sai «leads 7 dias» e o prazo de 7 dias (o resumo é do mês); entra o ticket médio; o prazo do mês só quando o servidor manda
+  assert.deepEqual(ids, ["receita", "ganhos", "vs", "ticket", "leads", "conv", "aberto"]);
   assert.equal(l.find(x => x.id === "ganhos").rotulo, "Oportunidades ganhas");
-  assert.equal(l.find(x => x.id === "prazo").valor, "78%");
+  const dp = NOVO(); dp.conversas.respondidas_no_prazo_mes_pct = 78;
+  assert.equal(I.linhasResumoMes(dp, { brl }).find(x => x.id === "prazo").valor, "78%");
   const d = NOVO(); d.gasto_anuncios_mes = 2000;
   assert.equal(I.linhasResumoMes(d, { brl }).find(x => x.id === "roi").valor, "R$ 14");
   assert.deepEqual(I.linhasResumoMes({}, { brl }), []);
@@ -1008,11 +1017,12 @@ test("IC-001: retornoAnuncios — «cada R$ 1 virou R$ X» só com gasto e recei
 
 test("IC-002: guiaPrimeiroUso — WhatsApp, anúncios e agenda (o que o plano libera); rota só para o admin que abre a seção", () => {
   const todos = I.guiaPrimeiroUso({ admin: true });
-  assert.deepEqual(todos.map(p => [p.id, p.rota]), [["whatsapp", "#/config/numeros?assistente=novo"], ["anuncios", "#/config/anuncios"], ["agenda", "#/config/agenda"]]);
-  assert.deepEqual(I.guiaPrimeiroUso({ admin: true, temModulo: m => m !== "ads" }).map(p => p.id), ["whatsapp", "agenda"]);
+  // plano 2000d: DR-263/264 — entram «Trazer seus clientes» e «Ajustar o funil»
+  assert.deepEqual(todos.map(p => [p.id, p.rota]), [["whatsapp", "#/config/numeros?assistente=novo"], ["contatos", "#/crm?importar=1"], ["anuncios", "#/config/anuncios"], ["agenda", "#/config/agenda"], ["funil", "#/config/funil"]]);
+  assert.deepEqual(I.guiaPrimeiroUso({ admin: true, temModulo: m => m !== "ads" }).map(p => p.id), ["whatsapp", "contatos", "agenda", "funil"]);
   assert.ok(I.guiaPrimeiroUso({ admin: false }).every(p => p.rota === null), "quem não é admin vê os passos sem botão");
   const f = I.guiaPrimeiroUso({ admin: true, feito: ids => ids.includes("anuncios_ligados") });
-  assert.deepEqual(f.map(p => p.feito), [false, true, false]);
+  assert.deepEqual(f.map(p => p.feito), [false, false, true, false, false]); // plano 2000d: DR-263/264 — cinco passos
 });
 
 test("IC-002 + RC-229: dadosExemplo — números redondos de exemplo, datas relativas a hoje, marcados como exemplo", () => {
@@ -1032,7 +1042,8 @@ test("IC-002 + RC-229 (DOM): conta zerada — «Comece por aqui» com WhatsApp/a
     const t = await montarTela(ZERADO(), { dom, agenda: agendaDe([]) });
     assert.ok(t.raiz.querySelector(".vazio-primeiro"), "o vazio continua (M09)");
     const guia = t.raiz.querySelector(".ini-guia");
-    assert.deepEqual(guia.querySelectorAll(".ini-guia-item").map(li => li.dataset.passo), ["whatsapp", "anuncios", "agenda"]);
+    // plano 2000d: DR-263/264 — cinco passos
+    assert.deepEqual(guia.querySelectorAll(".ini-guia-item").map(li => li.dataset.passo), ["whatsapp", "contatos", "anuncios", "agenda", "funil"]);
     assert.equal(botao(t.raiz, "guia-whatsapp").getAttribute("href"), "#/config/numeros?assistente=novo");
     assert.ok(botao(t.raiz, "guia-whatsapp").classList.contains("bt-prim"), "o 1º pendente em destaque");
     const ex = t.raiz.querySelectorAll("button").find(b => b.textContent === "Ver um exemplo");
@@ -1106,9 +1117,10 @@ test("RC-232 (DOM): a meta de vendas mostra o mês passado e «Usar +10%» preen
   try {
     const t = await montarTela(NOVO(), { dom });
     const metas = t.raiz.querySelector(".ini-metas");
-    assert.match(texto(metas), /Mês passado: R\$\s20\.300\./);
+    // plano 2000d: DR-297 — a conta aparece inteira e o botão diz de onde vem o número
+    assert.match(texto(metas), /Mês passado: R\$\s20\.300 \+ 10% = R\$\s22\.400\./);
     const bt = botao(t.raiz, "mt-sug");
-    assert.match(texto(bt), /^Usar \+10% \(R\$\s22\.400\)$/);
+    assert.match(texto(bt), /^Usar mês passado \+ 10% \(R\$\s22\.400\)$/);
     bt.click();
     assert.equal(botao(t.raiz, "mt-v").value, "22400");
   } finally { dom.fim(); }
@@ -1242,8 +1254,9 @@ const comNavegadorX = (extra, fn) => {
 
 test("IC-003 + IC-005: textoResumoMes — cabeçalho com empresa e data, uma linha por número; «Gerado em dd/mm às HH:MM» no fuso de SP", () => {
   const txt = I.textoResumoMes([{ rotulo: "Receita do mês", valor: "R$ 28.400" }, { rotulo: "Leads no mês", valor: "23" }], { empresa: "Clínica Demo", mes: "outubro de 2026", ate: "04/10" });
-  assert.equal(txt, "*Resumo de outubro de 2026* — Clínica Demo (até 04/10)\n• Receita do mês: R$ 28.400\n• Leads no mês: 23\nNúmeros do Órbita.");
-  assert.equal(I.textoResumoMes([], { mes: "maio" }), "*Resumo de maio*\nNúmeros do Órbita.");
+  // plano 2000d: DR-247 — sem marca, sem rodapé (revenda não leva «Órbita» fixo); com marca, o nome dela
+  assert.equal(txt, "*Resumo de outubro de 2026* — Clínica Demo (até 04/10)\n• Receita do mês: R$ 28.400\n• Leads no mês: 23");
+  assert.equal(I.textoResumoMes([], { mes: "maio", marca: "Órbita" }), "*Resumo de maio*\nNúmeros do Órbita.");
   assert.equal(I.textoGeradoEm(Date.parse("2026-10-25T14:05:00-03:00")), "Gerado em 25/10 às 14:05");
   assert.equal(I.textoGeradoEm(Date.parse("2026-10-25T02:30:00Z")), "Gerado em 24/10 às 23:30", "a hora de SP, não a UTC");
   assert.equal(I.textoGeradoEm(NaN), "");
@@ -1275,7 +1288,8 @@ test("IC-003 + IC-004 + IC-005 (DOM): o resumo do mês copia o texto, compartilh
 });
 
 test("IC-006 + IC-007 + IC-008: custo por lead; abaixo de R$ 1 a nota diz quanto falta para empatar; gasto sem venda aparece (antes sumia)", () => {
-  const d = NOVO(); d.gasto_anuncios_mes = 2000;
+  // plano 2000d: DR-246 — o custo divide só pelos leads que vieram de anúncio
+  const d = NOVO(); d.gasto_anuncios_mes = 2000; d.funil_mes.leads_anuncio = 23;
   assert.ok(Math.abs(I.custoPorLead(d) - 2000 / 23) < 1e-9);
   assert.equal(I.custoPorLead(NOVO()), null, "sem gasto: nada estimado");
   const brl = v => `R$ ${Math.round(v)}`;
@@ -1291,9 +1305,10 @@ test("IC-006 + IC-007 + IC-008: custo por lead; abaixo de R$ 1 a nota diz quanto
 test("IC-006 + IC-007 + IC-008 (DOM): o cartão do retorno mostra o custo por lead e, abaixo de R$ 1, a nota em vez de comemorar", async () => {
   const dom = comDom({ agora: AGORA });
   try {
-    const d = NOVO(); d.gasto_anuncios_mes = 2000;
+    // plano 2000d: DR-246 — só com os leads de anúncio, e o texto diz isso
+    const d = NOVO(); d.gasto_anuncios_mes = 2000; d.funil_mes.leads_anuncio = 23;
     const t = await montarTela(d, { dom });
-    assert.match(texto(botao(t.raiz, "roi-cpl")), /^Cada lead custou R\$\s86,96 este mês\.$/);
+    assert.match(texto(botao(t.raiz, "roi-cpl")), /^Cada lead de anúncio custou R\$\s86,96 este mês\.$/);
     assert.equal(botao(t.raiz, "roi-nota"), null);
     I.desmontar();
     const d2 = NOVO(); d2.gasto_anuncios_mes = 2000; d2.negocios.receita_anuncio_mes = 0;
@@ -1334,6 +1349,7 @@ test("IC-010 + IC-011 (DOM): a barra de progresso dos primeiros passos com o val
     const onb = { total: 3, feitos: 1, obrigatorios: 3, obrigatorios_feitos: 1, pct: 33, completo: false, itens: [{ id: "chave_codewords", feito: true }, { id: "aparelho_pareado", feito: true }, { id: "recebimento", feito: true }, { id: "anuncios_ligados", feito: false }, { id: "agenda_faixas", feito: false }] };
     const t = await montarTela(ZERADO(), { dom, agenda: agendaDe([]), onb });
     const barra = t.raiz.querySelector(".ini-guia-barra");
+    // plano 2000d: DR-263/264 — este checklist não tem «contatos_importados» nem «funil_ajustado»: os passos novos ficam de fora (3, como antes)
     assert.equal(barra.getAttribute("role"), "progressbar"); assert.equal(barra.getAttribute("aria-valuenow"), "1"); assert.equal(barra.getAttribute("aria-valuemax"), "3");
     assert.equal(barra.style.getPropertyValue("--guia-pct"), "33%");
     assert.equal(texto(botao(t.raiz, "guia-prog")), "1 de 3 prontos");
@@ -1370,7 +1386,8 @@ test("IC-012 + IC-013 + IC-018 + IC-019 (DOM): «(você)» na equipe, R$ parado 
     assert.ok(eu); assert.match(texto(eu.querySelector("th")), /Helena \(você\)/);
     assert.match(texto(botao(t.raiz, "ef-valor")), /pelo menos R\$\s1\.800 parados/);
     const mais = botao(t.raiz, "aniv-mais");
-    assert.equal(texto(mais), "+2 outros"); assert.equal(mais.getAttribute("title"), "Eva, Fábio");
+    // plano 2000d: DR-255 — «+2 aniversariantes» é botão que mostra os outros
+    assert.equal(texto(mais), "+2 aniversariantes"); assert.equal(mais.getAttribute("aria-expanded"), "false");
     const pr = botao(t.raiz, "pr-mais");
     assert.equal(texto(pr), "+2 na agenda de hoje"); assert.equal(pr.getAttribute("href"), `#/agenda?dia=${HOJE}`);
   } finally { dom.fim(); }

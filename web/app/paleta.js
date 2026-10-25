@@ -104,7 +104,7 @@ export function abrir(amb) {
       const rec = amb.recentes();
       // plano 2000d · DU-275: «Limpar recentes» (aparelho compartilhado: os pacientes vistos por outra pessoa saem daqui)
       const limparRec = rec.length && typeof amb.limparRecentes === "function"
-        ? [{ icone: "lixo", l1: "Limpar recentes", l2: "só neste aparelho", manter: true, id: "limpar-recentes", fazer: () => { amb.limparRecentes(); aoDigitar(); try { campo.focus(); } catch { /* ok */ } } }] : [];
+        ? [{ icone: "lixeira", l1: "Limpar recentes", l2: "só neste aparelho", manter: true, id: "limpar-recentes", fazer: () => { amb.limparRecentes(); aoDigitar(); try { campo.focus(); } catch { /* ok */ } } }] : [];
       if (rec.length) grupos.push(["Recentes", [...rec.map(aRecente), ...limparRec]]);
       const usados = typeof C.ultimosUsados === "function" ? C.ultimosUsados(todas, ultimos(), 4) : [];
       if (usados.length) grupos.push(["Usados por último", usados.map(aAcao)]);

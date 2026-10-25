@@ -272,8 +272,19 @@ function registrarComandos(ctx, k) {
   const ativos = ((baseAgora && baseAgora.funis) || []).filter(f => f.ativo !== false);
   if (ativos.length > 1) ativos.forEach((f, i) => reg({ id: `crm.funil-${f.id}`, rotulo: `Ir para o funil «${f.nome}»`, palavras: `funil quadro kanban ${f.nome}${i < 5 ? ` alt+${i + 1}` : ""}`,
     fazer: () => ctx.navegar(`#/crm?funil=${encodeURIComponent(f.id)}`) }));
-  if (!k.pode("atendente")) return;
   const tipoTela = telaAtual && telaAtual.tipo;
+  // plano 2000d · DR-069: os atalhos do quadro aparecem na folha «?» (antes só o N) — o quadro atende as teclas; aqui só a lista e o caminho pela paleta
+  if (tipoTela === "kanban") {
+    const focarBusca = () => { const b = typeof document !== "undefined" && document.querySelector ? document.querySelector('.crm-kb-ferramentas input[type="search"]') : null; if (b) b.focus(); };
+    reg({ id: "crm.kb-buscar", rotulo: "Buscar no quadro", palavras: "buscar procurar quadro cartão", atalho: "/", grupo: "Quadro", fazer: focarBusca });
+    if (k.pode("atendente")) {
+      const dica = t => () => ctx.ui.toast(t, { tipo: "info", ms: 6000 });
+      reg({ id: "crm.kb-mover", rotulo: "Mover o cartão para… (com o cartão em foco)", palavras: "mover etapa cartão teclado", atalho: "M", grupo: "Quadro", fazer: dica("Com um cartão em foco (Tab ou setas), aperte M para escolher a etapa.") });
+      reg({ id: "crm.kb-pegar", rotulo: "Pegar o cartão e mover com as setas", palavras: "mover arrastar teclado setas", atalho: "Espaço", grupo: "Quadro", fazer: dica("Com um cartão em foco, Espaço pega o cartão; as setas movem; Enter solta; Esc cancela.") });
+      reg({ id: "crm.kb-selecionar", rotulo: "Selecionar o cartão (vários de uma vez)", palavras: "selecionar vários lote cartão", atalho: "X", grupo: "Quadro", fazer: dica("Com um cartão em foco, X (ou Shift+Espaço) marca o cartão; depois «Mover para…», «Etiquetar…» na barra da seleção.") });
+    }
+  }
+  if (!k.pode("atendente")) return;
   // plano 1000 (CR-267): no quadro a tecla N cria um cartão (o quadro atende a tecla; aqui ela aparece na folha «?»)
   reg({ id: "crm.novo-negocio", rotulo: k.v.novo("negocio"), palavras: "oportunidade negócio lead cartão criar novo", ...(tipoTela === "kanban" ? { atalho: "N" } : {}), fazer: () => novoNegocio(ctx, {}) });
   reg({ id: "crm.nova-tarefa", rotulo: "Nova tarefa", palavras: "tarefa lembrete ligar retorno criar", fazer: async () => {
@@ -450,7 +461,10 @@ export async function montar(ctx) {
           // volta o endereço para o quadro sem remontar a tela (no funil que o quadro mostra agora)
           const fAtual = telaAtual && typeof telaAtual.funilAtual === "function" ? telaAtual.funilAtual() : null;
           const fq = fAtual || (r.query && r.query.funil);
-          const q = fq ? `?funil=${encodeURIComponent(fq)}` : "";
+          // plano 2000d · DR-048: a busca que veio no link (?busca=) continua no endereço ao fechar a gaveta
+          const bq = r.query && typeof r.query.busca === "string" && r.query.busca.trim() ? r.query.busca.trim() : "";
+          const partesQ = [fq ? `funil=${encodeURIComponent(fq)}` : "", bq ? `busca=${encodeURIComponent(bq)}` : ""].filter(Boolean);
+          const q = partesQ.length ? `?${partesQ.join("&")}` : "";
           const prefixo = `#/crm/negocio/${idNegocio}`;
           if (location.hash === prefixo || location.hash.startsWith(prefixo + "?")) history.replaceState(history.state, "", `${location.pathname}${location.search}#/crm${q}`);
         },
@@ -463,6 +477,8 @@ export async function montar(ctx) {
       if (tipo === "kanban" && partes[0] === "negocio" && partes[1] !== undefined && !/^\d+$/.test(partes[1] || "")) {
         const art = ctx.vocab && typeof ctx.vocab.art === "function" ? ctx.vocab.art("negocio") : "o";
         ui.toast(`Esse link não aponta para ${art === "a" ? "uma" : "um"} ${(ctx.vocab && typeof ctx.vocab.min === "function" && ctx.vocab.min("negocio")) || "negócio"} válid${art}.`, { tipo: "erro" });
+        // plano 2000d · DR-047: o endereço quebrado sai da barra (recarregar não repete o aviso)
+        try { if (typeof location !== "undefined" && /^#\/crm\/negocio\//.test(location.hash || "")) history.replaceState(history.state, "", `${location.pathname}${location.search}#/crm`); } catch { /* ok */ }
       }
     }
   } catch (e) {

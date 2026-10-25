@@ -12,6 +12,7 @@ export const MODULOS_PRONTOS = [
 ];
 export const CONFIG_PRONTAS = [
   "perfil", "usuarios", "marca", "dominio", "plano",
+  "empresa",   // plano 2000d · DU-394 (pendência da frente config): «Dados da empresa»
   "funis", "campos", "etiquetas", "motivos",
   "numeros", "respostas", "atendimento", "ia", "departamentos",
   "anuncios", "formulario", "agenda", "rastreio",

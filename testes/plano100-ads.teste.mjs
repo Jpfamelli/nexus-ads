@@ -306,7 +306,8 @@ test("F7 · «Gerar chave de instalação» não duplica a tela (um cartão, um 
   assert.equal(t.alvo.querySelectorAll(".rastc").length, 1);
   assert.equal(t.alvo.querySelectorAll(".rastc-privacidade").length, 1);
   // plano 1000b: AB-204 acrescentou a versão para site com banner de cookies (data-consentimento) — o snippet padrão continua único
-  assert.equal(t.alvo.querySelectorAll("pre").filter(p => p.textContent.includes("data-chave=") && !p.textContent.includes("data-consentimento")).length, 1);
+  // plano 2000d: DA-304 acrescentou a versão «só esta visita» (data-dias="0") — o snippet padrão continua único
+  assert.equal(t.alvo.querySelectorAll("pre").filter(p => p.textContent.includes("data-chave=") && !p.textContent.includes("data-consentimento") && !p.textContent.includes("data-dias")).length, 1);
 });
 
 test("F7 · «Gerar nova chave» avisa que desliga o script E o formulário; depois só a chave nova aparece (a revogada some da tela)", async () => {

@@ -341,4 +341,8 @@ export const VARIAVEIS_NOVAS = Object.freeze([
   ["profissional", "Profissional da agenda", "var_profissional"],
   ["link_avaliacao", "Link de avaliação no Google", "var_link_avaliacao"],
   ["proxima_abertura", "Próxima abertura (amanhã às 08:00)", "var_proxima_abertura"],
+  // plano 2000d · AX-076 (pendência DU-395 da frente config): os dados da empresa de Configurações → Empresa (nx_empresa_dados)
+  ["endereco", "Endereço da empresa", "var_dados_empresa"],
+  ["telefone_empresa", "Telefone da empresa", "var_dados_empresa"],
+  ["instagram", "Instagram da empresa (@)", "var_dados_empresa"],
 ]);

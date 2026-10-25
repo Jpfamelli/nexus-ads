@@ -295,13 +295,13 @@ export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, 
     el.addEventListener("focusin", () => { foco = true; pausar(); });
     el.addEventListener("focusout", ev => { if (ev && ev.relatedTarget && el.contains(ev.relatedTarget)) return; foco = false; retomar(); });
   }
-  anunciar(String(texto), { urgente: tipo === "erro" });
+  // plano 2000d · DU-434: sucesso não é só a cor verde — o leitor de tela ouve «Pronto:» antes (o ícone de check já está à vista)
+  anunciar(tipo === "ok" && !/^pronto\b/i.test(String(texto).trim()) ? `Pronto: ${String(texto)}` : String(texto), { urgente: tipo === "erro" });
   // RC-054 (plano 1500c) · plano 2000d: o texto do aviso à vista pode mudar («já foi gravado» quando a aba volta) sem abrir outro
   const atualizarTexto = t => {
     if (fechado) return false;
     const p = el.querySelector("p");
-    const no = p && [...p.childNodes].find(n => n.nodeType === 3);
-    if (no) no.nodeValue = String(t); else if (p) p.insertBefore(document.createTextNode(String(t)), p.firstChild);
+    if (p) { const cont = p.querySelector(".toast-vezes"); p.textContent = String(t); if (cont) p.appendChild(cont); }
     anunciar(String(t));
     return true;
   };
@@ -528,7 +528,7 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
       b.addEventListener("click", async () => {
         api.erro("");
         if (!a.fn) { api.fechar(a.valor !== undefined ? a.valor : a.tipo === "neutro" ? null : true); return; }
-        b.setAttribute("aria-busy", "true"); botoes.forEach(x => { x.disabled = true; });
+        const soltar = marcarOcupado(b); botoes.forEach(x => { x.disabled = true; });   // plano 2000d · DU-330
         ocupado = true;
         try {
           const r = await a.fn(api);
@@ -537,7 +537,7 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
           api.erro(mensagemErro(e));
         } finally {
           ocupado = false;
-          b.removeAttribute("aria-busy"); botoes.forEach(x => { x.disabled = false; });
+          soltar(); botoes.forEach(x => { x.disabled = false; });
         }
       });
       return b;
@@ -1006,8 +1006,18 @@ export function esqueleto(tipo = "lista", opcoes = {}) {
   else corpo = h("div", { class: "sk-lista" }, itensLista(n));   // "lista" (e qualquer tipo desconhecido)
   // plano 1000b · UB-209: `anunciar: false` nos esqueletos secundários — só o principal da tela fala «Carregando…» (role=status)
   const fala = o.anunciar === false ? null : h("span", { class: "sr-only", role: "status" }, "Carregando…");
+  // plano 2000d · DU-360: depois de `demorouMs` (5 s) com o esqueleto ainda na tela, uma linha visível diz O QUE está carregando e que pode ser a conexão
+  const demora = typeof o.demorou === "string" && o.demorou.trim() ? h("p", { class: "sk-demora", hidden: true }, o.demorou.trim()) : null;
   const raiz = h("div", { class: ["esqueleto", `esqueleto-${tipo}`], dataset: { tipo }, "aria-busy": "true" },
-    fala, comCab ? cab() : null, corpo);
+    fala, demora, comCab ? cab() : null, corpo);
+  if (demora) {
+    const ms = Number.isFinite(o.demorouMs) ? o.demorouMs : 5000;
+    setTimeout(() => {
+      if (!raiz.isConnected) return;
+      demora.hidden = false;
+      if (fala) fala.textContent = demora.textContent;
+    }, ms);
+  }
   return raiz;
 }
 export const TIPOS_ESQUELETO = Object.freeze(["inicio", "chat", "lista", "kanban", "ads", "tabela", "agenda", "cartoes", "cartao", "grafico", "kpi"]);
@@ -1910,15 +1920,30 @@ export function manterFoco(el) {
   };
 }
 
+/** plano 2000d · DU-330: enquanto ocupado, o nome acessível do botão diz que está trabalhando («Salvar, aguarde…») — o leitor de tela não ouve só
+    «ocupado». Devolve a função que desfaz (volta o nome que o botão tinha). */
+export function marcarOcupado(botao) {
+  if (!botao || typeof botao.setAttribute !== "function") return () => {};
+  if (typeof botao.getAttribute !== "function") { botao.setAttribute("aria-busy", "true"); return () => { if (typeof botao.removeAttribute === "function") botao.removeAttribute("aria-busy"); }; }
+  const tinha = botao.getAttribute("aria-label");
+  const nome = String(tinha || botao.textContent || "").replace(/\s+/g, " ").trim();
+  botao.setAttribute("aria-busy", "true");
+  if (nome) botao.setAttribute("aria-label", `${nome}, aguarde…`);
+  return () => {
+    botao.removeAttribute("aria-busy");
+    if (tinha === null) botao.removeAttribute("aria-label"); else botao.setAttribute("aria-label", tinha);
+  };
+}
 /** carregando(botao, promessa|função) — trava o botão (aria-busy) até terminar; devolve o resultado e o foco do teclado. */
 export async function carregando(botao, promessa) {
   const estavaDesab = botao ? botao.disabled : false;
   const devolverFoco = botao ? manterFoco(botao) : null;
-  if (botao) { botao.disabled = true; botao.setAttribute("aria-busy", "true"); }
+  let soltar = () => {};
+  if (botao) { botao.disabled = true; soltar = marcarOcupado(botao); }   // plano 2000d · DU-330
   try {
     return await (typeof promessa === "function" ? promessa() : promessa);
   } finally {
-    if (botao) { botao.disabled = estavaDesab; botao.removeAttribute("aria-busy"); devolverFoco(); }
+    if (botao) { botao.disabled = estavaDesab; soltar(); devolverFoco(); }
   }
 }
 
@@ -2003,7 +2028,7 @@ export function blocoLink(link, { rotulo = "Link", textoWhats, central } = {}) {
   // «Mostrar link» revela o completo e só então o foco seleciona. Copiar e WhatsApp usam sempre o link inteiro.
   const curto = linkTruncado(link);
   let visivel = curto === String(link);
-  const inp = h("input", { id, type: "text", class: "mono", readonly: true, value: visivel ? link : curto });
+  const inp = h("input", { id, type: "text", class: "mono", readonly: true, value: visivel ? link : curto, "aria-label": "Link" });   // plano 2000d · DU-326
   inp.addEventListener("focus", () => { if (visivel) inp.select(); });
   const mostrar = visivel ? null : h("button", { type: "button", class: "bt bt-sec bloco-link-mostrar", "aria-pressed": "false", "aria-controls": id, on: { click: () => {
     visivel = !visivel; inp.value = visivel ? link : curto;

@@ -121,7 +121,8 @@ test("AC-010 · ritmo avisa verba sobrando no dia 10 (com quanto dá para subir)
 
 test("AC-011 · orçamento já gasto: nada de «Segurar R$ X por dia» — o aviso diz que acabou", () => {
   const M = comHoje("2026-03-13", { metricas: serieAbs("2026-03-13", 40, { g: 10 }) }, { orcamento: 100 });
-  const r = M.avaliar(M.R, true).find(a => a.chave === "ritmo");
+  // plano 2000d: o «esgotado» tem chave própria («ritmo:esgotado», DA-006) — procura pela regra
+  const r = M.avaliar(M.R, true).find(a => a.regra.id === "ritmo");
   assert.ok(r);
   assert.equal(r.tipo, "esgotado");
   assert.doesNotMatch(r.acao, /Segurar/, "antes: «Segurar R$ … por dia … para fechar dentro do orçamento»");
@@ -151,8 +152,10 @@ test("AC-015 · melhor/pior: cada campanha contra a meta da SUA plataforma (Goog
   const ms = [...serie(1, 7, { g: 10, conv: 1 }), ...serie(1, 7, { p: "google", c: "G1", cn: "Pesquisa Google", a: "GA", g: 40, conv: 1 })];
   const M = montarDe({ metricas: ms }, { cpaAlvo: 12, cpaAlvoGoogle: 50 });
   const t = M.relDiario(M.R);
-  const pior = t.split("\n").find(l => l.includes("Pior:"));
+  // plano 2000d: as duas dentro da meta — a última do ranking é «Mais cara (dentro da meta)», sem «🔴 Pior» (DA-016)
+  const pior = t.split("\n").find(l => l.includes("Mais cara (dentro da meta):"));
   assert.ok(pior && !/Pesquisa Google/.test(pior), `antes: o Google (R$ 40 contra meta de R$ 50) era o pior — ${pior}`);
+  assert.doesNotMatch(t, /Pior:/);
   assert.match(t.split("\n").find(l => l.includes("Melhor:")), /Pesquisa Google/);
 });
 
@@ -289,7 +292,7 @@ test("AC-047 · estorno (gasto negativo) entra na soma, mas a barra do dia não 
 
 test("AC-048 · mensal com os criativos que mais trouxeram conversa", () => {
   const M = montarDe({ metricas: [...serie(1, 120), ...serie(1, 120, { a: "A2", an: "Vídeo da doutora", conv: 1 })] });
-  assert.match(M.relMensal(ultimoMes(M)), /Criativos que mais trouxeram conversa: _Anúncio teste_ \(\d+\), _Vídeo da doutora_ \(\d+\)/);
+  assert.match(M.relMensal(ultimoMes(M)), /Criativos que mais trouxeram conversa: _Anúncio teste_ \(\d+ · R\$\s[\d,]+ cada\), _Vídeo da doutora_ \(\d+ · R\$\s[\d,]+ cada\)/);
 });
 
 test("AC-055 · resumo semanal (segunda-feira): 7 dias contra os 7 anteriores", () => {

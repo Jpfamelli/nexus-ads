@@ -1230,7 +1230,8 @@ test("UCC-122 + UCC-123 · service worker: push mostra o aviso; clique foca a ab
   const e3 = m.evento({ notification: { data: { hash: "javascript:alert(1)" }, close() {} } });
   m.ouvintes.notificationclick(e3); await e3.fim();
   assert.deepEqual(abertas, [`${m.site}/app/index.html#/conversas`], "endereço estranho cai em Conversas");
-  assert.match(APP_JS, /m\.tipo === "abrir" && \/\^#\\\/\/\.test\(String\(m\.hash \|\| ""\)\)\) navegar\(m\.hash\)/);
+  // plano 2000d: DU-253/DU-254 — a mensagem do SW passa por mensagemDoSW (abrir, ler, push-renovar)
+  assert.match(APP_JS, /m\.tipo === "abrir" && \/\^#\\\/\/\.test\(String\(m\.hash \|\| ""\)\)\) \{ navegar\(m\.hash\)/);
 });
 
 test("UCC-129 · um relógio só: a conferência de migração vai no tique do pwa.js (aba escondida não confere)", async () => {
@@ -1487,12 +1488,14 @@ test("UC-030 · modo apresentação: avatares marcados como dado pessoal ficam b
 test("UC-037 · novidades: as notas vão junto na atualização, aparecem uma vez e ficam no menu Ajuda", () => {
   const ls = loja();
   assert.equal(PWA.guardarNovidades(ls, "V2", ["Agenda mais rápida", "", 3]), true);
-  assert.deepEqual(PWA.novidadesDaVersao(ls, "V2"), { notas: ["Agenda mais rápida"], vistas: false });
+  // plano 2000d: DU-286 — e se a pessoa já ABRIU a lista (o ponto do menu)
+  assert.deepEqual(PWA.novidadesDaVersao(ls, "V2"), { notas: ["Agenda mais rápida"], vistas: false, abertas: false });
   PWA.marcarNovidadesVistas(ls);
-  assert.deepEqual(PWA.novidadesDaVersao(ls, "V2"), { notas: ["Agenda mais rápida"], vistas: true });
+  assert.deepEqual(PWA.novidadesDaVersao(ls, "V2"), { notas: ["Agenda mais rápida"], vistas: true, abertas: false });   // plano 2000d: DU-286
   assert.deepEqual(PWA.novidadesDaVersao(ls, "V3").notas, [], "outra versão: nada");
   assert.equal(PWA.guardarNovidades(ls, "V4", []), false);
-  assert.match(fnDoApp("async function abrirMenuAjuda(ancora) {"), /a\.novidades \? \{ rotulo: "Novidades desta versão"/);
+  // plano 2000d: DU-286 — o rótulo ganha «(nova)» enquanto a lista não foi aberta
+  assert.match(fnDoApp("async function abrirMenuAjuda(ancora) {"), /a\.novidades \? \{ rotulo: novidadesPendentes\(\) \? "Novidades desta versão \(nova\)" : "Novidades desta versão"/);
 });
 
 test("UC-038 · situação dos serviços: aparelho, cada número (caído desde quando), IA e versão", () => {

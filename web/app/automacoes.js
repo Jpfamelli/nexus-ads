@@ -386,7 +386,9 @@ function telaLista(ctx, raiz, dados, P) {
         const novo = await ctx.api.rpcC("nx_automacoes_listar");
         if (eu !== montagem) return;
         // os da lista se repintam; os fora do filtro atual (sem cartão na tela) só atualizam o dado, que o resumo e os filtros contam
-        for (const it of novo.itens || []) { const m = metas.get(it.id); if (m) m(it); else { const x = itens.find(y => y.id === it.id); if (x) Object.assign(x, it); } }
+        // plano 2000d · AX-038: um índice por id (antes um find por item: 200 × 200 a cada pulso)
+        const porId = new Map(itens.map(y => [y.id, y]));
+        for (const it of novo.itens || []) { const m = metas.get(it.id); if (m) m(it); else { const x = porId.get(it.id); if (x) Object.assign(x, it); } }
         aoMudarEstado();
         // plano 1000b · UB-044: outra pessoa criou ou excluiu → faixa «A lista mudou · Atualizar» (não redesenha sozinho embaixo de quem está usando)
         if (L.listaMudou(itens, novo.itens, excluindo)) avisarListaMudou();
@@ -450,6 +452,9 @@ function primeiraAutomacao(ctx, vertical, P = null) {
   const btAbrir = h("button", { type: "button", class: "bt bt-prim", disabled: true }, ui.icone("seta-dir"), "Abrir a receita sugerida");
   const sugestao = h("p", { class: "sub au-prim-sug", role: "status" });
   const pintar = () => {
+    // plano 2000d · AX-097: «Seu WhatsApp é…» só importa para lembrete ao cliente — nos outros casos a pergunta some (uma escolha a menos)
+    const caixaCanal = grupos && grupos.find(g => g.dataset && g.dataset.pergunta === "canal");
+    if (caixaCanal) caixaCanal.hidden = !(resp.objetivo === "lembrar" && resp.quem === "cliente");
     const pronto = !!resp.objetivo && !!resp.quem;
     btAbrir.disabled = !pronto;
     if (!pronto) { sugestao.textContent = ""; return; }
@@ -472,7 +477,7 @@ function primeiraAutomacao(ctx, vertical, P = null) {
       grupo.appendChild(b);
     }
     if (P && typeof P.setas === "function") P.setas(grupo);     // setas e uma parada de Tab por pergunta
-    return h("div", { class: "au-prim-perg" }, h("p", { class: "au-prim-rot", id: idP }, p.pergunta), grupo);
+    return h("div", { class: "au-prim-perg", dataset: { pergunta: p.id }, hidden: p.id === "canal" }, h("p", { class: "au-prim-rot", id: idP }, p.pergunta), grupo);   // plano 2000d · AX-097
   });
   return h("section", { class: "cartao au-prim", "aria-labelledby": `${id}-t` },
     h("p", { class: "rotulo" }, "Primeira automação"),
@@ -495,6 +500,8 @@ function caixaColar(ctx, dados) {
     const lista = L.importarAutomacoes(area.value.trim(), dados.base, ctx.vocab);
     if (!lista.length) { erro.textContent = textoColagemInvalida(nomeSuporte(ctx)); erro.hidden = false; area.focus(); return; }   // plano 2000d · DU-026
     erro.hidden = true;
+    // plano 2000d · AX-031: o texto trazia mais de 50 — diz quantas ficaram de fora
+    if (lista.cortadas) ui.toast(`O texto tinha mais de 50 automações: entram as 50 primeiras e ${L.plural(lista.cortadas, "ficou de fora", "ficaram de fora")}. Cole o resto depois.`, { tipo: "info" });
     if (lista.length > 1) { colarVarias(ctx, dados, lista, btAbrir); return; }
     const r = lista[0];
     colagem = { auto: r.auto, explicacao: "Automação colada de outro cliente. Os itens com o mesmo nome foram ligados aos deste cliente; ela nasce desligada.", avisos: r.pendencias, colada: true };
@@ -511,10 +518,15 @@ function caixaColar(ctx, dados) {
  */
 async function colarVarias(ctx, dados, lista, botao) {
   const { ui } = ctx;
-  const prontas = lista.filter(r => L.validar(r.auto, { base: dados.base, ligar: false }).ok);
-  const ajustar = lista.filter(r => !prontas.includes(r));
+  const validas = lista.filter(r => L.validar(r.auto, { base: dados.base, ligar: false }).ok);
+  const ajustar = lista.filter(r => !validas.includes(r));
+  // plano 2000d · AX-032: só cria as que cabem no plano (antes o servidor recusava as últimas e o toast só dizia «não consegui»)
+  const vagas = L.vagasNoPlano(dados.limite);
+  if (!vagas) { ui.toast("Seu plano chegou ao limite de automações: exclua uma que não usa para colar outras.", { tipo: "erro" }); return; }
+  const prontas = validas.slice(0, vagas);
+  const semVaga = validas.length - prontas.length;
   const ok = await ui.confirmar({ titulo: `Criar ${L.plural(prontas.length, "automação", "automações")}?`, rotulo: "Criar desligadas",
-    texto: `Elas nascem desligadas.${ajustar.length ? ` ${L.listaNomesCurta(ajustar.map(r => r.auto.nome || "sem nome"))} precisam de ajuste (etapa, etiqueta ou campo que não existe aqui): cole uma de cada vez para abrir no editor.` : ""}` });
+    texto: `Elas nascem desligadas.${ajustar.length ? ` ${L.listaNomesCurta(ajustar.map(r => r.auto.nome || "sem nome"))} precisam de ajuste (etapa, etiqueta ou campo que não existe aqui): cole uma de cada vez para abrir no editor.` : ""}${semVaga ? ` O plano só tem vaga para ${L.plural(prontas.length, "automação", "automações")}: ${L.listaNomesCurta(validas.slice(vagas).map(r => r.auto.nome || "sem nome"))} ficam de fora.` : ""}` });
   if (!ok || !prontas.length) return;
   const feitas = [], falhas = [];
   const exec = (async () => { for (const r of prontas) { try { await ctx.api.rpcC("nx_automacao_salvar", { p_auto: L.limpar({ ...r.auto, ativo: false }) }); feitas.push(r); } catch { falhas.push(r); } } })();
@@ -528,7 +540,8 @@ async function colarVarias(ctx, dados, lista, botao) {
 function kitInicialCaixa(ctx, dados, vertical) {
   const { ui } = ctx;
   const h = ui.h;
-  const kit = L.kitInicial(vertical, dados.base, ctx.vocab);
+  // plano 2000d · AX-033: o kit só oferece o que cabe no plano (plano de 2 automações → kit de 2)
+  const kit = L.kitInicial(vertical, dados.base, ctx.vocab).slice(0, L.vagasNoPlano(dados.limite));
   if (kit.length < 2) return null;
   const nomeSeg = { odonto: "da clínica", oficina: "da oficina", loja: "da loja" }[vertical] || "para começar";
   const bt = h("button", { type: "button", class: "bt bt-sec au-kit-bt" }, ui.icone("raio"), `Criar o kit ${nomeSeg} (${kit.length} desligadas)`);
@@ -841,10 +854,14 @@ function secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado, aoExcluida = () =
   // plano 2000d · DU-343: acima de 60 automações, os cartões fora da tela não são desenhados (content-visibility no CSS)
   const lista = h("ul", { class: ["au-lista", itens.length > 60 && "au-lista-longa"], role: "list" });
   const vazio = h("div", { class: "au-lista-vazio", hidden: true });
+  // plano 2000d · AX-036: o período do resumo é lido UMA vez por contagem (antes o filtro «Com erro» relia a lista inteira para cada item:
+  // com 200 automações, 40 mil leituras a cada pulso)
+  let perCache = null;
+  const per = () => perCache || (perCache = L.periodoDoResumo(itens));
   const filtros = [["todas", "Todas", () => true], ["ligadas", "Ligadas", x => !!x.ativo], ["desligadas", "Desligadas", x => !x.ativo],
     // plano 1500c · UCA-026: «Com erro» na mesma régua do resumo do topo (30 dias quando o servidor manda) — erro de meses atrás não conta
-    ["erros", "Com erro", x => L.temErro(x, L.periodoDoResumo(itens))]];
-  const rotChip = (k, rot) => k === "erros" && L.periodoDoResumo(itens) === "30d" ? "Com erro (30 dias)" : rot;   // plano 1500c · UCA-026
+    ["erros", "Com erro", x => L.temErro(x, per())]];
+  const rotChip = (k, rot) => k === "erros" && per() === "30d" ? "Com erro (30 dias)" : rot;   // plano 1500c · UCA-026 · plano 2000d · AX-036
   const fnFiltro = () => filtros.find(x => x[0] === filtro)[2];
   const barra = h("div", { class: "au-chips au-lista-filtro", role: "radiogroup", "aria-label": "Mostrar automações" });
   const pintarVazio = () => {
@@ -852,6 +869,17 @@ function secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado, aoExcluida = () =
     vazio.hidden = n > 0;
     ui.limpar(vazio);
     if (!n) vazio.appendChild(h("p", { class: "sub" }, termo.trim() ? `Nenhuma automação com «${termo.trim()}» no nome ou no que faz.` : "Nenhuma automação nesta situação."));
+    // plano 2000d · AX-075: o vazio do filtro oferece a saída — «Mostrar todas» limpa a busca e volta o filtro (antes a pessoa caçava o chip)
+    if (!n && itens.length && (termo.trim() || filtro !== "todas")) {
+      const bt = h("button", { type: "button", class: "bt bt-sec bt-p au-lista-limpar" }, ui.icone("fechar"), "Mostrar todas");
+      bt.addEventListener("click", () => {
+        termo = ""; campoBusca.value = "";
+        const chipTodas = chips.find(x => x[3] === "todas");
+        if (chipTodas) escolher("todas", chipTodas[0]); else desenhar();
+        const f = lista.querySelector(".au-sw") || campoBusca; if (f && f.focus) f.focus({ preventScroll: true });
+      });
+      vazio.appendChild(bt);
+    }
   };
   const ops = {
     /** AS-004: ligou/desligou e o item não casa mais com o filtro → o cartão sai (depois de um instante) e o foco vai ao próximo interruptor. */
@@ -869,6 +897,8 @@ function secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado, aoExcluida = () =
     },
     /** AS-010 + AS-011: o cartão some na hora com «Desfazer»; só quando o aviso fecha a exclusão vale no servidor. */
     excluirItem(it, li, foco) { return excluir(ctx, it, li, { itens, metas, aoMudarEstado, pintarVazio, aoEsvaziar, aoExcluida, foco, usuarios: dados.base && dados.base.usuarios }); },
+    /** plano 2000d · AX-037: a frase do cartão sai do mesmo cache da busca (redesenhar 200 cartões não refaz 200 frases) */
+    frase: x => fraseDe(x),
   };
   // plano 1000 · AS-015: com muitas automações, busca por nome (sem acento) e ordem lembrada por pessoa neste aparelho
   const chaveOrdem = `nx-au-ordem:${ctx.cliente ? ctx.cliente.id : "-"}|${ctx.sessao && ctx.sessao.conta ? (ctx.sessao.conta.id || "-") : "-"}`;
@@ -888,6 +918,7 @@ function secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado, aoExcluida = () =
   // plano 1500c · UCA-069: modo «Selecionar» — caixas nos cartões e uma barra para ligar, desligar ou excluir várias de uma vez
   let sel = null;
   const desenhar = () => {
+    perCache = null;     // plano 2000d · AX-036
     ui.limpar(lista);
     const vis = L.listaAutomacoes(itens.filter(fnFiltro()), { termo, ordem, frase: fraseDe });
     metas.clear();
@@ -924,6 +955,7 @@ function secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado, aoExcluida = () =
   desenhar();
   const contaCab = h("span", { class: "rotulo" });
   const recontar = () => {
+    perCache = null;     // plano 2000d · AX-036: o pulso pode ter trazido os contadores de 30 dias
     const ligadas = itens.filter(x => x.ativo).length;
     contaCab.textContent = `${ligadas} ${ligadas === 1 ? "ligada" : "ligadas"} de ${itens.length}`;
     for (const [b, rot, fn, k] of chips) {
@@ -935,7 +967,7 @@ function secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado, aoExcluida = () =
         if (!n && filtro === "erros") escolher("todas", chips[0][0]);   // o filtro ativo ficou vazio: volta para «Todas»
       }
     }
-    barra.hidden = itens.length <= 3 && !itens.some(x => L.temErro(x, L.periodoDoResumo(itens)));   // plano 1500c · UCA-026
+    barra.hidden = itens.length <= 3 && !itens.some(x => L.temErro(x, per()));   // plano 1500c · UCA-026 · plano 2000d · AX-036
   };
   recontar();
   campoBusca.addEventListener("input", ui.debounce(() => { termo = campoBusca.value; desenhar(); }, 150));
@@ -964,7 +996,7 @@ export function textoConfirmarLigar(it, dados, vocab, opcoes = {}) {
   let massa = null;
   const opAv = { iaAtendimentoLigada: L.iaAtendimentoLigada(dados) };
   try { massa = L.avisosEstruturaDetalhados(it, vocab, opAv).find(x => x.tipo === "massa_diaria" || x.tipo === "toda_mensagem" || x.tipo === "conflito_ia") || null; } catch { massa = null; }
-  const quem = msg && opcoes && opcoes.total != null ? L.fraseQuemRecebe(opcoes.total) : null;
+  const quem = msg && opcoes && opcoes.total != null ? L.fraseQuemRecebe(opcoes.total, { auto: it }) : null;   // plano 2000d · AX-057
   const d = dados || {};
   const iaD = d.ia || (d.base && d.base.ia) || null;
   const cota = iaD && (iaD.cota || (iaD.limite !== undefined ? { usadas: iaD.usadas, limite: iaD.limite } : null));
@@ -1025,7 +1057,9 @@ function modoSelecao(ctx, dados, itens, metas, lista, P, aoMudarEstado, redesenh
   const barraSel = h("div", { class: "au-sel-barra", role: "toolbar", "aria-label": "Ações nas automações selecionadas", hidden: true }, status, btTodas, btLigar, btDesligar, btCopiar, btExcluir);
   const el = h("div", { class: "au-sel" }, btModo, barraSel);
   const visiveis = () => [...lista.querySelectorAll(".au-item")];
-  const doId = id => itens.find(x => String(x.id) === String(id));
+  // plano 2000d · AX-039: índice por id refeito só quando a lista muda de tamanho (marcar 200 caixas não faz 200 buscas lineares)
+  let idx = null, idxN = -1;
+  const doId = id => { if (!idx || idxN !== itens.length) { idx = new Map(itens.map(x => [String(x.id), x])); idxN = itens.length; } return idx.get(String(id)); };
   const pintar = () => {
     const n = marcadas.size;
     const vs = visiveis();
@@ -1112,18 +1146,14 @@ function modoSelecao(ctx, dados, itens, metas, lista, P, aoMudarEstado, redesenh
       }
     }
     const feitas = [], falhas = [];
-    const exec = (async () => {
-      let n = 0;
-      for (const it of alvo) {
-        n += 1; status.textContent = `${v ? "Ligando" : "Desligando"} ${n} de ${alvo.length}…`;
-        try {
-          const novo = await ctx.api.rpcC("nx_automacao_ativar", { p_id: it.id, p_ativo: v });
-          const dado = novo && typeof novo === "object" && typeof novo.ativo === "boolean" ? novo : { ativo: v };
-          const m = metas.get(it.id); if (m) m(dado); else Object.assign(it, dado);
-          feitas.push(it);
-        } catch { falhas.push(it); }
-      }
-    })();
+    // plano 2000d · AX-034: 4 de cada vez (200 automações não esperam uma a uma), o progresso conta as que terminaram
+    status.textContent = `${v ? "Ligando" : "Desligando"} 0 de ${alvo.length}…`;
+    const exec = L.emLotes(alvo, async it => {
+      const novo = await ctx.api.rpcC("nx_automacao_ativar", { p_id: it.id, p_ativo: v });
+      const dado = novo && typeof novo === "object" && typeof novo.ativo === "boolean" ? novo : { ativo: v };
+      const m = metas.get(it.id); if (m) m(dado); else Object.assign(it, dado);
+    }, { concorrencia: 4, aoProgresso: (n, t) => { status.textContent = `${v ? "Ligando" : "Desligando"} ${n} de ${t}…`; } })
+      .then(rs => { for (const r of rs) (r.ok ? feitas : falhas).push(r.item); });
     await (typeof ui.carregando === "function" ? ui.carregando(botao, exec) : exec);
     aoMudarEstado();
     pintar();
@@ -1150,11 +1180,10 @@ function modoSelecao(ctx, dados, itens, metas, lista, P, aoMudarEstado, redesenh
         aplicar: () => { for (const it of alvo) { const i = itens.indexOf(it); if (i >= 0) itens.splice(i, 1); } marcadas.clear(); redesenhar(); aoMudarEstado(); },
         reverter: () => { for (const [it, i] of posicoes.slice().sort((a, b) => a[1] - b[1])) if (!jaExcluidas.has(it) && !itens.includes(it)) itens.splice(Math.min(Math.max(i, 0), itens.length), 0, it); redesenhar(); aoMudarEstado(); },
         firmar: async o => {
+          // plano 2000d · AX-035: 4 exclusões de cada vez (antes uma a uma: 100 selecionadas seguravam o aviso por muito tempo)
+          const rs = await L.emLotes(alvo, it => ctx.api.rpcC("nx_automacao_excluir", { p_id: it.id }, o && o.saindo ? { keepalive: true } : {}), { concorrencia: 4 });
           let erro = null;
-          for (const it of alvo) {
-            try { await ctx.api.rpcC("nx_automacao_excluir", { p_id: it.id }, o && o.saindo ? { keepalive: true } : {}); jaExcluidas.add(it); }
-            catch (e) { erro = erro || e; }
-          }
+          for (const r of rs) { if (r.ok) jaExcluidas.add(r.item); else erro = erro || r.erro; }
           if (erro) throw erro;
         },
       });
@@ -1190,7 +1219,7 @@ function itemLista(ctx, dados, it, metas, P, posicao = 0, aoMudarEstado = () => 
   const lim = dados.limite || {};
   const noLimiteAgora = () => lim.limite != null && lim.usadas >= lim.limite;   // plano 1000b · UB-001: lido na hora de abrir o menu
   const g = L.GATILHO[it.gatilho];
-  const frase = L.descrever(it, dados.base, vv);
+  const frase = ops && typeof ops.frase === "function" ? ops.frase(it) : L.descrever(it, dados.base, vv);   // plano 2000d · AX-037
   const exec = h("span", { class: "au-item-num" });
   const errs = h("span", { class: "au-item-num au-com-erro" });
   const ultima = h("span", { class: "au-item-ult" });

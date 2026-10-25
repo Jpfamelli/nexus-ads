@@ -800,6 +800,7 @@ test("RB-208/112/099 ficha (DOM): na gaveta o nome é h2; o pulso mantém o filt
     assert.equal(el.scrollTop, 420);
     // RB-099
     el.querySelectorAll("button").find(b => b.attrs["aria-label"] === "Mais ações").clique();
+    t.ui.modal = async () => ({ motivo: "duplicado" });      // plano 2000d: DR-174 — a exclusão pergunta o motivo num modal (antes ui.confirmar)
     await itens.find(i => i && /Excluir cadastro/.test(i.rotulo || "")).fn(); await varias();
     assert.equal(t.reg.toasts.at(-1), "Cadastro excluído — 1 arquivo de mídia entra na faxina.", "antes: «1 arquivo(s) de mídia entram»");
   } finally { D.desfazer(); }
@@ -1051,7 +1052,7 @@ test("RB-139/149 Campos (DOM): opções repetidas viram uma (com aviso); a chave
     assert.equal(item.querySelector(".crm-cfg-chave"), null, "antes: « · convenio» em mono na lista");
     assert.ok(!item.textContent.includes("convenio"));
     assert.equal(item.attrs.title, "Chave interna: convenio");
-    alvo.querySelectorAll("button").find(b => b.textContent.trim() === "Campo").clique(); await varias();
+    alvo.querySelectorAll("button").find(b => b.textContent.trim() === "Novo campo").clique(); await varias();      // plano 2000d: DR-208 — o botão de criar tem verbo
     assert.deepEqual(reg.chamadas.find(c => c.n === "nx_campo_salvar").p.p_campo.opcoes, ["Unimed", "B"], "antes: «Unimed» duas vezes");
     assert.ok(reg.toasts.includes("Opções repetidas foram unidas (1)."));
   } finally { D.desfazer(); }
@@ -1203,7 +1204,7 @@ test("RB-044/029/213/227/120 textos: linha do tempo com o nome da etapa; chip de
 
 test("RB-042/136 exemplos por vertical: a oficina não vê «Implante superior» nem «dentista responsável»", () => {
   assert.equal(L.exemploTituloNegocio("odonto"), "Implante superior");
-  assert.equal(L.exemploTituloNegocio("oficina"), "Troca de embreagem");
+  assert.equal(L.exemploTituloNegocio("oficina"), "Gol 2015 — troca de embreagem");      // plano 2000d: DR-148 pôs o veículo no exemplo
   assert.equal(L.exemploTituloNegocio("loja"), "Kit presente");
   assert.equal(L.exemploTituloNegocio("qualquer"), "Proposta mensal");
   for (const v of ["oficina", "loja", "generico"]) {
@@ -1425,7 +1426,7 @@ test("RB-042/053/062 novo negócio (DOM): exemplo da vertical; e-mail conferido 
     N.novoNegocio(k, {}); await varias();
     const corpo = reg.g.corpo;
     const titulo = corpo.querySelector('input[name="titulo"]');
-    assert.equal(titulo.attrs.placeholder, "Ex.: Troca de embreagem", "antes: «Ex.: Implante superior» na oficina");
+    assert.equal(titulo.attrs.placeholder, "Ex.: Gol 2015 — troca de embreagem", "antes: «Ex.: Implante superior» na oficina");      // plano 2000d: DR-148
     const cons = corpo.querySelector('input[name="consulta_em"]');
     cons.value = "2020-01-01T10:00"; cons.dispara("change");
     const aviso = corpo.querySelectorAll(".ed-aviso").find(x => !x.hidden);
@@ -1616,7 +1617,7 @@ test("RB-135/242/146 Funis (DOM): contagem que falhou trava tipo/marco/anúncios
     assert.ok(alvo.querySelector(".fe-sem-contagem"), "antes: nenhum aviso e tudo livre");
     assert.ok(alvo.querySelectorAll(".fe-tipo").every(s => s.disabled), "tipo travado sem a contagem");
     assert.equal(alvo.querySelector('input[name="conta_no_ads"]').checked, false);
-    botaoTxt(alvo, /^Etapa$/).clique(); await varias();
+    botaoTxt(alvo, /^(Etapa|Nova etapa)$/).clique(); await varias();      // plano 2000d: DR-208 — «Nova etapa»
     const probs = alvo.querySelectorAll(".fe-prob").map(x => x.value);
     assert.ok(probs.includes(55), `chance da nova entre 10 e 100 (${probs})`);
     const nome = alvo.querySelector('input[name="nome"]');
@@ -1646,7 +1647,7 @@ test("RB-140/150 Campos e Etiquetas (DOM): funil desativado marcado no «Vale pa
     const alvoC = h0(D, "div");
     await secoesConfig.find(s => s.id === "campos").montar(ctx, alvoC);
     abasCampos.aoMudar("negocio");
-    botaoTxt(alvoC, /^(Campo|Criar campo)$/).clique(); await varias();
+    botaoTxt(alvoC, /^(Campo|Criar campo|Novo campo)$/).clique(); await varias();      // plano 2000d: DR-208
     assert.ok(opcoes && opcoes.some(o => o.rotulo === "Antigo (desativado)"), "antes: «Antigo» parecia um funil em uso");
     const alvoE = h0(D, "div");
     await secoesConfig.find(s => s.id === "etiquetas").montar(ctx, alvoE);
@@ -2216,8 +2217,8 @@ test("RB-137/141/147 Etiquetas, campos e funis (DOM): cor sugerida pela paleta r
     const { secoesConfig } = await import("../web/app/crm-config.js");
     const alvoE = h0(D, "div");
     await secoesConfig.find(s => s.id === "etiquetas").montar(ctx, alvoE);
-    alvoE.querySelectorAll("button").find(b => b.textContent.trim() === "Etiqueta").clique(); await varias();
-    assert.equal(cor, "c2", "antes: paleta[7 % 12] = undefined com paleta de 5");
+    alvoE.querySelectorAll("button").find(b => b.textContent.trim() === "Nova etiqueta").clique(); await varias();      // plano 2000d: DR-208 — o botão de criar tem verbo
+    assert.equal(cor, "c0", "antes: paleta[7 % 12] = undefined com paleta de 5");      // plano 2000d: DR-213 — a cor MENOS usada da paleta real (todas sem cor → a 1ª), não mais paleta[n % tamanho]
     // RB-141: erro null no salvar do campo
     ui.campo = uiDeMentira(h).campo;
     ui.lerForm = () => ({ rotulo: "Plano", tipo: "texto" });
@@ -2225,7 +2226,7 @@ test("RB-137/141/147 Etiquetas, campos e funis (DOM): cor sugerida pela paleta r
     ui.modal = async o => { resultado = await o.acoes.find(a => a.tipo === "primario").fn({ erro: x => erros.push(x) }); return null; };
     const alvoC = h0(D, "div");
     await secoesConfig.find(s => s.id === "campos").montar(ctx, alvoC);
-    alvoC.querySelectorAll("button").find(b => b.textContent.trim() === "Campo").clique(); await varias();
+    alvoC.querySelectorAll("button").find(b => b.textContent.trim() === "Novo campo").clique(); await varias();      // plano 2000d: DR-208 — o botão de criar tem verbo
     assert.equal(resultado, false, "antes: TypeError dentro do catch (e.hint de null)");
     assert.equal(erros.length, 1);
     // RB-147

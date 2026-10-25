@@ -1194,7 +1194,7 @@ test("CR-098/095/106/103/046 ficha (DOM): e-mail e UF conferidos sem ir ao servi
     el.querySelectorAll("button").find(b => b.attrs["aria-label"] === "Mais ações").clique();
     const lgpd = itensMenu.find(i => i && i.rotulo === "Baixar dados do titular (LGPD)");
     assert.ok(lgpd, "direito de acesso ao lado do «Excluir»");
-    lgpd.fn();
+    await lgpd.fn();      // plano 2000d: DR-175 — tenta antes a RPC com as mensagens (assíncrono)
     // plano 1000b: RB-263 — junto do JSON vai um .txt legível (2 arquivos)
     assert.equal(U.criados.length, 2);
     const json = JSON.parse(await U.criados[0].text());
@@ -1325,12 +1325,13 @@ test("CR-063 linha do tempo (DOM): chips «Tudo · Notas · Etapas · Conversas 
       { tipo: "automacao", em: iso(-1), dados: { nome: "Boas-vindas" } }, { tipo: "conversa_aberta", em: iso(-2), dados: {} }];
     const bloco = h0(D, "div", null, T.blocoTempo(k, itens));
     const chips = bloco.querySelectorAll(".tempo-filtro");
-    assert.deepEqual(chips.map(c => c.dataset.filtro), ["tudo", "nota", "etapas", "conversa", "automacao"]);
+    // plano 2000d: DR-116 pôs o chip «Tarefas» depois de «Notas»
+    assert.deepEqual(chips.map(c => c.dataset.filtro), ["tudo", "nota", "tarefa", "etapas", "conversa", "automacao"]);
     assert.equal(bloco.querySelectorAll(".tempo-it").length, 5);
     chips[1].clique();
     assert.equal(bloco.querySelectorAll(".tempo-it").length, 1, "só a nota");
     assert.equal(chips[1].attrs["aria-pressed"], "true");
-    chips[2].clique();
+    chips[3].clique();      // plano 2000d: com o chip «Tarefas» (DR-116), «Etapas» é o 4º
     assert.equal(bloco.querySelectorAll(".tempo-it").length, 2, "etapa + ganho");
     chips[0].clique();
     assert.equal(bloco.querySelectorAll(".tempo-it").length, 5);
@@ -1645,7 +1646,7 @@ test("CR-029/030 cartão (DOM): o selo de não lidas abre a conversa; ações r�
     const selo = t.cartao(5).querySelector(".kc-naolidas");
     assert.equal(selo.tagName, "BUTTON");
     selo.clique();
-    assert.deepEqual(nav, ["#/conversas?contato=501"]);
+    assert.deepEqual(nav, ["#/conversas?contato=501&de=crm"]);      // plano 2000d: DR-346 — a conversa sabe que veio do quadro (?de=crm)
     t.cartao(5).querySelector('.kc-rapida[data-acao="tarefa"]').clique(); await varias();
     assert.deepEqual(tarefas, [{ negocio_id: 5, contato_id: 501, titulo: "Retomar contato — Ana" }], "plano 1000b: RB-246 — o título vem sugerido");
     t.cartao(5).querySelector('.kc-rapida[data-acao="conversa"]').clique();
@@ -1683,7 +1684,7 @@ test("CR-036/037/039 Kanban (DOM): recolher vazias; Alt+2 troca de funil; mostra
     const sec = id => t.tela.querySelector(`.kb-col[data-estagio="${id}"]`);
     assert.ok(sec("s2").classList.contains("kb-col-recolhida") && !sec("s1").classList.contains("kb-col-recolhida"), "CR-036");
     // plano 1000b: RB-028 — «Recolher vazias» lembrado por empresa E conta
-    assert.equal(D.storage.get("nx-app-crm-kb-recolher-cli-p1000-u1"), "1");
+    assert.equal(D.storage.get("nx-app-crm-kb-recolher-cli-p1000-u1-f1"), "1");      // plano 2000d: DR-035 — e por funil
     D.documento("keydown", { key: "2", code: "Digit2", altKey: true, target: D.doc.body }); await varias();
     assert.equal(t.chamadas("nx_negocios_kanban").at(-1).p.p_funil, "f2", "CR-037");
     assert.equal(t.api.mostrarFunil("f1"), true, "CR-039");
@@ -1941,7 +1942,8 @@ test("CR-109/112/111 empresa (DOM): excluir diz quantos contatos; site sem https
     await t.M.montarEmpresa(t.k, el, 7, {});
     assert.equal(el.querySelector(".fx-id a.link").attrs.href, "https://www.frota.com", "CR-112");
     botaoTxt(el, /Excluir/).clique(); await varias();
-    assert.match(txt, /^2 pacientes deixam de estar ligad/, "CR-109");
+    // plano 2000d: DR-173 — sem o «tem certeza?»: a frase dos contatos vai no aviso do Desfazer
+    assert.match((t.reg.desfazer || []).at(-1).texto, /2 pacientes deixam de estar ligad/, "CR-109");
     botaoTxt(el, /Editar/).clique(); await varias();
     const doc = modal.corpo.querySelector('[name="documento"]');
     doc.value = "11222333000181"; doc.dispara("blur");

@@ -11,7 +11,7 @@
    escolhido por critérios: retorno ~5,4x, 2→9→10→11 pacientes/mês e
    radar só com os cenários planejados.
    ============================================================ */
-import { cfgCom, meioDia, hojeSP } from "./nucleo.js";
+import { cfgCom, meioDia, hojeSP, isoDe } from "./nucleo.js";
 
 function mulberry32(a) {
   return () => {
@@ -86,7 +86,29 @@ const INICIAIS = "ABCDFGLMNOPRSTV";
  * @param {string} [o.nome]          nome do cliente exibido
  * @param {object} [o.cfg]           configuração do cliente (metas, tickets…)
  */
-export function gerarDemo({ sal = "pdz", hoje = hojeSP(), nome = "Clínica Demonstração", cfg = {} } = {}) {
+/** Plano 2000d · DA-389: a mesma demonstração com a cara de uma OFICINA ou de uma LOJA (?vertical=oficina|loja) — os números são os
+    mesmos (calibrados), só os nomes de serviço, campanha e criativo e o vocabulário mudam. */
+export const VERTICAIS_DEMO = {
+  oficina: { nome: "Oficina Demonstração",
+    servicos: { "Aparelho invisível": "Retífica de motor", "Implante": "Troca de embreagem", "Clareamento": "Alinhamento e balanceamento", "Clínica geral": "Revisão completa", "Limpeza": "Troca de óleo", "Canal / urgência": "Socorro / guincho" },
+    campanhas: { m1: ["Revisão · ângulo segurança", "Revisão · segurança"], m2: ["Autoridade · mecânico explica", "Autoridade"], m3: ["Prova social · nota 5,0", "Prova social"], m4: ["Remarketing · visitou o site", "Remarketing"],
+      g1: ["Pesquisa · oficina na cidade", "Oficina na cidade"], g2: ["Pesquisa · retífica de motor", "Busca retífica"], g3: ["Pesquisa · socorro mecânico", "Socorro"] },
+    criativos: { m1a: ["Reels · “Barulho no freio?”", "Reels barulho no freio"], m1b: ["Carrossel · o que entra na revisão", "Carrossel da revisão"], m2a: ["Vídeo · 3 mitos da troca de óleo", "3 mitos do óleo"],
+      m2b: ["Vídeo · como é o diagnóstico", "O diagnóstico"], m3a: ["Tour pela oficina", "Tour pela oficina"], m3b: ["Print das avaliações 5,0", "Print das avaliações"], m4a: ["Lembrete · sua revisão te espera", "Lembrete"],
+      g1a: ["Anúncio · atendimento até as 20h", "Até as 20h"], g2a: ["Anúncio · retífica com garantia", "Retífica com garantia"], g3a: ["Anúncio · quebrou? buscamos hoje", "Buscamos hoje"] } },
+  loja: { nome: "Loja Demonstração",
+    servicos: { "Aparelho invisível": "Sofá sob medida", "Implante": "Mesa de jantar", "Clareamento": "Poltrona", "Clínica geral": "Decoração", "Limpeza": "Almofadas", "Canal / urgência": "Pronta entrega" },
+    campanhas: { m1: ["Sofá sob medida · ângulo conforto", "Sofá · conforto"], m2: ["Autoridade · designer explica", "Autoridade"], m3: ["Prova social · nota 5,0", "Prova social"], m4: ["Remarketing · visitou o site", "Remarketing"],
+      g1: ["Pesquisa · loja de móveis na cidade", "Móveis na cidade"], g2: ["Pesquisa · sofá sob medida", "Busca sofá"], g3: ["Pesquisa · móveis pronta entrega", "Pronta entrega"] },
+    criativos: { m1a: ["Reels · “Sofá que não cabe na sala?”", "Reels sofá na sala"], m1b: ["Carrossel · tecidos e medidas", "Carrossel dos tecidos"], m2a: ["Vídeo · 3 mitos do sofá retrátil", "3 mitos do retrátil"],
+      m2b: ["Vídeo · como é o projeto", "O projeto"], m3a: ["Tour pela loja", "Tour pela loja"], m3b: ["Print das avaliações 5,0", "Print das avaliações"], m4a: ["Lembrete · seu orçamento te espera", "Lembrete"],
+      g1a: ["Anúncio · aberto até as 20h", "Até as 20h"], g2a: ["Anúncio · sofá sob medida em 20 dias", "Sofá em 20 dias"], g3a: ["Anúncio · leve hoje", "Leve hoje"] } },
+};
+export function gerarDemo({ sal = "pdz", hoje = hojeSP(), nome = null, cfg = {}, vertical = "odonto" } = {}) {
+  // plano 2000d · KX-019: «hoje» que não é data real (?hoje=amanha, 2026-02-31) cai no hoje de São Paulo — antes a demo saía toda NaN
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(hoje || "")) || Number.isNaN(meioDia(hoje).getTime()) || isoDe(meioDia(hoje)) !== hoje) hoje = hojeSP();
+  const VD = VERTICAIS_DEMO[vertical] || null;
+  if (nome == null) nome = VD ? VD.nome : "Clínica Demonstração";
   const DIAS = 120, R = DIAS - 1;
   const REF = meioDia(hoje); REF.setDate(REF.getDate() - 1);
   const dataDe = i => { const d = new Date(REF); d.setDate(d.getDate() + (i - R)); return d; };
@@ -183,5 +205,59 @@ export function gerarDemo({ sal = "pdz", hoje = hojeSP(), nome = "Clínica Demon
   }
 
   const cfgDemo = { ...CFG_DEMO, ...cfg, ticket: { ...CFG_DEMO.ticket, ...(cfg.ticket || {}) }, proximos: { ...CFG_DEMO.proximos, ...(cfg.proximos || {}) } };
-  return { LINHAS, LEADS, CAMP, CRI, CFG: cfgCom(cfgDemo), REF, DIAS, vertical: "odonto", nome, curto: nome.split(" ")[0], demo: true };
+  // plano 2000d · DA-389: troca os nomes da vertical (serviços nos leads, na tabela de valores e nas dicas; campanhas e criativos)
+  if (VD) {
+    const sv = s => VD.servicos[s] || s, troca = o => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [sv(k), v]));
+    for (const L of LEADS) L.servico = sv(L.servico);
+    cfgDemo.ticket = troca(cfgDemo.ticket);
+    cfgDemo.proximos = Object.fromEntries(Object.entries(troca(cfgDemo.proximos)).map(([k, v]) => [k, `• Aumentar a verba de ${k.toLowerCase()} — é o que mais rende.`]));
+    for (const [id, [n, c]] of Object.entries(VD.campanhas)) if (CAMP[id]) Object.assign(CAMP[id], { nome: n, curto: c });
+    for (const [id, [n, c]] of Object.entries(VD.criativos)) if (CRI[id]) Object.assign(CRI[id], { nome: n, curto: c });
+  }
+  return { LINHAS, LEADS, CAMP, CRI, CFG: cfgCom(cfgDemo), REF, DIAS, vertical: VD ? vertical : "odonto", nome, curto: nome.split(" ")[0], demo: true };
+}
+
+/* ============================================================
+   plano 2000d · DC-376/DC-450: SEMANA DE EXEMPLO da Agenda (só dev-falso/demo — botão «Preencher semana de exemplo»)
+   5 dias (seg–sex) × 3 profissionais, horários das 8h às 16h (9 por dia), 60% ocupados; 2 encaixes (um num horário CHEIO de terça às
+   10h, marcado pela IA — DC-450 — e um fora do horário, quinta às 18h), 2 faltas, 3 marcadas pela IA (com o encaixe de terça),
+   4 confirmadas e 3 vindas de anúncio (utm_source «instagram»). Determinística: a mesma segunda dá sempre a mesma semana.
+   Formato das consultas da Agenda (negocio_id, inicio/fim com -03:00, dono_id/dono_nome, marcado_por, encaixe, presenca…). PURO.
+   ============================================================ */
+export const PROFS_EXEMPLO = [{ id: "p1", nome: "Dra. Helena" }, { id: "p2", nome: "Dr. Paulo" }, { id: "p3", nome: "Ana (higienista)" }];
+const SERV_EXEMPLO = ["Avaliação", "Limpeza", "Clareamento", "Aparelho invisível", "Implante", "Clínica geral"];
+export function semanaDeExemplo(segISO = null) {
+  // a segunda-feira pedida (ou a desta semana); outro dia da semana recua até a segunda
+  let seg = /^\d{4}-\d{2}-\d{2}$/.test(String(segISO || "")) ? meioDia(segISO) : meioDia(hojeSP());
+  if (Number.isNaN(seg.getTime())) seg = meioDia(hojeSP());
+  seg.setDate(seg.getDate() - ((seg.getDay() + 6) % 7));
+  const dias = Array.from({ length: 5 }, (_, k) => { const d = new Date(seg); d.setDate(d.getDate() + k); return isoDe(d); });
+  const r = mulberry32(hash(`semana:${dias[0]}`));
+  const hm = h => `${String(h).padStart(2, "0")}:00`;
+  const vagas = [];
+  for (let d = 0; d < 5; d++) for (const p of PROFS_EXEMPLO) for (let h = 8; h <= 16; h++) vagas.push({ d, p, h });
+  // embaralha (Fisher–Yates com a semente da semana) e ocupa 60% — o horário de terça 10h da Dra. Helena fica sempre ocupado (DC-450)
+  for (let k = vagas.length - 1; k > 0; k--) { const j = Math.floor(r() * (k + 1)); [vagas[k], vagas[j]] = [vagas[j], vagas[k]]; }
+  const n = Math.round(vagas.length * 0.6);
+  const fixa = vagas.findIndex(v => v.d === 1 && v.p.id === "p1" && v.h === 10);
+  if (fixa >= n) [vagas[fixa], vagas[0]] = [vagas[0], vagas[fixa]];
+  const ocup = vagas.slice(0, n).sort((a, b) => (a.d - b.d) || (a.h - b.h) || a.p.id.localeCompare(b.p.id));
+  const nome = () => { const l = r() < .62 ? NOMES_F : NOMES_M; return `${l[Math.floor(r() * l.length)]} ${INICIAIS[Math.floor(r() * INICIAIS.length)]}.`; };
+  let id = 9000;
+  const consulta = (v, extra = {}) => ({
+    negocio_id: ++id, contato_id: id + 1000, inicio: `${dias[v.d]}T${hm(v.h)}:00-03:00`, fim: `${dias[v.d]}T${hm(v.h + 1)}:00-03:00`,
+    status: "aberto", presenca: null, servico: SERV_EXEMPLO[Math.floor(r() * SERV_EXEMPLO.length)], dono_id: v.p.id, dono_nome: v.p.nome,
+    nome: nome(), telefone: "", encaixe: false, marcado_por: "recepcao", confirmada_em: null, exemplo: true, ...extra,
+  });
+  const lista = ocup.map(v => consulta(v));
+  // 2 faltas (segunda e terça, dias que já passaram na semana de exemplo), 4 confirmadas, 2 pela IA e 3 de anúncio — espalhadas
+  const pega = (filtro, q) => lista.filter(filtro).filter((_, k, a) => k % Math.max(1, Math.floor(a.length / q)) === 0).slice(0, q);
+  for (const c of pega(c => c.inicio.startsWith(dias[0]) || c.inicio.startsWith(dias[1]), 2)) c.presenca = "faltou";
+  for (const c of pega(c => !c.presenca && c.inicio >= dias[2], 4)) c.confirmada_em = `${c.inicio.slice(0, 10)}T07:30:00-03:00`;
+  for (const c of pega(c => !c.presenca && !c.confirmada_em, 2)) c.marcado_por = "ia";
+  for (const c of pega(c => !c.presenca && c.marcado_por !== "ia", 3)) Object.assign(c, { origem: "anuncio", plataforma: "meta", utm_source: "instagram" });
+  // DC-450: horário cheio (capacidade 1) com encaixe marcado pela IA — terça 10h, Dra. Helena; e um encaixe fora do horário (quinta 18h)
+  lista.push(consulta({ d: 1, p: PROFS_EXEMPLO[0], h: 10 }, { encaixe: true, marcado_por: "ia", servico: "Canal / urgência" }));
+  lista.push(consulta({ d: 3, p: PROFS_EXEMPLO[1], h: 18 }, { encaixe: true }));
+  return { profissionais: PROFS_EXEMPLO.map(p => ({ ...p })), dias, consultas: lista.sort((a, b) => a.inicio.localeCompare(b.inicio) || a.dono_id.localeCompare(b.dono_id)) };
 }

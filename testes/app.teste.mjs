@@ -900,7 +900,8 @@ await teste("apps independentes: atalhos CRM/Ads/Atendimento, query de produto e
   // plano 1500c: UCC-036 passa o produto aberto (#/inicio fica no produto) — produtoDaRota(r.modulo, E.workspace)
   assert.match(shell, /const destino = rotas\.produtoDaRota\(r\.modulo, E\.workspace\)[\s\S]*?urlWorkspace\(destino, rotas\.montarHash\(r\.modulo, r\.partes, r\.query\)\)/, "rotas cruzadas preservam o destino e alternam para o produto correspondente");
   assert.match(shell, /E\.workspace === null \|\| E\.workspace === "crm"/, "busca global só existe no Órbita completo ou no CRM");
-  assert.match(shell, /document\.title = E\.workspace \? rotas\.PRODUTOS\[E\.workspace\]\.titulo/, "cada atalho tem título próprio");
+  // plano 2000d: DU-155 — o título vem de nomeDoApp (o do produto na marca padrão; o da revenda, sem «Órbita»/«Nexus», na white-label)
+  assert.match(shell, /document\.title = rotas\.nomeDoApp\(\{ produto: E\.produto, workspace: E\.workspace \}\)\.name/, "cada atalho tem título próprio");
   assert.match(shell, /const nomeApp = E\.workspace \? E\.M\?\.rotas\?\.PRODUTOS\?\.\[E\.workspace\]\?\.nome : "";/, "título mantém o produto mesmo quando muda a rota interna");
   const seletor = shell.match(/function abrirSeletorProduto\(ancora\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.match(seletor, /const rotas = E\.M\.rotas;/, "seletor usa o módulo de rotas carregado no contexto");
@@ -2189,7 +2190,8 @@ await teste("ui.toast: todo toast é anunciado (polido; erro urgente) e aoFechar
   const d = comDom();
   try {
     U.toast("Salvo.", { tipo: "ok" }); await esperar(50);
-    assert.equal(d.doc.getElementById("anuncio").textContent, "Salvo."); assert.equal(d.doc.getElementById("anuncio").getAttribute("aria-live"), "polite");
+    // plano 2000d: DU-434 — o sucesso é anunciado com «Pronto:» (não só a cor verde)
+    assert.equal(d.doc.getElementById("anuncio").textContent, "Pronto: Salvo."); assert.equal(d.doc.getElementById("anuncio").getAttribute("aria-live"), "polite");
     U.toast("Falhou.", { tipo: "erro" }); await esperar(50);
     assert.equal(d.doc.getElementById("anuncio-urgente").textContent, "Falhou."); assert.equal(d.doc.getElementById("anuncio-urgente").getAttribute("aria-live"), "assertive");
     assert.equal(d.doc.getElementById("toasts").getAttribute("aria-live"), null, "a caixa não fala por conta própria (uma só voz: anunciar)");

@@ -489,7 +489,8 @@ function telaEntrar(ctx) {
       if (!r || !r.token) throw Object.assign(new Error("credenciais_invalidas"), { codigo: "credenciais_invalidas" });
       rotuloBt.textContent = "Abrindo…";
       // plano 2000d · DU-222: o servidor que contar tentativas erradas recentes manda o resumo; o shell avisa depois de entrar
-      await ctx.aoEntrar(r.token, { ...opcoesEntrada, ...(r.expira_em ? { expira_em: r.expira_em } : {}), ...(r.tentativas_recentes ? { tentativas: r.tentativas_recentes } : {}) });
+      // plano 2000d · DU-119: a empresa exige verificação em duas etapas e esta conta ainda não ligou → abre direto no passo de ligar
+      await ctx.aoEntrar(r.token, { ...opcoesEntrada, ...(r.expira_em ? { expira_em: r.expira_em } : {}), ...(r.tentativas_recentes ? { tentativas: r.tentativas_recentes } : {}), ...(r.precisa_ativar_2fa === true ? { ativar2fa: true } : {}) });
     } catch (e) {
       rotuloBt.textContent = "Entrar";
       const msg = api.mensagemErro(e);
@@ -555,7 +556,9 @@ function telaEntrar(ctx) {
     demo,
     h("div", { class: "entrar-rodape" }, esqueci, textoGrande),
     ajuda,
-    prospectEl);
+    prospectEl,
+    // plano 2000d · DU-145: termos, privacidade e suporte da revenda
+    (() => { const ls = linksDoRodape(m); return ls.length ? h("nav", { class: "entrar-links", "aria-label": "Informações" }, ls.map(l => h("a", { class: "link", href: l.href, ...(l.href.startsWith("https:") ? { target: "_blank", rel: "noopener noreferrer" } : {}) }, l.rotulo))) : null; })());
   ui.limpar(ctx.alvo);
   ctx.alvo.appendChild(moldura(ctx, { titulo: m.login_titulo, sub: null, cartao }));
   // UCB-046: bloqueio que ainda corre (a página foi recarregada no meio) retoma a contagem
@@ -689,7 +692,7 @@ async function telaConvite(ctx, token) {
   const expira = cv && typeof cv.expira_em === "string" && !Number.isNaN(Date.parse(cv.expira_em)) ? cv.expira_em : null;
   const logo = expira ? avisoValidade(expira) : null;   // plano 1500c · UCB-120: faltando menos de 2 h, o aviso em tom de atenção
   const cartao = h("section", { class: "entrar-cartao", "aria-labelledby": "t-convite" },
-    h("h1", { id: "t-convite" }, "Você foi convidado"),
+    h("h1", { id: "t-convite" }, "Você recebeu um convite"),   // plano 2000d · DU-120: sem gênero
     h("div", { class: "entrar-convite" }, ui.icone("convidar"),
       h("p", null, gestor ? "Para gerenciar " : "Para ", h("b", null, destinoTxt), " como ", h("b", null, papelTxt), "."),
       expira ? h("p", { class: ["entrar-validade", logo ? "entrar-validade-aten" : "fraco"] }, logo || `Vale até ${ui.dataCurtaBR(expira)} ${ui.horaBR(expira)}.`) : null),
@@ -834,6 +837,17 @@ export const VERTICAIS_TESTE = Object.freeze([
   { valor: "odonto", rotulo: "Clínica odontológica" }, { valor: "oficina", rotulo: "Oficina mecânica" },
   { valor: "loja", rotulo: "Loja" }, { valor: "generico", rotulo: "Outro tipo de empresa" },
 ]);
+/** plano 2000d · DU-145: os links da revenda no rodapé da entrada (termos, privacidade, e-mail de suporte) — só https e e-mail válido. */
+export function linksDoRodape(m) {
+  const x = m || {};
+  const url = v => (typeof v === "string" && /^https:\/\/[^\s"<>]+$/i.test(v.trim()) ? v.trim() : null);
+  const out = [];
+  if (url(x.termos_url)) out.push({ rotulo: "Termos de uso", href: url(x.termos_url) });
+  if (url(x.privacidade_url)) out.push({ rotulo: "Privacidade", href: url(x.privacidade_url) });
+  const em = String(x.suporte_email || "").trim();
+  if (/^[^\s@<>"]+@[^\s@<>"]+\.[a-z]{2,}$/i.test(em)) out.push({ rotulo: "Suporte por e-mail", href: `mailto:${em}` });
+  return out;
+}
 /** plano 2000d · DU-214: o texto do aceite com os links da marca (termos_url, privacidade_url); sem link, o texto sozinho. */
 export function partesDoAceite(m) {
   const url = v => (typeof v === "string" && /^https:\/\//i.test(v.trim()) ? v.trim() : null);

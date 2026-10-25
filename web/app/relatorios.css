@@ -1312,3 +1312,147 @@ button.ads-pilula:focus-visible { outline: var(--foco-largura, 2px) solid var(--
 .cfga-descartar { min-height: 44px; }
 .cfga-rmk { border: 0; padding: 0; margin: .6rem 0 0; }
 .cfga-tickets + .campo-erro { margin: .25rem 0 0; color: var(--c-ruim); font-size: var(--fs-13); }
+
+/* ============================================================
+   plano 2000d · frente ads (lotes ads-d1..d4) — só tokens; 360 px sem rolagem; alvos de 44 px; movimento reduzido respeitado
+   ============================================================ */
+/* plano 2000d · DA-153/DA-334/DA-355/DA-151: apresentação — capa da agência, número de destaque, miniatura do campeão e passos editáveis */
+.ads-apr-capa { display: flex; align-items: center; gap: .75rem; }
+.ads-apr-logo { max-height: 48px; width: auto; }
+.ads-apr-agencia { font: 600 var(--fs-14, .875rem) var(--f-titulo); color: var(--c-texto-2); }
+.ads-apr-destaque { margin: 0; font: 700 clamp(1.8rem, 7vw, 4rem)/1.05 var(--f-titulo); color: var(--c-prim); overflow-wrap: anywhere; }
+.ads-apr-img img { width: 160px; height: 160px; object-fit: cover; border-radius: var(--r-p, 8px); background: var(--c-sup-3); }
+.ads-apr-editar { width: 100%; min-height: 6rem; font-size: 1rem; }
+.ads-apr-pdf { min-height: 44px; }
+.ads-apr-impressao { display: none; }
+/* plano 2000d · DA-154: «Salvar PDF» da apresentação — um slide por página, paisagem, só a apresentação no papel */
+@media print {
+  body.ads-apr-imprimindo > *:not(.ads-apr) { display: none !important; }
+  body.ads-apr-imprimindo .ads-apr { position: static; inset: auto; padding: 0; overflow: visible; background: Canvas !important; color: CanvasText !important; }
+  body.ads-apr-imprimindo .ads-apr > *:not(.ads-apr-impressao) { display: none !important; }
+  body.ads-apr-imprimindo .ads-apr-impressao { display: block; }
+  .ads-apr-pagina { break-after: page; page-break-after: always; min-height: 90vh; padding: 1.5cm; }
+  .ads-apr-pagina:last-child { break-after: auto; page-break-after: auto; }
+}
+@page { size: auto; }
+/* plano 2000d · DA-169: legenda das cores do custo */
+.ads-legenda-cpa { list-style: none; display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin: .6rem 0 0; padding: 0; }
+.ads-legenda-cpa li { display: inline-flex; align-items: center; gap: .35rem; }
+/* plano 2000d · DA-142: contador do marco */
+.ads-marco-cont { display: block; margin-top: .25rem; text-align: right; font-variant-numeric: tabular-nums; }
+/* plano 2000d · DA-146: o número visível na faixa mais alta do calor (não só a cor) */
+.g-cal-c { position: relative; }
+.ads-cal-num { position: absolute; inset: 0; display: grid; place-items: center; font: 600 .625rem/1 var(--f-mono); color: var(--c-sup); pointer-events: none; }
+/* plano 2000d · DA-138/DA-173/DA-359/DA-167: notas novas */
+.ads-cal-sugestao, .ads-cri-dica, .ads-ajuste-serie { margin: .4rem 0 0; }
+.ads-retorno-sem { font-size: var(--fs-16, 1rem); color: var(--c-texto-2); }
+.ads-cri-funil-custo { white-space: nowrap; }
+.ads-balde-ver { white-space: nowrap; }
+/* plano 2000d · DA-194: simulador de investimento */
+.ads-sim summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 600; }
+.ads-sim-l { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .5rem; }
+.ads-sim-n { width: 7rem; min-height: 44px; font-size: 1rem; font-variant-numeric: tabular-nums; }
+.ads-sim-res { margin: .5rem 0 0; }
+.ads-normalizado { margin: .4rem 0 0; }
+.ads-bolha-link { overflow-wrap: anywhere; }
+/* plano 2000d · DA-236/DA-237: no papel o tema escuro vira claro — fundo branco nos cartões e traços/textos dos gráficos escuros */
+@media print {
+  html[data-esquema="escuro"] { color-scheme: light; --c-fundo: Canvas; --c-sup: Canvas; --c-sup-2: Canvas; --c-sup-3: Canvas; --c-camada-2: Canvas;
+    --c-texto: CanvasText; --c-texto-2: CanvasText; --c-texto-3: GrayText; --c-borda: GrayText; --c-borda-2: GrayText; }
+  html[data-esquema="escuro"] body { background: Canvas !important; color: CanvasText !important; }
+  .rel svg text, .rel .g-eixo text { fill: CanvasText !important; }
+  .rel svg .g-grade line, .rel svg .g-eixo line { stroke: GrayText !important; }
+}
+@media print and (prefers-color-scheme: dark) {
+  html:not([data-esquema="claro"]) { color-scheme: light; --c-fundo: Canvas; --c-sup: Canvas; --c-sup-2: Canvas; --c-sup-3: Canvas; --c-camada-2: Canvas;
+    --c-texto: CanvasText; --c-texto-2: CanvasText; --c-texto-3: GrayText; --c-borda: GrayText; --c-borda-2: GrayText; }
+}
+/* plano 2000d · DA-233: a capa do relatório impresso com o resultado principal (só no papel) */
+.relat-capa-impressao { display: none; }
+@media print {
+  .relat-capa-impressao { display: block; break-after: page; page-break-after: always; padding: 2cm 0; }
+  .relat-capa-impressao h2 { font: 700 2rem/1.1 var(--f-titulo); margin: 0 0 1rem; color: CanvasText; }
+  .relat-capa-impressao p { font-size: 1.125rem; margin: .35rem 0; color: CanvasText; }
+}
+@media (prefers-reduced-motion: reduce) { .ads-sim summary { transition: none; } }
+/* plano 2000d · DA-289: cliques por dia do rastreio (barras simples, cor do tema) */
+.ads-rastreio-dias { list-style: none; display: flex; align-items: flex-end; gap: 2px; height: 48px; margin: .4rem 0 0; padding: 0; }
+.ads-rastreio-dias li { flex: 1 1 0; min-width: 2px; height: max(2px, var(--h, 0%)); background: var(--c-prim); border-radius: 2px 2px 0 0; opacity: .85; }
+.ads-rastreio-dica { margin: .5rem 0 0; }
+.ads-rastreio-pag { display: block; }
+@media (prefers-reduced-motion: reduce) { .ads-rastreio-dias li { transition: none; } }
+/* plano 2000d · DA-335: a cor da agência (--ads-marca, só #RRGGBB validado) nos destaques da apresentação e no papel */
+.ads-apr-destaque { color: var(--ads-marca, var(--c-prim)); }
+.ads-apr .ads-apr-t { border-left: 4px solid var(--ads-marca, transparent); padding-left: .6rem; }
+@media print { .ads .rel-impressao-cab { border-bottom: 2px solid var(--ads-marca, CanvasText); padding-bottom: .3rem; } }
+.ads-impressao-agencia { margin-left: .6rem; }
+/* plano 2000d · DA-361: meta de fechamentos do mês */
+.ads-meta-fe { display: flex; flex-direction: column; gap: .4rem; margin-top: .6rem; }
+.ads-meta-fe-trilho { height: 10px; border-radius: 999px; background: var(--c-sup-3); overflow: hidden; }
+.ads-meta-fe-trilho i { display: block; height: 100%; width: var(--w, 0%); background: var(--ads-marca, var(--c-prim)); border-radius: inherit; }
+.ads-copiar-renovacao { min-height: 44px; }
+/* plano 2000d · DA-349/DA-350: Meta × Google pela régua do CRM */
+.ads-plat-crm { margin-top: .8rem; display: flex; flex-direction: column; gap: .3rem; }
+.ads-plat-crm-lista { margin: 0; padding-left: 1.1rem; }
+.ads-plat-crm-destaque { margin: 0; font-weight: 600; }
+/* plano 2000d · DA-369: o período anterior tracejado com contraste no tema claro (antes opacidade .75 sobre texto-2) */
+.g-ant { opacity: 1; stroke-width: 1.75; }
+@media (prefers-reduced-motion: reduce) { .ads-meta-fe-trilho i { transition: none; } }
+/* plano 2000d · DA-356/DA-357/DA-358: tempo do funil, perdas por motivo e o caminho para os contatos */
+.ads-tempos-funil { margin: .4rem 0 0; }
+.ads-passo-ver { display: inline-flex; align-items: center; min-height: 44px; }
+.ads-perdas summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 600; }
+.ads-perdas-lista { list-style: none; margin: .4rem 0 0; padding: 0; display: grid; gap: .25rem; }
+.ads-perdas-lista li { display: flex; justify-content: space-between; gap: 1rem; }
+
+/* ============================================================
+   plano 2000d · frente ads (Relatórios, lote x) — pendências de outras frentes e NX-3NN; só tokens, 360 px, 44 px, movimento reduzido
+   ============================================================ */
+/* plano 2000d · DR-403: etapa com 0 no funil mostra o trilho vazio tracejado (não some nem parece barra cheia) */
+.g-fetapa.g-fzero .g-ftrilho { background: repeating-linear-gradient(90deg, var(--c-borda) 0 4px, transparent 4px 8px); }
+.g-fetapa.g-fzero .g-fqtd { color: var(--c-texto-2); }
+/* plano 2000d · RC-243: o «i» da taxa do funil e o link da etapa também fora do Início (nos Relatórios saíam sem estilo) */
+.g-flink { color: inherit; text-decoration: underline; text-decoration-color: var(--c-borda-2); text-underline-offset: 3px; }
+.g-flink:hover { color: var(--c-prim-luz); text-decoration-color: currentColor; }
+.g-flink:focus-visible { outline: var(--foco-largura, 2px) solid var(--c-foco); outline-offset: 2px; border-radius: var(--r-pp, 4px); }
+.g-fdica-bt { display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; margin-left: var(--esp-1, .25rem); border-radius: 50%; border: 1px solid var(--c-borda-2); background: none; color: var(--c-texto-2); font: 600 var(--fs-12, .75rem)/1 var(--f-mono); cursor: pointer; }
+.g-fdica-bt:hover, .g-fdica-bt[aria-expanded="true"] { color: var(--c-prim-luz); border-color: var(--c-prim-luz); }
+.g-fdica-bt:focus-visible { outline: var(--foco-largura, 2px) solid var(--c-foco); outline-offset: 2px; }
+.g-fdica-txt { grid-column: 1 / -1; font-size: var(--fs-12, .75rem); color: var(--c-texto-2); line-height: 1.45; }
+/* plano 2000d · RC-246: «Copiar tabela» ao lado do «Ver como gráfico», no mesmo desenho da pílula */
+.g-copiar-tabela { min-height: 36px; padding: .3rem .8rem; border-radius: 999px; border: 1px solid var(--c-borda-2); background: none; color: var(--c-texto-2); font: 600 var(--fs-13, .8125rem)/1 var(--f-corpo); cursor: pointer; }
+.g-copiar-tabela:hover { color: var(--c-prim-luz); border-color: var(--c-prim-luz); }
+.g-tabela:focus-visible { outline: var(--foco-largura, 2px) solid var(--c-foco); outline-offset: 2px; }
+@media (pointer: coarse), (max-width: 760px) {
+  .g-copiar-tabela { min-height: 44px; }
+  .g-fdica-bt { width: 44px; height: 44px; margin-block: -10px; }
+}
+@media print { .g-fdica-bt, .g-copiar-tabela { display: none !important; } .g-fdica-txt[hidden] { display: none !important; } }
+/* plano 2000d · NX-325: «Atualizar» ocupado (aria-disabled: o foco do teclado fica nele) */
+.rel-btn[aria-disabled="true"] { opacity: .55; cursor: progress; }
+/* plano 2000d · NX-332: parado com valor tem 4 peças — o valor ganha a 4ª coluna (antes caía sozinho numa 2ª linha, na coluna da bolinha) */
+.relat-parados li:has(.relat-parado-valor) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+/* plano 2000d · NX-333: nome de etapa comprido quebra dentro do cartão (360 px sem rolagem lateral) */
+.relat-parado-nome { min-width: 0; overflow-wrap: anywhere; }
+/* plano 2000d · NX-337: a linha «Total» das tabelas por pessoa — destacada e, no celular (cartões), com o rótulo de cada número */
+.relat-tabela tfoot th, .relat-tabela tfoot td { font-weight: 700; color: var(--c-texto); border-top: 1px solid var(--c-borda-2); border-bottom: 0; }
+@media (max-width: 480px) {
+  .relat-tabela tfoot { display: block; }
+  .relat-tabela tfoot tr { border-bottom: 0; border-top: 2px solid var(--c-borda-2); }
+  .relat-tabela tfoot th, .relat-tabela tfoot td { border: 0; }
+  .relat-tabela tfoot th { grid-column: 1 / -1; }
+}
+/* plano 2000d · NX-338: os 6 botões de período quebram de linha entre 761 e ~1000 px (antes passavam da borda e rolavam de lado) */
+.relat-filtros .rel-seg { flex-wrap: wrap; max-width: 100%; }
+/* plano 2000d · NX-334: alto contraste do Windows — o período escolhido e a faixa mais forte não dependem só do fundo */
+@media (forced-colors: active) {
+  .rel-seg-b[aria-pressed="true"] { outline: 2px solid CanvasText; outline-offset: -2px; forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .relat-faixa-forte { border: 2px solid CanvasText; }
+  .rel-btn[aria-disabled="true"] { color: GrayText; border-color: GrayText; }
+}
+@media print {
+  /* plano 2000d · NX-335: «Por que difere do Anúncios?» fechado saía só como a pergunta solta no papel */
+  .relat-por-que { display: none !important; }
+  /* plano 2000d · NX-336: imprimir no meio de um «Atualizar» não sai esmaecido */
+  .relat-atualizando { opacity: 1 !important; }
+}

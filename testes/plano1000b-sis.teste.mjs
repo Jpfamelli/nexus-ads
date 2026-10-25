@@ -928,7 +928,7 @@ test("UB-278 · barra do celular: o item aberto 3× pelo «Mais» entra no 4º l
   const contar = fnApp("function contarUsoDaBarra(id) {", { LS, lerUsosDaBarra: ler_, CHAVE_USOS_BARRA: "u" });
   assert.deepEqual([contar("automacoes"), contar("automacoes"), contar("automacoes")], [1, 2, 3]);
   assert.deepEqual(ler_(), { automacoes: 3 });
-  assert.match(APP_JS, /const prefer = E\.M\.rotas\.itensDaBarra\(itens, lerUsosDaBarra\(\)\);/);
+  assert.match(APP_JS, /const prefer = E\.M\.rotas\.itensDaBarra\(itens, lerUsosDaBarra\(\)(?:, undefined, lerEscolhaDaBarra\(\))?\);/);   // plano 2000d: DU-277 — a escolha da pessoa vem por último
 });
 
 /* ---------- app.js ---------- */
@@ -1040,7 +1040,7 @@ test("UB-168 · aparelho compartilhado: 2 h sem uso avisa 1 min antes e sai; um 
   andar(3600e3); assert.deepEqual(ev2, ["aviso", "saiu"]);
   v2.desligar();
   assert.match(APP_JS, /ligarOciosidade\(\);\s+\/\/ plano 1000b · UB-168/);
-  assert.match(APP_JS, /if \(!comp\) return;/);
+  assert.match(APP_JS, /if \(!limite\) return;/);   // plano 2000d: DU-140 — sem política da empresa, o limite só existe no aparelho compartilhado
 });
 
 test("UB-270 + UB-125 · sino: erro com «Tentar de novo»; «Marcar todas» com mais de 10 pede um 2º toque", async () => {

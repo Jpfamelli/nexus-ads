@@ -514,7 +514,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         h("a", { href: `#/automacoes/${encodeURIComponent(o.id)}` }, o.nome), " ",
         ui.pilula(o.ativo ? "Ligada" : "Desligada", o.ativo ? "ok" : "neutra"),
         o.frase ? h("small", { class: "sub" }, o.frase) : null))),
-      l.length > 6 ? h("p", { class: "sub" }, `e mais ${l.length - 6}`) : null,
+      ...[l.length > 6 ? h("p", { class: "sub" }, `e mais ${l.length - 6}`) : null].filter(Boolean),   // plano 2000d · AX-001: sem null no append
       h("p", { class: "sub" }, "Todas rodam quando o gatilho acontece; uma não espera a outra."));
   }
   let ultimoDiagrama = null, tDiagrama = null;
@@ -932,6 +932,13 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         }))));
     }
     pal.append(semNada, status);
+    // plano 2000d · AX-074: no limite de esperas, o «Esperar» da paleta já aparece desabilitado com o motivo (antes entrava e só depois dava erro)
+    if (auto.acoes.filter(x => x && x.tipo === "esperar").length >= L.LIMITES.esperas)
+      for (const t of pal.querySelectorAll('.au-tile[data-acao="esperar"]')) {
+        t.disabled = true;
+        const txt = t.querySelector(".au-tile-txt");
+        if (txt) txt.appendChild(h("small", { class: "au-tile-off" }, `Limite de ${L.LIMITES.esperas} esperas por automação`));
+      }
     busca.addEventListener("input", () => {
       const ok = new Set(L.acoesDaBusca(busca.value, vv));
       let n = 0;
@@ -945,7 +952,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     });
     busca.addEventListener("keydown", ev => {
       if (ev.key !== "Enter") return;
-      const primeiro = [...pal.querySelectorAll(".au-tile")].find(t => !t.hidden && !(t.closest(".au-paleta-grupo") || {}).hidden);
+      const primeiro = [...pal.querySelectorAll(".au-tile")].find(t => !t.hidden && !t.disabled && !(t.closest(".au-paleta-grupo") || {}).hidden);   // plano 2000d · AX-074
       if (primeiro) { ev.preventDefault(); primeiro.click(); }
     });
     return pal;
@@ -1385,7 +1392,9 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   function analisar() {
     const ps = L.problemas(auto, { base, ligar: !!auto.ativo });
     return { ps, r: ps[0] ? { ok: false, motivo: ps[0].motivo, onde: ps[0].onde, indice: ps[0].indice } : { ok: true },
-      vars: L.variaveisDosPassos(auto, base), cads: L.cadeiasDeAutomacao(auto, dados.itens || [], base) };
+      vars: L.variaveisDosPassos(auto, base), cads: L.cadeiasDeAutomacao(auto, dados.itens || [], base),
+      // plano 2000d · AX-095: os avisos de estrutura UMA vez por mudança (antes: duas, na lateral e nos passos); com a base (AX-016/AX-091)
+      est: L.avisosEstruturaDetalhados(auto, vv, { iaAtendimentoLigada: L.iaAtendimentoLigada(dados), base }) };
   }
   /** Os avisos da lateral esperam a pessoa parar de digitar (120 ms); dentro do passo, na hora. */
   let tAvisos = null;
@@ -1421,7 +1430,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     else { const av = L.avisoDataHoraConsulta(auto, vertical); if (av) bloqs.push(av); }
     if (iaOff && L.temIA(auto)) bloqs.push(L.AVISO_IA_DESLIGADA);
     // plano 1500c · UCA-017/018/019/020/022/111/112: os avisos de estrutura falam a língua da vertical
-    for (const t of L.avisosEstrutura(auto, vv, { iaAtendimentoLigada: L.iaAtendimentoLigada(dados) })) bloqs.push(t);   // plano 2000d · DU-018
+    for (const t of (an.est || []).map(x => x.texto)) bloqs.push(t);   // plano 2000d · DU-018 · AX-095
     // plano 1000 · AS-035: variável escrita errada chega crua ao cliente — avisa (e não deixa LIGAR; salvar desligada pode)
     for (const v of an.vars) bloqs.push(`Passo ${v.indice + 1}: ${L.fraseVariaveis(v)}. Assim o cliente receberia o texto entre chaves.`);
     // plano 1000 · AS-278: um passo daqui dispara outra automação ligada (e, no pior caso, ela devolve: laço)
@@ -1441,7 +1450,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const vars = new Map(an.vars.map(v => [v.indice, v]));
     const cads = an.cads;
     // plano 1500c · UCA-111: os avisos de estrutura com passo (esperas seguidas, passo sem conversa…) também aparecem no próprio passo
-    const est = L.avisosEstruturaDetalhados(auto, vv, { iaAtendimentoLigada: L.iaAtendimentoLigada(dados) }).filter(x => x.indice != null && x.tipo !== "parar");
+    const est = (an.est || []).filter(x => x.indice != null && x.tipo !== "parar");   // plano 2000d · AX-095
     blocoEntao.querySelectorAll(".au-passo").forEach((li, i) => {
       let el = li.querySelector(".au-passo-aviso");
       const v = vars.get(i), c = cads.find(x => x.indice === i && x.laco) || cads.find(x => x.indice === i), e = est.find(x => x.indice === i);
@@ -1574,7 +1583,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         // plano 2000d · DU-040: automação de tempo/diária com mensagem: quantos recebem AGORA (acima de 50, digitar o número)
         let quem = null;
         if (L.contarAoLigar(auto)) {
-          try { const resp = await ctx.api.rpcC("nx_auto_simular", { p_automacao: L.limpar(auto) }); quem = L.fraseQuemRecebe(L.normalizarSimulacao(resp, auto, base, vv).total); } catch { quem = null; }
+          try { const resp = await ctx.api.rpcC("nx_auto_simular", { p_automacao: L.limpar(auto) }); quem = L.fraseQuemRecebe(L.normalizarSimulacao(resp, auto, base, vv).total, { auto }); /* plano 2000d · AX-057 */ } catch { quem = null; }
         }
         const reforco = !!massa || !!(quem && quem.massa);
         const ok = await ui.confirmar({ titulo: `Ligar «${auto.nome}»?`, rotulo: reforco ? "Ligar mesmo assim" : "Salvar e ligar", perigo: reforco,

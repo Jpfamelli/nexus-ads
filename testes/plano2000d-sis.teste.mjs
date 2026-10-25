@@ -630,9 +630,9 @@ test("DU-141 · tela bloqueada com PIN: cobre o app sem sair; o PIN certo libera
   assert.equal(app.getAttribute("aria-hidden"), "true"); assert.ok(app.hasAttribute("inert"));
   assert.equal(tela.getAttribute("role"), "dialog"); assert.equal(tela.getAttribute("aria-modal"), "true");
   const pin = tela.querySelector("input[name=pin]"), form = tela.querySelector("form");
-  pin.value = "9999"; ev(form, "submit"); await tick(4);
+  pin.value = "9999"; ev(form, "submit"); await esperar(15);
   assert.match(tela.querySelector(".entrar-erro").textContent, /4 tentativas/);
-  pin.value = "1234"; ev(form, "submit"); await tick(4);
+  pin.value = "1234"; ev(form, "submit"); await esperar(15);
   assert.equal(tela.isConnected, false); assert.equal(app.hasAttribute("inert"), false); assert.equal(saidas, 0);
   const t2 = bloquear();
   for (let i = 0; i < 5; i++) { t2.querySelector("input[name=pin]").value = "0000"; ev(t2.querySelector("form"), "submit"); await esperar(10); }
@@ -869,4 +869,450 @@ test("DU-243 · a primeira semana dia a dia (relógio falso): boas-vindas no D0,
     "D0=boas-vindas+whatsapp", "D1=", "D2=whatsapp", "D3=", "D4=whatsapp", "D5=", "D6=whatsapp", "D7=aviso:lembrete",
     "D8=whatsapp", "D9=", "D10=whatsapp", "D11=aviso:aviso", "D12=whatsapp", "D13=aviso:urgente", "D14=whatsapp+aviso:urgente", "D15=vencido",
   ]);
+});
+
+/* ==================== lote sis-d2 ==================== */
+test("DU-257 + DU-155 · faixa de versão: «Ver novidades» abre e fecha a lista (aria-expanded); sem produto diz «do sistema»", () => {
+  const f = PWA.criarFaixaVersao(U, "", () => {}, { notas: ["Agenda mais rápida", "Busca nova"] });
+  assert.match(f.textContent, /Nova versão do sistema pronta\./);
+  assert.doesNotMatch(f.textContent, /Órbita/);
+  const ver = f.querySelector(".faixa-versao-ver"), ul = f.querySelector(".faixa-versao-notas");
+  assert.equal(ul.hidden, true, "a lista começa fechada");
+  assert.equal(ver.getAttribute("aria-controls"), ul.id);
+  ver.click();
+  assert.equal(ul.hidden, false); assert.equal(ver.getAttribute("aria-expanded"), "true"); assert.equal(ver.textContent, "Esconder novidades");
+  ver.click();
+  assert.equal(ul.hidden, true); assert.equal(ver.getAttribute("aria-expanded"), "false");
+  assert.equal(PWA.criarFaixaVersao(U, "Sorriso", () => {}).querySelector(".faixa-versao-ver"), null, "sem notas, sem botão");
+  assert.match(PWA.criarFaixaVersao(U, "Sorriso", () => {}).textContent, /Nova versão do Sorriso pronta/);
+  assert.doesNotMatch(ler("pwa.js"), /o\.produto \? o\.produto\(\) : "Órbita"/);
+});
+
+test("DU-258 · instalar no iPhone: cada passo com o desenho do botão do Safari e onde ele fica", () => {
+  assert.deepEqual(PWA.PASSOS_IOS_VISUAL.map(p => p.icone), ["compartilhar", "mais", "check"]);
+  assert.deepEqual(PWA.PASSOS_IOS_VISUAL.map(p => p.texto), [...PWA.PASSOS_IOS]);
+  for (const p of PWA.PASSOS_IOS_VISUAL) { assert.ok(p.onde.length > 10); assert.ok(sprite.has(p.icone), `i-${p.icone} no sprite`); }
+  assert.match(fnDoApp("async function instalarApp() {"), /PASSOS_IOS_VISUAL[\s\S]*instalar-passo-ico/);
+});
+
+test("DU-261 + UCC-054 + DU-446 · manifesto da marca: atalhos só dos módulos da empresa, categorias e «Compartilhar» com sessão", () => {
+  const nome = { name: "Sorriso", short_name: "Sorriso", description: "x" };
+  const at = PWA.atalhosDoIcone(["crm", "conversas", "relatorios"], m => (m === "crm" ? "Pacientes" : null));
+  assert.deepEqual(at.map(a => [a.rota, a.nome]), [["conversas", "Conversas"], ["crm", "Pacientes"]]);
+  const m = PWA.construirManifesto({ nome, base: "https://x.test/app/", fundo: "#000", atalhos: at, compartilhar: true });
+  assert.deepEqual(m.shortcuts.map(s => s.url), ["https://x.test/app/#/conversas", "https://x.test/app/#/crm"]);
+  assert.deepEqual(m.categories, ["business", "productivity"]);
+  assert.equal(m.share_target.action, "https://x.test/app/?compartilhar=1"); assert.equal(m.share_target.method, "GET");
+  const w = PWA.construirManifesto({ nome, base: "https://x.test/app/", fundo: "#000", workspace: "crm", atalhos: [{ rota: "agenda", nome: "Agenda" }, { rota: "javascript:x", nome: "x" }] });
+  assert.deepEqual(w.shortcuts.map(s => s.url), ["https://x.test/app/?produto=crm#/agenda"], "rota estranha fica de fora");
+  assert.equal(w.share_target, undefined, "sem sessão, sem compartilhar");
+  assert.equal(PWA.construirManifesto({ nome, base: "https://x.test/app/", fundo: "#000" }).shortcuts, undefined);
+  assert.match(fnDoApp("async function atualizarManifestoApp() {"), /atalhosDoIcone[\s\S]*compartilhar: !!E\.sessao/);
+});
+
+test("UCC-054…057 (plano 1500c) + DU-446 + DU-155 · manifestos estáticos: PNG 192/512/maskable, atalhos, categorias, theme_color claro e sem «Nexus»", () => {
+  for (const f of ["manifest.webmanifest", "manifest-crm.webmanifest", "manifest-ads.webmanifest", "manifest-atendimento.webmanifest"]) {
+    const m = JSON.parse(ler(f));
+    assert.ok(m.icons.some(i => i.sizes === "192x192" && i.type === "image/png"), `${f}: 192`);
+    assert.ok(m.icons.some(i => i.sizes === "512x512" && i.purpose === "maskable"), `${f}: maskable`);
+    assert.deepEqual(m.categories, ["business", "productivity"], f);
+    assert.equal(m.theme_color, "#FAFAF8", f);
+    assert.deepEqual(m.shortcuts.map(s => s.name), ["Conversas", "CRM", "Agenda"], f);
+    for (const s of m.shortcuts) assert.ok(s.url.startsWith("/app/"), `${f}: atalho no escopo`);
+    assert.doesNotMatch(JSON.stringify(m), /Nexus|Anthropic|CodeWords/, f);
+  }
+  const p = JSON.parse(ler("manifest.webmanifest"));
+  assert.deepEqual(p.share_target, { action: "/app/?compartilhar=1", method: "GET", params: { title: "titulo", text: "texto", url: "link" } });
+});
+
+test("DU-446 · o texto compartilhado chega às Conversas (guardado na aba) e o endereço perde o ?compartilhar", () => {
+  assert.equal(PWA.textoCompartilhado("?compartilhar=1&titulo=Oi&texto=Veja%20isto&link=https%3A%2F%2Fa.test"), "Oi\nVeja isto\nhttps://a.test");
+  assert.equal(PWA.textoCompartilhado("?compartilhar=1&texto=a&link=a"), "a", "sem repetir");
+  assert.equal(PWA.textoCompartilhado("?texto=a"), null); assert.equal(PWA.textoCompartilhado("?compartilhar=1"), null);
+  assert.equal(PWA.textoCompartilhado(`?compartilhar=1&texto=${"x".repeat(3000)}`).length, 2000);
+  const corpo = fnDoApp("function receberCompartilhado() {");
+  assert.match(corpo, /sessionStorage\.setItem\("nx-compartilhado", texto\)/); assert.match(corpo, /history\.replaceState/); assert.match(corpo, /navegar\("#\/conversas"/);
+});
+
+test("DU-408 · o app instalado reabre na última tela principal (uma vez, só sem endereço próprio)", () => {
+  const f = PWA.rotaAoAbrirInstalado;
+  assert.equal(f({ instalado: true, hash: "", ultima: "#/agenda" }), "#/agenda");
+  assert.equal(f({ instalado: true, hash: "#/inicio", ultima: "#/crm" }), "#/crm");
+  assert.equal(f({ instalado: false, hash: "", ultima: "#/agenda" }), null, "no navegador, não");
+  assert.equal(f({ instalado: true, hash: "#/conversas/9", ultima: "#/agenda" }), null, "aberto num endereço: respeita");
+  assert.equal(f({ instalado: true, hash: "", ultima: "#/login" }), null);
+  assert.equal(f({ instalado: true, hash: "", ultima: "javascript:alert(1)" }), null);
+  assert.equal(f({ instalado: true, hash: "", ultima: "#/agenda", ligado: false }), null, "desligado no Perfil");
+  const navs = [];
+  const guardado = new Map([["nx-ultima-rota", "#/agenda"]]);
+  const E = { sessao: { conta: { id: "u" } }, pwaMod: PWA };
+  const abrir = fnApp("function abrirNaUltimaRota() {", { E, LS: { lerTxt: k => guardado.get(k) || null }, rodandoInstalado: () => true, location: { hash: "" }, navegar: (h, o) => navs.push([h, o]) });
+  assert.equal(abrir(), "#/agenda"); assert.deepEqual(navs, [["#/agenda", { substituir: true }]]);
+  assert.equal(abrir(), null, "uma vez por abertura");
+  assert.match(fnDoApp("async function montarNoShell(r, seq, doUsuario) {"), /LS\.gravar\(E\.pwaMod && E\.pwaMod\.CHAVE_ULTIMA_ROTA \|\| "nx-ultima-rota", `#\/\$\{r\.modulo\}`\)/);
+});
+
+const PP = P;
+test("DU-268 · horário silencioso: o número sobe, mas sem som nem aviso de tela (inclusive atravessando a meia-noite)", () => {
+  
+  const em = (h, m) => new Date(2026, 2, 3, h, m);
+  const s = { de: "20:00", ate: "08:00" };
+  assert.equal(PP.emHorarioSilencioso(s, em(22, 0)), true); assert.equal(PP.emHorarioSilencioso(s, em(7, 59)), true);
+  assert.equal(PP.emHorarioSilencioso(s, em(8, 0)), false); assert.equal(PP.emHorarioSilencioso(s, em(12, 0)), false);
+  assert.equal(PP.emHorarioSilencioso({ de: "12:00", ate: "13:30" }, em(13, 0)), true);
+  assert.equal(PP.emHorarioSilencioso({ de: "25:00", ate: "08:00" }, em(22, 0)), false); assert.equal(PP.emHorarioSilencioso(null, em(22, 0)), false);
+  const base = { antes: 1, depois: 3, escondida: true, pref: { som: true, tela: true, silencio: s } };
+  assert.deepEqual(PP.avisoDeNaoLidas({ ...base, agora: em(23, 0) }), { som: false, tela: false, novas: 2, silencio: true });
+  assert.deepEqual(PP.avisoDeNaoLidas({ ...base, agora: em(10, 0) }), { som: true, tela: true, novas: 2 });
+  assert.deepEqual(PP.avisoDeNaoLidas({ ...base }), { som: true, tela: true, novas: 2 }, "sem relógio: como antes");
+  assert.match(fnDoApp("function avisarNaoLidas(n, ultima = null) {"), /agora: new Date\(\)/);
+  assert.match(fnDoApp("function lerAvisosConversas() {"), /silencio:/);
+});
+
+test("DU-277 · barra de baixo escolhida pela pessoa (até 4 + Mais); item fora do plano some; vazio volta ao automático", () => {
+  const itens = ["inicio", "conversas", "crm", "agenda", "tarefas", "relatorios"].map(id => ({ id })).concat([{ id: "config", fixo: true }]);
+  assert.deepEqual(ROTAS.itensDaBarra(itens, {}, undefined, ["agenda", "relatorios"]).map(i => i.id), ["agenda", "relatorios"]);
+  assert.deepEqual(ROTAS.itensDaBarra(itens, {}, undefined, ["a", "b", "c", "d", "agenda", "crm", "tarefas", "inicio", "conversas"]).map(i => i.id), ["agenda", "crm", "tarefas", "inicio"], "no máximo 4");
+  assert.deepEqual(ROTAS.itensDaBarra(itens, {}, undefined, ["config", "sumiu"]).map(i => i.id), ROTAS.itensDaBarra(itens, {}).map(i => i.id), "nada válido: automático");
+  assert.equal(ROTAS.MAX_ITENS_BARRA, 4);
+  assert.match(fnDoApp("function abrirFolhaMais(itens) {"), /"Editar barra"/);
+  assert.match(fnDoApp("function editarBarra() {"), /x\.c\.disabled = !x\.c\.checked && n >= MAX/);
+});
+
+test("DU-286 · novidade da versão: ponto na conta e «(nova)» até abrir; o toast de «Atualizado» não apaga o ponto", () => {
+  const ls = loja();
+  PWA.guardarNovidades(ls, "V9", ["Agenda nova"]);
+  assert.deepEqual(PWA.novidadesDaVersao(ls, "V9"), { notas: ["Agenda nova"], vistas: false, abertas: false });
+  PWA.marcarNovidadesVistas(ls);
+  assert.equal(PWA.novidadesDaVersao(ls, "V9").abertas, false, "o toast só marca vistas");
+  PWA.marcarNovidadesAbertas(ls);
+  assert.deepEqual(PWA.novidadesDaVersao(ls, "V9"), { notas: ["Agenda nova"], vistas: true, abertas: true });
+  assert.match(fnDoApp("function desenharConta() {"), /dataset: \{ novidade: temNovidade \? "1" : null \}/);
+  assert.match(fnDoApp("function abrirNovidades() {"), /marcarNovidadesAbertas/);
+  assert.match(CSS_APP, /\.lat-conta\[data-novidade="1"\]::after/);
+});
+
+test("DU-269 + DU-410 + DU-447 · atalhos «G + letra» com Relatórios e Equipe; a paleta mostra o atalho; a tecla é a da plataforma", () => {
+  assert.equal(C.SEQUENCIAS_G.p, "#/relatorios/vendas"); assert.equal(C.SEQUENCIAS_G.e, "#/config/equipe");
+  assert.equal(C.atalhoDoDestino("relatorios"), "G P"); assert.equal(C.atalhoDoDestino("conversas"), "G C"); assert.equal(C.atalhoDoDestino("nada"), "");
+  assert.equal(C.teclaDaPlataforma("MacIntel"), "⌘"); assert.equal(C.teclaDaPlataforma("Win32"), "Ctrl");
+  assert.equal(C.textoAtalho("{mod} + K", "macOS"), "⌘ + K"); assert.equal(C.textoAtalho("Ctrl/⌘ + K", "Linux"), "Ctrl + K");
+  assert.ok(C.ATALHOS_GERAIS.some(a => /P Relatórios, E Equipe/.test(a.rotulo)));
+});
+
+test("DU-270 · a paleta acha automações pelo nome e liga/desliga (desligar pergunta antes)", () => {
+  const lista = [{ id: 1, nome: "Lembrete de consulta", ativo: true }, { id: 2, nome: "Pós-venda", ativo: false }, { id: 3, nome: "Aniversário", ativo: true }];
+  assert.deepEqual(C.automacoesDaPaleta(lista, "lembr").map(a => a.id), [1]);
+  assert.deepEqual(C.automacoesDaPaleta(lista, "l"), [], "1 letra: nada");
+  assert.match(PALETA_TXT, /Automações/);
+  assert.match(fnDoApp("async function alternarAutomacaoPelaPaleta(a) {"), /confirmar[\s\S]*nx_automacao_ativar/);
+});
+
+test("DU-275 · «Limpar recentes» na paleta e ao sair da conta", () => {
+  assert.match(PALETA_TXT, /Limpar recentes/);
+  assert.match(fnDoApp("function ambientePaleta(inicial) {"), /limparRecentes: rec \? \(\) => \{ rec\.limpar\(\)/);
+  assert.match(APP_JS, /const prefixos = \[E\.M\.comandos \? E\.M\.comandos\.PREFIXO_RECENTES : "nx-rec:"/);
+});
+
+test("DU-281 · modo foco: a paleta liga e desliga; o CSS esconde o menu lateral e as faixas que não bloqueiam", () => {
+  const c = C.CATALOGO.find(x => x.id === "modo-foco");
+  assert.equal(c.rotulo({ modoFoco: true }), "Sair do modo foco"); assert.equal(c.rotulo({}), "Modo foco");
+  const cl = new Set(), ss = new Map();
+  const alternar = fnApp("function alternarModoFoco(on = !document.documentElement.classList.contains(\"modo-foco\")) {", {
+    document: { documentElement: { classList: { contains: x => cl.has(x), toggle: (x, v) => (v ? cl.add(x) : cl.delete(x)) } } },
+    sessionStorage: { setItem: (k, v) => ss.set(k, v), removeItem: k => ss.delete(k) }, E: { ui: { anunciar() {} } } });
+  assert.equal(alternar(), true); assert.ok(cl.has("modo-foco")); assert.equal(ss.get("nx-modo-foco"), "1");
+  assert.equal(alternar(), false); assert.equal(ss.has("nx-modo-foco"), false);
+  assert.match(CSS_APP, /html\.modo-foco \.lateral \{ display: none; \}/);
+  assert.match(CSS_APP, /html\.modo-foco \.faixas > \.faixa:not\(\.faixa-bloqueio\) \{ display: none; \}/);
+});
+
+test("DU-282 · «Ir para o menu» além do «Pular para o conteúdo»; o menu recebe o foco", () => {
+  assert.match(HTML, /<a class="pular pular-menu" href="#lateral">Ir para o menu<\/a>/);
+  assert.match(HTML, /<aside class="lateral" id="lateral" aria-label="Menu principal" tabindex="-1">/);
+});
+
+test("DU-283 · «Trocar de produto» só com 2+ produtos liberados; com um outro só, diz qual", () => {
+  const c = C.CATALOGO.find(x => x.id === "abrir-produto");
+  assert.equal(c.quando({ temCliente: true, produtosLiberados: 1 }), false);
+  assert.equal(c.quando({ temCliente: true, produtosLiberados: 2 }), true);
+  assert.equal(c.rotulo({ outrosProdutos: ["Anúncios"] }), "Trocar para Anúncios");
+  assert.equal(c.rotulo({ outrosProdutos: ["CRM", "Anúncios"] }), "Trocar de produto");
+});
+
+test("DU-284 · «Recarregar o app» com texto não salvo pergunta antes", async () => {
+  let recarregou = 0, perguntou = 0, resposta = false, ocupado = true;
+  const f = fnApp("async function recarregarComCuidado(recarregar = () => location.reload()) {", { ocupadoParaAtualizar: () => ocupado, E: { ui: { confirmar: async () => { perguntou++; return resposta; } } } });
+  assert.equal(await f(() => recarregou++), false); assert.equal(recarregou, 0); assert.equal(perguntou, 1);
+  resposta = true; assert.equal(await f(() => recarregou++), true); assert.equal(recarregou, 1);
+  ocupado = false; perguntou = 0; assert.equal(await f(() => recarregou++), true); assert.equal(perguntou, 0);
+  assert.match(fnDoApp("function acoesDoShell() {"), /"recarregar": \(\) => recarregarComCuidado\(\)/);
+});
+
+test("DU-285 · suporte pelo app: a mensagem leva empresa, tela, versão e aparelho (nada de cliente)", () => {
+  assert.equal(C.textoSuporte({ app: "Sorriso", tela: "Agenda", empresa: "Clínica X", versao: "V9", aparelho: "Win32 · 1280 px" }),
+    "Olá! Preciso de ajuda no Sorriso. Empresa: Clínica X. Tela: Agenda. Versão: V9. Aparelho: Win32 · 1280 px.");
+  assert.equal(C.textoSuporte({}), "Olá! Preciso de ajuda no sistema.");
+  assert.match(fnDoApp("function falarComSuporte() {"), /textoSuporte\(\{ app, tela: E\.titulo, empresa: E\.cliente \? E\.cliente\.nome : "", versao: VERSAO, aparelho \}\)/);
+});
+
+test("DU-295 + DU-296 + DU-297 + DU-302 + DU-303 + DU-304 + DU-310 + DU-315 · design system: desabilitado próprio, opacidade única, chip, botões cheios, selos e elevação", () => {
+  assert.match(CSS_APP, /\.bt:disabled, \.bt\[aria-disabled="true"\] \{ opacity: 1; background: var\(--c-sup-2\); color: var\(--c-texto-2\);[^}]*border-style: dashed;[^}]*cursor: not-allowed/);
+  assert.match(CSS_APP, /--opac-desab: \.55/);
+  assert.doesNotMatch(CSS_APP.replace(/\/\*[\s\S]*?\*\//g, ""), /:disabled[^{]*\{[^}]*opacity: \.(45|5|6)\b/, "nenhuma opacidade de desabilitado solta");
+  assert.match(CSS_APP, /\.chip-check input:not\(:disabled\):not\(:checked\) \+ span:hover/); assert.match(CSS_APP, /-webkit-mask: url\("data:image\/svg\+xml/);
+  assert.match(CSS_APP, /\.bt-perigo-cheio \{ background: var\(--c-ruim\);[^}]*color: var\(--c-ruim-txt\)/);
+  assert.match(CSS_APP, /\.bt-ok \{ background: var\(--c-ok\);/);
+  assert.match(CSS_APP, /--sombra-1:[^;]+;[\s\S]*--sombra-2:[^;]+;[\s\S]*--sombra-3:/);
+  assert.match(CSS_APP, /\.arrastando, \[aria-grabbed="true"\] \{ box-shadow: var\(--sombra-3\); \}/);
+  assert.match(CSS_APP, /\.etiq \{[^}]*min-height: 24px/);
+});
+
+test("DU-306 · tema escuro: avisos, faixas, painéis, etiquetas e toasts com a borda alfa", () => {
+  const m = /html\[data-esquema="escuro"\] \.aviso,[\s\S]*?\{ border-color: var\(--c-borda-alfa\); \}/.exec(CSS_APP);
+  assert.ok(m);
+  for (const s of [".faixa", ".flut", ".menu-pop", ".etiq", ".toast"]) assert.ok(m[0].includes(`html[data-esquema="escuro"] ${s}`), s);
+});
+
+test("DU-308 + DU-316 + DU-321 + DU-324 + DU-325 · acessibilidade global no CSS: mais contraste, links sublinhados, 44 px na tabela, foco visível no título e no diálogo", () => {
+  assert.match(CSS_APP, /@media \(prefers-contrast: more\) \{\s*:root \{ --c-texto-2: var\(--c-texto\); --c-texto-3: var\(--c-texto\);/);
+  assert.match(CSS_APP, /\.vista p a:not\(\.bt\)[^{]*\{ text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; \}/);
+  assert.match(CSS_APP, /@media \(any-pointer: coarse\) \{ \.tabela \.campo-check label[^{]*\{ min-height: 44px; min-width: 44px;/);
+  assert.match(CSS_APP, /\.cab-titulo:focus-visible/);
+  assert.match(CSS_APP, /\.modal:focus-visible|\.gaveta:focus-visible/);
+});
+
+test("DU-312 · contraste dos tokens: textos ≥ 4,5:1 nas superfícies, nos esquemas claro e escuro (padrão e uma marca média)", () => {
+  for (const cores of [{}, { esquema: "escuro" }, { primaria: "#E8A33D", fundo: "#FFFFFF" }, { primaria: "#2B5A80", fundo: "#0E1A24" }]) {
+    const t = T.derivarTema(cores);
+    const v = t.vars || t;
+    const sup = ["--c-fundo", "--c-sup", "--c-poco", "--c-sup-2"].map(k => v[k]).filter(Boolean);
+    for (const tx of ["--c-texto", "--c-texto-2", "--c-texto-3", "--c-ok", "--c-ruim", "--c-aten", "--c-info"]) {
+      for (const s of sup) assert.ok(T.contraste(v[tx], s) >= 4.5, `${JSON.stringify(cores)} ${tx} ${v[tx]} sobre ${s}: ${T.contraste(v[tx], s).toFixed(2)}`);
+    }
+    // o tom de link/foco da marca: 4,5:1 sobre a página (o tema.js garante); sobre cartão/poço ≥ 3:1 (contorno de foco e ícone)
+    assert.ok(T.contraste(v["--c-prim-luz"], v["--c-fundo"]) >= 4.5, `${JSON.stringify(cores)} prim-luz sobre a página`);
+    for (const s of [v["--c-sup"], v["--c-poco"]]) assert.ok(T.contraste(v["--c-prim-luz"], s) >= 3, `${JSON.stringify(cores)} prim-luz sobre ${s}`);
+    assert.ok(Math.min(T.contraste(v["--c-prim-txt"], v["--c-prim"]), T.contraste(v["--c-prim-txt"], v["--c-prim-hi"])) >= 4.5, `${JSON.stringify(cores)}: texto do botão primário`);
+    for (const s of sup) assert.ok(T.contraste(v["--c-texto-3"], s) >= 3, "ícone/controle ≥ 3:1");
+  }
+});
+
+/* ==================== lote sis-d3 ==================== */
+test("DU-319 · o aviso fica o tempo de ler: mínimo 6 s (8 s com botão) + 1 s a cada 20 letras, até 15 s", () => {
+  assert.equal(U.duracaoToast("Salvo."), 7000);
+  assert.equal(U.duracaoToast("Excluído.", { comBotao: true }), 9000);
+  assert.equal(U.duracaoToast("x".repeat(100)), 11000);
+  assert.equal(U.duracaoToast("x".repeat(900)), 15000);
+});
+
+test("DU-330 · botão ocupado: o nome acessível diz «aguarde» e volta ao normal no fim", async () => {
+  limparCorpo();
+  const b = h("button", { type: "button" }, "Salvar");
+  doc.body.appendChild(b);
+  let soltar = null;
+  const p = U.carregando(b, () => new Promise(r => { soltar = r; }));
+  assert.equal(b.getAttribute("aria-busy"), "true"); assert.equal(b.getAttribute("aria-label"), "Salvar, aguarde…");
+  soltar(1); await p;
+  assert.equal(b.getAttribute("aria-busy"), null); assert.equal(b.getAttribute("aria-label"), null);
+  const b2 = h("button", { type: "button", "aria-label": "Excluir contato" }, "x");
+  const desfaz = U.marcarOcupado(b2);
+  assert.equal(b2.getAttribute("aria-label"), "Excluir contato, aguarde…"); desfaz();
+  assert.equal(b2.getAttribute("aria-label"), "Excluir contato");
+  limparCorpo();
+});
+
+test("DU-434 · sucesso não é só cor: o leitor de tela ouve «Pronto:»", async () => {
+  limparCorpo();
+  U.toast("Contato salvo.", { tipo: "ok" });
+  await esperar(50);
+  assert.equal(doc.getElementById("anuncio").textContent, "Pronto: Contato salvo.");
+  U.toast("Pronto: tudo certo.", { tipo: "ok" });
+  await esperar(50);
+  assert.equal(doc.getElementById("anuncio").textContent, "Pronto: tudo certo.", "sem repetir");
+  limparCorpo();
+});
+
+test("DU-326 · o campo do link (convite, nova senha) tem nome acessível", () => {
+  assert.match(UI_TXT, /readonly: true, value: visivel \? link : curto, "aria-label": "Link"/);
+});
+
+test("DU-345 · trocar de empresa apaga do aparelho o que era da anterior (a atual fica)", async () => {
+  const apagados = [];
+  const E = { cliente: { id: "c1" }, sessao: { conta: { id: "u1" }, clientes: [{ id: "c1" }, { id: "c2", modulos: [] }] }, cache: { apagarEmpresa: async o => { apagados.push(o); } }, M: { rotas: ROTAS } };
+  const f = fnApp("async function escolherCliente(id, { remontar = true } = {}) {", { E, reiniciarCanais() {}, atualizarCanais() {}, conferirMigracao() {}, LS: { gravar() {} }, CHAVE_CLIENTE: "x",
+    aplicarMarcaCliente: async () => {}, desenharShell() {}, aplicarSomenteConsulta() {}, atualizarBadges() {}, atualizarSinoUI() {}, desmontarAtual() {}, navegar() {}, aoMudarRota: async () => {}, location: { hash: "#/inicio" } });
+  await f("c2", { remontar: false });
+  assert.deepEqual(apagados, [{ conta: "u1", cliente: "c1" }]);
+  await f("c2", { remontar: false });
+  assert.equal(apagados.length, 1, "mesma empresa: nada");
+});
+
+test("DU-400 · sessão encerrada por um administrador / outro aparelho / senha trocada: a janela diz o motivo", () => {
+  const f = fnApp("function textoSessaoCaiu(e) {", { MOTIVOS_QUEDA: new Function(`${constDoApp("MOTIVOS_QUEDA").replace(/^const MOTIVOS_QUEDA = /, "return ")}`)() });
+  assert.equal(f({ codigo: "sessao_invalida", hint: "encerrada_admin" }).titulo, "Sua sessão foi encerrada");
+  assert.match(f({ codigo: "sessao_invalida", hint: "encerrada_admin" }).texto, /Um administrador/);
+  assert.match(f({ codigo: "sessao_invalida", detalhe: { motivo: "outro_aparelho" } }).texto, /outro aparelho/);
+  assert.equal(f({ hint: "senha_trocada" }).titulo, "Sua senha foi trocada");
+  assert.equal(f({ hint: "revogada" }).motivo, "encerrada_admin");
+  assert.equal(f({ codigo: "sessao_invalida" }).titulo, "Sua sessão expirou");
+  assert.equal(f(null).motivo, "expirou");
+  assert.match(fnDoApp("async function pedirLoginNaTela() {"), /titulo: queda\.titulo/);
+  assert.match(APP_JS, /aoSessaoInvalida: e => sessaoCaiu\(e\)/);
+});
+
+test("DU-360 · «Carregando…» que demora diz o quê depois de 5 s (e só enquanto o esqueleto estiver na tela)", async () => {
+  limparCorpo();
+  assert.equal(ROTAS.textoCarregandoDemorou("automacoes"), "Ainda carregando as automações… Pode ser a conexão; a tela aparece assim que chegar.");
+  assert.match(ROTAS.textoCarregandoDemorou("xyz"), /esta tela/);
+  const sk = U.esqueleto("lista", { demorou: "Ainda carregando as conversas…", demorouMs: 20 });
+  doc.body.appendChild(sk);
+  const p = sk.querySelector(".sk-demora");
+  assert.equal(p.hidden, true);
+  await esperar(40);
+  assert.equal(p.hidden, false); assert.equal(sk.querySelector("[role=status]").textContent, "Ainda carregando as conversas…");
+  const sk2 = U.esqueleto("lista", { demorou: "x", demorouMs: 10 });
+  await esperar(30);
+  assert.equal(sk2.querySelector(".sk-demora").hidden, true, "fora da tela não muda");
+  assert.equal(U.esqueleto("lista").querySelector(".sk-demora"), null);
+  limparCorpo();
+});
+
+test("DU-452 · conta com mais de uma empresa: o nome curto aparece no topo do celular", () => {
+  assert.equal(ROTAS.nomeCurtoEmpresa("Clínica Sorriso Feliz"), "Sorriso");
+  assert.equal(ROTAS.nomeCurtoEmpresa("Oficina do Zé"), "Zé");
+  assert.equal(ROTAS.nomeCurtoEmpresa("Paralelepípedos Reunidos"), "Paralelepíp…");
+  assert.equal(ROTAS.nomeCurtoEmpresa(""), "");
+  assert.match(fnDoApp("function desenharEmpresa() {"), /class: "emp-curto", "aria-hidden": "true"/);
+  assert.match(CSS_APP, /@media \(max-width: 480px\) \{ \.empresa-bt \.emp-curto \{ display: inline;/);
+});
+
+test("DU-451 + DU-353 · trocar de empresa volta à lista da tela; datas e dinheiro no padrão brasileiro", () => {
+  assert.equal(ROTAS.rotaAoTrocarEmpresa({ modulo: "conversas", partes: ["c9"] }), "#/conversas");
+  assert.equal(ROTAS.rotaAoTrocarEmpresa({ modulo: "crm", partes: ["negocio", "n1"] }), "#/crm");
+  assert.equal(ROTAS.rotaAoTrocarEmpresa({ modulo: "crm", partes: ["lista"] }), null);
+  assert.equal(ROTAS.rotaAoTrocarEmpresa({ modulo: "config", partes: ["equipe"] }), null);
+  const agora = Date.parse("2026-03-10T15:00:00Z");
+  assert.equal(ROTAS.dataBR("2026-03-10T14:58:00Z", { agora, relativa: true }), "há 2 min");
+  assert.equal(ROTAS.dataBR("2026-03-10T12:00:00Z", { agora, relativa: true }), "hoje, 09:00");
+  assert.equal(ROTAS.dataBR("2026-03-09T12:00:00Z", { agora, relativa: true }), "ontem, 09:00");
+  assert.equal(ROTAS.dataBR("2026-02-01T12:00:00Z", { agora }), "01/02");
+  assert.equal(ROTAS.dinheiroBR(1234.5).replace(/\s/g, " "), "R$ 1.234,50");
+  assert.equal(ROTAS.numeroBR(12345), "12.345");
+});
+
+test("DU-449 · vídeo do passo: o da revenda vence; só https", () => {
+  assert.deepEqual(ROTAS.videoDoPasso({ id: "whatsapp", video: "https://a.test/v" }), { url: "https://a.test/v", rotulo: "Ver como (1 min)" });
+  assert.equal(ROTAS.videoDoPasso({ id: "whatsapp", video: "https://a.test/v" }, { videos_passos: { whatsapp: "https://revenda.test/w" } }).url, "https://revenda.test/w");
+  assert.equal(ROTAS.videoDoPasso({ id: "x", video: "javascript:alert(1)" }), null);
+});
+
+/* ==================== pendências do plano 1500c nos meus arquivos ==================== */
+test("CC-139 (plano 1500c) · menu com títulos de grupo: o título não é item (as setas pulam)", async () => {
+  limparCorpo();
+  const ancora = h("button", null, "…"); doc.body.appendChild(ancora);
+  U.menu(ancora, [{ titulo: "Atendimento" }, { rotulo: "Transferir", fn() {} }, "-", { titulo: "Conversa" }, { rotulo: "Arquivar", fn() {} }]);
+  await esperar(5);
+  const pop = doc.querySelector(".menu-pop");
+  assert.deepEqual(pop.querySelectorAll(".menu-titulo").map(p => [p.textContent, p.getAttribute("role")]), [["Atendimento", "presentation"], ["Conversa", "presentation"]]);
+  assert.equal(pop.querySelectorAll("[role=menuitem]").length, 2);
+  limparCorpo();
+});
+
+test("RC-054 (plano 1500c) · o aviso «Desfazer» pode trocar o texto sem abrir outro", async () => {
+  limparCorpo();
+  const t = U.toast("Movido para Ganho.", { tipo: "info" });
+  assert.equal(t.atualizarTexto("Movido para Ganho (já foi gravado)."), true);
+  assert.match(t.el.querySelector("p").textContent, /^Movido para Ganho \(já foi gravado\)\./);
+  let api = null;
+  const p = U.acaoComDesfazer({ texto: "Excluído.", aoCriar: a => { api = a; }, ms: 50 });
+  assert.equal(typeof api.atualizarTexto, "function");
+  assert.equal(api.atualizarTexto("Excluído (gravado)."), true);
+  assert.ok([...doc.querySelectorAll(".toast p")].some(x => /Excluído \(gravado\)\./.test(x.textContent)));
+  api.firmarAgora(); await p;
+  assert.equal(api.atualizarTexto("depois"), false, "fechado: não mexe");
+  t.fechar();
+  limparCorpo();
+});
+
+test("RC-266 (plano 1500c) · gaveta no celular: arrastar para a direita (ou para baixo na folha) fecha; o Voltar fecha a gaveta", () => {
+  assert.equal(U.gestoFechaGaveta(120, 10), true);
+  assert.equal(U.gestoFechaGaveta(60, 0), false, "curto");
+  assert.equal(U.gestoFechaGaveta(100, 90), false, "na diagonal: é rolagem");
+  assert.equal(U.gestoFechaGaveta(-120, 0), false, "para a esquerda não");
+  assert.equal(U.gestoFechaGaveta(5, 140, { folha: true }), true);
+  assert.equal(U.gestoFechaGaveta(140, 5, { folha: true }), false);
+  const corpo = UI_TXT.slice(UI_TXT.indexOf("export function gaveta("), UI_TXT.indexOf("export function gaveta(") + 6000);
+  assert.match(corpo, /camada = abrirCamada\(\);/); assert.match(corpo, /if \(camada\) \{ camada\.liberar\(\); camada = null; \}/);
+  assert.match(corpo, /touchend[\s\S]*gestoFechaGaveta/);
+});
+
+test("RC-262 (plano 1500c) · rpc e rpcC aceitam o AbortSignal de quem chama (sinal ou signal)", async () => {
+  const ctl = new AbortController();
+  let viu = null;
+  const api = A.criarApi({ url: "https://x.test", chave: "k", token: () => "t", cliente: () => "c1",
+    fetch: async (u, init) => { viu = init.signal; return new Promise((res, rej) => { init.signal.addEventListener("abort", () => rej(Object.assign(new Error("abort"), { name: "AbortError" }))); }); } });
+  const p = api.rpcC("nx_teste_ler", {}, { signal: ctl.signal });
+  await tick(2);
+  ctl.abort();
+  await assert.rejects(p, e => e.codigo === "cancelado");
+  assert.ok(viu);
+  const ctl2 = new AbortController(); ctl2.abort();
+  await assert.rejects(api.rpc("nx_outro", {}, { sinal: ctl2.signal }), e => e.codigo === "cancelado");
+});
+
+test("RC-151 (plano 1500c) · ctx.guardaSaida(fn): com alteração não salva, o shell pergunta «Sair sem salvar?»", () => {
+  const corpo = APP_JS.slice(APP_JS.indexOf("    guardaSaida(fn, {"), APP_JS.indexOf("    guardaSaida(fn, {") + 900);
+  assert.match(corpo, /sujo = !!fn\(\)/); assert.match(corpo, /if \(!sujo\) return true;/);
+  assert.match(corpo, /E\.ui\.confirmar\(\{ titulo, texto, rotulo: "Sair sem salvar", perigo: true \}\)/);
+  assert.match(corpo, /guardasDeRota\.add\(guarda\)/);
+});
+
+test("CC-323 (plano 1500c) · #/agenda/tv chega à Agenda com partes ['tv'] (a Agenda abre o modo TV — pendência da frente agenda)", () => {
+  const r = ROTAS.rotear("#/agenda/tv");
+  assert.equal(r.modulo, "agenda"); assert.deepEqual([...r.partes], ["tv"]);
+});
+
+/* ==================== pendências da frente config (2000d) nos meus arquivos ==================== */
+test("DU-394 (config) · prontos.js libera a seção «Dados da empresa»", async () => {
+  const PR = await import(pathToFileURL(join(APP, "prontos.js")).href);
+  assert.ok(PR.CONFIG_PRONTAS.includes("empresa"));
+});
+
+test("DU-120 + DU-145 (config) · convite sem gênero; rodapé da entrada com os links da revenda", () => {
+  assert.match(LOGIN_TXT, /"Você recebeu um convite"/); assert.doesNotMatch(LOGIN_TXT, /"Você foi convidado"/);
+  assert.deepEqual(LOGIN.linksDoRodape({ termos_url: "https://r.test/termos", privacidade_url: "http://inseguro.test", suporte_email: "ajuda@r.test" }),
+    [{ rotulo: "Termos de uso", href: "https://r.test/termos" }, { rotulo: "Suporte por e-mail", href: "mailto:ajuda@r.test" }]);
+  assert.deepEqual(LOGIN.linksDoRodape({ suporte_email: "x@" }), []);
+});
+
+test("DU-145 (config) · a tela de entrada mostra os links da revenda", async () => {
+  const alvo = await montarLogin("login", [], { marca: { produto: "Sorriso", termos_url: "https://r.test/t", suporte_email: "a@r.test" }, api: { publica: async () => ({}), mensagemErro: A.mensagemErro } });
+  const nav = alvo.querySelector(".entrar-links");
+  assert.ok(nav);
+  assert.deepEqual(nav.querySelectorAll("a").map(a => a.getAttribute("href")), ["https://r.test/t", "mailto:a@r.test"]);
+  const alvo2 = await montarLogin("login", [], { marca: { suporte_wa: "" }, api: { publica: async () => ({}), mensagemErro: A.mensagemErro } });
+  assert.equal(alvo2.querySelector(".entrar-links"), null);
+});
+
+test("DU-119 (config) · a empresa exige 2 etapas: depois de entrar, o Perfil abre no passo de ligar", () => {
+  assert.match(LOGIN_TXT, /r\.precisa_ativar_2fa === true \? \{ ativar2fa: true \} : \{\}/);
+  assert.match(APP_JS, /if \(ativar2fa\) \{ destino = "#\/config\/perfil\?ativar2fa=1";/);
+});
+
+test("DU-142 + DU-147 + DU-128 + DU-150 (config) · avisos por conta, ícone próprio do app, «Ficar ausente» e marca repintada pela outra aba", () => {
+  const guardado = new Map([["nx-cv-avisos", { som: false }], ["nx-cv-avisos:u1", { som: true, tela: true }]]);
+  const f = fnApp("function lerAvisosConversas() {", { LS: { ler: k => guardado.get(k) || null }, E: { sessao: { conta: { id: "u1" } } } });
+  assert.deepEqual(f(), { som: true, tela: true, silencio: null });
+  const g = fnApp("function lerAvisosConversas() {", { LS: { ler: k => guardado.get(k) || null }, E: { sessao: { conta: { id: "u2" } } } });
+  assert.equal(g().som, false, "sem a chave da conta: a antiga");
+  assert.match(fnDoApp("async function atualizarManifestoApp() {"), /origem: m\.icone_app \|\| m\.logo_cliente/);
+  assert.match(fnDoApp("function desenharConta() {"), /rotulo: "Ficar ausente"[\s\S]*#\/config\/perfil\?secao=avisos#cfg-pf-avisos/);
+  assert.match(fnDoApp("function ouvirOutrasAbas() {"), /ev\.key !== "nx-marca-hash"[\s\S]*aplicarMarcaCliente\(\)/);
+});
+
+test("DU-145 + DU-147 (config) · validarMarca aceita as chaves novas; o ícone do app passa pela mesma regra de imagem", () => {
+  assert.deepEqual(T.validarMarca({ suporte_email: "a@b.test", termos_url: "https://x", icone_app: "data:image/png;base64,AAAA", teste_aberto: true }), []);
+  assert.deepEqual(T.validarMarca({ icone_app: "data:image/svg+xml;base64,AAAA" }).map(e => e.campo), ["icone_app"]);
+  assert.deepEqual(T.validarMarca({ qualquer: 1 }).map(e => e.campo), ["qualquer"]);
 });

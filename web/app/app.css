@@ -532,6 +532,11 @@ dialog { color: var(--c-texto); }
 /* CC-139 (plano 1500c) · plano 2000d: título de grupo dentro do menu */
 .menu-titulo { margin: .45rem .6rem .2rem; font-size: var(--fs-12); font-weight: 600; color: var(--c-texto-3); }
 .menu-titulo:first-child { margin-top: .2rem; }
+/* plano 2000d · DU-360 */
+.sk-demora { margin: 0 0 var(--esp-3); color: var(--c-texto-2); font-size: var(--fs-14); }
+/* plano 2000d · DU-452: o nome curto da empresa no topo do celular (conta com mais de uma) */
+.emp-curto { display: none; }
+@media (max-width: 480px) { .empresa-bt .emp-curto { display: inline; max-width: 9ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-13); font-weight: 600; } }
 .flut-busca { width: 100%; min-height: 38px; padding: .45rem .8rem; border-radius: 10px; border: 1px solid var(--c-borda-2); background: var(--c-poco); color: var(--c-texto); }
 .flut-lista { display: flex; flex-direction: column; gap: .15rem; max-height: 260px; overflow: auto; }
 .flut-op { display: flex; align-items: center; gap: .55rem; min-height: 36px; padding: .25rem .4rem; border-radius: 8px; cursor: pointer; }
@@ -1103,7 +1108,7 @@ body.palco-vivo .palco .brilho-b { animation: orbitaBrilhoB 39s cubic-bezier(.45
 .cores-sug { align-items: center; padding: .7rem .8rem; border-radius: var(--r-p); background: var(--c-sup-2); }
 .cores-sug .rotulo { margin-right: .3rem; }
 .cores-caixa { gap: 1.1rem; }
-.cores-caixa:disabled { opacity: .5; }
+.cores-caixa:disabled { opacity: var(--opac-desab); }   /* plano 2000d · DU-297 */
 .cor-campo { display: flex; flex-direction: column; gap: .6rem; }
 .marca-acoes { gap: .5rem; }
 .marca-espaco { flex: 1 1 auto; }
@@ -1795,7 +1800,7 @@ html[data-esquema="escuro"] .entrar-cartao { box-shadow: 0 0 0 1px var(--c-borda
 .campo-caps { display: inline-flex; align-items: center; gap: var(--esp-1); color: var(--c-aten); font-size: var(--fs-13); font-weight: 600; margin-block-start: var(--esp-1); }
 .campo-caps .ic { width: 14px; height: 14px; }
 /* AS-209: sem internet, os botões de salvar avisam antes do clique (o clique continua dando a frase honesta) */
-html.sem-internet [data-sem-rede] { opacity: .6; cursor: not-allowed; }
+html.sem-internet [data-sem-rede] { opacity: var(--opac-desab); cursor: not-allowed;   /* plano 2000d · DU-297 */ }
 /* AS-243: ponto vermelho em Conversas enquanto um número de WhatsApp estiver desconectado */
 .canal-ponto { position: absolute; top: 6px; left: 26px; width: 9px; height: 9px; border-radius: 50%; background: var(--c-ruim); box-shadow: 0 0 0 2px var(--c-fundo); }
 .barra-b .canal-ponto { top: 6px; left: calc(50% + 6px); }
@@ -1881,7 +1886,7 @@ html.modo-foco .faixas > .faixa:not(.faixa-bloqueio) { display: none; }
   .link, a.link { text-decoration-thickness: 2px; }
 }
 /* DU-321: a caixa de seleção dentro de tabela ganha a área de toque de 44 px (o rótulo cresce, a caixa continua 20) */
-@media (pointer: coarse) { .tabela .campo-check label, .tabela td > label:has(input[type="checkbox"]) { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; } }
+@media (any-pointer: coarse) { .tabela .campo-check label, .tabela td > label:has(input[type="checkbox"]) { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; } }
 /* DU-316: link dentro de texto corrido sempre sublinhado (a cor da marca pode ficar perto da cor do texto) */
 .vista p a:not(.bt), .vista li a:not(.bt), .entrar p a:not(.bt) { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 /* DU-282: «Ir para o menu» ao lado do «Pular para o conteúdo» */
@@ -1894,3 +1899,6 @@ html.modo-foco .faixas > .faixa:not(.faixa-bloqueio) { display: none; }
 /* plano 2000d · DU-286: ponto de novidade da versão na conta (some ao abrir as novidades) */
 .lat-conta { position: relative; }
 .lat-conta[data-novidade="1"]::after { content: ""; position: absolute; top: .45rem; left: 2.1rem; width: 9px; height: 9px; border-radius: 50%; background: var(--c-prim); box-shadow: 0 0 0 2px var(--c-sup); }
+/* plano 2000d · DU-145: termos, privacidade e suporte da revenda no pé da entrada */
+.entrar-links { display: flex; flex-wrap: wrap; justify-content: center; gap: .25rem 1rem; margin-top: var(--esp-3); font-size: var(--fs-13); }
+.entrar-links a { min-height: 44px; display: inline-flex; align-items: center; color: var(--c-texto-2); }

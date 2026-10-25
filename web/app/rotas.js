@@ -182,6 +182,21 @@ const ESQUELETO_DA_ROTA = Object.freeze({
   inicio: "inicio", conversas: "chat", crm: "kanban", contatos: "lista", empresas: "lista", tarefas: "lista", agenda: "agenda",
   anuncios: "ads", relatorios: "ads", automacoes: "lista", config: "lista", admin: "tabela",
 });
+/** plano 2000d · DU-360: o que a tela está carregando, para a linha «Ainda carregando as automações…» depois de 5 s. */
+export const O_QUE_CARREGA = Object.freeze({ inicio: "o início", conversas: "as conversas", crm: "os negócios", contatos: "os contatos", empresas: "as empresas",
+  tarefas: "as tarefas", agenda: "a agenda", automacoes: "as automações", relatorios: "os relatórios", anuncios: "os anúncios", config: "as configurações", ajuda: "a ajuda" });
+export function textoCarregandoDemorou(modulo) {
+  const o = Object.hasOwn(O_QUE_CARREGA, modulo) ? O_QUE_CARREGA[modulo] : "esta tela";
+  return `Ainda carregando ${o}… Pode ser a conexão; a tela aparece assim que chegar.`;
+}
+/** plano 2000d · DU-452: o nome da empresa que cabe no topo do celular — a 1ª palavra que não é genérica («Clínica», «Oficina»…), até 12 letras. */
+const PALAVRAS_GENERICAS_EMPRESA = new Set(["clinica", "clínica", "oficina", "loja", "auto", "centro", "consultorio", "consultório", "studio", "estudio", "estúdio", "a", "o", "os", "as", "de", "da", "do"]);
+export function nomeCurtoEmpresa(nome) {
+  const ps = String(nome || "").trim().split(/\s+/).filter(Boolean);
+  if (!ps.length) return "";
+  const p = ps.find(x => !PALAVRAS_GENERICAS_EMPRESA.has(x.toLowerCase())) || ps[0];
+  return p.length > 12 ? `${p.slice(0, 11)}…` : p;
+}
 export function esqueletoDaRota(modulo, partes = []) {
   if (modulo === "crm" && partes && partes[0] === "negocio") return "lista";
   return Object.hasOwn(ESQUELETO_DA_ROTA, modulo) ? ESQUELETO_DA_ROTA[modulo] : "lista";

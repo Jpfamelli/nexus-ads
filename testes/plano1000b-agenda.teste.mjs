@@ -708,7 +708,8 @@ test("CB-255 / CB-149 · remarcar pelo «Dia seguinte» do celular: horário ocu
     T.alvo.querySelector(".ag-bloco").click();
     T.reg.pops.at(-1).querySelector(".ag-det-amanha").click();
     await esperar(20);
-    assert.equal(erros[0], "Esse horário está ocupado. Escolha outro horário.");
+    // plano 2000d: DC-276 — a recusa relê a agenda e diz que outro atendimento entrou
+    assert.equal(erros[0], "Outro atendimento entrou neste horário (a agenda foi atualizada). Escolha outro horário.");
   } finally { T.sair(); }
 });
 
@@ -741,9 +742,11 @@ test("CB-263 · deslocamentoFuso: São Paulo −180; Nova York muda 60 min entre
 });
 
 test("CB-265 · normalizarExtrasAgenda: inválidos voltam ao padrão; id longo é recusado", () => {
-  assert.deepEqual(A.normalizarExtrasAgenda(null), { prof: "todos", fechados: "ocultar", atalhos: "ligados" });
-  assert.deepEqual(A.normalizarExtrasAgenda({ prof: "x".repeat(81), fechados: "talvez", atalhos: 1 }), { prof: "todos", fechados: "ocultar", atalhos: "ligados" });
-  assert.deepEqual(A.normalizarExtrasAgenda({ prof: "eu", fechados: "mostrar", atalhos: "desligados" }), { prof: "eu", fechados: "mostrar", atalhos: "desligados" });
+  // plano 2000d: DC-399/DC-405 — dois campos novos: «roteiro» (Já configurei) e «lista» (a Lista do dia do celular aberta ou fechada)
+  const novos = { roteiro: "mostrar", lista: null };
+  assert.deepEqual(A.normalizarExtrasAgenda(null), { prof: "todos", fechados: "ocultar", atalhos: "ligados", ...novos });
+  assert.deepEqual(A.normalizarExtrasAgenda({ prof: "x".repeat(81), fechados: "talvez", atalhos: 1 }), { prof: "todos", fechados: "ocultar", atalhos: "ligados", ...novos });
+  assert.deepEqual(A.normalizarExtrasAgenda({ prof: "eu", fechados: "mostrar", atalhos: "desligados" }), { prof: "eu", fechados: "mostrar", atalhos: "desligados", ...novos });
   assert.equal(A.normalizarExtrasAgenda({ prof: "" }).prof, "todos");
 });
 

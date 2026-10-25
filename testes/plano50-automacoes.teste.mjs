@@ -185,7 +185,8 @@ test("comandos: todo item do catálogo tem grupo conhecido; agruparAcoes segue a
   assert.deepEqual(g.map(x => x.grupo), ["Nesta tela", "Criar", "Ir e ver", "Aparência e app", "Ajuda", "Conta"]);
   assert.deepEqual(g[0].itens.map(x => x.id), ["tela.x"]);
   assert.ok(g[1].itens.some(x => x.id === "tela.y") && g[1].itens.some(x => x.id === "nova-conversa"));
-  assert.deepEqual(g[5].itens.map(x => x.id), ["sair"]);
+  // plano 2000d: DU-141 — «Bloquear a tela» também é da Conta
+  assert.deepEqual(g[5].itens.map(x => x.id), ["sair", "bloquear-tela"]);
 });
 
 test("comandos: últimos usados por conta — registra sem repetir, respeita o máximo, ordena e nunca lança erro", () => {

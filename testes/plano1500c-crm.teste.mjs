@@ -868,7 +868,7 @@ test("RC-083 · faixa da seleção: etiquetar e trocar o responsável dos seleci
     t.tela.querySelector(".crm-sel-etq").clique(); await varias(10);
     const sal = t.chamadas("nx_negocio_salvar");
     assert.deepEqual(sal.map(c => c.p.p_negocio), [{ id: 1, etiquetas: [3, 5] }, { id: 2, etiquetas: [3, 5] }]);
-    assert.match(t.reg.toasts.at(-1), /Etiqueta «VIP» posta em 2 cartões/);
+    assert.match(t.reg.desfazer.at(-1).texto, /Etiqueta «VIP» posta em 2 cartões/);      // plano 2000d: DR-013 — o aviso agora tem «Desfazer»
     for (const id of [1, 2]) t.cartao(id).dispara("click", { shiftKey: true, target: t.cartao(id) });
     respostas.push("u2");
     t.tela.querySelector(".crm-sel-dono").clique(); await varias(10);
@@ -1140,7 +1140,7 @@ test("RC-146/147/149/152/154/163/165 · funis: cor com nome, mini-rótulos, aber
     assert.match(css, /\.fe-cor::after \{ content: ""; position: absolute; inset: -9px; \}/, "RC-146: alvo de 44 px");
     t.base.funis.push({ id: "f3", nome: "Antigo", ordem: 0, ativo: false, conta_no_ads: false, estagios: [{ id: "c1", nome: "N", tipo: "aberto" }, { id: "c2", nome: "G", tipo: "ganho" }, { id: "c3", nome: "P", tipo: "perdido" }] });
     t.reg.chamadas.length = 0;
-    t.alvo.querySelectorAll("button").find(b => b.textContent === "Funil").clique(); await varias();
+    t.alvo.querySelectorAll("button").find(b => b.textContent === "Novo funil").clique(); await varias();      // plano 2000d: DR-208 — o botão de criar tem verbo
     // editor de funil novo: modelos da vertical
     const sel = t.alvo.querySelector(".fe-modelo");
     assert.ok(sel, "RC-154: «Começar com» no funil novo");
@@ -1193,11 +1193,11 @@ test("RC-159/160/162/163/164 · campos, etiquetas e motivos: exemplos da vertica
     const subir = aC.querySelectorAll("button").find(b => b.attrs["aria-label"] === "Subir A");
     assert.equal(subir.disabled, false, "RC-163: continua focável");
     assert.equal(subir.getAttribute("aria-disabled"), "true"); assert.equal(subir.getAttribute("title"), "Já é o primeiro");
-    aC.querySelectorAll("button").find(b => b.textContent === "Campo").clique(); await varias();
+    aC.querySelectorAll("button").find(b => b.textContent === "Novo campo").clique(); await varias();      // plano 2000d: DR-208 — o botão de criar tem verbo
     assert.ok(placeholders.includes("Ex.: Modelo do carro"), "RC-160: antes «Ex.: Convênio» para toda vertical");
     const aE = h0(D, "div");
     await secoesConfig.find(s => s.id === "etiquetas").montar(ctx, aE);
-    aE.querySelectorAll("button").find(b => b.textContent === "Etiqueta").clique(); await varias();
+    aE.querySelectorAll("button").find(b => b.textContent === "Nova etiqueta").clique(); await varias();      // plano 2000d: DR-208 — o botão de criar tem verbo
     assert.ok(placeholders.includes("Ex.: Revisão"), "RC-159");
     const aM = h0(D, "div");
     await secoesConfig.find(s => s.id === "motivos").montar(ctx, aM);
@@ -1262,7 +1262,7 @@ test("RC-253/257/264 · quadro: dicas da 1ª visita, «Por pessoa» no resumo e 
     const tour = t.tela.querySelector(".kb-tour");
     assert.ok(tour, "RC-253: dicas na 1ª visita");
     tour.querySelector(".kb-tour-ok").clique();
-    assert.equal(D.storage.get("nx-app-crm-tour-quadro"), "1");
+    assert.equal(D.storage.get("nx-app-crm-tour-quadro:cli-p1000:u1"), "1");      // plano 2000d: DR-006 — a chave é por empresa e conta
     assert.ok(!t.tela.querySelector(".kb-tour"));
     const pessoas = t.tela.querySelector(".crm-fr-tab-pessoas");
     assert.ok(pessoas, "RC-257");
@@ -1362,7 +1362,8 @@ test("RC-323/324/327 · filtros do quadro: período invertido com erro no campo,
     let corpo = t.reg.flut.conteudo;
     const opP = corpo.querySelectorAll("select").find(s => s.attrs["aria-label"] === "Parados há").querySelectorAll("option").map(o => o.value);
     assert.ok(opP.includes("60") && opP.includes("90"), "RC-324");
-    assert.ok(!corpo.querySelector(".crm-filtros-link"), "sem filtro aplicado não há link para copiar");
+    // plano 2000d: DR-003 — o botão fica sempre (o link sai do formulário no clique); sem filtro nenhum ele avisa em vez de copiar
+    corpo.querySelector(".crm-filtros-link").clique(); assert.equal(copiados.length, 0, "sem filtro não copia");
     const de = corpo.querySelectorAll("input").find(x => x.attrs["aria-label"] === "Criados de"), ate = corpo.querySelectorAll("input").find(x => x.attrs["aria-label"] === "Criados até");
     de.value = "2026-10-10"; ate.value = "2026-10-01";
     const nAntes = t.chamadas("nx_negocios_kanban").length;
@@ -1584,11 +1585,11 @@ test("RC-292/316/317/318/329/334 · configuração: confirma o padrão, nome vaz
     assert.deepEqual(confirmacoes, ["Tornar «Implantes» o funil padrão?"], "RC-292");
     assert.ok(!cham.includes("nx_funil_salvar"), "recusou: nada gravado");
     // editor de funil novo
-    t.alvo.querySelectorAll("button").find(b => b.textContent === "Funil").clique(); await varias();
+    t.alvo.querySelectorAll("button").find(b => b.textContent === "Novo funil").clique(); await varias();      // plano 2000d: DR-208 — o botão de criar tem verbo
     const cont = t.alvo.querySelector(".fe-cont");
     const nIni = t.alvo.querySelectorAll(".fe-etapa").length;
     assert.equal(cont.textContent, `${nIni} de 25`, "RC-317");
-    const btEtapa = t.alvo.querySelectorAll("button").find(b => b.textContent === "Etapa");
+    const btEtapa = t.alvo.querySelectorAll("button").find(b => b.textContent === "Nova etapa");      // plano 2000d: DR-208 — o botão de criar tem verbo
     // RC-316: nova etapa sem nome, sair do campo → marcado
     btEtapa.clique(); await varias();
     const vazio = t.alvo.querySelectorAll(".fe-nome").find(x => !x.value);
@@ -1852,8 +1853,9 @@ test("RX-035/036/038 · ficha: telefone recusado na hora, negócios na régua do
     const el = h0(D, "div", { class: "crm" });
     await t.M.montarFicha(t.k, el, 501, {});
     const minis = el.querySelectorAll(".ng-outros .ng-mini");
-    assert.equal(minis[0].querySelector("b").textContent, "R$ 1200", "RX-036: ganho sem valor final usa o previsto (antes «—»)");
-    assert.equal(minis[1].querySelector(".sem").textContent, "Sem valor");
+    // plano 2000d: DR-168 — abertos primeiro na ficha (a «Limpeza» aberta vem antes do ganho)
+    assert.equal(minis[1].querySelector("b").textContent, "R$ 1200", "RX-036: ganho sem valor final usa o previsto (antes «—»)");
+    assert.equal(minis[0].querySelector(".sem").textContent, "Sem valor");
     const src = ler("crm-listas.js");
     assert.ok(src.includes("!L.normalizarTelefone(x.value) ? L.textoTelefoneInvalido(x.value) : null"), "RX-035");
     assert.ok(src.includes("class: \"kc-mais-etq\", title: e.slice(3)"), "RX-038");
@@ -1894,7 +1896,7 @@ test("RX-042/043/044 · seleção: tirar etiqueta, busca na lista longa e quem f
     t.tela.querySelector(".crm-sel-tirar-etq").clique(); await varias(10);
     assert.deepEqual(opcoesTirar, ["Urgência", "E4"], "RX-043: só as etiquetas que os selecionados têm");
     assert.deepEqual(t.chamadas("nx_negocio_salvar").map(c => c.p.p_negocio), [{ id: 1, etiquetas: [4] }, { id: 2, etiquetas: [4] }]);
-    assert.match(t.reg.toasts.at(-1), /Etiqueta «Urgência» tirada de 2 cartões/);
+    assert.match(t.reg.desfazer.at(-1).texto, /Etiqueta «Urgência» tirada de 2 cartões/);      // plano 2000d: DR-013 — com «Desfazer»
     assert.match(ler("crm-kanban.js"), /ficaram"\} de fora \(ainda salvando\)/, "RX-042");
     t.api.desmontar();
   } finally { D.desfazer(); }
@@ -2018,7 +2020,7 @@ test("RX-055/057 · motivos de perda: sugeridos que já existiam avisam; nome re
     aM.querySelectorAll("button").find(b => b.textContent === "Usar motivos sugeridos").clique(); await varias(10);
     assert.ok(toasts.some(x => /^Nada novo: os motivos sugeridos já existiam/.test(x.t)), "RX-055: antes nenhum aviso");
     base.motivos.push({ id: 9, nome: "Achou caro" });
-    aM.querySelectorAll("button").find(b => b.textContent === "Motivo").clique(); await varias();
+    aM.querySelectorAll("button").find(b => b.textContent === "Novo motivo").clique(); await varias();      // plano 2000d: DR-208 — o botão de criar tem verbo
     const n0 = chamadas.length;
     const r = await acoesModal.find(a => a.tipo === "primario").fn({ erro() {} });
     assert.equal(r, false);

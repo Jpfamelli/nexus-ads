@@ -537,3 +537,86 @@ details.ini-canal-erro .bt { margin-top: var(--esp-1); min-height: 32px; }
 .ini-esfr-valor { color: var(--c-aten); font-weight: 600; }
 /* plano 1500c · IC-005 */
 .ini-resumo-gerado { margin: 0; font-family: var(--f-mono); }
+
+/* ============================================================ plano 2000d · frente inicio ============================================================ */
+/* DR-276/DR-330: o selo da leitura que falhou ou sem internet */
+.ini-selo-leitura { display: inline-flex; align-items: center; padding: 1px var(--esp-2); border-radius: var(--r-pp); background: var(--c-aten-suave); color: var(--c-aten); font: 600 var(--fs-12)/1.5 var(--f-mono); }
+/* DR-398: desde a sua última visita */
+.ini-novidades { display: flex; align-items: center; gap: var(--esp-2); margin: 0; padding: var(--esp-2) var(--esp-3); border-radius: var(--r-p); background: var(--c-ok-suave); color: var(--c-texto); font-size: var(--fs-14); }
+.ini-novidades .ic { flex: none; width: 16px; height: 16px; color: var(--c-ok); }
+/* DU-236/DU-449: o tempo e o vídeo de cada passo */
+.ini-guia-tempo { font: 500 var(--fs-12)/1.4 var(--f-mono); color: var(--c-texto-2); }
+.ini-guia-video { justify-self: start; font-size: var(--fs-13); }
+/* DR-283: as setas de mover só no modo «Organizar o Início» (recolher fica sempre) */
+.ini:not(.ini-organizando) .ini-bl-bt:not(.ini-bl-rec) { display: none; }
+.ini-organizando .rel-cartao[data-bloco] { outline: 1px dashed color-mix(in srgb, var(--c-prim) 45%, transparent); outline-offset: 2px; }
+.ini-org-bt[aria-pressed="true"] { background: var(--c-prim-suave); color: var(--c-texto); }
+/* DR-265: a faixa do exemplo presa no topo e o selo pequeno em cada bloco */
+.ini-exemplo .ini-exemplo-faixa { position: sticky; top: calc(var(--topo, 56px) + var(--esp-2)); z-index: 3; box-shadow: 0 6px 18px var(--c-sombra); }
+.ini-exemplo-selo-p { margin-left: var(--esp-2); padding: 0 var(--esp-1); font-size: var(--fs-11); vertical-align: middle; }
+/* DR-248/DR-249/DR-269/DR-270/DR-328: o cartão de retorno */
+.ini-roi-periodo, .ini-roi-cedo, .ini-roi-30 { margin: 0; }
+.ini-roi-cedo { color: var(--c-aten); }
+.ini-roi-total .ini-roi-n { color: var(--c-texto); }
+.ini-roi-plats { display: grid; gap: var(--esp-1); margin: 0; padding: 0; list-style: none; }
+.ini-roi-plat { display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-1) var(--esp-2); min-width: 0; font-size: var(--fs-14); }
+.ini-roi-plat .ic { width: 16px; height: 16px; flex: none; }
+.ini-roi-selo { padding: 0 var(--esp-2); border-radius: var(--r-pp); background: var(--c-ok-suave); color: var(--c-ok); font: 600 var(--fs-12)/1.6 var(--f-mono); }
+.ini-roi-vendas { display: grid; gap: var(--esp-1); padding-top: var(--esp-2); border-top: 1px solid var(--c-borda); }
+.ini-roi-vendas ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; font-size: var(--fs-14); }
+.ini-roi-vendas .rel-olho { margin: 0; }
+/* DR-300: a barra fantasma do mês passado inteiro */
+.ini-barra-t .ini-b-fant { background: transparent; border: 1px dashed var(--c-borda-2, var(--c-borda)); box-sizing: border-box; }
+/* DR-301/DR-405: projeção e o começo do mês */
+.ini-mes-proj { display: flex; align-items: flex-start; gap: var(--esp-1); margin: 0; font-size: var(--fs-14); color: var(--c-texto); }
+.ini-mes-proj .ic { flex: none; width: 16px; height: 16px; margin-top: 2px; color: var(--c-prim-luz); }
+.ini-mes-inicio { margin: 0; }
+/* DR-299: a frase da meta curta no celular, longa no resto */
+.ini-meta-curto { display: none; }
+@media (max-width: 520px) {
+  .ini-meta-longo { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .ini-meta-curto { display: inline; }
+}
+/* DR-399: a reta final */
+.ini-reta-final { display: flex; align-items: flex-start; gap: var(--esp-1); margin: 0 0 var(--esp-2); padding: var(--esp-2) var(--esp-3); border-radius: var(--r-p); background: var(--c-aten-suave); color: var(--c-texto); font-weight: 600; }
+.ini-reta-final .ic { flex: none; width: 16px; height: 16px; margin-top: 2px; color: var(--c-aten); }
+/* DR-218/DR-355/DR-353/DR-260: a equipe */
+.ini-equipe-pos { margin: 0 0 var(--esp-2); font-weight: 600; }
+.ini-equipe-dist { font-weight: 400; }
+.ini-equipe-meta { display: grid; grid-template-columns: minmax(3rem, 6rem) auto; align-items: center; gap: var(--esp-2); margin-top: 2px; font-weight: 400; }
+.ini-equipe-meta i { display: block; height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--c-prim-luz) var(--w, 0%), var(--c-poco) var(--w, 0%)); }
+.ini-equipe-semtf { margin: var(--esp-2) 0 0; }
+/* DR-286: as ações de cada negócio esfriando */
+.ini-esfr-acoes { display: flex; flex-wrap: wrap; gap: var(--esp-1); justify-content: flex-end; }
+.ini-esfr-acoes .bt .ic { width: 14px; height: 14px; }
+/* DR-255/DR-293 */
+.ini-aniv-mais { padding: 0; border: 0; background: none; color: var(--c-prim-luz); font: inherit; font-size: var(--fs-13); text-decoration: underline; cursor: pointer; justify-self: start; }
+.ini-aniv-mais:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.ini-sempres-todos { justify-self: start; margin-top: var(--esp-1); }
+/* DR-133 */
+.ini-leads-contato { display: flex; align-items: center; gap: var(--esp-1); margin: 0; font-size: var(--fs-14); }
+.ini-leads-contato .ic { width: 16px; height: 16px; color: var(--c-prim-luz); }
+.ini-leads-ontem { margin: 0; }
+/* DR-332: os atalhos */
+.ini-atalhos { display: grid; gap: var(--esp-2); max-width: 18rem; }
+.ini-atalhos-lista { display: grid; gap: var(--esp-1); margin: 0; }
+.ini-atalho { display: grid; grid-template-columns: 3rem minmax(0, 1fr); align-items: center; gap: var(--esp-2); }
+.ini-atalho dd { margin: 0; }
+.ini-atalho kbd { display: inline-block; min-width: 1.6rem; padding: 1px var(--esp-1); border: 1px solid var(--c-borda); border-radius: var(--r-pp); background: var(--c-poco); font: 600 var(--fs-12)/1.5 var(--f-mono); text-align: center; }
+/* DR-403: a etapa zerada do funil continua à vista */
+.ini .g-fzero .g-ftrilho { background: repeating-linear-gradient(90deg, var(--c-borda) 0 4px, transparent 4px 8px); }
+.ini .g-fzero .g-fqtd { color: var(--c-texto-2); }
+/* DR-352: o placar da TV */
+.ini-tv .ini-placar { padding: var(--esp-6); }
+.ini-placar-t { margin: 0 0 var(--esp-4); font: 600 var(--fs-31)/1.1 var(--f-titulo); }
+.ini-placar-lista { display: grid; gap: var(--esp-2); margin: 0; padding: 0; list-style: none; }
+.ini-placar-item { display: grid; grid-template-columns: 3.5rem minmax(0, 1fr) auto auto; align-items: baseline; gap: var(--esp-3); padding: var(--esp-3) var(--esp-4); border-radius: var(--r); background: var(--c-sup-2); font-size: var(--fs-25); }
+.ini-placar-top { background: var(--c-prim-suave); }
+.ini-placar-pos { font-family: var(--f-mono); color: var(--c-texto-2); }
+.ini-placar-nome { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.ini-placar-v { font-family: var(--f-mono); }
+@media (max-width: 760px) { .ini-placar-item { grid-template-columns: 2.5rem minmax(0, 1fr); font-size: var(--fs-17); } .ini-placar-n, .ini-placar-v { grid-column: 2; } }
+@media (pointer: coarse), (max-width: 760px) {
+  .ini-esfr-acoes .bt, .ini-sempres-todos, .ini-org-bt, .ini-desde-acoes .bt, .ini-aniv-mais { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) { .ini-exemplo .ini-exemplo-faixa { box-shadow: none; } }

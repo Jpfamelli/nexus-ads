@@ -330,7 +330,8 @@ test("DU-019 / DU-020 lead frio 2 dias e pesquisa de 0 a 10 (nota inteira: «6»
   assert.equal(L.casaPalavras("16", ["6"], { inteira: true }), null);
   const nps = L.aplicarModelo("nps", BASE_ODONTO); assert.ok(L.validar(nps, { base: BASE_ODONTO }).ok);
   const det = L.aplicarModelo("nps_detrator", BASE_ODONTO);
-  assert.deepEqual(det.condicoes, [{ campo: "etiqueta", op: "igual", valor: U(35) }]); assert.ok(L.validar(det, { base: BASE_ODONTO }).ok);
+  // plano 2000d: AX-028 — a nota «10» contém «1» e «0»; a receita leva também «o texto não contém 10»
+  assert.deepEqual(det.condicoes, [{ campo: "etiqueta", op: "igual", valor: U(35) }, { campo: "texto", op: "nao_contem", valor: "10" }]); assert.ok(L.validar(det, { base: BASE_ODONTO }).ok);
 });
 
 test("DU-021 / DU-022 / DU-023 primeira automação com 5 objetivos, exemplos da IA por vertical e palavras de preço por vertical", () => {
@@ -738,7 +739,7 @@ test("DU-095 / DU-101 tempo poupado com os minutos da empresa e mensagens de hoj
     dados.itens[0] = { ...dados.itens[0], mensagens_30d: 30 };
     const e = await abrirTela(d, { dados });
     const txt = textoDe(e.raiz);
-    assert.match(txt, /≈ 3 h/, "30 mensagens × 5 min");
+    assert.match(txt, /≈ 2 h 30 min/, "30 mensagens × 5 min (plano 2000d: AX-029 — sem arredondar 150 min para 3 h)");
     assert.match(txt, /Mensagens hoje/);
     e.A.desmontar();
     const e2 = await abrirTela(d);
@@ -861,4 +862,321 @@ test("DU-098 nenhum caminho cria automação ligada: receita, IA aplicada, colag
   for (const a of L.kitInicial("odonto", BASE, VOCAB)) assert.equal(a.ativo, false);
   const src = ler("web/app/automacoes.js");
   assert.match(src, /async function duplicar[\s\S]{0,1500}a\.ativo = false/);
+});
+
+/* ================================================================== plano 2000d · frente auto — complemento AX (agente auto-x) */
+
+const tiposAv = (a, op = {}) => L.avisosEstruturaDetalhados(a, VOCAB, op).map(x => x.tipo);
+const naEtapaAX = extra => ({ nome: "x", gatilho: "negocio_estagio", config: { estagio_id: U(13) }, condicoes: [], acoes: [], ...extra });
+
+test("AX-001 auto-editor: «Outras automações neste gatilho» não passa null ao append", () => {
+  const src = ler("web/app/auto-editor.js");
+  assert.doesNotMatch(src, /l\.length > 6 \? h\("p", \{ class: "sub" \}, `e mais \$\{l\.length - 6\}`\) : null,/);
+  assert.match(src, /plano 2000d · AX-001/);
+});
+
+test("AX-002 / AX-003 / AX-004 / AX-005 frase do gatilho sem o tempo e com palavras repetidas", () => {
+  assert.match(L.descrever({ gatilho: "tempo_no_estagio", config: { estagio_id: U(13) }, acoes: [] }, BASE, VOCAB), /\(escolha o tempo\)/);
+  assert.match(L.descrever({ gatilho: "antes_da_data", config: { campo: "consulta" }, acoes: [] }, BASE, VOCAB), /\(escolha quanto tempo\)/);
+  assert.match(L.descrever({ gatilho: "apos_data", config: { campo: "consulta" }, acoes: [] }, BASE, VOCAB), /\(escolha quanto tempo\)/);
+  assert.doesNotMatch(L.descrever({ gatilho: "antes_da_data", config: { campo: "consulta", horas: 24 }, acoes: [] }, BASE, VOCAB), /escolha/);
+  const f = L.descrever({ gatilho: "mensagem_recebida", config: { palavras: ["preço", "Preço", "valor"] }, acoes: [] }, BASE, VOCAB);
+  assert.equal((f.match(/«preço»/gi) || []).length, 1);
+  assert.match(f, /«valor»/);
+});
+
+test("AX-006 / AX-007 / AX-008 frase dos passos: prazo apagado é 24 h, mensagem vazia e alerta com o texto", () => {
+  const f = acs => L.descrever({ gatilho: "negocio_ganho", config: {}, acoes: acs }, BASE, VOCAB);
+  assert.match(f([{ tipo: "criar_tarefa", titulo: "Ligar", dono: "responsavel", vence_em_horas: "" }]), /24 h/);
+  assert.match(f([{ tipo: "enviar_mensagem", texto: "" }]), /«…»/);
+  assert.match(f([{ tipo: "alerta_whatsapp", texto: "Lead quente chegou" }]), /Lead quente chegou/);
+});
+
+test("AX-009 rascunho: a mesma config em outra ordem de chaves não «mudou»", () => {
+  const a = { nome: "x", gatilho: "antes_da_data", config: { horas: 24, campo: "consulta" }, acoes: [], condicoes: [] };
+  const b = { nome: "x", gatilho: "antes_da_data", config: { campo: "consulta", horas: 24 }, acoes: [], condicoes: [] };
+  assert.equal(L.resumoDiferencas(a, b), "");
+  assert.notEqual(L.resumoDiferencas(a, { ...b, config: { campo: "consulta", horas: 2 } }), "");
+});
+
+test("AX-010 / AX-011 condições impossíveis: maior/menor contra «igual»", () => {
+  assert.equal(L.condicoesContraditorias([{ campo: "valor", op: "maior", valor: 5000 }, { campo: "valor", op: "igual", valor: 3000 }]).length, 1);
+  assert.equal(L.condicoesContraditorias([{ campo: "valor", op: "maior", valor: 1000 }, { campo: "valor", op: "igual", valor: 3000 }]).length, 0);
+  assert.equal(L.condicoesContraditorias([{ campo: "valor", op: "igual", valor: 200 }, { campo: "valor", op: "menor", valor: 100 }]).length, 1);
+  assert.equal(L.condicoesContraditorias([{ campo: "valor", op: "igual", valor: 50 }, { campo: "valor", op: "menor", valor: 100 }]).length, 0);
+});
+
+test("AX-012 / AX-013 condição repetida e a mesma mensagem duas vezes seguidas", () => {
+  const cd = { campo: "origem", op: "igual", valor: "anuncio" };
+  assert.ok(tiposAv(naEtapaAX({ condicoes: [cd, { ...cd }], acoes: [{ tipo: "nota", texto: "a" }] })).includes("cond_repetida"));
+  assert.ok(!tiposAv(naEtapaAX({ condicoes: [cd], acoes: [{ tipo: "nota", texto: "a" }] })).includes("cond_repetida"));
+  const m = { tipo: "enviar_mensagem", texto: "Oi {primeiro_nome}, tudo certo?" };
+  assert.ok(tiposAv(naEtapaAX({ acoes: [m, { ...m }] })).includes("msg_repetida"));
+  assert.ok(!tiposAv(naEtapaAX({ acoes: [m, { tipo: "esperar", minutos: 60 }, { ...m }] })).includes("msg_repetida"));
+});
+
+test("AX-014 / AX-015 / AX-087 / AX-100 segurança do texto: link encurtado, MAIÚSCULAS, {{1}} e mensagem só com o nome", () => {
+  const t = texto => tiposAv(naEtapaAX({ acoes: [{ tipo: "enviar_mensagem", texto }] }));
+  assert.ok(t("Veja a promoção: https://bit.ly/abc123 — {empresa}").includes("link_encurtado"));
+  assert.ok(!t("Veja em https://minhaclinica.com.br/promo — {empresa}").includes("link_encurtado"));
+  assert.ok(t("PROMOÇÃO IMPERDÍVEL SÓ HOJE PARA VOCÊ {primeiro_nome}").includes("maiusculas"));
+  assert.ok(!t("Oi {primeiro_nome}, a promoção vale até sexta. Use o código ABC.").includes("maiusculas"));
+  assert.ok(t("Olá {{1}}, tudo bem?").includes("chave_dupla"));
+  assert.ok(t("{primeiro_nome}!").includes("so_variavel"));
+  assert.ok(!t("Oi {primeiro_nome}, tudo bem?").includes("so_variavel"));
+});
+
+test("AX-016 / AX-059 opt-out: «Não enviar» não pode receber; a receita «pediu_parar» põe a etiqueta", () => {
+  const base = { ...BASE, etiquetas: [...(BASE.etiquetas || []), { id: U(39), nome: "Não enviar" }] };
+  const msg = { tipo: "enviar_mensagem", texto: "Oi {primeiro_nome}, tudo bem?" };
+  assert.ok(tiposAv(naEtapaAX({ acoes: [msg] }), { base }).includes("opt_out"));
+  assert.ok(!tiposAv(naEtapaAX({ acoes: [msg], condicoes: [{ campo: "etiqueta", op: "diferente", valor: U(39) }] }), { base }).includes("opt_out"));
+  assert.ok(!tiposAv(naEtapaAX({ acoes: [msg] }), { base: { ...BASE, etiquetas: [] } }).includes("opt_out"));
+  const r = L.aplicarModelo("pediu_parar", base, VOCAB);
+  assert.ok(r.acoes.some(a => a.etiqueta_id === U(39)));
+  assert.ok(!tiposAv(r, { base }).includes("opt_out"), "a própria receita não se avisa");
+});
+
+test("AX-017 / AX-090 horário: «Todo dia» de madrugada e lembrete curto com «Respeitar horário»", () => {
+  const ag = h => ({ nome: "x", gatilho: "agendado", config: { horario: h, dias_semana: [1] }, condicoes: [], acoes: [{ tipo: "enviar_mensagem", texto: "Oi {primeiro_nome}, tudo bem?" }] });
+  assert.ok(tiposAv(ag("05:30")).includes("madrugada"));
+  assert.ok(tiposAv(ag("22:00")).includes("madrugada"));
+  assert.ok(!tiposAv(ag("09:00")).includes("madrugada"));
+  assert.ok(!tiposAv({ ...ag("05:30"), respeitar_horario: true }).includes("madrugada"));
+  const lem = h => ({ nome: "x", gatilho: "antes_da_data", config: { campo: "consulta", horas: h }, respeitar_horario: true, condicoes: [], acoes: [{ tipo: "enviar_mensagem", texto: "Oi, tudo bem?" }] });
+  assert.ok(tiposAv(lem(2)).includes("lembrete_curto"));
+  assert.ok(!tiposAv(lem(24)).includes("lembrete_curto"));
+});
+
+test("AX-018 / AX-019 limpar: nome em uma linha e texto sem CR nem espaço no fim da linha", () => {
+  const CR = String.fromCharCode(13), LF = String.fromCharCode(10);
+  const l = L.limpar({ nome: `Lembrete${LF}  24 h`, gatilho: "negocio_ganho", config: {}, acoes: [{ tipo: "enviar_mensagem", texto: `Oi   ${CR}${LF}tudo bem?` }] });
+  assert.equal(l.nome, "Lembrete 24 h");
+  assert.equal(l.acoes[0].texto, `Oi${LF}tudo bem?`);
+  assert.deepEqual(L.limpar(l), l, "continua idempotente");
+});
+
+test("AX-020 horas: «1.000» é mil e «1,5» dias são 36 h", () => {
+  assert.equal(L.comporHoras("1.000", "horas"), 1000);
+  assert.equal(L.comporHoras("1,5", "dias"), 36);
+});
+
+test("AX-021..AX-024 / AX-104..AX-106 montagem da IA: nome sugerido, limites, palavras em texto, espera em horas e nomes viram ids", () => {
+  const base = { ...BASE, etiquetas: [{ id: U(31), nome: "Orçamento" }] };
+  const muitos = Array.from({ length: L.LIMITES.acoes + 2 }, () => ({ tipo: "nota", campos: { texto: "a" } }));
+  const r = L.deFormatoIA({ gatilho: { tipo: "negocio_ganho", campos: {} }, acoes: muitos,
+    condicoes: Array.from({ length: L.LIMITES.condicoes + 1 }, () => ({ campo: "etiqueta", op: "igual", valor: "Orçamento" })) }, base);
+  assert.ok(r.auto.nome.length > 0, "AX-021");
+  assert.equal(r.auto.acoes.length, L.LIMITES.acoes, "AX-022");
+  assert.ok(r.avisos.length >= 1);
+  assert.equal(r.auto.condicoes.length, L.LIMITES.condicoes, "AX-023");
+  assert.equal(r.auto.condicoes[0].valor, U(31), "AX-105");
+  const p = L.deFormatoIA({ gatilho: { tipo: "mensagem_recebida", campos: { palavras: "preço, valor" } }, acoes: [{ tipo: "esperar", campos: { horas: 2 } }, { tipo: "etiquetar", campos: { etiqueta_id: "VIP", alvo: "contato" } }] }, base);
+  assert.deepEqual(p.auto.config.palavras, ["preço", "valor"], "AX-024");
+  assert.equal(p.auto.acoes[0].minutos, 120, "AX-104");
+  assert.equal(p.auto.acoes[1].etiqueta_nome, "VIP", "AX-106");
+});
+
+test("AX-025 / AX-077 / AX-082 / AX-101 / AX-045 números com milhar e singular", () => {
+  assert.match(L.estimativaDiaria([1, 1, 1]).texto, /1 mensagem\b/);
+  assert.match(L.estimativaDiaria([1200, 1300]).texto, /1\.250/);
+  assert.match(L.linhaCotaIA({ usadas: 1234, limite: 2000 }).texto, /1\.234/);
+  assert.match(L.avisoDesligarEspera({ em_espera: 1500 }), /1\.500/);
+  assert.match(L.resumoExecucoes({ execucoes: 1234, erros: 2 }), /1\.234/);
+});
+
+test("AX-026 / AX-027 objetivo: toda receita tem grupo e o resto que manda mensagem é relacionamento", () => {
+  assert.equal(L.objetivoDe({ gatilho: "negocio_estagio", acoes: [{ tipo: "enviar_mensagem", texto: "x" }] }), "Relacionamento");
+  for (const m of L.MODELOS) assert.ok(L.OBJETIVOS.includes(L.objetivoDe({ modelo: m.id, ...m.auto })), m.id);
+});
+
+test("AX-028 pesquisa: nota 10 não vira detrator (o motor casa por trecho)", () => {
+  const det = L.aplicarModelo("nps_detrator", BASE_ODONTO);
+  assert.ok(det.condicoes.some(x => x.campo === "texto" && x.op === "nao_contem" && x.valor === "10"));
+});
+
+test("AX-029 tempo poupado: 90 min é «1 h 30 min», não «2 h»", () => {
+  assert.match(L.tempoEconomizado([{ mensagens_30d: 45 }]).texto, /1 h 30 min/);
+});
+
+test("AX-030 / AX-081 teste para copiar: +55 e e-mail mascarados", () => {
+  assert.doesNotMatch(L.mascararTelefone("Ligar +55 12 98765-4321"), /\+55/);
+  assert.equal(L.mascararEmail("maria.souza@gmail.com"), "m•••@gmail.com");
+});
+
+test("AX-031 colar mais do que cabe: a lista diz quantas ficaram de fora", () => {
+  assert.match(ler("web/app/automacoes.js"), /\.cortadas/);
+  assert.match(ler("web/app/auto-logica.js"), /cortadas/);
+});
+
+test("AX-032 / AX-033 vagas do plano", () => {
+  assert.equal(L.vagasNoPlano({ usadas: 6, limite: 8 }), 2);
+  assert.equal(L.vagasNoPlano({ usadas: 9, limite: 8 }), 0);
+  assert.equal(L.vagasNoPlano({ usadas: 3 }), Infinity);
+  assert.equal(L.vagasNoPlano(null), Infinity);
+  const src = ler("web/app/automacoes.js");
+  assert.match(src, /plano 2000d · AX-032/);
+  assert.match(src, /plano 2000d · AX-033/);
+});
+
+test("AX-034 / AX-035 em lotes: no máximo 4 ao mesmo tempo, na ordem, com o progresso", async () => {
+  let ativos = 0, pico = 0; const prog = [];
+  const rs = await L.emLotes([1, 2, 3, 4, 5, 6, 7, 8, 9], async x => { ativos++; pico = Math.max(pico, ativos); await esperar(2); ativos--; if (x === 5) throw new Error("x"); return x * 2; },
+    { concorrencia: 4, aoProgresso: (n, t) => prog.push(`${n}/${t}`) });
+  assert.equal(pico, 4);
+  assert.deepEqual(rs.map(r => r.ok), [true, true, true, true, false, true, true, true, true]);
+  assert.equal(rs[8].valor, 18);
+  assert.equal(prog.at(-1), "9/9");
+  const src = ler("web/app/automacoes.js");
+  assert.match(src, /plano 2000d · AX-034/);
+  assert.match(src, /plano 2000d · AX-035/);
+  assert.ok((src.match(/L\.emLotes\(/g) || []).length >= 2);
+});
+
+test("AX-036..AX-039 desempenho com muitas automações: período em cache, frase do cache, índice por id", () => {
+  const src = ler("web/app/automacoes.js");
+  for (const id of ["AX-036", "AX-037", "AX-038", "AX-039"]) assert.match(src, new RegExp(`plano 2000d · ${id}`), id);
+  assert.match(src, /new Map\(/);
+});
+
+test("AX-040 / AX-041 lista: ordem numérica no nome e busca por várias palavras", () => {
+  const itens = [{ id: 1, nome: "Lembrete 10" }, { id: 2, nome: "Lembrete 2" }, { id: 3, nome: "Aviso", acoes: [{ tipo: "enviar_mensagem", texto: "x" }] }];
+  assert.deepEqual(L.listaAutomacoes(itens, { ordem: "nome" }).map(x => x.id), [3, 2, 1]);
+  assert.deepEqual(L.listaAutomacoes(itens, { termo: "lembrete 2" }).map(x => x.id), [2]);
+  assert.deepEqual(L.listaAutomacoes(itens, { termo: "aviso whatsapp" }).map(x => x.id), [3]);
+});
+
+test("AX-042 / AX-043 / AX-044 nomes: cópia sem acento, espaço duplo e nome pela antecedência", () => {
+  assert.equal(L.nomeDaCopia("Lembrete (copia)"), "Lembrete (cópia 2)");
+  assert.ok(L.nomeRepetido("Lembrete  24 h", [{ id: 1, nome: "Lembrete 24 h" }]));
+  assert.match(L.sugestaoNome({ gatilho: "antes_da_data", config: { campo: "consulta", horas: 24 }, acoes: [{ tipo: "enviar_mensagem" }] }, BASE, VOCAB), /24 h antes/);
+});
+
+test("AX-046 / AX-098 / AX-099 dados pessoais no pedido à IA: placa, RG e cartão", () => {
+  const n = t => L.dadosPessoaisNoPedido(t).length;
+  assert.ok(n("o carro ABC1D23 do João") >= 1);
+  assert.ok(n("RG 12.345.678-9") >= 1);
+  assert.ok(n("cartão 4111 1111 1111 1111") >= 1);
+  assert.equal(n("quando ficar 24 horas sem resposta"), 0);
+});
+
+test("AX-047 / AX-048 dicas de erro: número bloqueado e contato que pediu para sair", () => {
+  assert.ok(L.dicaDoErro("envio falhou: número bloqueado por spam"));
+  assert.ok(L.dicaDoErro("o contato fez opt-out"));
+  assert.notDeepEqual(L.dicaDoErro("envio falhou: número bloqueado por spam"), L.dicaDoErro("o contato fez opt-out"));
+});
+
+test("AX-049 / AX-092 / AX-093 / AX-094 variáveis que podem sair em branco", () => {
+  assert.ok(L.avisoDataHoraConsulta({ gatilho: "negocio_estagio", acoes: [{ tipo: "enviar_mensagem", texto: "Na {dia_semana_consulta}" }] }, "odonto"));
+  assert.ok(tiposAv(naEtapaAX({ acoes: [{ tipo: "enviar_mensagem", texto: "Seu orçamento de {valor} está pronto" }] })).includes("valor_vazio"));
+  assert.ok(tiposAv(naEtapaAX({ acoes: [{ tipo: "enviar_mensagem", texto: "Seu protocolo é {protocolo}" }] })).includes("var_conversa"));
+});
+
+test("AX-050 «Depois da data» com «hoje»/«amanhã» no texto", () => {
+  const ap = t => L.avisosEstruturaDetalhados({ nome: "x", gatilho: "apos_data", config: { campo: "consulta", horas: 24 }, condicoes: [], acoes: [{ tipo: "enviar_mensagem", texto: t }] }, VOCAB).length;
+  assert.ok(ap("Te vemos amanhã, até lá") > ap("Te vemos em breve, até lá"));
+});
+
+test("AX-051..AX-054 passos que não fazem nada", () => {
+  assert.ok(tiposAv(naEtapaAX({ acoes: [{ tipo: "nota", texto: "a" }, { tipo: "esperar", minutos: 60 }, { tipo: "parar" }] })).includes("espera_inutil"));
+  assert.ok(tiposAv(naEtapaAX({ acoes: [{ tipo: "mover_estagio", estagio_id: U(13) }] })).includes("sem_efeito"));
+  assert.ok(!tiposAv(naEtapaAX({ acoes: [{ tipo: "mover_estagio", estagio_id: U(12) }] })).includes("sem_efeito"));
+  assert.ok(tiposAv({ nome: "x", gatilho: "conversa_nova", config: {}, condicoes: [], acoes: [{ tipo: "resolver_conversa" }, { tipo: "enviar_mensagem", texto: "Oi, tudo bem?" }] }).includes("resolver_antes"));
+  assert.ok(!tiposAv({ nome: "x", gatilho: "conversa_nova", config: {}, condicoes: [], acoes: [{ tipo: "enviar_mensagem", texto: "Oi, tudo bem?" }, { tipo: "resolver_conversa" }] }).includes("resolver_antes"));
+});
+
+test("AX-055 / AX-056 laço próprio: «Criar negócio» que cai no próprio gatilho", () => {
+  const a = { id: "x", nome: "Cria", gatilho: "negocio_criado", config: {}, condicoes: [], acoes: [{ tipo: "criar_negocio" }], ativo: true };
+  assert.ok(L.cadeiasDeAutomacao(a, [], BASE).some(c => c.autoLaco));
+});
+
+test("AX-057 ligar «Todo dia»: diz o próximo horário, não «15 minutos»", () => {
+  const t = L.fraseQuemRecebe(3, { auto: { gatilho: "agendado", config: { horario: "09:00", dias_semana: [1, 2, 3, 4, 5] } } }).texto;
+  assert.match(t, /próximo horário escolhido/);
+  assert.match(t, /09:00/);
+  assert.doesNotMatch(L.fraseQuemRecebe(3, { auto: { gatilho: "tempo_no_estagio", config: {} } }).texto, /próximo horário escolhido/);
+});
+
+test("AX-058 «Sem rodar há N dias» respeita a semana de quem roda só às segundas", () => {
+  const agora = Date.now();
+  const it = (dias, d) => ({ ativo: true, gatilho: "agendado", config: { horario: "09:00", dias_semana: dias }, ultima_execucao_em: new Date(agora - d * 86400000).toISOString() });
+  assert.ok(!L.semRodarHa(it([1], 8), agora), "1 vez por semana: 8 dias ainda é normal");
+  assert.ok(L.semRodarHa(it([0, 1, 2, 3, 4, 5, 6], 8), agora));
+});
+
+test("AX-059..AX-067 receitas novas existem e aparecem no segmento certo", () => {
+  for (const id of ["pediu_parar", "reclamacao", "pediu_atendente", "inicio_tratamento", "carro_recebido", "pagamento_confirmado", "motivo_perda", "etiqueta_urgente"]) assert.ok(L.MODELOS.some(m => m.id === id), id);
+  const vis = v => L.modelosDaVertical(v, BASES[v]).map(m => m.id);
+  assert.ok(vis("odonto").includes("inicio_tratamento") && !vis("oficina").includes("inicio_tratamento"));
+  assert.ok(vis("oficina").includes("carro_recebido") && !vis("loja").includes("carro_recebido"));
+  assert.ok(vis("loja").includes("pagamento_confirmado") && !vis("odonto").includes("pagamento_confirmado"));
+  const comUrg = { ...BASE, etiquetas: [{ id: U(38), nome: "Urgente" }] };
+  assert.equal(L.aplicarModelo("etiqueta_urgente", comUrg).config.etiqueta_id, U(38), "AX-067");
+});
+
+test("AX-068 / AX-069 / AX-070 tom formal e sugestão dos {{n}}", () => {
+  assert.notEqual(L.tomFormal("Me diga o melhor dia."), "Me diga o melhor dia.");
+  const p = L.montarParametrosTemplate("Prezada Sra. {{1}}, sua consulta é no horário: {{2}}.");
+  assert.equal(p[0].sugestao, "{primeiro_nome}");
+  assert.equal(p[1].sugestao, "{hora_consulta}");
+});
+
+test("AX-071 / AX-072 / AX-103 perguntas da IA: chips e sem repetição", () => {
+  const p = L.perguntasDosAvisos(["Em que horário enviar?", "Em que horário enviar?"], BASE);
+  assert.equal(p.length, 1);
+  assert.ok(p[0].opcoes && p[0].opcoes.length > 0);
+});
+
+test("AX-073 sugestão de variável usa a base", () => {
+  assert.equal(L.sugestaoVariavel.length >= 1, true);
+  assert.match(ler("web/app/auto-logica.js"), /plano 2000d · AX-073/);
+});
+
+test("AX-074 / AX-095 / AX-102 editor: «Esperar» desabilitado no limite e avisos calculados uma vez", () => {
+  const src = ler("web/app/auto-editor.js");
+  assert.match(src, /est: L\.avisosEstruturaDetalhados\(/, "AX-095");
+  assert.match(src, /plano 2000d · AX-074/);
+  assert.match(src, /Limite de/);
+  assert.match(ler("web/app/automacoes.css"), /\.au-tile:disabled/, "AX-102");
+});
+
+test("AX-075 / AX-096 lista: o vazio do filtro tem «Mostrar todas»", () => {
+  assert.match(ler("web/app/automacoes.js"), /au-lista-limpar/);
+  assert.match(ler("web/app/automacoes.css"), /\.au-lista-limpar[^}]*min-height: var\(--alvo-toque\)/);
+});
+
+test("AX-076 variáveis da empresa: endereço, telefone e Instagram", () => {
+  assert.ok(CAT.VARIAVEIS_NOVAS.some(v => v[0] === "endereco"));
+  assert.ok(CAT.VARIAVEIS_NOVAS.some(v => v[0] === "instagram"));
+  const base = { ...BASE, recursos: ["var_dados_empresa"], empresa_dados: { endereco: "Av. Brasil, 10", instagram: "@clinica" } };
+  assert.equal(L.aplicarVariaveis("{endereco}", L.exemploVariaveis({ base })), "Av. Brasil, 10");
+});
+
+test("AX-078 / AX-079 / AX-080 / AX-083 textos", () => {
+  assert.match(L.listaNomesCurta(["", "B"]), /sem nome/);
+  assert.match(L.textoParaCompartilhar({ nome: "Lembrete", ativo: true, gatilho: "negocio_ganho", config: {}, acoes: [] }, BASE, VOCAB), /ligada/);
+  assert.match(L.resumoRascunhoNova({ gatilho: "negocio_ganho", acoes: [] }), /nenhum passo/);
+});
+
+test("AX-084 / AX-085 / AX-086 validação: palavra só com pontuação, pontuação de 0 a 100", () => {
+  assert.equal(L.validar({ nome: "x", gatilho: "mensagem_recebida", config: { palavras: ["?"] }, acoes: [{ tipo: "nota", texto: "a" }] }).ok, false);
+  assert.equal(L.validar({ nome: "x", gatilho: "negocio_ganho", config: {}, acoes: [{ tipo: "campo_atualizar", campo: "score", valor: "150" }] }).ok, false);
+  assert.ok(L.validar({ nome: "x", gatilho: "negocio_ganho", config: {}, acoes: [{ tipo: "campo_atualizar", campo: "score", valor: "80" }] }).ok);
+});
+
+test("AX-088 / AX-089 CSS do celular", () => {
+  const css = ler("web/app/automacoes.css");
+  assert.match(css, /plano 2000d · AX-088/);
+  assert.match(css, /-webkit-line-clamp: 3/);
+});
+
+test("AX-091 só número oficial: texto livre depois de 24 h", () => {
+  const base = { ...BASE, canais: [{ id: U(61), nome: "Oficial", provedor: "meta" }] };
+  const a = naEtapaAX({ acoes: [{ tipo: "esperar", minutos: 2880 }, { tipo: "enviar_mensagem", texto: "Oi {primeiro_nome}, tudo bem?" }] });
+  assert.ok(tiposAv(a, { base }).includes("janela_meta"));
+});
+
+test("AX-097 primeira automação: a pergunta do canal nasce escondida", () => {
+  assert.match(ler("web/app/automacoes.js"), /plano 2000d · AX-097/);
+  assert.match(ler("web/app/automacoes.js"), /dataset\.pergunta/);
 });

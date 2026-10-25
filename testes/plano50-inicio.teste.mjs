@@ -178,7 +178,8 @@ test("KPI de consultas: falha ao ler a agenda ≠ conta sem agenda (o motivo cer
   const falhou = I.kpisInicio(DADO(), { erro: true }, { hoje: HOJE })[1];
   assert.equal(falhou.valor, null); assert.equal(falhou.sub, "não consegui ler a agenda"); assert.match(falhou.ajuda, /Não consegui ler a agenda agora/);
   const semConta = I.kpisInicio(DADO(), null, { hoje: HOJE })[1];
-  assert.equal(semConta.sub, "agenda indisponível"); assert.match(semConta.ajuda, /não está disponível para a sua conta/);
+  // plano 2000d: DR-258 — a frase diz por quê e com quem falar
+  assert.equal(semConta.sub, "agenda indisponível"); assert.match(semConta.ajuda, /Sua conta não tem acesso à agenda\. Peça ao administrador\./);
 });
 
 /* ============================================================ (b) COMPORTAMENTO — DOM de mentira */
@@ -484,7 +485,8 @@ test("tela: a linha de tendência aparece a partir do 3º dia de leitura e a set
     const kpis = raiz.querySelectorAll(".ini-kpi");
     assert.ok(kpis[0].querySelector(".ini-kpi-sp svg"), "linha com 4 dias (3 guardados + hoje)");
     assert.ok(kpis[0].classList.contains("ini-kpi-com-linha"));
-    assert.match(kpis[0].querySelector(".sr-only").textContent, /últimos 4 dias de leitura neste aparelho/);
+    // plano 2000d: DR-281 — o 1º .sr-only do cartão agora é o chip em palavras; a descrição do cartão é a do aria-describedby
+    assert.match(kpis[0].querySelector("[id^=ini-kpi-aj]").textContent, /últimos 4 dias de leitura neste aparelho/);
     const seta = kpis[0].querySelector(".rel-var");
     assert.ok(seta, "seta contra o dia anterior");
     assert.ok(seta.classList.contains("rel-var-bom"), "espera caiu de 3 para 2: bom (sentido invertido)");
@@ -528,15 +530,17 @@ test("tela: recolher um bloco (aria-expanded + corpo oculto), mover para antes/d
     assert.match(vendas2.querySelector("[data-k=bl-rec-vendas]").getAttribute("aria-label"), /Mostrar «Vendas»/);
     assert.deepEqual(JSON.parse(dom.mem.get(chaveBlocos)).recolhidos, ["vendas"]);
     assert.equal(dom.doc.activeElement.dataset.k, "bl-rec-vendas", "o foco fica no botão depois do redesenho");
-    // mover «Atendimento» para antes de «Agora» (pelo teclado: o foco está no botão)
-    const btAnt = raiz.querySelector("[data-k=bl-ant-atendimento]");
+    // mover o 2º bloco para antes de «Agora» (pelo teclado: o foco está no botão)
+    // plano 2000d: DR-271 — para o admin o 2º bloco é «Vendas» (o mês logo depois do que pede ação), antes era «Atendimento»
+    const seg = ordem0[1];
+    const btAnt = raiz.querySelector(`[data-k=bl-ant-${seg}]`);
     btAnt.focus(); btAnt.click();
     const ordem1 = raiz.querySelector(".ini-grade").querySelectorAll("section[data-bloco]").map(s => s.dataset.bloco);
-    assert.deepEqual(ordem1.slice(0, 2), ["atendimento", "agora"]);
-    assert.equal(raiz.querySelector("[data-k=bl-ant-atendimento]").disabled, true, "na ponta, «antes» desliga");
-    assert.equal(dom.doc.activeElement.dataset.k, "bl-dep-atendimento", "o «antes» voltou desligado: o foco vai para o «depois» do mesmo bloco, não para o BODY");
+    assert.deepEqual(ordem1.slice(0, 2), [seg, "agora"]);
+    assert.equal(raiz.querySelector(`[data-k=bl-ant-${seg}]`).disabled, true, "na ponta, «antes» desliga");
+    assert.equal(dom.doc.activeElement.dataset.k, `bl-dep-${seg}`, "o «antes» voltou desligado: o foco vai para o «depois» do mesmo bloco, não para o BODY");
     const prefs = JSON.parse(dom.mem.get(chaveBlocos));
-    assert.equal(prefs.ordem[0], "atendimento"); assert.deepEqual(prefs.recolhidos, ["vendas"]);
+    assert.equal(prefs.ordem[0], seg); assert.deepEqual(prefs.recolhidos, ["vendas"]);
     // o primeiro bloco do «Mais detalhes» também não tem «antes»
     const det = raiz.querySelector(".ini-mais");
     assert.ok(det, "o que não pede ação continua recolhido em «Mais detalhes»");
@@ -585,10 +589,12 @@ test("tela: metas do mês — sem meta o bloco fica em «Mais detalhes» com o f
     assert.ok(linhas[0].classList.contains("ini-meta-frente"));
     const barra = linhas[0].querySelector("[role=progressbar]");
     assert.equal(barra.getAttribute("aria-valuenow"), "57"); assert.equal(barra.querySelector("i").style.getPropertyValue("--w"), "56.8%");
-    assert.match(barra.querySelector("b").style.getPropertyValue("--m"), /^12\.9/);
-    assert.equal(texto(linhas[0].querySelector(".ini-meta-txt")), /* plano 1000b: RB-158 «57%» sem espaço */ "R$ 28.400 de R$ 50.000 (57%). Faltam R$ 21.600 — você está à frente do ritmo; no dia 4 de 31 o esperado seria R$ 6.452.");
+    // plano 2000d: DR-250 — às 10:20 do dia 4 o esperado conta 3 dias + 10h20 de hoje (3,43/31 = 11,07%), não o dia 4 inteiro (12,9%);
+    // DR-299 — o texto longo fica em .ini-meta-longo (o curto, para o celular, em .ini-meta-curto)
+    assert.match(barra.querySelector("b").style.getPropertyValue("--m"), /^11\.0/);
+    assert.equal(texto(linhas[0].querySelector(".ini-meta-longo")), /* plano 1000b: RB-158 «57%» sem espaço */ "R$ 28.400 de R$ 50.000 (57%). Faltam R$ 21.600 — você está à frente do ritmo; no dia 4 de 31 o esperado seria R$ 5.533.");
     assert.match(texto(linhas[1]), /Consultas realizadas no mês/);
-    assert.equal(texto(linhas[1].querySelector(".ini-meta-txt")), "3 de 12 (25%). Faltam 9 — você está à frente do ritmo; no dia 4 de 31 o esperado seria 2.",
+    assert.equal(texto(linhas[1].querySelector(".ini-meta-longo")), "3 de 12 (25%). Faltam 9 — você está à frente do ritmo; no dia 4 de 31 o esperado seria 1.",
       "só as que já aconteceram (09:00 de hoje, 01/10 e 02/10): a cancelada, a falta e as marcadas para depois ficam fora");
     assert.equal(texto(linhas[1].querySelector(".ini-meta-extra")), "+3 já marcadas até o fim do mês (contam quando acontecerem) · 1 falta fica fora da conta.");
     assert.ok(linhas[1].classList.contains("ini-meta-frente"));
@@ -774,8 +780,9 @@ test("tela: sem agenda (conta sem CRM) nada quebra — KPI «—», «Agora» ex
     const agora = raiz.querySelector("section[data-bloco=agora]");
     assert.ok(agora.closest(".ini-mais"), "sem urgência nem agenda, «Agora» fica recolhido");
     assert.match(texto(agora.querySelector(".ini-agora-ok")), /Ninguém esperando resposta/);
-    assert.match(texto(agora.querySelector(".ini-agora-ag")), /A agenda não está disponível/);
-    assert.match(texto(raiz.querySelector("section[data-bloco=horas]")), /A agenda não está disponível/);
+    // plano 2000d: DR-258 — «Sua conta não tem acesso à agenda. Peça ao administrador.»
+    assert.match(texto(agora.querySelector(".ini-agora-ag")), /Sua conta não tem acesso à agenda/);
+    assert.match(texto(raiz.querySelector("section[data-bloco=horas]")), /Sua conta não tem acesso à agenda/);
     assert.equal(JSON.parse(dom.mem.get(chaveHist)).dias[0].consultas, null, "sem agenda o histórico guarda null, não 0");
   } finally { dom.fim(); }
 });

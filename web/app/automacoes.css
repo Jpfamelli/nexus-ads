@@ -1072,3 +1072,18 @@ h3.au-ia-res-nome:focus:not(:focus-visible) { outline: none; }
 .au-pil-em-uso:focus-visible { outline: var(--foco-largura) solid var(--c-foco); outline-offset: 2px; }
 .au-pedir-mais, .au-quero-ia { margin-left: .4rem; }
 @media (pointer: coarse) { .au-ver-quem, .au-quero-ia, .au-pedir-mais, .au-pil-em-uso { min-height: var(--alvo-toque); } }
+
+/* ================================================================ plano 2000d · frente auto (complemento AX) */
+/* plano 2000d · AX-088: no celular a barra da seleção gruda no rodapé — com 200 automações, «Ligar/Desligar/Excluir» ficam à mão ao rolar */
+@media (max-width: 760px) {
+  .au-sel-barra:not([hidden]) { position: sticky; bottom: calc(var(--esp-2) + env(safe-area-inset-bottom, 0px)); z-index: 5; background: var(--c-sup); box-shadow: var(--sombra-2); }
+  /* plano 2000d · AX-089: a frase do cartão em até 3 linhas no celular (a lista longa fica escaneável; a frase inteira está no editor) */
+  .au-item-frase { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+}
+/* plano 2000d · AX-096: «Mostrar todas» no vazio do filtro, com alvo de toque */
+.au-lista-vazio { display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-2); }
+.au-lista-limpar { min-height: var(--alvo-toque); }
+/* plano 2000d · AX-102: passo da paleta no limite (Esperar) — apagado e sem efeito de toque, o motivo escrito embaixo */
+.au-tile:disabled { opacity: .55; cursor: not-allowed; }
+.au-tile:disabled:active { transform: none; }
+@media (forced-colors: active) { .au-tile:disabled { color: GrayText; border-color: GrayText; opacity: 1; } }

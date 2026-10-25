@@ -181,7 +181,7 @@ await teste("CSV de campanhas separa métricas Ads/CRM e escapa fórmula em nome
     k: { conversas: 8, agendadas: 4, fecharam: 2, receita: 500 }, roas: 5 };
   const out = Ads.csvCampanhas([row], { periodo: "03/09/2026 a 02/10/2026", csv: Logica.csv,
     moeda: x => String(x), inteiro: x => String(x), decimal: x => String(x) });
-  assert.match(out, /Conversões da plataforma/);
+  assert.match(out, /Contatos contados pela plataforma/);   // plano 2000d: DA-363 — nomes de coluna na língua do dono
   assert.match(out, /Agendamentos CRM/);
   assert.match(out, /'=/);
   assert.match(out, /03\/09\/2026 a 02\/10\/2026/);

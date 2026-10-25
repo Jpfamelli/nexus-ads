@@ -415,7 +415,7 @@ await teste("mapa de calor: lista → matriz 7 × 24 (0 = domingo), pico e entra
   assert.equal(m.length, 7); assert.ok(m.every(l => l.length === 24));
   assert.equal(m[1][9], 7, "soma repetidos"); assert.equal(m[6][23], 3); assert.equal(m[3][14], 4, "aceita texto numérico");
   assert.equal(m.flat().reduce((s, x) => s + x, 0), 14, "dow 7 e hora 24 ficam de fora");
-  assert.deepEqual(L.picoCalor(m), { dow: 1, hora: 9, qtd: 7 });
+  assert.deepEqual(L.picoCalor(m), { dow: 1, hora: 9, qtd: 7, empates: 0 });   // plano 2000d: DA-223 — diz quantos empatam
   assert.equal(L.picoCalor(L.matrizCalor([])), null);
   assert.equal(L.matrizCalor(null).flat().length, 168);
 });
@@ -493,7 +493,7 @@ await teste("Início: saudação pelo relógio de SP, saúde do número e mês c
   assert.match(L.estadoCanal({ status: "ativo", ultima_entrada_em: "2026-09-24T10:00:00Z" }, agora).texto, /mais de 3 dias/);
   assert.equal(L.estadoCanal({ status: "ativo", ultima_entrada_em: null }, agora).nivel, "bom", "número novo, ainda sem mensagem, não é problema");
   const mv = L.mesVsAnterior({ receita_mes: 5000, receita_mes_anterior: 12000, receita_mes_anterior_parcial: 4000, dia_do_mes: 28 });
-  assert.deepEqual(mv, { atual: 5000, anterior: 4000, anteriorInteiro: 12000, dia: 28 });
+  assert.deepEqual(mv, { atual: 5000, anterior: 4000, anteriorInteiro: 12000, dia: 28, comparavel: true });   // plano 2000d: DA-215 — diz se o mês anterior serve de base
   assert.equal(L.chipVar(mv.atual, mv.anterior, "cima").txt, "25%");
   assert.equal(L.mesVsAnterior({ receita_mes: 10, receita_mes_anterior: 7 }).anterior, 7, "sem o parcial usa o mês inteiro (contrato básico)");
   assert.equal(L.mesVsAnterior(null), null);
@@ -978,7 +978,12 @@ await teste("R119: os filtros do checklist são os declarados nas seções das C
 await teste("R119: «Sim, chegou» no teste do assistente marca «Mensagem de teste enviada» neste aparelho (a mesma chave do «Já está bom»)", async () => {
   const cw = ler("web/app/cv-config.js"), ini = ler("web/app/inicio.js"), cfg = ler("web/app/config.js");
   const chave = "`nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || \"-\"}`";
-  for (const [nome, src] of [["inicio", ini], ["config", cfg]]) assert.ok(src.includes(chave), `${nome}: a mesma chave local`);
+  // plano 2000d: DR-333 — o Início monta a chave por chaveOnboarding (mesmo formato «nx-onb:<cliente>:<conta>»), mas sem conta não guarda nada
+  // (a chave «-» era dividida por quem usasse o aparelho); com conta, a chave é a mesma do config.js
+  assert.ok(cfg.includes(chave), "config: a mesma chave local");
+  assert.ok(ini.includes("chaveOnboarding(ctx.cliente.id, ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id)"), "inicio: a mesma chave local (pela conta)");
+  const I0 = await import((await import("node:url")).pathToFileURL(join(RAIZ, "web", "app", "inicio.js")).href);
+  assert.equal(I0.chaveOnboarding("c1", "k1"), "nx-onb:c1:k1");
   // plano 100 (frente G): o cv-config passou a marcar por uma função pura (marcarTesteLocal) — o teste agora é de comportamento
   const CW = await import("../web/app/cv-config.js");
   const loja = new Map([["nx-onb:c1:u1", JSON.stringify({ dispensadoAte: 99, pulados: ["colega_convidado"] })]]);

@@ -376,7 +376,8 @@ test("tela (RPC NOVA): «Respondidas no prazo» no topo e «Leads» no bloco; li
     assert.match(texto(raiz.querySelector("section[data-bloco=leads]")), /23\s*nos últimos 7 dias/);
     const ag = raiz.querySelector(".ini-kpi[data-kpi=aguardando]");
     assert.ok(ag.querySelector(".ini-kpi-sp svg"), "linha do servidor sem esperar o 3º dia neste aparelho");
-    assert.match(ag.querySelector(".sr-only").textContent, /conversas novas por dia nos últimos 14 dias \(contagem do servidor\)/);
+    // plano 2000d: DR-280 — o 1º .sr-only do cartão agora é a tendência em palavras; a descrição é a do aria-describedby
+    assert.match(ag.querySelector("[id^=ini-kpi-aj]").textContent, /conversas novas por dia nos últimos 14 dias \(contagem do servidor\)/);
     assert.equal(ag.querySelector(".rel-var"), null, "revisão: «esperando agora» × «conversas abertas ontem» não são comparáveis — sem seta");
   } finally { dom.fim(); }
 });

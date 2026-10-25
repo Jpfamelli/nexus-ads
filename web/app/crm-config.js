@@ -16,10 +16,10 @@ async function kitDe(ctx) {
 }
 
 export const secoesConfig = [
-  { id: "funis", titulo: "Funis e etapas", desc: "As etapas por onde cada venda passa", grupo: "CRM", papelMin: "admin", modulo: "crm", icone: "funil", montar: secaoFunis },
-  { id: "campos", titulo: "Campos personalizados", desc: "Dados extras do cadastro e da venda", grupo: "CRM", papelMin: "admin", modulo: "crm", icone: "editar", montar: secaoCampos },
+  { id: "funis", titulo: "Funis e etapas", desc: "As etapas do funil, da chegada ao fechamento" /* plano 2000d · DR-209: sem «venda» fixa (vale para clínica e oficina) */, grupo: "CRM", papelMin: "admin", modulo: "crm", icone: "funil", montar: secaoFunis },
+  { id: "campos", titulo: "Campos personalizados", desc: "Dados extras do cadastro e do funil" /* plano 2000d · DR-209 */, grupo: "CRM", papelMin: "admin", modulo: "crm", icone: "editar", montar: secaoCampos },
   { id: "etiquetas", titulo: "Etiquetas", desc: "Marcas coloridas para achar depois", grupo: "CRM", papelMin: "supervisor", modulo: "crm", icone: "etiqueta", montar: secaoEtiquetas },
-  { id: "motivos", titulo: "Motivos de perda", desc: "Por que uma venda não fechou", grupo: "CRM", papelMin: "admin", modulo: "crm", icone: "alerta", montar: secaoMotivos },
+  { id: "motivos", titulo: "Motivos de perda", desc: "Por que não fechou" /* plano 2000d · DR-209 */, grupo: "CRM", papelMin: "admin", modulo: "crm", icone: "alerta", montar: secaoMotivos },
 ];
 
 /* ------------------------------------------------------------ peças comuns */
@@ -141,7 +141,7 @@ async function secaoFunis(ctx, alvo) {
     alvo.append(cartao(k, {
       titulo: "Funis",
       sub: "O funil padrão recebe as conversas novas do WhatsApp. Funis que contam nos anúncios alimentam o retorno do painel de Anúncios; o pós-venda fica fora deles.",
-      acoes: btn(k, "Funil", { tipo: "prim", icone: "mais", fn: () => editor(null) }),
+      acoes: btn(k, "Novo funil", { /* plano 2000d · DR-208: botão de criar com verbo */ tipo: "prim", icone: "mais", fn: () => editor(null) }),
     }, itens));
     // plano 1500c · RC-152: quantos abertos cada funil tem (a mesma contagem leve do excluir) — decide desativar/excluir
     for (const f of funis) contagens(f.id).then(c => {
@@ -185,7 +185,7 @@ async function secaoFunis(ctx, alvo) {
       if (!destino) return;
     } else if (!(await ui.confirmar({ titulo: `Excluir «${f.nome}»?`, texto: "O funil e as etapas somem. Automações que usavam este funil deixam de funcionar.", perigo: true }))) return;
     // plano 1500c · RC-150: o progresso aparece NO item do funil (quem enxerga via a tela parada) e os botões ficam desligados até terminar
-    const itemF = alvo.querySelector(`.crm-cfg-funil[data-funil="${f.id}"]`);
+    const itemF = alvo.querySelector(`.crm-cfg-funil[data-funil="${L.escaparCss(f.id)}"]`);      // plano 2000d · DR-343: id do servidor escapado no seletor
     const prog = itemF ? h("small", { class: "crm-cfg-prog", role: "status" }) : null;
     if (itemF) { itemF.appendChild(prog); for (const b of itemF.querySelectorAll("button")) b.disabled = true; itemF.setAttribute("aria-busy", "true"); }
     try {
@@ -223,7 +223,7 @@ async function secaoFunis(ctx, alvo) {
     const travada = e => !!(e.id && (e._n || semContagem));
     const f = original
       ? { id: original.id, nome: original.nome, conta_no_ads: !!original.conta_no_ads, ativo: original.ativo !== false, padrao: !!original.padrao }
-      : { nome: copiaDe ? `${copiaDe.nome} (cópia)`.slice(0, 60) : "", conta_no_ads: false, ativo: true };
+      : { nome: copiaDe ? L.nomeCopiaFunil(copiaDe.nome, (k.base.funis || []).map(x => x.nome)) : ""      /* plano 2000d · DR-341: o sufixo nunca some e cópias repetidas são numeradas */, conta_no_ads: false, ativo: true };
     let etapas = original
       ? original.estagios.map(e => ({ id: e.id, nome: e.nome, tipo: e.tipo, marco: e.marco, cor: e.cor, probabilidade: e.probabilidade, sla_horas: e.sla_horas, _n: cont ? cont[e.id] || 0 : null }))
       : copiaDe ? (copiaDe.estagios || []).map(e => ({ nome: e.nome, tipo: e.tipo, marco: null, cor: e.cor, probabilidade: e.probabilidade ?? L.probPadrao(e.tipo), sla_horas: e.sla_horas ?? null, _n: 0 }))
@@ -253,7 +253,7 @@ async function secaoFunis(ctx, alvo) {
     nome.querySelector("input").addEventListener("input", ev => { f.nome = ev.target.value; });
     const ads = ui.campo({ tipo: "interruptor", nome: "conta_no_ads", rotulo: "Conta nos anúncios", valor: f.conta_no_ads, desabilitado: temNegocios || f.padrao,
       ajuda: f.padrao ? "O funil padrão sempre conta nos anúncios." : temNegocios ? "Só dá para mudar com o funil vazio (os números dos anúncios não podem mudar de lado)."
-        : "Liga as etapas ao retorno do painel de Anúncios: cada etapa ganha um marco (Nova conversa, Agendou, Fechou…)." });
+        : "As vendas deste funil contam no retorno dos anúncios (custo por venda e retorno do investimento). Cada etapa ganha um marco: Nova conversa, Agendou, Fechou…" /* plano 2000d · DR-420 */ });
     ads.querySelector("input").addEventListener("change", ev => {
       f.conta_no_ads = ev.target.checked;
       if (f.conta_no_ads) for (const e of etapas) if (!e.marco || !L.marcosDoTipo(e.tipo).some(m => m.id === e.marco)) e.marco = sugerirMarco(e);
@@ -304,7 +304,7 @@ async function secaoFunis(ctx, alvo) {
 
     // plano 1500c · RC-317: «7 de 25» à vista e o «+ Etapa» desliga (com o motivo) no limite
     const contEtapas = h("small", { class: "fe-cont dado", "aria-live": "polite" });
-    const btNovaEtapa = btn(k, "Etapa", { icone: "mais", fn: () => novaEtapa() });
+    const btNovaEtapa = btn(k, "Nova etapa", { /* plano 2000d · DR-208 */ icone: "mais", fn: () => novaEtapa() });
     const notaLimite = h("small", { class: "sub fe-limite", hidden: true }, "Chegou ao limite de 25 etapas.");
     function desenharEtapas(focar) {
       contEtapas.textContent = `${etapas.length} de 25`;
@@ -344,7 +344,11 @@ async function secaoFunis(ctx, alvo) {
         ui.flutuante(corBt, h("div", { class: "pilha-p" }, h("p", { class: "rotulo" }, "Cor da etapa"), sc), { largura: 248 });
       });
       const nomeIn = h("input", { type: "text", value: e.nome || "", maxlength: 40, "aria-label": `Nome da etapa ${i + 1}`, placeholder: "Nome da etapa", class: "fe-nome" });
-      nomeIn.addEventListener("input", () => { e.nome = nomeIn.value; if (nomeIn.value.trim()) { nomeIn.removeAttribute("aria-invalid"); nomeIn.title = ""; } });
+      // plano 2000d · DR-417: perto do limite de 40 letras, o contador aparece («32/40») — antes o maxlength cortava calado
+      const contNome = h("small", { class: "fe-nome-cont", "aria-live": "polite", hidden: true });
+      const pintarCont = () => { const n = [...String(nomeIn.value || "")].length; contNome.hidden = n < 30; contNome.textContent = n >= 30 ? `${n}/40` : ""; };
+      pintarCont();
+      nomeIn.addEventListener("input", () => { e.nome = nomeIn.value; pintarCont(); if (nomeIn.value.trim()) { nomeIn.removeAttribute("aria-invalid"); nomeIn.title = ""; } });
       // plano 1500c · RC-316: saiu do nome vazio — o campo já fica marcado (antes só no «Salvar»)
       nomeIn.addEventListener("blur", () => {
         if (nomeIn.value.trim() || !listaEl.contains(nomeIn)) return;
@@ -392,7 +396,7 @@ async function secaoFunis(ctx, alvo) {
       const sla = h("div", { class: "fe-sla" }, slaN, slaUn);
       const rem = btIcone(k, "lixeira", `Remover a etapa ${e.nome || i + 1}`, () => remover(e), { class: "fe-rem", desabilitado: etapas.length <= 1 });
       linha.append(alca, corBt,
-        h("div", { class: "fe-nome-cel" }, nomeIn, e._n ? h("small", { class: "fe-n" }, `${e._n} ${k.v.min(e._n === 1 ? "negocio" : "negocios")}`) : null),
+        h("div", { class: "fe-nome-cel" }, nomeIn, contNome /* plano 2000d · DR-417 */, e._n ? h("small", { class: "fe-n" }, `${e._n} ${k.v.min(e._n === 1 ? "negocio" : "negocios")}`) : null),
         tipoSel, marcoSel,
         // plano 1500c · RC-147: no celular o cabeçalho some — mini-rótulos visíveis só lá (o leitor já tem o aria-label)
         h("div", { class: "fe-num" }, h("span", { class: "fe-mini", "aria-hidden": "true" }, "Chance"), prob, h("span", { "aria-hidden": "true" }, "%")),
@@ -684,7 +688,7 @@ async function secaoCampos(ctx, alvo) {
   alvo.append(cartao(k, {
     titulo: "Campos personalizados",
     sub: "Informações extras nos cadastros. Aparecem na ficha, na gaveta do negócio e na importação de planilhas.",
-    acoes: btn(k, "Campo", { tipo: "prim", icone: "mais", fn: () => form(null) }),
+    acoes: btn(k, "Novo campo", { /* plano 2000d · DR-208 */ tipo: "prim", icone: "mais", fn: () => form(null) }),
   }, abas.el, corpo));
   desenhar();
   return () => { vivo = false; };
@@ -734,7 +738,7 @@ async function secaoEtiquetas(ctx, alvo) {
   async function form(e) {
     const f = h("form", { class: "crm-form", novalidate: true },
       ui.campo({ rotulo: "Nome", nome: "nome", valor: e ? e.nome : "", obrigatorio: true, max: 40, placeholder: `Ex.: ${String(L.exemplosVertical(k.v.vertical).etiquetas).split(",")[0].trim()}` }),      // plano 1500c · RC-159
-      ui.campo({ rotulo: "Cor", nome: "cor", tipo: "cor", valor: e ? e.cor : (ctx.paleta && ctx.paleta.length ? ctx.paleta[k.base.etiquetas.length % ctx.paleta.length] : null), paleta: ctx.paleta }));     // plano 1000b · RB-137: % tamanho da paleta (não 12)
+      ui.campo({ rotulo: "Cor", nome: "cor", tipo: "cor", valor: e ? e.cor : (ctx.paleta && ctx.paleta.length ? (L.corMenosUsada(ctx.paleta, (k.base.etiquetas || []).map(x => x.cor)) || ctx.paleta[k.base.etiquetas.length % ctx.paleta.length]) : null) /* plano 2000d · DR-213: a cor menos usada */, paleta: ctx.paleta }));     // plano 1000b · RB-137: % tamanho da paleta (não 12)
     const r = await ui.modal({ titulo: e ? `Editar «${e.nome}»` : "Nova etiqueta", largura: "p", corpo: f, acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: null },
       { rotulo: e ? "Salvar" : "Criar etiqueta", tipo: "primario", fn: async api => {
@@ -753,7 +757,7 @@ async function secaoEtiquetas(ctx, alvo) {
     desenhar();
     // plano 1500c · RC-164: a etiqueta que já existia é levada à vista e destacada (antes o aviso sumia sem dizer qual)
     if (jaExistia && r.id != null) {
-      const item = corpo.querySelector(`.crm-cfg-item[data-id="${r.id}"]`);
+      const item = corpo.querySelector(`.crm-cfg-item[data-id="${L.escaparCss(r.id)}"]`);      // plano 2000d · DR-343
       if (item) {
         try { item.scrollIntoView({ block: "center", behavior: ui.comportamentoRolagem ? ui.comportamentoRolagem() : "auto" }); } catch { /* ok */ }
         item.classList.add("crm-cfg-destaque");
@@ -792,7 +796,7 @@ async function secaoEtiquetas(ctx, alvo) {
   alvo.append(cartao(k, {
     titulo: "Etiquetas",
     sub: `Um catálogo só para ${k.v.min("contatos")}, ${k.v.min("negocios")} e conversas. ${podeExcluir ? "" : "Só o administrador exclui etiquetas."}`,
-    acoes: btn(k, "Etiqueta", { tipo: "prim", icone: "mais", fn: () => form(null) }),
+    acoes: btn(k, "Nova etiqueta", { /* plano 2000d · DR-208 */ tipo: "prim", icone: "mais", fn: () => form(null) }),
   }, h("div", { class: "busca crm-cfg-busca" }, ui.icone("busca"), busca), corpo));
   desenhar();
   return () => { vivo = false; };
@@ -894,7 +898,7 @@ async function secaoMotivos(ctx, alvo) {
   alvo.append(cartao(k, {
     titulo: "Motivos de perda",
     sub: `Aparecem quando alguém marca ${k.v.art("negocio") === "a" ? "uma" : "um"} ${k.v.min("negocio")} como ${k.v.perder.toLowerCase()}. Com motivos cadastrados, escolher um é obrigatório.`,
-    acoes: btn(k, "Motivo", { tipo: "prim", icone: "mais", fn: () => form(null) }),
+    acoes: btn(k, "Novo motivo", { /* plano 2000d · DR-208 */ tipo: "prim", icone: "mais", fn: () => form(null) }),
   }, corpo));
   desenhar();
   return () => { vivo = false; };

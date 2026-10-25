@@ -331,7 +331,8 @@ test("CC-168 / CC-286 · a Agenda aberta à noite percebe a virada do dia", () =
 
 test("CC-172 / CC-284 · «Ver mais 14 dias» respeita o limite da configuração (dias_a_frente), contado de hoje", () => {
   assert.equal(A.limiteDiasAgenda({ dias_a_frente: 30 }), 30);
-  assert.equal(A.limiteDiasAgenda({ dias_a_frente: 999 }), 180);
+  // plano 2000d: DC-397 — o teto passou a 366 (retorno semestral); sem configuração continua 180
+  assert.equal(A.limiteDiasAgenda({ dias_a_frente: 999 }), 366);
   assert.equal(A.limiteDiasAgenda(null), 180);
   const hoje = "2026-10-21";
   assert.equal(A.podeVerMais({ janelaIni: hoje, janelaDias: 14, hoje, config: { dias_a_frente: 30 } }), true);
@@ -400,7 +401,8 @@ test("CC-228 / CC-227 · telefone vira link no primeiro toque e o WhatsApp do ap
 test("CC-256 · taxa de faltas das consultas que já passaram", () => {
   const agora = Date.parse("2026-10-21T12:00:00-03:00");
   const t = A.taxaFaltas([k("2026-10-20", "09:00", "09:30", { presenca: "faltou" }), k("2026-10-20", "10:00", "10:30"), k("2026-10-25", "10:00", "10:30", { presenca: "faltou" })], agora);
-  assert.deepEqual(t, { faltas: 1, de: 2, pct: .5 }, "a futura não entra");
+  // plano 2000d: DC-269 — a que passou sem marcação não conta como «compareceu»: fica fora da conta e aparece em sem_marca
+  assert.deepEqual(t, { faltas: 1, de: 1, pct: 1, sem_marca: 1 }, "a futura não entra");
   assert.equal(A.taxaFaltas([k("2026-10-25", "10:00", "10:30")], agora), null);
 });
 
@@ -409,7 +411,8 @@ test("CC-258 · CSV do período com «;», BOM e aspas quando precisa", () => {
   assert.equal(csv.codePointAt(0), 0xfeff, "o Excel lê os acentos");
   const linhas = csv.slice(1).trim().split("\r\n");
   // plano 1500c: GX-006 acrescentou a coluna «Fim» depois da «Hora»
-  assert.equal(linhas[0], "Data;Hora;Fim;Paciente;Serviço;Profissional;Presença;Origem");
+  // plano 2000d: DC-382 acrescentou «Telefone» e «Observação» no fim
+  assert.equal(linhas[0], "Data;Hora;Fim;Paciente;Serviço;Profissional;Presença;Origem;Telefone;Observação");
   assert.ok(linhas[1].startsWith("20/10/2026;08:00;08:30;Bia;"), "em ordem de horário");
   assert.ok(linhas[2].startsWith('20/10/2026;10:00;10:30;"Ana; Souza";Avaliação;Dra. Helena;Compareceu'));
 });
@@ -446,7 +449,8 @@ test("CC-205 / CC-289 / CC-210 · textos ao paciente na palavra da vertical e co
 test("CC-206 · lembrete com o nome e o endereço da empresa", () => {
   const c = { nome: "Ana Lima", servico: "Avaliação", inicio: "2026-10-22T10:00:00-03:00" };
   assert.equal(A.textoLembrete(c, "2026-10-21", { empresa: "Clínica Sorriso", endereco: "Rua A, 10 — Centro" }),
-    "Olá, Ana! Aqui é da Clínica Sorriso. Lembrando da sua consulta (Avaliação) amanhã às 10:00, na Rua A, 10 — Centro. Podemos confirmar?");
+    // plano 2000d: DC-298/DC-299 — «Aqui é de» (sem artigo) e o endereço em frase própria
+    "Olá, Ana! Aqui é de Clínica Sorriso. Lembrando da sua consulta (Avaliação) amanhã às 10:00. Endereço: Rua A, 10 — Centro. Podemos confirmar?");
 });
 
 test("CC-207 · aviso de desmarcação diz o serviço", () => {
@@ -928,7 +932,8 @@ test("CC-256 / CC-324 · resumo com a taxa de faltas e as marcadas pela IA", asy
   const pas = passadaSeg();
   const T = await montarAgenda({ data: pas, consultas: [consultaEm(pas, "09:00", { presenca: "faltou" }), consultaEm(pas, "10:00", { negocio_id: 802, marcado_por: "ia" })] });
   try {
-    assert.match(T.alvo.querySelector(".agenda-resumo-faltas").textContent, /^Faltas: 50% \(1 de 2\)/);
+    // plano 2000d: DC-269 — a das 10:00 sem marcação fica fora da taxa e é contada à parte
+    assert.match(T.alvo.querySelector(".agenda-resumo-faltas").textContent, /^Faltas: 100% \(1 de 1\) \(1 sem marcação\)/);
     assert.match(T.alvo.querySelector(".agenda-resumo-ia").textContent, /1 marcada pela IA/);
     assert.ok(T.alvo.querySelector('.ag-item[data-negocio="802"] .ag-bloco-ia'), "o bloco da IA tem o ícone");
   } finally { T.sair(); }
@@ -942,6 +947,7 @@ test("CC-258 / CC-260 / CC-266 / CC-323 · exportar, imprimir a semana, filtrar 
     const filtro = T.alvo.querySelector(".agenda-filtro-nome");
     filtro.value = "rafa";
     filtro.dispatchEvent(T.D.evento("input", { target: filtro }));
+    await dormir(150);     // plano 2000d: DC-359 — o filtro espera 120 ms sem digitar
     assert.ok(T.alvo.querySelector('.ag-item[data-negocio="801"]').classList.contains("ag-filtrado"));
     assert.ok(!T.alvo.querySelector('.ag-item[data-negocio="802"]').classList.contains("ag-filtrado"));
     T.alvo.querySelector(".agenda-imprimir-semana").click();
@@ -1549,6 +1555,7 @@ test("GX-015 / GX-016 / GX-018 / GX-054 · filtro: conta o que sobrou, Esc limpa
     assert.equal(T.D.estado.ativo, filtro, "«/» leva ao filtro");
     filtro.value = "4321";
     filtro.dispatchEvent(T.D.evento("input", { target: filtro }));
+    await dormir(150);     // plano 2000d: DC-359 — o filtro espera 120 ms sem digitar
     assert.equal(T.alvo.querySelector(".agenda-filtro-conta").textContent, "1 de 2 consultas");
     assert.equal(filtro.getAttribute("aria-describedby"), T.alvo.querySelector(".agenda-filtro-conta").getAttribute("id"));
     assert.ok(T.alvo.querySelector('.ag-item[data-negocio="802"]').classList.contains("ag-filtrado"), "achou pelo telefone");

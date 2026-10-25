@@ -1160,11 +1160,12 @@ await teste("rascunho.js: sem armazenamento ou com armazenamento que lança erro
 await teste("app.js (M17): sessão expirada abre a janela sem desmontar a tela; outra conta limpa tudo; logout apaga os rascunhos; ctx.rascunho e rascunho.js entram no boot", () => {
   const pedir = /async function pedirLoginNaTela\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
   assert.doesNotMatch(pedir, /desmontarAtual\(|ui\.limpar\(/, "a tela e o que foi digitado ficam como estão");
-  assert.match(pedir, /titulo: "Sua sessão expirou"/); assert.match(pedir, /valor: antes\.email/, "e-mail preenchido");
+  // plano 2000d: DU-400 — o título vem do motivo da queda («Sua sessão expirou» quando o servidor não diz outro)
+  assert.match(pedir, /titulo: queda\.titulo/); assert.match(APP_JS, /titulo: "Sua sessão expirou"/); assert.match(pedir, /valor: antes\.email/, "e-mail preenchido");
   assert.match(pedir, /nova\.conta\.id !== antes\.id\) return "outra"/);
   assert.match(pedir, /if \(r === "outra"\) \{\s*if \(E\.rascunhos\) E\.rascunhos\.apagarTudo\(\);/);
   assert.match(pedir, /E\.M\.dados\.guardarToken\(r2\.token\)/);
-  const caiu = /function sessaoCaiu\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
+  const caiu = /function sessaoCaiu\((?:e = null)?\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];   // plano 2000d: DU-400 — recebe o erro (motivo da queda)
   assert.match(caiu, /if \(!E\.sessao\) \{ sessaoCaiuTotal\(\); return false; \}/, "na abertura (sem sessão) segue o caminho antigo");
   assert.match(caiu, /loginPendente = pedirLoginNaTela\(\)/, "várias leituras que falham dividem UMA janela");
   assert.match(fnDoApp("sair"), /E\.rascunhos\.apagarTudo\(\)/);   // plano 1000: sair({ perguntar, manterRascunhos })
@@ -1359,7 +1360,7 @@ await teste("app.js (M16): sessão guardada pinta o shell e a rede revalida; sel
   assert.match(APP_JS, /Mostrando dados de \$\{hora\} · atualizando…/);
   assert.match(APP_JS, /reiniciarSelo\(\);\s*marcarMenu\(r\.modulo\);/, "o selo recomeça a cada tela");
   assert.match(HTML, /<link rel="modulepreload" href="cache\.js\?v=/);
-  assert.match(APP_JS, /ui\.esqueleto\(rotas\.esqueletoDaRota\(r\.modulo, r\.partes\)\)/);
+  assert.match(APP_JS, /ui\.esqueleto\(rotas\.esqueletoDaRota\(r\.modulo, r\.partes\), \{ demorou:/);   // plano 2000d: DU-360 — e diz o que carrega depois de 5 s
   const tiposUi = [...ler("ui.js").matchAll(/tipo === "([a-z]+)"/g)].map(m => m[1]);
   for (const m of ["inicio", "conversas", "crm", "contatos", "empresas", "tarefas", "agenda", "anuncios", "relatorios", "automacoes", "config", "admin", "qualquer"]) {
     const tipo = ROTAS_MOD.esqueletoDaRota(m, []);
@@ -1543,7 +1544,8 @@ await teste("app.js (revisão R119): empresa removida → cache dela apagado, ou
 
 await teste("app.js (revisão R119): entrar ou aceitar convite com outra conta aberta não adota a sessão antiga; rota pública não dispara a sessão antecipada", () => {
   // plano 1500c: UCC-030/UC-019/UCB-054 — o aoEntrar recebe também expira_em, boasVindas e demo
-  const entrar = /async aoEntrar\(token, \{ cliente_id(?:, compartilhado)?(?:, expira_em, boasVindas, demo)? \} = \{\}\) \{[\s\S]*?\n    \},/.exec(APP_JS)[0];
+  // plano 2000d: DU-222/DU-119 — também tentativas e ativar2fa
+  const entrar = /async aoEntrar\(token, \{ cliente_id(?:, compartilhado)?(?:, expira_em, boasVindas, demo)?(?:, tentativas)?(?:, ativar2fa = false)? \} = \{\}\) \{[\s\S]*?\n    \},/.exec(APP_JS)[0];
   assert.match(entrar, /E\.sessaoPromessa = null; E\.sessaoGuardada = null;\s*limparDadosDoAparelho\(\);\s*E\.M\.dados\.guardarToken\(token\);/, "zera a antecipada e a guardada e limpa o aparelho ANTES de guardar o token e navegar");
   assert.ok(entrar.indexOf("limparDadosDoAparelho()") < entrar.indexOf("navegar(destino"), "limpa antes de navegar");
   const iniciar = /async function iniciar\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
@@ -1740,7 +1742,8 @@ await teste("rotas.nomeDoApp: org padrão usa os títulos de sempre; white-label
   assert.deepEqual([n("Conecta", "crm").name, n("Conecta", "ads").name, n("Conecta", "atendimento").name], ["Conecta CRM", "Conecta Anúncios", "Conecta Atendimento"]);
   assert.equal(n("Conecta", "ads").short_name, "Conecta Ads"); assert.equal(n("Conecta", "crm").short_name, "Conecta CRM");
   for (const x of [n("Clínica Sorriso Vivo Odontologia", "atendimento"), n("Órbita", "atendimento"), n("X", "crm")]) assert.ok(x.short_name.length <= 12, x.short_name);
-  assert.equal(n("Conecta", null).name, "Conecta"); assert.equal(n("", null).name, "Órbita"); assert.equal(n(undefined, "inexistente").name, "Órbita");
+  // plano 2000d: DU-276 — sem produto (a marca ainda não chegou) o nome é neutro («Painel»), nunca o da plataforma
+  assert.equal(n("Conecta", null).name, "Conecta"); assert.equal(n("", null).name, "Painel"); assert.equal(n(undefined, "inexistente").name, "Painel");
   assert.equal(n("Conecta", "crm").description, "Contatos, oportunidades, vendas e automações.");
   assert.deepEqual(["crm", "ads", "atendimento", null].map(w => ROTAS_MOD.iconeDoProduto(w, "dente")), ["dente", "anuncio", "chat", "camadas"]);
   for (const ic of ["dente", "anuncio", "chat", "camadas", "funil"]) assert.ok(sprite.has(ic), `i-${ic} no sprite`);
@@ -1929,7 +1932,8 @@ await teste("ações do catálogo filtradas por papel e produto (aceite do M18)"
   const ads = idsDe(ambiente({ workspace: "ads" }));
   // plano 1500c: UCC-082…085 — Central de ajuda, Ver plano, tour, recarregar e notificações valem em qualquer produto
   // plano 1500c: UC-028/UC-038 — «Convidar pessoa» (admin) e «Situação dos serviços» também valem em qualquer produto
-  assert.deepEqual(ads.filter(i => !["alternar-tema", "abrir-produto", "atalhos", "sair", "primeiros-passos", "central-ajuda", "ver-plano", "tour", "recarregar", "notificacoes", "convidar-pessoa", "situacao-servicos"].includes(i)), [], "em Anúncios nenhuma ação de CRM/Conversas/Agenda");
+  // plano 2000d: DU-141/DU-281 — «Bloquear a tela» e «Modo foco» são do shell (valem em todo produto)
+  assert.deepEqual(ads.filter(i => !["alternar-tema", "abrir-produto", "atalhos", "sair", "primeiros-passos", "central-ajuda", "ver-plano", "tour", "recarregar", "notificacoes", "convidar-pessoa", "situacao-servicos", "bloquear-tela", "modo-foco"].includes(i)), [], "em Anúncios nenhuma ação de CRM/Conversas/Agenda");
   // papel: leitura não cria nada; atendente cria mas não vê Primeiros passos (é do admin)
   const leitura = idsDe(ambiente({ papel: "leitura" }));
   assert.deepEqual(leitura.filter(i => i.startsWith("nova-") || i === "marcar-consulta" || i === "primeiros-passos"), [], "papel leitura: sem ações de criar");
@@ -1975,7 +1979,8 @@ await teste("rotas.itensDoMenu (o «Ir para» e o menu do shell): papel, plano, 
   assert.ok(ROTAS_MOD.itensDoMenu({ op: op(), vocab: {}, workspace: "crm" }).find(i => i.id === "crm").icone, "vocabulário vazio não quebra");
   assert.equal(ROTAS_MOD.itensDoMenu({ op: op(), vocab: VOC.vocab("odonto"), workspace: "ads", dev: true, prontos: ["inicio"] }).find(i => i.id === "anuncios").emConstrucao, true, "dev marca «obra»");
   const d = CMD.destinos(ROTAS_MOD.itensDoMenu({ op: op(), vocab: VOC.vocab("odonto"), workspace: "atendimento" }));
-  assert.deepEqual(d.find(x => x.id === "conversas"), { id: "conversas", rotulo: "Conversas", hash: "#/conversas", icone: "chat", palavras: CMD.PALAVRAS_DESTINO.conversas, emConstrucao: false });
+  // plano 2000d: DU-410 — o destino traz o atalho «G C»
+  assert.deepEqual(d.find(x => x.id === "conversas"), { id: "conversas", rotulo: "Conversas", hash: "#/conversas", icone: "chat", palavras: CMD.PALAVRAS_DESTINO.conversas, emConstrucao: false, atalho: "G C" });
   assert.deepEqual(CMD.filtrar(d, "whatsapp").map(x => x.id), ["conversas"], "«whatsapp» leva a Conversas pelas palavras extras");
   assert.equal(ROTAS_MOD.itensDoMenu({ op: op(), vocab: VOC.vocab("odonto"), workspace: "relatorios_nao_existe" }).length > 5, true, "produto desconhecido não filtra (como antes)");
   assert.equal(d.find(x => x.id === "config").hash, "#/config");
@@ -2053,9 +2058,10 @@ await teste("app.js (M18): a paleta abre em todo produto, módulo carregado sob 
   tem(APP_JS, 'E.comandos.temAtalho("?") || document.querySelector("dialog[open]")', "«?» fica com a tela que o registra (Conversas) e não abre sobre outra janela");
   tem(APP_JS, "function definirTitulo(texto) { E.titulo = texto || \"\"; atualizarTitulo(); lembrarRecente(texto); }", "Recentes pelo título da tela de detalhe");
   tem(APP_JS, "const prefixos = [E.M.comandos ? E.M.comandos.PREFIXO_RECENTES", "Recentes (nomes de pessoas) saem no logout/queda de sessão");
-  tem(APP_JS, '{ rotulo: "Aparência", icone:', "tema no menu da conta"); tem(APP_JS, '{ rotulo: "Ajuda", icone: "ajuda", fn: () => abrirMenuAjuda(ancora) }', "Ajuda no menu da conta");
+  tem(APP_JS, '{ rotulo: "Aparência", icone:', "tema no menu da conta"); tem(APP_JS, 'icone: "ajuda", fn: () => abrirMenuAjuda(ancora) }', "Ajuda no menu da conta");   // plano 2000d: DU-286 — o rótulo diz «· há novidades»
   tem(APP_JS, '"Primeiros passos"', "Ajuda: Primeiros passos"); tem(APP_JS, '"Atalhos de teclado"', "Ajuda: Atalhos"); tem(APP_JS, '"Falar com o suporte"', "Ajuda: suporte");
-  tem(APP_JS, "Preciso de ajuda no ${app}${tela}${emp}", "o texto do suporte leva produto, tela e empresa");
+  // plano 2000d: DU-285 — o texto do suporte saiu para comandos.textoSuporte (empresa, tela, versão e aparelho)
+  tem(APP_JS, "textoSuporte({ app, tela: E.titulo, empresa: E.cliente ? E.cliente.nome : \"\", versao: VERSAO, aparelho })", "o texto do suporte leva produto, tela e empresa");
   tem(APP_JS, "E.ui.linkWhatsApp(", "link pelo helper (número só com dígitos)");
   tem(APP_JS, 'class: "pilula-teste"', "pílula de teste"); tem(APP_JS, "Ocultar por 24 h", "dispensável por 24 h");
   assert.doesNotMatch(APP_JS.slice(APP_JS.indexOf("function desenharFaixas")), /Teste grátis até/, "o teste em andamento não é mais faixa de linha inteira");

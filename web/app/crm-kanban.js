@@ -105,7 +105,17 @@ export async function montarKanban(k, el, rota) {
   if (rota.query && typeof rota.query.busca === "string" && rota.query.busca.trim()) S.filtro.busca = rota.query.busca.trim().slice(0, 120);
   // plano 1000 (CR-246): «revisar as paradas» (vazio de Tarefas) abre o quadro já no atalho «Parados há 7+ dias»
   // plano 1500c · RC-327: link com filtros (?f=, de «Copiar link com estes filtros») abre o quadro com os mesmos filtros
-  if (rota.query && typeof rota.query.f === "string") { const fl = L.filtroDoLink(rota.query.f); if (fl) S.filtro = { ...(S.filtro.busca ? { busca: S.filtro.busca } : {}), ...fl }; }  // plano 1500c · RC-324: 60 e 90 dias também
+  let ignoradosDoLink = [];
+  if (rota.query && typeof rota.query.f === "string") {
+    const fl = L.filtroDoLink(rota.query.f);
+    if (fl) {
+      // plano 2000d · DR-075: o link conferido com esta empresa — responsável/etiqueta/campo que não existem aqui saem e a tela avisa (antes, quadro vazio calado)
+      const r = L.filtroDoLinkNaBase ? L.filtroDoLinkNaBase(fl, { temDono: id => !!k.usuario(id), temEtiqueta: id => !!k.etiqueta(id), campos: k.base.campos }) : { filtro: fl, ignorados: [] };
+      ignoradosDoLink = r.ignorados;
+      S.filtro = { ...(S.filtro.busca ? { busca: S.filtro.busca } : {}), ...r.filtro };
+    }
+  }  // plano 1500c · RC-324: 60 e 90 dias também
+  if (ignoradosDoLink.length) ui.toast(`O link tinha filtros que não existem aqui (${ignoradosDoLink.join(", ")}): foram ignorados.`, { tipo: "aten", ms: 8000 });
   if (rota.query && /^(3|7|15|30|60|90)$/.test(String(rota.query.parados || ""))) S.filtro.parado_dias = paradosDaUrl = Number(rota.query.parados);
   const podeMover = k.pode("atendente");
   const comConversas = !!(ctx.temModulo && ctx.temModulo("conversas"));
@@ -130,23 +140,27 @@ export async function montarKanban(k, el, rota) {
     const f = k.funil(id);
     if (!f) { ui.toast("Esse funil não existe mais.", { tipo: "aten" }); desenharSelFunil(); return; }
     S.funil = f;
+    S.recolher = lerRecolher();      // plano 2000d · DR-035: cada funil com a sua escolha
+    btRecolher.setAttribute("aria-pressed", String(S.recolher));
     gravarLocal();
     history.replaceState(history.state, "", `${location.pathname}${location.search}#/crm?funil=${encodeURIComponent(S.funil.id)}`);
     carregar();
   }
+  // plano 2000d · DR-058: «Funil» pelo vocabulário da vertical (vocab.funil/funis quando existir; senão «Funil»)
+  const termoFunil = (k.v && k.v.funil) || "Funil", termoFunis = (k.v && k.v.funis) || "Funis";
   function desenharSelFunil() {
     ui.limpar(selFunil); ui.limpar(selFunilM);
     const lista = funis();
     selFunil.hidden = selFunilM.hidden = lista.length < 2;
     if (lista.length < 2) return;
     const select = classe => {
-      const s = h("select", { class: ["sel", "crm-funil-sel", classe], "aria-label": "Funil" }, lista.map(f => h("option", { value: f.id, selected: S.funil && f.id === S.funil.id }, f.nome)));
+      const s = h("select", { class: ["sel", "crm-funil-sel", classe], "aria-label": termoFunil }, lista.map(f => h("option", { value: f.id, selected: S.funil && f.id === S.funil.id }, f.nome)));
       s.addEventListener("change", () => trocarFunil(s.value));
       return s;
     };
     if (lista.length <= 5) {
       selFunil.appendChild(ui.segmentado({ opcoes: lista.map(f => ({ valor: f.id, rotulo: f.nome, icone: f.conta_no_ads ? "anuncio" : null })),
-        valor: S.funil && S.funil.id, rotulo: "Funis", aoMudar: trocarFunil }));
+        valor: S.funil && S.funil.id, rotulo: termoFunis, aoMudar: trocarFunil }));
       selFunilM.appendChild(select("crm-funil-sel-m"));        // o CSS mostra um dos dois: abas no desktop, seletor no celular
     } else {
       selFunil.hidden = true;
@@ -178,7 +192,11 @@ export async function montarKanban(k, el, rota) {
   const nFiltros = h("span", { class: "crm-filtro-n", hidden: true });
   const btFiltros = h("button", { type: "button", class: "bt bt-sec crm-filtro-bt", "aria-haspopup": "dialog" }, ui.icone("filtro"), "Filtros", nFiltros);
   btFiltros.addEventListener("click", abrirFiltros);
-  const chips = h("div", { class: "crm-chips", "aria-label": "Filtros ativos" });
+  const chips = h("div", { class: "crm-chips", role: "group", "aria-label": "Filtros ativos" });      // plano 2000d · DR-008: aria-label só vale com papel
+  // plano 2000d · DR-061: com filtro/busca, a contagem do recorte («Mostrando 34 de 210» quando o servidor manda o total sem filtro)
+  const recorte = h("p", { class: "crm-recorte fraco", role: "status", hidden: true });
+  // plano 2000d · DR-024/025/027: aviso de filtro que vale só nos cartões carregados
+  const notaLocal = h("p", { class: "crm-recorte crm-nota-local fraco", hidden: true });
   const btMeus = h("button", { type: "button", class: "bt bt-fant bt-p crm-atalho", "aria-pressed": String(S.filtro.dono === "eu"), on: { click: () => {
     S.filtro.dono = S.filtro.dono === "eu" ? undefined : "eu"; if (!S.filtro.dono) delete S.filtro.dono;
     gravarLocal(); carregar({ silencioso: true });
@@ -189,13 +207,16 @@ export async function montarKanban(k, el, rota) {
   } }, title: "Sem mudar de etapa há 7 dias ou mais" }, "Parados há 7+ dias");      // plano 1000 (CR-205): o rótulo diz o que é
   // plano 1000 (CR-036): «Recolher vazias» — coluna sem cartão vira uma faixa estreita (continua destino do arrasto); lembrado por empresa no aparelho
   // plano 1000b · RB-028: lembrado por CONTA (como o filtro, CR-024) — a chave antiga (só da empresa) é lida uma vez e apagada
-  const chaveRecolher = `nx-app-crm-kb-recolher-${cli}-${conta}`;
-  S.recolher = lerPorConta(chaveRecolher, `nx-app-crm-kb-recolher-${cli}`) === "1";
+  // plano 2000d · DR-035: e por FUNIL — recolher no «Pós-venda» não recolhe no funil de vendas (a chave sem funil vale como padrão antigo)
+  const chaveRecolherConta = `nx-app-crm-kb-recolher-${cli}-${conta}`;
+  const chaveRecolherFunil = () => `${chaveRecolherConta}-${S.funil ? S.funil.id : "-"}`;
+  const lerRecolher = () => { try { const v = localStorage.getItem(chaveRecolherFunil()); if (v !== null) return v === "1"; } catch { /* ok */ } return lerPorConta(chaveRecolherConta, `nx-app-crm-kb-recolher-${cli}`) === "1"; };
+  S.recolher = lerRecolher();
   const btRecolher = h("button", { type: "button", class: "bt bt-fant bt-p crm-atalho crm-recolher", "aria-pressed": String(S.recolher), title: "Colunas sem cartão viram uma faixa estreita",
     on: { click: () => {
       S.recolher = !S.recolher;
       btRecolher.setAttribute("aria-pressed", String(S.recolher));
-      try { localStorage.setItem(chaveRecolher, S.recolher ? "1" : "0"); } catch { /* ok */ }
+      try { localStorage.setItem(chaveRecolherFunil(), S.recolher ? "1" : "0"); } catch { /* ok */ }
       for (const [id, c] of colEls) marcarRecolhida(c, colunaDe(id));
       ui.anunciar(S.recolher ? "Colunas vazias recolhidas." : "Todas as colunas abertas.");
     } } }, "Recolher vazias");
@@ -206,13 +227,13 @@ export async function montarKanban(k, el, rota) {
     const min = Math.floor((Date.now() - S.ultimaRecarga) / 60000);
     idade.hidden = false;
     // plano 1000b · RB-015: velho, o texto VISÍVEL diz há quanto tempo (o title some no toque e no leitor de tela)
-    idade.textContent = `atualizado às ${ui.horaBR(new Date(S.ultimaRecarga).toISOString())}${min >= 2 ? ` · há ${min} min` : ""}`;
+    idade.textContent = `atualizado às ${ui.horaBR(new Date(S.ultimaRecarga).toISOString())}${min >= 2 ? ` · ${L.idadeCurta(min)}` : ""}`;      // plano 2000d · DR-034: «há 2 h», não «há 125 min»
     idade.classList.toggle("velho", min >= 2);
-    if (min >= 2) idade.setAttribute("title", `Sem atualizar há ${min} min. Confira a internet ou recarregue a página.`); else idade.removeAttribute("title");
+    if (min >= 2) idade.setAttribute("title", `Sem atualizar ${L.idadeCurta(min)}. Confira a internet ou recarregue a página.`); else idade.removeAttribute("title");
   }
   const tIdade = setInterval(() => { if (S.vivo) pintarIdade(); }, 30000);
   if (tIdade && typeof tIdade.unref === "function") tIdade.unref();     // (no Node dos testes o relógio não segura o processo)
-  const atalhos = h("div", { class: "crm-atalhos", "aria-label": "Filtros rápidos" }, btMeus, btParados, btRecolher, idade);
+  const atalhos = h("div", { class: "crm-atalhos", role: "group", "aria-label": "Filtros rápidos" }, btMeus, btParados, btRecolher, idade);      // plano 2000d · DR-008
   function atualizarAtalhos() {
     if (!btMeus || !btParados) return;
     btMeus.setAttribute("aria-pressed", String(S.filtro.dono === "eu"));
@@ -308,6 +329,8 @@ export async function montarKanban(k, el, rota) {
 
   // celular (M23): fita de etapas fixa sob a busca (também é destino do arrasto) + totais numa linha que expande ao toque
   const fitaEtapas = h("nav", { class: "kb-fita", "aria-label": "Etapas do funil" });
+  // plano 2000d · DR-067: no celular, com muitas etapas, «Etapa 3 de 10» diz onde se está no funil
+  const fitaPos = h("small", { class: "kb-fita-pos dado", "aria-hidden": "true" });
   const idTotais = `crm-totais-${cli}`;
   totais.id = idTotais;
   const resumoLinha = h("button", { type: "button", class: "crm-resumo", "aria-expanded": "false", "aria-controls": idTotais,
@@ -327,10 +350,13 @@ export async function montarKanban(k, el, rota) {
   // plano 1500c · RC-087: modo apresentação (reunião/TV) — tela cheia, sem ferramentas e filtros, letra maior; sai com Esc (ou no mesmo botão)
   const btApresentar = h("button", { type: "button", class: "bt bt-fant bt-p crm-apresentar", "aria-pressed": "false", title: "Tela cheia para reunião (Esc sai)",
     on: { click: () => alternarApresentacao() } }, ui.icone("ampliar"), h("span", { class: "crm-apresentar-txt" }, "Tela cheia"));
+  // plano 2000d · DR-007: no modo apresentação as ferramentas somem — um botão visível «Sair da apresentação» fica sempre (iPhone sem tela cheia, TV sem teclado)
+  const btSairApres = h("button", { type: "button", class: "bt bt-sec bt-p kb-sair-apres", hidden: true, on: { click: () => { alternarApresentacao(false); try { btApresentar.focus(); } catch { /* ok */ } } } }, ui.icone("fechar"), "Sair da apresentação");
   function alternarApresentacao(forcar) {
     const ligar = forcar === undefined ? !el.classList.contains("kb-apresentacao") : !!forcar;
     el.classList.toggle("kb-apresentacao", ligar);
     btApresentar.setAttribute("aria-pressed", String(ligar));
+    btSairApres.hidden = !ligar;
     try {
       if (ligar && el.requestFullscreen && !document.fullscreenElement) el.requestFullscreen().catch(() => {});
       else if (!ligar && document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
@@ -341,8 +367,8 @@ export async function montarKanban(k, el, rota) {
   el.append(...[
     ui.cabecalho({ titulo: k.v.crm, acoes: [btApresentar, btNovo, selFunilM] }),
     selFunil,
-    h("div", { class: "pilha-p crm-kb-ferramentas" }, fitaBusca, atalhos, controlesVisoes.el, chips),
-    fitaEtapas, resumoLinha, totais, resumoFunil, areaVazia, corpoQuadro, instr, fab].filter(Boolean));
+    h("div", { class: "pilha-p crm-kb-ferramentas" }, fitaBusca, atalhos, controlesVisoes.el, chips, recorte, notaLocal),
+    fitaEtapas, fitaPos, resumoLinha, totais, resumoFunil, areaVazia, corpoQuadro, instr, fab, btSairApres].filter(Boolean));
   desenharSelFunil();
 
   // plano 1000 (CR-035): barra da seleção — «3 selecionados · Mover para… · Limpar»
@@ -362,18 +388,49 @@ export async function montarKanban(k, el, rota) {
   const semRede = () => typeof navigator !== "undefined" && !!navigator && navigator.onLine === false;
   const faixaRede = h("p", { class: "aviso aviso-aten kb-sem-rede", role: "status", hidden: !semRede() }, ui.icone("alerta"), h("span", null, "Sem internet — mudanças não são salvas. O quadro volta a mexer quando a conexão voltar."));
   el.insertBefore(faixaRede, barraSel);
-  const aoMudarRede = () => { faixaRede.hidden = !semRede(); el.classList.toggle("kb-offline", semRede()); };
+  // plano 2000d · DR-345: lead sem responsável não fica parado calado — a faixa conta e o supervisor distribui em rodízio (com «Desfazer»)
+  const ativosDist = () => (k.base.usuarios || []).filter(u => u && u.ativo !== false);
+  const btDistribuir = h("button", { type: "button", class: "bt bt-sec bt-p kb-sem-dono-bt", on: { click: () => distribuirSemDono() } }, "Distribuir entre a equipe");
+  const faixaSemDono = k.pode("supervisor") && podeMover ? h("p", { class: "aviso aviso-aten kb-sem-dono", role: "note", hidden: true }, ui.icone("contato"), h("span", { class: "kb-sem-dono-txt" }), btDistribuir) : null;
+  if (faixaSemDono) el.insertBefore(faixaSemDono, barraSel);
+  function pintarSemDono() {
+    if (!faixaSemDono || !S.dados || !S.funil) return;
+    const ids = L.cartoesSemDono(S.dados.colunas, S.funil.estagios);
+    faixaSemDono.hidden = !ids.length;
+    faixaSemDono.querySelector(".kb-sem-dono-txt").textContent = ids.length === 1 ? "1 cartão aberto está sem responsável." : `${ids.length} cartões abertos estão sem responsável.`;
+    btDistribuir.hidden = ativosDist().length < 2;
+  }
+  async function distribuirSemDono() {
+    const ids = L.cartoesSemDono(S.dados ? S.dados.colunas : [], S.funil ? S.funil.estagios : []);
+    const ativos = ativosDist();
+    if (!ids.length || ativos.length < 2) return;
+    S.sel.clear(); for (const id of ids) S.sel.add(id);
+    const plano = new Map(L.rodizio(ids, ativos.map(u => u.id)).map(x => [String(x.id), x.dono_id]));
+    await aplicarEmLote(c => ({ dono_id: plano.get(String(c.id)) ?? c.dono_id ?? null }), n => `${n} ${n === 1 ? "cartão distribuído" : "cartões distribuídos"} entre ${ativos.length} pessoas.`,
+      { desfazerDe: c => ({ dono_id: c.dono_id ?? null }) });
+    if (S.vivo) { limparSel(); pintarSemDono(); }
+  }
+  const aoMudarRede = () => {
+    faixaRede.hidden = !semRede(); el.classList.toggle("kb-offline", semRede());
+    // plano 2000d · DR-053: a faixa diz de quando são os números na tela («mostrando o de 14:32»)
+    const hora = semRede() && S.ultimaRecarga ? ui.horaBR(new Date(S.ultimaRecarga).toISOString()) : "";
+    faixaRede.lastChild.textContent = `Sem internet${hora ? ` — mostrando o de ${hora}` : ""}. Mudanças não são salvas; o quadro volta a mexer quando a conexão voltar.`;
+  };
   aoMudarRede();
   try { addEventListener("online", aoMudarRede); addEventListener("offline", aoMudarRede); } catch { /* ok */ }
 
   // plano 1500c · RC-253: na 1ª visita, três dicas do quadro (arrastar · filtros salvos · abrir para ver tudo) com «Entendi»; guardado no aparelho
-  const CHAVE_TOUR = "nx-app-crm-tour-quadro";
+  // plano 2000d · DR-006: a chave é por empresa e CONTA (recepção com computador compartilhado: cada pessoa vê as dicas uma vez)
+  const CHAVE_TOUR = `nx-app-crm-tour-quadro:${cli}:${conta}`;
   let tourVisto = true;
   try { tourVisto = localStorage.getItem(CHAVE_TOUR) === "1"; } catch { /* sem armazenamento: não mostra */ }
-  if (!tourVisto && !(rota && rota.query && rota.query.negocio)) {
+  // plano 2000d · DR-004: chegou por link de negócio (#/crm/negocio/ID → partes[0]) ou há diálogo aberto — as dicas ficam para a próxima entrada
+  const comNegocioNaRota = !!(rota && ((rota.query && rota.query.negocio) || (Array.isArray(rota.partes) && rota.partes[0] === "negocio")));
+  const comDialogo = (() => { try { return !!(typeof document !== "undefined" && document.querySelector && document.querySelector("dialog[open]")); } catch { return false; } })();
+  if (!tourVisto && !comNegocioNaRota && !comDialogo) {
     const fecharTour = () => { try { localStorage.setItem(CHAVE_TOUR, "1"); } catch { /* ok */ } tour.remove(); };
     const tour = h("section", { class: "cartao kb-tour", "aria-label": "Dicas do quadro" },
-      h("h2", { class: "kb-tour-t" }, `Primeira vez no ${k.v.crm}?`),
+      h("h2", { class: "kb-tour-t" }, "Primeira vez neste quadro?"),      // plano 2000d · DR-005: sem artigo fixo («no Vendas», «no Orçamentos»)
       h("ol", { class: "kb-tour-lista" },
         h("li", null, podeMover ? "Arraste o cartão para outra etapa (no celular, segure e arraste) — ou use o botão de mover do cartão." : "Cada coluna é uma etapa do funil; os cartões andam da esquerda para a direita."),
         h("li", null, "Use «Filtros» e salve os que você usa sempre em «Salvar filtro»."),
@@ -398,23 +455,55 @@ export async function montarKanban(k, el, rota) {
   }
   function limparSel() { S.sel.clear(); S.modoSel = false; pintarSel(); }
   /** plano 1500c · RC-083: grava um patch em cada selecionado (fila), recarrega e diz quantos deram certo. */
-  async function aplicarEmLote(patchDe, textoOk) {
+  /**
+   * plano 2000d · DR-013/016/042: `pular(c)` tira do lote quem já está como deveria (e conta «já tinham»); `desfazerDe(c)` = o patch que devolve o
+   * cartão ao que era — com ele o aviso final ganha «Desfazer». `viaRpc(cards)` (DR-014): uma operação incremental no servidor; devolve null
+   * quando a RPC não existe (aí vale o laço de nx_negocio_salvar).
+   */
+  async function aplicarEmLote(patchDe, textoOk, { pular = null, desfazerDe = null, viaRpc = null } = {}) {
     const todos = [...S.sel].map(cardDe).filter(Boolean);
-    const cards = todos.filter(c => !S.pend.has(c.id));
+    const livres = todos.filter(c => !S.pend.has(c.id));
     // plano 1500c · RX-042: cartão que ainda está salvando fica de fora — e a pessoa fica sabendo (antes sumia calado da conta)
-    const pulados = todos.length - cards.length;
-    if (!cards.length) { if (pulados) ui.toast(`${pulados === 1 ? "O cartão ainda está" : "Os cartões ainda estão"} salvando. Tente de novo em instantes.`, { tipo: "info" }); return; }
+    const pulados = todos.length - livres.length;
+    if (!livres.length) { if (pulados) ui.toast(`${pulados === 1 ? "O cartão ainda está" : "Os cartões ainda estão"} salvando. Tente de novo em instantes.`, { tipo: "info" }); return; }
+    const cards = pular ? livres.filter(c => !pular(c)) : livres;
+    const jaEstavam = livres.length - cards.length;
     if (cards.length > 5) ui.anunciar(`Alterando ${cards.length} cartões…`);
+    const antes = new Map(cards.map(c => [c.id, desfazerDe ? desfazerDe(c) : null]));
     let ok = 0, primeiroErro = null;
-    for (const c of cards) {
-      try { await k.api.rpcC("nx_negocio_salvar", { p_negocio: { id: c.id, ...patchDe(c) } }); ok++; S.meus.add(c.id); }
+    const feitos = [];
+    let foiRpc = false;
+    if (viaRpc && cards.length) {
+      try { const r = await viaRpc(cards); if (r) { foiRpc = true; for (const c of cards) if (r.has(String(c.id))) { ok++; feitos.push(c); S.meus.add(c.id); } if (ok < cards.length) primeiroErro = primeiroErro || new Error("parcial"); } }
+      catch (e) { if (!L.rpcAusente(e)) { foiRpc = true; primeiroErro = e; } }
+    }
+    if (!foiRpc) for (const c of cards) {
+      try { await k.api.rpcC("nx_negocio_salvar", { p_negocio: { id: c.id, ...patchDe(c) } }); ok++; feitos.push(c); S.meus.add(c.id); }
       catch (e) { primeiroErro = primeiroErro || e; }
     }
     limparSel();
     if (S.vivo) await carregar({ silencioso: true });
-    if (ok) ui.toast(`${textoOk(ok)}${pulados ? ` ${pulados} ${pulados === 1 ? "ficou" : "ficaram"} de fora (ainda salvando).` : ""}`, { tipo: "ok" });
-    if (primeiroErro) ui.toast(`${cards.length - ok} não ${cards.length - ok === 1 ? "foi alterado" : "foram alterados"}: ${k.erro(primeiroErro)}`, { tipo: "erro" });
+    const sufixo = pulados ? ` ${pulados} ${pulados === 1 ? "ficou" : "ficaram"} de fora (ainda salvando).` : "";
+    const texto = `${textoOk(ok, jaEstavam)}${sufixo}`;
+    if (ok && desfazerDe) {
+      ui.acaoComDesfazer({ texto, reverter: async () => {
+        let falhou = 0;
+        for (const c of feitos) { try { await k.api.rpcC("nx_negocio_salvar", { p_negocio: { id: c.id, ...antes.get(c.id) } }); S.meus.add(c.id); } catch { falhou++; } }
+        if (S.vivo) await carregar({ silencioso: true });
+        if (falhou) ui.toast(`${falhou} de ${feitos.length} não ${falhou === 1 ? "voltou" : "voltaram"} ao que era.`, { tipo: "erro" });
+      } });
+    } else if (ok || (jaEstavam && !primeiroErro)) ui.toast(texto, { tipo: ok ? "ok" : "info" });
+    if (primeiroErro) ui.toast(`${cards.length - ok} não ${cards.length - ok === 1 ? "foi alterado" : "foram alterados"}${primeiroErro.message === "parcial" ? "." : `: ${k.erro(primeiroErro)}`}`, { tipo: "erro" });
   }
+  /** plano 2000d · DR-014: etiquetar/tirar em lote como operação incremental (não sobrescreve a etiqueta que outra pessoa pôs depois do último pulso). */
+  const etiquetarViaRpc = (adicionar, remover) => async cards => {
+    if (S.semEtiquetarLote) return null;
+    try {
+      const r = await k.api.rpcC("nx_negocios_etiquetar_lote", { p_ids: cards.map(c => c.id), p_adicionar: adicionar, p_remover: remover });
+      if (!r || !Array.isArray(r.ok)) return null;
+      return new Set(r.ok.map(String));
+    } catch (e) { if (L.rpcAusente(e)) { S.semEtiquetarLote = true; return null; } throw e; }
+  };
   async function escolherNaLista(titulo, opcoes) {
     let modalApi = null;
     const lista = h("ul", { class: "kb-mover" }, opcoes.map(o => h("li", { dataset: { busca: L.semAcento(o.rotulo) } }, h("button", { type: "button", class: "kb-mover-op", on: { click: () => modalApi && modalApi.fechar(o.valor) } },
@@ -446,7 +535,15 @@ export async function montarKanban(k, el, rota) {
     const id = await escolherNaLista(`Etiquetar ${S.sel.size} ${S.sel.size === 1 ? "cartão" : "cartões"}`, etqs.map(e => ({ valor: e.id, rotulo: e.nome })));
     if (id == null || !S.vivo) return;
     const nome = (k.etiqueta(id) || {}).nome || "etiqueta";
-    await aplicarEmLote(c => ({ etiquetas: [...new Set([...(c.etiquetas || []), id])] }), n => `Etiqueta «${nome}» posta em ${n} ${n === 1 ? "cartão" : "cartões"}.`);
+    // plano 2000d · DR-393: LGPD — quem não quer marketing está no lote? avisa antes (a etiqueta pode virar campanha)
+    const semMkt = L.contarSemMarketing([...S.sel].map(cardDe).filter(Boolean));
+    if (semMkt && !(await ui.confirmar({ titulo: `Etiquetar com «${nome}»?`, rotulo: "Etiquetar",
+      texto: `${semMkt === 1 ? "1 dos selecionados não quer" : `${semMkt} dos selecionados não querem`} receber marketing. Se esta etiqueta for usada em campanha, ${semMkt === 1 ? "ele fica" : "eles ficam"} de fora pelo opt-out — confira antes.` }))) return;
+    if (!S.vivo) return;
+    // plano 2000d · DR-013/014/016: só quem ainda não tinha; incremental no servidor; com «Desfazer»
+    const tem = c => (c.etiquetas || []).some(x => String(x) === String(id));
+    await aplicarEmLote(c => ({ etiquetas: [...new Set([...(c.etiquetas || []), id])] }), (n, ja) => L.textoLoteEtiqueta(nome, n, ja),
+      { pular: tem, desfazerDe: c => ({ etiquetas: [...(c.etiquetas || [])] }), viaRpc: etiquetarViaRpc([id], []) });
   }
   async function loteTirarEtiqueta() {
     const usadas = new Set([...S.sel].map(cardDe).filter(Boolean).flatMap(c => (c.etiquetas || []).map(String)));
@@ -455,15 +552,28 @@ export async function montarKanban(k, el, rota) {
     const id = await escolherNaLista(`Tirar etiqueta de ${S.sel.size} ${S.sel.size === 1 ? "cartão" : "cartões"}`, etqs.map(e => ({ valor: e.id, rotulo: e.nome })));
     if (id == null || !S.vivo) return;
     const nome = (k.etiqueta(id) || {}).nome || "etiqueta";
-    await aplicarEmLote(c => ({ etiquetas: (c.etiquetas || []).filter(x => String(x) !== String(id)) }), n => `Etiqueta «${nome}» tirada de ${n} ${n === 1 ? "cartão" : "cartões"}.`);
+    await aplicarEmLote(c => ({ etiquetas: (c.etiquetas || []).filter(x => String(x) !== String(id)) }), n => `Etiqueta «${nome}» tirada de ${n} ${n === 1 ? "cartão" : "cartões"}.`,
+      { pular: c => !(c.etiquetas || []).some(x => String(x) === String(id)), desfazerDe: c => ({ etiquetas: [...(c.etiquetas || [])] }), viaRpc: etiquetarViaRpc([], [id]) });      // plano 2000d · DR-013/014
   }
   async function loteResponsavel() {
-    const SEM = "__sem__";
+    const SEM = "__sem__", RODIZIO = "__rodizio__";
+    const ativos = (k.base.usuarios || []).filter(u => u.ativo !== false);
     const id = await escolherNaLista(`Responsável de ${S.sel.size} ${S.sel.size === 1 ? "cartão" : "cartões"}`,
-      [...(k.base.usuarios || []).map(u => ({ valor: u.id, rotulo: u.nome })), { valor: SEM, rotulo: "Sem responsável" }]);
+      [...(k.base.usuarios || []).map(u => ({ valor: u.id, rotulo: u.nome })), { valor: SEM, rotulo: "Sem responsável" },
+        // plano 2000d · DR-040: «Distribuir entre a equipe» — reparte os selecionados em rodízio (1º para a 1ª pessoa, 2º para a 2ª…)
+        ...(S.sel.size > 1 && ativos.length > 1 ? [{ valor: RODIZIO, rotulo: `Distribuir entre ${ativos.length} pessoas (rodízio)` }] : [])]);
     if (id == null || !S.vivo) return;
+    if (id === RODIZIO) {
+      const plano = new Map(L.rodizio([...S.sel], ativos.map(u => u.id)).map(x => [String(x.id), x.dono_id]));
+      await aplicarEmLote(c => ({ dono_id: plano.get(String(c.id)) ?? c.dono_id ?? null }), n => `${n} ${n === 1 ? "cartão distribuído" : "cartões distribuídos"} entre ${ativos.length} pessoas.`,
+        { desfazerDe: c => ({ dono_id: c.dono_id ?? null }) });
+      return;
+    }
     const nome = id === SEM ? "ninguém" : ((k.usuario(id) || {}).nome || "—");
-    await aplicarEmLote(() => ({ dono_id: id === SEM ? null : id }), n => `Responsável (${nome}) trocado em ${n} ${n === 1 ? "cartão" : "cartões"}.`);
+    const novoDono = id === SEM ? null : id;
+    // plano 2000d · DR-042: com «Desfazer» (cada cartão volta ao responsável de antes); quem já era dessa pessoa fica de fora da conta
+    await aplicarEmLote(() => ({ dono_id: novoDono }), n => `Responsável (${nome}) trocado em ${n} ${n === 1 ? "cartão" : "cartões"}.`,
+      { pular: c => String(c.dono_id ?? "") === String(novoDono ?? ""), desfazerDe: c => ({ dono_id: c.dono_id ?? null }) });
   }
 
   /** plano 1500c · RC-057: seleciona todos os cartões CARREGADOS da etapa (avisa quando o servidor tem mais). */
@@ -519,6 +629,17 @@ export async function montarKanban(k, el, rota) {
     desenharQuadro();
   }
 
+  /** plano 2000d · DR-024/025/027: «só com não lida», serviço e temperatura valem nos cartões carregados (o servidor ainda não filtra por eles). */
+  function filtrarLocal(d) {
+    if (!d || !Array.isArray(d.colunas)) return d;
+    const r = L.aplicarFiltroLocal(d.colunas, S.filtro);
+    d.colunas = r.colunas;
+    notaLocal.hidden = !L.temFiltroLocal(S.filtro);
+    notaLocal.textContent = r.parcial ? "Alguns filtros valem só para os cartões já carregados em cada etapa." : "";
+    if (!r.parcial) notaLocal.hidden = true;
+    return d;
+  }
+
   async function carregar({ silencioso = false } = {}) {
     const minha = ++S.seq;
     if (!S.funil) { mostrarSemFunil(); return; }
@@ -531,13 +652,15 @@ export async function montarKanban(k, el, rota) {
       const d = await k.api.rpcC("nx_negocios_kanban", { p_funil: S.funil.id, p_filtro: filtroServidor(), p_por_coluna: 30 }, { cache: true, aoCache: dc => {
         // M16/M30: a 1ª pintura é o último quadro guardado (só quando ainda não há nada na tela); a rede chega logo depois
         if (minha !== S.seq || !S.vivo || S.dados || !dc || !Array.isArray(dc.colunas)) return;
-        S.dados = dc; doCache = true;
+        S.dados = filtrarLocal(dc); doCache = true;
         desenharQuadro();
         if (S.pronta) S.pronta();       // a tela já pode entrar: o quadro guardado está pintado
       } });
       if (minha !== S.seq || !S.vivo) return;
+      filtrarLocal(d);      // plano 2000d · DR-024/025/027
       const igual = doCache && mesmoQuadro(d);     // nada mudou desde o guardado: não refaz o quadro (plano 1000b · RB-262)
       S.ultimaRecarga = Date.now();
+      S.avisouFalha = false;      // plano 2000d · DR-001: voltou a atualizar — a próxima falha avisa de novo
       pintarIdade();
       // a resposta chegou com um cartão sendo arrastado: redesenhar agora apagaria o cartão e o marcador do gesto (no celular o arrasto cairia) — fica para o fim do gesto
       if (!igual && !trocouTudo && emGesto()) { S.adiado = { dados: d }; return; }
@@ -562,8 +685,23 @@ export async function montarKanban(k, el, rota) {
           mostrarSemFunil(); return;
         }
       }
+      // plano 2000d · DR-001: recarga silenciosa (pulso, busca, filtro) que falhou com o quadro JÁ desenhado não apaga o que o vendedor está vendo —
+      // o selo fica âmbar e um aviso (uma vez por sequência de falhas) diz de quando é o quadro, com «Tentar»
+      if (silencioso && S.dados && colEls.size) {
+        idade.classList.add("velho");
+        if (!S.avisouFalha) {
+          S.avisouFalha = true;
+          const hora = S.ultimaRecarga ? ui.horaBR(new Date(S.ultimaRecarga).toISOString()) : "";
+          ui.toast(`Não consegui atualizar${hora ? ` — mostrando o de ${hora}` : ""}.`, { tipo: "aten", acao: { rotulo: "Tentar", fn: () => carregar({ silencioso: true }) } });
+        }
+        return;
+      }
       ui.limpar(quadro);
-      quadro.appendChild(ui.erroCartao(e, () => carregar()));
+      const cartaoErro = ui.erroCartao(e, () => carregar());
+      // plano 2000d · DR-021: o código para o suporte, pequeno, no cartão de erro do quadro
+      const cod = L.codigoSuporte(e);
+      if (cod && cartaoErro && cartaoErro.appendChild) cartaoErro.appendChild(h("small", { class: "kb-erro-cod fraco" }, `código ${cod}`));
+      quadro.appendChild(cartaoErro);
     }
   }
 
@@ -619,13 +757,16 @@ export async function montarKanban(k, el, rota) {
         titulo: `${k.v.nenhum("negocio")} aqui ainda.`,
         // plano 1000b · RB-016: sem o módulo Conversas nada chega sozinho pelo WhatsApp — o texto não promete isso
         texto: comConversas ? `${fem ? "Elas aparecem sozinhas" : "Eles aparecem sozinhos"} quando alguém chama no WhatsApp — ou ${fem ? "crie uma" : "crie um"} agora.`
-          : `${fem ? "Crie a primeira" : "Crie o primeiro"} ou importe uma planilha.`,
-        tema: "crm", acao: podeMover ? { rotulo: k.v.novo("negocio"), fn: () => novo({}) } : null }));
+          : k.pode("supervisor") ? `${fem ? "Crie a primeira" : "Crie o primeiro"} ou importe uma planilha.` : `${fem ? "Crie a primeira" : "Crie o primeiro"} agora.`,
+        tema: "crm", acao: podeMover ? { rotulo: k.v.novo("negocio"), fn: () => novo({}) } : null,
+        // plano 2000d · DR-019: o texto fala em importar — o botão leva à importação (quem pode importar: supervisor)
+        acoes: k.pode("supervisor") ? [{ rotulo: "Importar planilha", fn: () => ctx.navegar("#/crm?importar=1") }] : [] }));
     } else if (S.estadoVazio === "filtro") {
       // plano 1000 (CR-200): a busca e os filtros valem para todos os funis — trocar para um funil sem nada que passe neles não pode parecer «quadro vazio»
       areaVazia.appendChild(ui.vazio({ tipo: "sem_resultado", tema: "crm", titulo: "Nada com estes filtros neste funil.",
         texto: S.filtro.busca ? `A busca «${S.filtro.busca}» e os filtros ativos valem para todos os funis.` : "Os filtros ativos valem para todos os funis.",
         acao: { rotulo: "Limpar filtros", fn: limparTudo } }));
+      sugerirOutrosFunis();
     }
     for (const e of S.funil.estagios) {
       const col = colunaDe(e.id) || { estagio_id: e.id, total: 0, soma_previsto: 0, soma_valor: 0, itens: [] };
@@ -639,12 +780,54 @@ export async function montarKanban(k, el, rota) {
     }
     desenharTotais();
     desenharFita();
+    garantirRoving();      // plano 2000d · DR-029
+    restaurarVolta();      // plano 2000d · DR-346
+  }
+
+  /* plano 2000d · DR-346: do cartão para a conversa e de volta — guarda funil e rolagem (do quadro e da página) e, na volta, o quadro
+     reabre onde estava; a conversa recebe ?de=crm (para o botão «Voltar ao quadro» de lá). */
+  const chaveVolta = `nx-app-crm-kb-volta-${cli}`;
+  function irConversa(idContato) {
+    try {
+      const se = typeof document !== "undefined" && document.scrollingElement;
+      sessionStorage.setItem(chaveVolta, JSON.stringify({ funil: S.funil ? S.funil.id : null, x: quadro.scrollLeft || 0, y: se ? se.scrollTop || 0 : 0, em: Date.now() }));
+    } catch { /* sem sessionStorage: só não volta ao mesmo lugar */ }
+    ctx.navegar(`#/conversas?contato=${encodeURIComponent(idContato)}&de=crm`);
+  }
+  function restaurarVolta() {
+    let v = null;
+    try { v = JSON.parse(sessionStorage.getItem(chaveVolta) || "null"); } catch { return; }
+    if (!v) return;
+    try { sessionStorage.removeItem(chaveVolta); } catch { /* ok */ }
+    if (!S.funil || String(v.funil) !== String(S.funil.id) || !(Date.now() - (v.em || 0) < 30 * 60000)) return;
+    quadro.style.scrollBehavior = "auto";
+    quadro.scrollLeft = Number(v.x) || 0;
+    quadro.style.scrollBehavior = "";
+    try { const se = typeof document !== "undefined" && document.scrollingElement; if (se && v.y) se.scrollTop = Number(v.y) || 0; } catch { /* ok */ }
   }
 
   /** «» (há cartões) · «total» (funil vazio de verdade) · «filtro» (nada passa na busca/filtros neste funil). */
   function estadoVazioAgora() {
     if (!S.dados.colunas.every(c => !c.total)) return "";
     return L.filtroVazio(S.filtro) ? "total" : "filtro";
+  }
+  /**
+   * plano 2000d · DR-033: a busca não achou nada NESTE funil — pergunta ao servidor (nx_negocios_buscar_funis) quantos há nos outros e oferece
+   * «2 em Pós-venda». Sem a RPC no servidor, nada aparece (e não pergunta de novo nesta tela).
+   */
+  async function sugerirOutrosFunis() {
+    const q = S.filtro.busca;
+    if (!q || S.semBuscaFunis || funis().length < 2) return;
+    const funil0 = S.funil && S.funil.id;
+    let r;
+    try { r = await k.api.rpcC("nx_negocios_buscar_funis", { p_busca: q }); }
+    catch (e) { if (L.rpcAusente(e)) S.semBuscaFunis = true; return; }
+    if (!S.vivo || S.filtro.busca !== q || !S.funil || S.funil.id !== funil0 || areaVazia.hidden) return;
+    const outros = (Array.isArray(r) ? r : (r && r.funis) || []).filter(x => x && String(x.funil_id) !== String(funil0) && Number(x.n) > 0 && k.funil(x.funil_id));
+    if (!outros.length) return;
+    areaVazia.appendChild(h("div", { class: "linha kb-outros-funis" }, h("span", { class: "fraco" }, "Achamos em outro funil:"),
+      outros.map(x => h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { trocarFunil(x.funil_id); desenharSelFunil(); } } },
+        `${ui.num(Number(x.n))} em ${k.funil(x.funil_id).nome}`))));
   }
   /** «Limpar filtros» do quadro vazio por filtro: tira também a busca. */
   function limparTudo() { S.filtro = {}; busca.value = ""; gravarLocal(); carregar({ silencioso: true }); }
@@ -691,7 +874,7 @@ export async function montarKanban(k, el, rota) {
   const depois = (f, ms) => { const t = setTimeout(() => { timers.delete(t); f(); }, ms); timers.add(t); return t; };
   function destacarMovidos(antes) {
     if (!antes) return;
-    const movidos = [];
+    const movidos = [], movidosIds = [];
     for (const col of S.dados.colunas) for (const x of col.itens || []) {
       const era = antes.get(x.id);
       if (era === undefined || era === col.estagio_id || S.pend.has(x.id) || S.meus.has(x.id)) continue;
@@ -710,9 +893,20 @@ export async function montarKanban(k, el, rota) {
       }
       depois(() => { el.classList.remove("kc-movido"); if (tituloAntes) el.setAttribute("title", tituloAntes); else el.removeAttribute("title"); }, 2000);
       movidos.push(`«${L.tituloCard(x)}» foi para ${(k.estagio(col.estagio_id) || {}).nome || "outra etapa"}${quem ? ` (${quem})` : ""}`);
+      movidosIds.push(x.id);
     }
     S.meus.clear();
     if (movidos.length && movidos.length <= 2) ui.anunciar(`${movidos.join("; ")}.`);
+    // plano 2000d · DR-010: acima de 2 o pulso de cada cartão passa despercebido — uma nota curta com «Ver» (rola até o primeiro)
+    else if (movidos.length > 2) {
+      const primeiro = movidosIds[0];
+      ui.toast(`${ui.num(movidos.length)} cartões mudaram de etapa.`, { tipo: "info", ms: 6000, acao: { rotulo: "Ver", fn: () => {
+        const a = cartaoEl(primeiro);
+        if (!a) return;
+        try { a.scrollIntoView({ block: "nearest", inline: "center", behavior: ui.comportamentoRolagem() }); } catch { /* ok */ }
+        try { a.focus({ preventScroll: true }); } catch { a.focus(); }
+      } } });
+    }
   }
 
   /* ---------- fita de etapas (celular): atalho para cada coluna + destino do arrasto ---------- */
@@ -756,6 +950,9 @@ export async function montarKanban(k, el, rota) {
     const q = quadro.getBoundingClientRect();
     let melhor = null, dist = Infinity;
     for (const [id, c] of colEls) { const d = Math.abs(c.sec.getBoundingClientRect().left - q.left - 16); if (d < dist) { dist = d; melhor = id; } }
+    const ids = [...colEls.keys()];
+    const pos = ids.indexOf(melhor);
+    fitaPos.textContent = ids.length > 1 && pos >= 0 ? `Etapa ${pos + 1} de ${ids.length}` : "";      // plano 2000d · DR-067
     for (const b of fitaEtapas.children) {
       const atual = b.dataset.estagio === melhor;
       if (atual) b.setAttribute("aria-current", "true"); else b.removeAttribute("aria-current");
@@ -787,14 +984,16 @@ export async function montarKanban(k, el, rota) {
     // plano 1500c · RC-310: coluna fechada diz no cabeçalho de que período são os cartões (30/90 dias ou todos) — antes só no rodapé
     const periodo = e.tipo !== "aberto" ? h("small", { class: "kb-col-periodo" }) : null;
     const anun = h("span", { class: "kb-col-anuncio", hidden: true });      // C10: «2 de anúncio» quando a coluna tem cartão vindo de anúncio
+    // plano 2000d · DR-066: «3 fora do prazo» no cabeçalho — a etapa em alerta sem precisar olhar cartão por cartão
+    const slaEl = e.tipo === "aberto" && e.sla_horas ? h("span", { class: "kb-col-sla", hidden: true, title: `Passaram do prazo da etapa (${L.textoPrazoSla(e.sla_horas)})` }) : null;
     const sec = h("section", { class: "kb-col", dataset: { estagio: e.id, tipo: e.tipo }, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, "aria-labelledby": idNome },
       h("header", { class: "kb-col-cab" },
         // plano 1500c · RC-071: nome longo cortado pelo CSS ganha a dica com o nome inteiro
         h("div", { class: "kb-col-l1" }, h("i", { "aria-hidden": "true" }), h("h2", { class: "kb-col-nome", id: idNome, title: e.nome }, e.nome), n, selCol, mais),
         h("div", { class: "kb-col-l2" }, soma, h("span", { class: "kb-col-tipo" }, tipoTxt), periodo),
-        h("div", { class: "kb-col-l3" }, prop, pct, anun)),
+        h("div", { class: "kb-col-l3" }, prop, pct, anun, slaEl)),
       lista, extra);
-    colEls.set(e.id, { sec, lista, n, soma, extra, e, prop, pct, anun, periodo });
+    colEls.set(e.id, { sec, lista, n, soma, extra, e, prop, pct, anun, periodo, slaEl });
     preencherColuna(e.id, col);
     return sec;
   }
@@ -849,16 +1048,29 @@ export async function montarKanban(k, el, rota) {
     // plano 1500c · RC-257: «Por pessoa» — dos cartões abertos JÁ carregados (a nota diz isso quando há colunas com mais)
     ui.limpar(resPessoas);
     const porPessoa = L.resumoPorPessoa(S.dados.colunas, S.funil.estagios);
+    // plano 2000d · DR-011: ganhos, valor ganho e taxa de ganho por pessoa (dos fechados do período carregados) — o gerente vê quem fecha
+    const fech = L.fechadosPorPessoa(S.dados.colunas, S.funil.estagios);
+    for (const [chave, f] of fech) if (!porPessoa.linhas.some(p => String(p.dono_id) === chave)) porPessoa.linhas.push({ dono_id: f.dono_id, n: 0, valor: 0, ponderado: 0 });
     if (porPessoa.linhas.length > 1 || (porPessoa.linhas.length === 1 && porPessoa.linhas[0].dono_id != null)) {
       const nomeDe = id => (id == null ? "Sem responsável" : ((k.usuario(id) || {}).nome || "Pessoa removida"));
+      // plano 2000d · DR-012: o nome filtra o quadro por essa pessoa (o mesmo do avatar do cartão)
+      const celNome = p => {
+        const u = p.dono_id != null ? k.usuario(p.dono_id) : null;
+        return u ? h("button", { type: "button", class: "link crm-fr-pessoa", title: `Ver só os cartões de ${u.nome}`, on: { click: () => filtrarDono(u) } }, u.nome) : nomeDe(p.dono_id);
+      };
+      const periodo = S.fechadosDias ? `${S.fechadosDias} dias` : "todos";
       resPessoas.append(h("h3", { class: "crm-fr-pessoas-t" }, "Por pessoa"),
         h("table", { class: "tabela crm-fr-tab crm-fr-tab-pessoas" },
-          h("caption", { class: "sr-only" }, "Abertos, valor e previsão ponderada por responsável"),
-          h("thead", null, h("tr", null, h("th", { scope: "col" }, "Responsável"), h("th", { scope: "col", class: "dir" }, "Abertos"), h("th", { scope: "col", class: "dir" }, "Valor"), h("th", { scope: "col", class: "dir" }, "Previsão"))),
-          h("tbody", null, porPessoa.linhas.map(p => h("tr", null, h("th", { scope: "row" }, nomeDe(p.dono_id)),
+          h("caption", { class: "sr-only" }, `Abertos, valor, previsão ponderada, ganhos e taxa de ganho (${periodo}) por responsável`),
+          h("thead", null, h("tr", null, h("th", { scope: "col" }, "Responsável"), h("th", { scope: "col", class: "dir" }, "Abertos"), h("th", { scope: "col", class: "dir" }, "Valor"), h("th", { scope: "col", class: "dir" }, "Previsão"),
+            h("th", { scope: "col", class: "dir", title: `Fechados como ${k.v.ganhar} (${periodo})` }, k.v.ganhar), h("th", { scope: "col", class: "dir" }, "Valor ganho"), h("th", { scope: "col", class: "dir", title: "Ganhos ÷ fechados" }, "Taxa"))),
+          h("tbody", null, porPessoa.linhas.map(p => { const f = fech.get(String(p.dono_id)) || { ganhos: 0, valorGanho: 0, taxa: null }; return h("tr", null, h("th", { scope: "row" }, celNome(p)),
             h("td", { class: "dir", dataset: { rotulo: "Abertos" } }, ui.num(p.n)),
             h("td", { class: "dir", dataset: { rotulo: "Valor" } }, p.valor ? ui.brl(p.valor, { centavos: false }) : "—"),
-            h("td", { class: "dir", dataset: { rotulo: "Previsão" }, title: "Valor × chance da etapa" }, p.ponderado ? ui.brl(p.ponderado, { centavos: false }) : "—"))))),
+            h("td", { class: "dir", dataset: { rotulo: "Previsão" }, title: "Valor × chance da etapa" }, p.ponderado ? ui.brl(p.ponderado, { centavos: false }) : "—"),
+            h("td", { class: "dir", dataset: { rotulo: k.v.ganhar } }, ui.num(f.ganhos)),
+            h("td", { class: "dir", dataset: { rotulo: "Valor ganho" } }, f.valorGanho ? ui.brl(f.valorGanho, { centavos: false }) : "—"),
+            h("td", { class: "dir", dataset: { rotulo: "Taxa" } }, f.taxa == null ? "—" : L.pctInteiro(f.taxa))); }))),
         ...(porPessoa.parcial ? [h("p", { class: "sub" }, "Conta só os cartões já carregados nas colunas.")] : [])); // plano 1500c · RX-001: nunca append(null)
     }
     // plano 1500c · RC-294: «Previsão por mês» — pela data de previsão de fechamento dos abertos carregados (sem o campo nos cartões, a tabela não aparece)
@@ -889,7 +1101,7 @@ export async function montarKanban(k, el, rota) {
     const e = c.e;
     col = col || colunaDe(estagioId);
     const tot = Number(col.total) || 0;
-    c.n.textContent = String(tot);
+    c.n.textContent = ui.num(tot);      // plano 2000d · DR-009: «1.250», como o valor ao lado
     c.n.append(h("span", { class: "sr-only" }, tot === 1 ? " cartão" : " cartões"));      // plano 1000b · RB-011
     const valorSoma = e.tipo === "ganho" ? col.soma_valor : col.soma_previsto;
     c.soma.textContent = Number(valorSoma) ? ui.brl(valorSoma, { centavos: false }) : "R$ 0";
@@ -901,6 +1113,12 @@ export async function montarKanban(k, el, rota) {
     c.anun.hidden = !anuncio.n;
     if (anuncio.n) c.anun.appendChild(ui.pilula(anuncio.texto, "anuncio", { variante: "origem", tamanho: "p",
       title: `${anuncio.texto}${anuncio.parcial ? " (entre os cartões carregados)" : ""} nesta etapa` }));
+    if (c.slaEl) {      // plano 2000d · DR-066
+      const nSla = L.contarSla(col.itens, e.sla_horas);
+      c.slaEl.hidden = !nSla;
+      c.slaEl.textContent = nSla ? `${ui.num(nSla)} fora do prazo` : "";
+      c.sec.classList.toggle("kb-col-alerta", nSla > 0);
+    }
     ui.limpar(c.lista);
     for (const it of col.itens) c.lista.appendChild(criarCartao(it, e));
     if (!col.itens.length) c.lista.appendChild(h("div", { class: "kb-vazia", role: "listitem" }, ui.vazio({ tipo: "sem_resultado", titulo: podeMover
@@ -922,6 +1140,7 @@ export async function montarKanban(k, el, rota) {
     }
     marcarRecolhida(c, col);
     c.json = jsonColuna(e, col);       // o que esta coluna desenhou: a recarga silenciosa só refaz a coluna se a resposta for diferente (CR-023)
+    garantirRoving();      // plano 2000d · DR-029
     if (c.periodo) c.periodo.textContent = S.fechadosDias === 0 ? "todos" : `últimos ${S.fechadosDias} dias`;     // plano 1500c · RC-310
     if (e.tipo !== "aberto") {
       c.extra.appendChild(h("div", { class: "kb-antigos" },
@@ -933,6 +1152,18 @@ export async function montarKanban(k, el, rota) {
     }
   }
 
+  /** plano 2000d · DR-029: o cartão focado vira o único com tabindex=0; se o «atual» sumiu, o 1º cartão do quadro assume. */
+  function marcarRoving(id) {
+    S.rovingId = id;
+    for (const x of quadro.querySelectorAll(".kc")) x.setAttribute("tabindex", x.dataset.id === String(id) ? "0" : "-1");
+  }
+  function garantirRoving() {
+    const cards = quadro.querySelectorAll(".kc");
+    if (!cards.length) return;
+    if (cards.some ? cards.some(x => x.getAttribute("tabindex") === "0") : [...cards].some(x => x.getAttribute("tabindex") === "0")) return;
+    cards[0].setAttribute("tabindex", "0");
+    S.rovingId = cards[0].dataset.id;
+  }
   /** CR-036: a coluna vazia recolhida (faixa estreita com o nome na vertical); o arrasto continua achando a coluna (.kb-col). */
   function marcarRecolhida(c, col) {
     if (!c || !c.sec) return;
@@ -941,6 +1172,7 @@ export async function montarKanban(k, el, rota) {
 
   function desenharTotais() {
     if (S.sel.size) pintarSel();
+    pintarSemDono();      // plano 2000d · DR-345
     const t = L.previsao(S.dados.colunas, S.funil.estagios);
     pintarNumero(totAbertos, t.abertos, v => ui.num(Math.round(v)));
     pintarNumero(totSoma, t.soma_aberto, v => ui.brl(v, { centavos: false }));
@@ -950,9 +1182,19 @@ export async function montarKanban(k, el, rota) {
     rotGanho.textContent = `${k.v.ganhar} · ${S.fechadosDias === 0 ? "todos" : `${S.fechadosDias} dias`}`;
     legGanho.textContent = `${ui.num(gq.n)} ${gq.n === 1 ? k.v.min("negocio") : k.v.min("negocios")} · valor final`;
     const filtrado = contarFiltros() > 0 || !!S.filtro.busca;
+    // plano 2000d · DR-046: o título da aba diz o filtro salvo e o funil («Quentes · Pacientes · CRM»)
+    try {
+      const visao = controlesVisoes && typeof controlesVisoes.nomeAtual === "function" ? controlesVisoes.nomeAtual() : null;
+      ctx.titulo([visao, funis().length > 1 && S.funil ? S.funil.nome : null, k.v.crm].filter(Boolean).join(" · "));
+    } catch { /* sem título */ }
     totais.classList.toggle("crm-totais-filtrado", filtrado);
     legTot.forEach((s, i) => { s.textContent = filtrado ? (i === 0 ? "com os filtros" : `${LEG_TOT[i]} · com os filtros`) : LEG_TOT[i]; });
     totais.setAttribute("aria-label", filtrado ? "Totais do funil com os filtros ativos" : "Totais do funil");
+    // plano 2000d · DR-061: «Mostrando 34 de 210 cartões» (o «de N» quando o servidor manda total_sem_filtro); sem filtro, some
+    const nRecorte = S.dados.colunas.reduce((s, c) => s + (Number(c.total) || 0), 0);
+    const semFiltro = Number(S.dados.total_sem_filtro);
+    recorte.hidden = !filtrado;
+    recorte.textContent = filtrado ? `Mostrando ${ui.num(nRecorte)}${Number.isFinite(semFiltro) && semFiltro >= nRecorte ? ` de ${ui.num(semFiltro)}` : ""} ${nRecorte === 1 && !(semFiltro > 1) ? "cartão" : "cartões"} com os filtros.` : "";
     resumoTxt.textContent = L.resumoDoFunil({ abertos: t.abertos, soma: ui.brl(t.soma_aberto, { centavos: false }), previsao: ui.brl(t.previsao_ponderada, { centavos: false }) }, k.v.art("negocio"))
       + (filtrado ? " · com filtros" : "");
     contarFita();
@@ -991,8 +1233,25 @@ export async function montarKanban(k, el, rota) {
    * Cartão em 3 linhas (M24): título · valor + «contato · procedimento» · rodapé (tempo na etapa — âmbar depois do prazo —, consulta, tarefa
    * [ponto vermelho se atrasada], pontuação, glifo da origem, até 3 pontos de etiqueta e o dono). Nenhum texto abaixo de 12 px.
    */
+  /** plano 2000d · DR-032: o trecho da busca marcado (<mark>) no título e na linha do contato — sem acento e sem maiúscula, como a busca. */
+  function marcarBusca(txt) {
+    const q = String(S.filtro.busca || "").trim();
+    if (!q || /^[0-9\s().+-]+$/.test(q) || !txt) return txt;
+    const i = L.semAcento(txt).indexOf(L.semAcento(q));
+    if (i < 0) return txt;
+    return [txt.slice(0, i), h("mark", { class: "kc-achado" }, txt.slice(i, i + q.length)), txt.slice(i + q.length)].filter(x => x !== "");
+  }
+  /** plano 2000d · DR-032: busca só de dígitos que achou pelo telefone → os últimos dígitos digitados (ou null). */
+  function telAchado(c) {
+    const q = String(S.filtro.busca || "").trim();
+    const dig = q.replace(/\D/g, "");
+    if (!q || !/^[0-9\s().+-]+$/.test(q) || dig.length < 4) return null;
+    const tel = String(c.telefone || (c.contato && c.contato.telefone) || "");
+    return tel.includes(dig) ? dig.slice(-8) : null;
+  }
   function criarCartao(c, e) {
     const titulo = L.tituloCard(c);
+    const achouTel = telAchado(c);
     const nomeContato = c.contato && c.contato.nome && c.contato.nome !== titulo ? c.contato.nome : null;
     const sub = [nomeContato, c.servico].filter(Boolean).join(" · ");
     const valor = e.tipo === "ganho" ? (c.valor ?? c.valor_previsto) : c.valor_previsto;
@@ -1037,23 +1296,28 @@ export async function montarKanban(k, el, rota) {
     const rotulo = `${tituloCurto}${valor != null ? `, ${ui.brl(valor, { centavos: false })}` : ""}${faixa ? `, ${faixa.texto.toLowerCase()}` : ""}`;
     // plano 1000b · RB-035: «entrou em dd/mm» no detalhe sr-only e na dica do rodapé (não mais no title do cartão inteiro)
     const entrouEm = c.criado_em ? (ui.dataCurtaBR ? ui.dataCurtaBR(c.criado_em) : ui.dataBR(c.criado_em)) : "";
-    const detalhes = [sub, entrouEm ? `entrou em ${entrouEm}` : "", consultaTxt ? `${cp} ${consultaTxt}` : "", semPresenca ? `presença da ${cp} não marcada` : "", semData ? `agendad${aNeg} sem data` : "",
+    const novoLead = e.tipo === "aberto" && L.leadNovo(c);      // plano 2000d · DR-072
+    const detalhes = [novoLead ? "lead novo" : "", sub, entrouEm ? `entrou em ${entrouEm}` : "", consultaTxt ? `${cp} ${consultaTxt}` : "", semPresenca ? `presença da ${cp} não marcada` : "", semData ? `agendad${aNeg} sem data` : "",
       motivoTxt ? `motivo: ${motivoTxt}` : "",
       tarefaTxt.toLowerCase(), origemTxt ? `origem ${origemTxt}` : "", etqs.length ? `etiquetas ${etqs.map(x => x.nome).join(", ")}` : "",
       pont ? `pontuação ${pont.score} de 100` : "", dono ? `responsável ${dono.nome}` : "",
       c.nao_lidas ? `${c.nao_lidas} ${c.nao_lidas === 1 ? "mensagem não lida" : "mensagens não lidas"}` : ""].filter(Boolean).join(", ");      // plano 1500c · RC-052: singular
     const naoLidasTxt = c.nao_lidas === 1 ? "1 não lida" : `${c.nao_lidas} não lidas`;      // plano 1500c · RX-028: «1 não lida» no selo (não «1 não lidas»)
     const idDet = `kc-d-${cli}-${c.id}`;
-    const art = h("article", { class: ["kc", S.sel.has(c.id) && "kc-sel", S.pend.has(c.id) && "confirmando salvando", faixa && `kc-prazo-${faixa.nivel}`], role: "listitem", tabindex: "0", dataset: { id: c.id }, "aria-roledescription": "cartão",
+    // plano 2000d · DR-029: «tabindex móvel» — só UM cartão do quadro fica na ordem do Tab (o último focado); as setas andam entre eles e o Tab sai do quadro
+    const art = h("article", { class: ["kc", novoLead && "kc-novo", S.sel.has(c.id) && "kc-sel", S.pend.has(c.id) && "confirmando salvando", faixa && `kc-prazo-${faixa.nivel}`], role: "listitem", tabindex: String(S.rovingId) === String(c.id) ? "0" : "-1", dataset: { id: c.id }, "aria-roledescription": "cartão",
       "aria-label": rotulo, "aria-describedby": detalhes ? idDet : null, "aria-busy": S.pend.has(c.id) ? "true" : null, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null },
       detalhes ? h("span", { class: "sr-only", id: idDet }, detalhes) : null,
       h("div", { class: "kc-l1" }, nomeAvatar ? ui.avatar(nomeAvatar, idAvatar) : h("span", { class: "kc-avatar-vazio kc-sem-contato", title: "Sem contato" }, ui.icone("usuario")),
-        h("span", { class: "kc-t dado-pessoal", title: Array.from(titulo).length > 48 ? titulo : null }, titulo)),      // plano 1500c · RX-080: a mesma régua do corte (caracteres, não unidades UTF-16 — emoji contava 2)
+        h("span", { class: "kc-t dado-pessoal", title: Array.from(titulo).length > 48 ? titulo : null }, marcarBusca(titulo)),
+        novoLead ? h("span", { class: "kc-novo-selo", title: `Chegou ${ui.relativo(c.criado_em)}` }, "novo") : null),      // plano 1500c · RX-080: a mesma régua do corte (caracteres, não unidades UTF-16 — emoji contava 2)
       h("div", { class: "kc-l2" },
         // plano 1500c · RC-074: no ganho, o valor FINAL em destaque (com a dica «valor final»)
         valor != null ? h("b", { class: ["kc-valor", e.tipo === "ganho" && c.valor != null && "kc-valor-final"], title: e.tipo === "ganho" && c.valor != null ? "Valor final" : null }, ui.brl(valor, { centavos: L.temCentavos(valor) }))      // plano 1500c · RC-287: centavos só quando há
           : h("span", { class: ["kc-valor", "sem"] }, "Sem valor"),      // plano 1000b · RB-236: mesma caixa da gaveta
-        sub ? h("span", { class: "kc-s dado-pessoal", title: sub }, sub) : null),      // plano 1500c · UC-030: nome/telefone somem no modo apresentação
+        sub ? h("span", { class: "kc-s dado-pessoal", title: sub }, marcarBusca(sub)) : null,
+        // plano 2000d · DR-032: achou pelo telefone (que o cartão não mostra) — o fim do número aparece marcado
+        achouTel ? h("span", { class: "kc-s kc-tel-achado dado-pessoal" }, "tel. …", h("mark", { class: "kc-achado" }, achouTel)) : null),      // plano 1500c · UC-030: nome/telefone somem no modo apresentação
       motivoTxt ? h("span", { class: "kc-motivo", title: `Motivo: ${motivoTxt}` }, motivoTxt) : null,
       // plano 1500c · RC-085: a barra é só visual (o tempo já está no rótulo do cartão) — sem role=img repetindo. RC-280: a dica diz quanto falta para o prazo
       faixa ? h("span", { class: ["kc-tempo", faixa.nivel], "aria-hidden": "true", title: `${L.textoDiasEtapa(c.estagio_em)} · ${faixa.texto}${L.textoFaltaPrazo(c.estagio_em, e.sla_horas) ? ` · ${L.textoFaltaPrazo(c.estagio_em, e.sla_horas)}` : ""}` },
@@ -1092,12 +1356,12 @@ export async function montarKanban(k, el, rota) {
       // plano 1000 (CR-029): o selo de não lidas leva direto à conversa do contato (antes era só informativo)
       c.nao_lidas ? (idContato != null && comConversas
         ? h("button", { type: "button", class: "kc-naolidas", title: `Abrir conversa (${naoLidasTxt})`, "aria-label": `Abrir conversa de «${tituloCurto}» (${naoLidasTxt})`,
-          on: { click: ev => { ev.stopPropagation(); ctx.navegar(`#/conversas?contato=${encodeURIComponent(idContato)}`); } } }, String(c.nao_lidas > 99 ? "99+" : c.nao_lidas))
+          on: { click: ev => { ev.stopPropagation(); irConversa(idContato); } } }, String(c.nao_lidas > 99 ? "99+" : c.nao_lidas))      // plano 2000d · DR-346
         : h("span", { class: "kc-naolidas", title: naoLidasTxt }, String(c.nao_lidas > 99 ? "99+" : c.nao_lidas))) : null,
       // plano 1000 (CR-030): no desktop, ao passar o mouse (ou com o foco no cartão), «Conversa» e «Tarefa» sem abrir a gaveta
       podeMover ? h("span", { class: "kc-rapidas" },
         idContato != null && comConversas ? h("button", { type: "button", class: "bt-icone kc-rapida", dataset: { acao: "conversa" }, "aria-label": `Abrir conversa de «${tituloCurto}»`, title: "Abrir conversa",
-          on: { click: ev => { ev.stopPropagation(); ctx.navegar(`#/conversas?contato=${encodeURIComponent(idContato)}`); } } }, ui.icone("whatsapp")) : null,
+          on: { click: ev => { ev.stopPropagation(); irConversa(idContato); } } }, ui.icone("whatsapp")) : null,      // plano 2000d · DR-346
         h("button", { type: "button", class: "bt-icone kc-rapida", dataset: { acao: "tarefa" }, "aria-label": `Nova tarefa para «${tituloCurto}»`, title: "Nova tarefa",
           on: { click: ev => { ev.stopPropagation(); novaTarefa(c, idContato); } } }, ui.icone("tarefa"))) : null);
     // plano 1000 (CR-271): quando o lead entrou, sem abrir a gaveta. plano 1000b · RB-035: na dica do rodapé (kc-dias), não no cartão inteiro
@@ -1115,6 +1379,7 @@ export async function montarKanban(k, el, rota) {
     // botão do meio do mouse: nova aba também
     art.addEventListener("auxclick", ev => { if (ev.button === 1 && !(ev.target && ev.target.closest && ev.target.closest("a, button"))) { ev.preventDefault(); abrirEmNovaAba(c.id); } });
     art.addEventListener("keydown", ev => teclaCartao(ev, c.id));
+    art.addEventListener("focus", () => marcarRoving(c.id));      // plano 2000d · DR-029
     // o toque longo do celular não pode abrir o menu do sistema (copiar/colar, imagem) em cima do cartão
     art.addEventListener("contextmenu", ev => { if (S.arrasto && S.arrasto.toque) ev.preventDefault(); });
     if (podeMover) art.addEventListener("pointerdown", ev => inicioPonteiro(ev, c.id, art));
@@ -1150,7 +1415,9 @@ export async function montarKanban(k, el, rota) {
   }
   function abrir(id) {
     lembrar(id);
-    N.abrirNegocio(k, id, { aoMudar: c => { S.meus.add((c && c.id) ?? id); carregar({ silencioso: true }); }, vizinhos: vizinhosDe, aoNavegar: lembrar });
+    const cPrev = cardDe(id);      // plano 2000d · DR-359: título e valor do cartão aparecem na gaveta antes da leitura
+    N.abrirNegocio(k, id, { aoMudar: c => { S.meus.add((c && c.id) ?? id); carregar({ silencioso: true }); }, vizinhos: vizinhosDe, aoNavegar: lembrar,
+      previa: cPrev ? { titulo: L.tituloCard(cPrev), valor: cPrev.valor ?? null, valor_previsto: cPrev.valor_previsto ?? null, status: cPrev.status } : null });
   }
   /** CR-281: o link do negócio numa aba nova (noopener: a aba nova não mexe nesta). */
   function abrirEmNovaAba(id) {
@@ -1278,7 +1545,13 @@ export async function montarKanban(k, el, rota) {
     let extra = {};
     try { extra = await N.prepararMovimento(k, card, destino); }
     catch (e) { extra = null; k.toastErro(e); }
-    if (extra === null) { preencherColuna(origemCol.estagio_id); if (destCol !== origemCol) preencherColuna(estagioId); focarCartao(id); ui.anunciar("Movimento cancelado."); return; }
+    if (extra === null) {
+      preencherColuna(origemCol.estagio_id); if (destCol !== origemCol) preencherColuna(estagioId); focarCartao(id);
+      // plano 2000d · DR-064: o cartão voltou — e o aviso diz por quê (a pergunta foi cancelada)
+      const faltou = { ganho: "faltou o valor final", perdido: "faltou o motivo", agendada: "faltou a data" }[L.pedidoAoMover(destino, k.estagio(origemCol.estagio_id))];
+      ui.toast(`Movimento cancelado${faltou ? `: ${faltou}` : ""}. O cartão ficou onde estava.`, { tipo: "info", ms: 4000 });
+      return;
+    }
     // otimista: a tela já mostra o cartão no destino
     const patch = L.patchMovimento(destino, extra);       // o mesmo que a gaveta do negócio aplica (C1)
     S.dados.colunas = L.moverLocal(S.dados.colunas, id, estagioId, pos, ordem, patch);
@@ -1315,7 +1588,10 @@ export async function montarKanban(k, el, rota) {
     if (!ok || origemCol === destCol) return;       // só reordenar dentro da etapa não pede «Desfazer»
     // plano 1000b · RB-008: «movida» quando o registro da vertical é feminino (oportunidade, venda) — também no aviso do leitor
     // plano 1500c · RC-293: os totais novos (CR-268) vão no próprio aviso — ele é a única fala do movimento
-    ui.acaoComDesfazer({ texto: `«${titulo}» movid${k.v.art("negocio")} para ${destino.nome}.${totaisDoMovimento(mov)}`, reverter: () => desfazerMovimento(mov) });
+    // plano 2000d · DR-028: a posição na coluna nova também («posição 1 de 5»)
+    const nDest = (colunaDe(estagioId) || { itens: [] }).itens.length;
+    const posTxt = nDest > 1 ? ` (posição ${pos + 1} de ${nDest})` : "";
+    ui.acaoComDesfazer({ texto: `«${titulo}» movid${k.v.art("negocio")} para ${destino.nome}${posTxt}.${totaisDoMovimento(mov)}`, reverter: () => desfazerMovimento(mov) });
   }
 
   /**
@@ -1507,7 +1783,11 @@ export async function montarKanban(k, el, rota) {
     const antes = document.hidden ? [...S.pend.values()].filter(m => !m.efetivado) : [];
     if (document.hidden) efetivarPendentes({ saindo: true });
     if (antes.length) { S.movsFirmados = S.movsFirmados || new Set(); for (const m of antes) S.movsFirmados.add(m); }
-    if (!document.hidden) avisarFirmados();
+    if (!document.hidden) {
+      avisarFirmados();
+      // plano 2000d · DR-020/052: voltou para a aba depois de um tempo (ou o pulso foi pulado com ela oculta): recarrega já, sem esperar o próximo pulso
+      if (S.vivo && S.dados && !emGesto() && (S.pulsoPendente || Date.now() - S.ultimaRecarga > 60000)) { S.pulsoPendente = false; carregar({ silencioso: true }); }
+    }
   };
   const aoSairDaPagina = () => efetivarPendentes({ saindo: true });
   document.addEventListener("visibilitychange", aoEsconder);
@@ -1515,7 +1795,10 @@ export async function montarKanban(k, el, rota) {
 
   function focarCartao(id) {
     const c = cartaoEl(id);
-    if (c && (S.teclado || document.activeElement === document.body || el.contains(document.activeElement))) {
+    // plano 2000d · DR-068: depois do «Mover para…» o botão ⋮ que tinha o foco foi redesenhado (saiu do documento) — o foco vai para o cartão movido
+    const focoPerdido = !document.activeElement || (document.activeElement !== document.body && !document.activeElement.isConnected);
+    if (c && (S.teclado || S.focarApos === id || focoPerdido || document.activeElement === document.body || el.contains(document.activeElement))) {
+      if (S.focarApos === id) S.focarApos = null;
       try { c.focus({ preventScroll: false }); } catch { c.focus(); }
     }
   }
@@ -1689,6 +1972,12 @@ export async function montarKanban(k, el, rota) {
         h("i", { "aria-hidden": "true" }), h("span", { class: "kb-mover-nome" }, e.nome),
         h("small", null, atual ? "etapa atual" : `${n} ${n === 1 ? "cartão" : "cartões"}`)));
     }));
+    // plano 2000d · DR-056: cartão perdido ganha «Reabrir» no topo da folha (volta para a 1ª etapa aberta, com o «Desfazer» de sempre)
+    const primeiraAberta = S.funil.estagios.find(e => e.tipo === "aberto");
+    if ((k.estagio(atualId) || {}).tipo === "perdido" && primeiraAberta) {
+      corpo.prepend(h("li", null, h("button", { type: "button", class: "kb-mover-op kb-mover-reabrir", on: { click: () => modalApi && modalApi.fechar(primeiraAberta.id) } },
+        ui.icone("desfazer"), h("span", { class: "kb-mover-nome" }, "Reabrir"), h("small", null, `volta para «${primeiraAberta.nome}»`))));
+    }
     // plano 1000 (CR-044): trocar de funil daqui mesmo (antes só pela gaveta → ⋮), com a mesma trava do funil de anúncios
     if (funis().length > 1 && typeof N.moverDeFunil === "function") {
       corpo.appendChild(h("li", null, h("button", { type: "button", class: "kb-mover-op kb-mover-funil", on: { click: () => modalApi && modalApi.fechar(OUTRO_FUNIL) } },
@@ -1708,7 +1997,7 @@ export async function montarKanban(k, el, rota) {
     const escolhida = await ui.modal({ titulo: "Mover para…", descricao: L.tituloCard(card), corpo: comBuscaEtapas(corpo), largura: "p", protegerTexto: false,
       acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: null }], aoAbrir: a => { modalApi = a; } });
     if (escolhida === TAREFA && S.vivo) { novaTarefa(card, idContato); return; }
-    if (escolhida === CONVERSA && S.vivo) { ctx.navegar(`#/conversas?contato=${encodeURIComponent(idContato)}`); return; }
+    if (escolhida === CONVERSA && S.vivo) { irConversa(idContato); return; }      // plano 2000d · DR-346
     if (escolhida === SELECIONAR && S.vivo) {
       S.modoSel = true;
       if (!S.sel.has(id)) alternarSel(id);
@@ -1720,7 +2009,7 @@ export async function montarKanban(k, el, rota) {
       await N.moverDeFunil(k, { ...card, funil_id: S.funil.id, status }, { aoMover: () => { S.meus.add(id); carregar({ silencioso: true }); } });
       return;
     }
-    if (escolhida && S.vivo) soltar(id, escolhida, 0);
+    if (escolhida && S.vivo) { S.focarApos = id; soltar(id, escolhida, 0); }      // plano 2000d · DR-068
   }
   /**
    * plano 1000 (CR-035): mover os selecionados de uma vez — a etapa uma vez, o motivo da perda uma vez, as gravações em fila (com o progresso para o
@@ -1737,12 +2026,12 @@ export async function montarKanban(k, el, rota) {
     let modalApi = null;
     const corpo = h("ul", { class: "kb-mover" }, S.funil.estagios.map(e =>      // plano 1000b · RB-010: <ul><li><button>
       h("li", { dataset: { etapa: e.id } }, h("button", { type: "button", class: "kb-mover-op", style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, on: { click: () => modalApi && modalApi.fechar(e.id) } },
-        h("i", { "aria-hidden": "true" }), h("span", { class: "kb-mover-nome" }, e.nome), h("small", null, e.tipo === "ganho" ? "um por vez (valor de cada)" : "")))));
+        h("i", { "aria-hidden": "true" }), h("span", { class: "kb-mover-nome" }, e.nome), h("small", null, e.tipo === "ganho" ? "com o valor previsto de cada" : "")))));      // plano 2000d · DR-017
     const destinoId = await ui.modal({ titulo: `Mover ${cards.length} ${cards.length === 1 ? "cartão" : "cartões"} para…${foraPend ? ` (${foraPend} ainda gravando, ${foraPend === 1 ? "fica" : "ficam"} de fora)` : ""}`, corpo: comBuscaEtapas(corpo), largura: "p", protegerTexto: false,
       acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: null }], aoAbrir: a => { modalApi = a; } });
     const destino = destinoId && k.estagio(destinoId);
     if (!destino || !S.vivo) return;
-    if (destino.tipo === "ganho") { ui.toast(`Para marcar como «${destino.nome}», mova um por vez: cada um tem o seu valor final.`, { tipo: "info" }); return; }
+    if (destino.tipo === "ganho") { await ganharEmLote(cards, destino); return; }
     const mover = cards.filter(c => (colunaDeCard(c.id) || {}).estagio_id !== destino.id);
     if (!mover.length) { limparSel(); return; }
     let extra = {};
@@ -1762,7 +2051,7 @@ export async function montarKanban(k, el, rota) {
         if (!r || !Array.isArray(r.ok)) throw Object.assign(new Error("resposta_invalida"), { status: 404 });      // resposta que não é do lote: volta ao laço
         const ok = new Set(r.ok.map(String));
         for (const c of mover) if (ok.has(String(c.id))) { feitos.push({ c, origem: origens.get(c.id) }); S.meus.add(c.id); }
-        for (const f of (r && r.falhas) || []) falhas.push(Object.assign(new Error(f.codigo || "erro"), { codigo: f.codigo || "erro" }));
+        for (const f of (r && r.falhas) || []) falhas.push(Object.assign(new Error(f.codigo || "erro"), { codigo: f.codigo || "erro", card: mover.find(c => String(c.id) === String(f.id)) || null }));
         viaLote = true;
         ui.anunciar(`Movidos ${feitos.length} de ${mover.length}.`);
       } catch (e) {
@@ -1773,13 +2062,13 @@ export async function montarKanban(k, el, rota) {
     if (!viaLote) for (let i = 0; i < mover.length; i++) {
       const c = mover[i], origem = origens.get(c.id);
       try { await N.moverNegocio(k, c, destino, { extra }); feitos.push({ c, origem }); S.meus.add(c.id); }
-      catch (e) { falhas.push(e); }
+      catch (e) { falhas.push(Object.assign(e, { card: c })); }
       // plano 1000b · RB-027: o leitor ouve o 1º, a cada 5 e o último (antes: um aviso por cartão inundava a fala)
       if (i === 0 || (i + 1) % 5 === 0 || i === mover.length - 1) ui.anunciar(`Movendo ${i + 1} de ${mover.length}…`);
     }
     limparSel();
     if (S.vivo) await carregar({ silencioso: true });
-    if (falhas.length) ui.toast(`${falhas.length} não ${falhas.length === 1 ? "foi movido" : "foram movidos"}: ${k.erro(falhas[0])}`, { tipo: "erro" });
+    if (falhas.length) avisarFalhasLote(falhas, "movido");
     if (!feitos.length) return;
     // plano 1000b · RB-025: etapa com data (marco «agendada») em lote vai sem data — o aviso diz isso e o que fazer
     const semData = destino.marco === "agendada" ? ` — sem data marcada: abra cada um para agendar` : "";
@@ -1797,6 +2086,41 @@ export async function montarKanban(k, el, rota) {
         if (S.vivo) await carregar({ silencioso: true });
         if (naoVoltaram) ui.toast(`${naoVoltaram} de ${feitos.length} não ${naoVoltaram === 1 ? "voltou" : "voltaram"} para a etapa de antes${primeiroErro ? `: ${k.erro(primeiroErro)}` : "."}`, { tipo: "erro" });
       } });
+  }
+  /** plano 2000d · DR-018: quais falharam (títulos e motivo) e «Selecionar só estes» para tentar de novo. */
+  function avisarFalhasLote(falhas, verbo) {
+    const comCard = falhas.filter(f => f && f.card);
+    const nomes = comCard.slice(0, 3).map(f => `«${L.tituloCard(f.card)}»`).join(", ");
+    const resto = comCard.length > 3 ? ` e mais ${comCard.length - 3}` : "";
+    const n = falhas.length;
+    const texto = `${n} não ${n === 1 ? `foi ${verbo}` : `foram ${verbo}s`}${nomes ? `: ${nomes}${resto}` : ""} — ${k.erro(falhas[0])}`;
+    const ids = comCard.map(f => f.card.id).filter(id => cardDe(id));
+    ui.toast(texto, { tipo: "erro", acao: ids.length ? { rotulo: "Selecionar só estes", fn: () => { S.sel.clear(); for (const id of ids) S.sel.add(id); S.modoSel = true; pintarSel(); ui.anunciar(`${ids.length} ${ids.length === 1 ? "cartão selecionado" : "cartões selecionados"}.`); } } : null });
+  }
+  /**
+   * plano 2000d · DR-017: ganho em lote — cada cartão fecha com o SEU valor previsto (confirmação com o total). Quem não tem valor previsto fica de fora
+   * (cada um precisa do valor final). Um por vez no servidor (as automações do ganho saem por cartão), com o progresso para o leitor de tela.
+   */
+  async function ganharEmLote(cards, destino) {
+    const comValor = cards.filter(c => Number(c.valor_previsto) > 0 && (colunaDeCard(c.id) || {}).estagio_id !== destino.id);
+    const semValor = cards.filter(c => !(Number(c.valor_previsto) > 0));
+    if (!comValor.length) { ui.toast(`Nenhum dos selecionados tem valor previsto: marque como «${destino.nome}» um por vez, com o valor final de cada.`, { tipo: "info" }); return; }
+    const total = comValor.reduce((s, c) => s + Number(c.valor_previsto), 0);
+    const ok = await ui.confirmar({ titulo: `Marcar ${comValor.length} como «${destino.nome}»?`,
+      texto: `Cada um fecha com o valor previsto — total de ${ui.brl(total, { centavos: L.temCentavos(total) })}.${semValor.length ? ` ${semValor.length} sem valor previsto ${semValor.length === 1 ? "fica" : "ficam"} de fora.` : ""} Mensagens automáticas do ganho podem sair para cada um.`,
+      rotulo: `Marcar ${comValor.length}` });
+    if (!ok || !S.vivo) return;
+    const feitos = [], falhas = [];
+    for (let i = 0; i < comValor.length; i++) {
+      const c = comValor[i];
+      try { await N.moverNegocio(k, c, destino, { extra: { valor: Number(c.valor_previsto) } }); feitos.push(c); S.meus.add(c.id); }
+      catch (e) { falhas.push(Object.assign(e, { card: c })); }
+      if (i === 0 || (i + 1) % 5 === 0 || i === comValor.length - 1) ui.anunciar(`Marcando ${i + 1} de ${comValor.length}…`);
+    }
+    limparSel();
+    if (S.vivo) await carregar({ silencioso: true });
+    if (falhas.length) avisarFalhasLote(falhas, "marcado");
+    if (feitos.length) ui.toast(`${feitos.length} ${feitos.length === 1 ? "marcado" : "marcados"} como «${destino.nome}» · ${ui.brl(feitos.reduce((s, c) => s + Number(c.valor_previsto), 0), { centavos: false })}.`, { tipo: "ok" });
   }
   function colunaDeCard(id) { return S.dados.colunas.find(c => c.itens.some(x => x.id === id)) || null; }
 
@@ -2046,7 +2370,9 @@ export async function montarKanban(k, el, rota) {
     if (ev.key === "/" && !ev.altKey && !ev.ctrlKey && !ev.metaKey) {
       const a = ev.target;
       const editando = a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || "") || (a.closest && a.closest("[role=dialog],dialog")));
-      if (!editando) { ev.preventDefault(); busca.focus(); }
+      // plano 2000d · DR-022: com um diálogo aberto (confirmação, gaveta), «/» não puxa o foco para a busca atrás dele
+      const dialogoAberto = typeof document !== "undefined" && document.querySelector && document.querySelector("dialog[open]");
+      if (!editando && !dialogoAberto) { ev.preventDefault(); busca.focus(); }
     }
   };
   document.addEventListener("keydown", aoTeclaGlobal);
@@ -2062,6 +2388,10 @@ export async function montarKanban(k, el, rota) {
     if (f.parado_dias) n++;
     if (f.criado_de || f.criado_ate) n++;
     if (f.campo) n++;
+    if (f.nao_lidas) n++;      // plano 2000d · DR-024/025/027
+    if (f.servico) n++;
+    if (f.temperatura) n++;
+    if (f.campanha) n++;      // plano 2000d · DR-026
     return n;
   }
 
@@ -2075,7 +2405,11 @@ export async function montarKanban(k, el, rota) {
       try { if (alvo && alvo.focus) alvo.focus(); } catch { /* ok */ }
     });
     const add = (txt, tirar, dica) => { const i = chips.querySelectorAll(".crm-chip").length; chips.appendChild(h("span", { class: "crm-chip" }, h("span", null, txt, dica ? h("small", null, ` ${dica}`) : null),
-      h("button", { type: "button", "aria-label": `Tirar o filtro ${txt}`, on: { click: () => { tirar(); gravarLocal(); ui.anunciar(`Filtro tirado: ${txt}.`); focarDepois(i); } } }, ui.icone("fechar")))); };
+      h("button", { type: "button", "aria-label": `Tirar o filtro ${txt}`, on: { click: () => { tirar(); gravarLocal(); focarDepois(i).then(() => {
+        // plano 2000d · DR-060: depois de recarregar, o leitor ouve o que saiu E quantos cartões há agora
+        const n = S.dados ? S.dados.colunas.reduce((s, c) => s + (Number(c.total) || 0), 0) : null;
+        ui.anunciar(`Filtro tirado: ${txt}.${n != null ? ` ${ui.num(n)} ${n === 1 ? "cartão" : "cartões"} no quadro.` : ""}`);
+      }); } } }, ui.icone("fechar")))); };
     if (f.dono) add(L.textoChipDono(f.dono, k.usuario(f.dono)), () => delete f.dono);     // plano 1000b · RB-029: «pessoa removida» em vez de «—»
     if (f.etiquetas && f.etiquetas.ids && f.etiquetas.ids.length) {
       // plano 1000b · RB-018: frase («Tem todas: VIP, Retorno»), sem o código do operador; etiqueta apagada vira «etiqueta removida»
@@ -2086,6 +2420,10 @@ export async function montarKanban(k, el, rota) {
     if (f.parado_dias) add(`Parados há ${f.parado_dias}+ dias`, () => delete f.parado_dias);
     if (f.criado_de || f.criado_ate) add(`Criados ${f.criado_de ? `de ${ui.dataBR(f.criado_de)} ` : ""}${f.criado_ate ? `até ${ui.dataBR(f.criado_ate)}` : ""}`.trim(), () => { delete f.criado_de; delete f.criado_ate; });
     if (f.campo) add(L.textoFiltroCampo(f.campo, k.base.campos), () => delete f.campo);
+    if (f.nao_lidas) add("Com mensagem não lida", () => delete f.nao_lidas);      // plano 2000d · DR-024
+    if (f.servico) add(`${k.v.servico || "Serviço"}: ${f.servico}`, () => delete f.servico);      // plano 2000d · DR-025
+    if (f.temperatura) add(`Temperatura: ${{ quente: "quentes", morno: "mornos", frio: "frios" }[f.temperatura] || f.temperatura}`, () => delete f.temperatura);      // plano 2000d · DR-027
+    if (f.campanha) add(`Campanha: ${f.campanha}`, () => delete f.campanha);      // plano 2000d · DR-026
     const n = contarFiltros();
     if (n > 0) chips.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p crm-chips-limpar", on: { click: () => {
       const b = S.filtro.busca; S.filtro = b ? { busca: b } : {}; gravarLocal();
@@ -2142,11 +2480,34 @@ export async function montarKanban(k, el, rota) {
     const de = h("input", { type: "date", "aria-label": "Criados de", value: f.criado_de || "" });
     const ate = h("input", { type: "date", "aria-label": "Criados até", value: f.criado_ate || "" });
     // plano 1500c · RC-327: «Copiar link com estes filtros» — o gerente manda ao vendedor o quadro já filtrado (#/crm?funil=..&f=..; a busca digitada não vai)
-    const codLink = L.filtroParaLink(S.filtro);
-    const btLink = codLink ? h("button", { type: "button", class: "bt bt-fant bt-p crm-filtros-link", on: { click: () => {
+    // plano 2000d · DR-003: o link sai do que está NO FORMULÁRIO agora (o mesmo que «Aplicar» leria) — não do filtro de quando o popover abriu
+    const btLink = h("button", { type: "button", class: "bt bt-fant bt-p crm-filtros-link", on: { click: () => {
+      const r = lerNovo();
+      if (!r.nf) { mostrarErro(r); return; }
+      const codLink = L.filtroParaLink(r.nf);
+      if (!codLink) { ui.toast("Escolha algum filtro para copiar o link.", { tipo: "info" }); return; }
       const base = typeof location !== "undefined" && location ? `${location.origin || ""}${location.pathname || ""}` : "";
       ui.copiar(`${base}#/crm?${S.funil ? `funil=${encodeURIComponent(S.funil.id)}&` : ""}f=${codLink}`, { aviso: "Link com os filtros copiado." });
-    } } }, ui.icone("link"), "Copiar link com estes filtros") : null;    // plano 1500c · RC-323: período invertido mostra o erro junto das datas (antes só um aviso que some — e a visão salva perdia o período)
+    } } }, ui.icone("link"), "Copiar link com estes filtros");    // plano 1500c · RC-323: período invertido mostra o erro junto das datas (antes só um aviso que some — e a visão salva perdia o período)
+    // plano 2000d · DR-023: «Este mês» / «Mês passado» preenchem as datas (dia de São Paulo)
+    const atalhoPeriodo = (rot, tipo) => h("button", { type: "button", class: "bt bt-fant bt-p crm-filtros-periodo", on: { click: () => {
+      const p = L.periodoAtalho(tipo, ui.hojeSP()); if (!p) return;
+      de.value = p.de; ate.value = p.ate; contarPend();
+    } } }, rot);
+    // plano 2000d · DR-024/025/027: «só com mensagem não lida», serviço e temperatura (pontuação)
+    const soNaoLidas = h("input", { type: "checkbox", checked: !!f.nao_lidas });
+    const servicos = L.servicosDoQuadro(S.dados && S.dados.colunas);
+    if (f.servico && !servicos.includes(f.servico)) servicos.unshift(f.servico);
+    const selServico = servicos.length ? h("select", { class: "sel", "aria-label": k.v.servico || "Serviço" }, h("option", { value: "" }, "Qualquer um"), servicos.map(s => h("option", { value: s, selected: f.servico === s }, s))) : null;
+    const selTemp = h("select", { class: "sel", "aria-label": "Temperatura do lead" }, [["", "Qualquer"], ["quente", "Quentes (70+ pts)"], ["morno", "Mornos (40 a 69)"], ["frio", "Frios (até 39)"]]
+      .map(([v, t]) => h("option", { value: v, selected: (f.temperatura || "") === v }, t)));
+    // plano 2000d · DR-026: campanha do anúncio (aparece quando os cartões trazem a campanha)
+    const campanhas = L.servicosDoQuadro(S.dados && S.dados.colunas, L.campanhaDoCard);
+    if (f.campanha && !campanhas.includes(f.campanha)) campanhas.unshift(f.campanha);
+    const selCampanha = campanhas.length ? h("select", { class: "sel", "aria-label": "Campanha do anúncio" }, h("option", { value: "" }, "Qualquer uma"), campanhas.map(s => h("option", { value: s, selected: f.campanha === s }, s))) : null;
+    if (selCampanha) selCampanha.value = f.campanha || "";
+    // o valor do <select> também pelo .value (o «Copiar link» lê o formulário antes de qualquer mudança — DR-003)
+    parado.value = String(f.parado_dias || ""); selTemp.value = f.temperatura || ""; if (selServico) selServico.value = f.servico || "";
     const erroData = h("small", { class: "ed-erro crm-filtros-erro", role: "alert", id: `crm-fd-${cli}`, hidden: true });
     const aplicar = h("button", { type: "button", class: "bt bt-prim bt-p" }, "Aplicar");
     const limpar = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Limpar");
@@ -2173,7 +2534,12 @@ export async function montarKanban(k, el, rota) {
       h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Origem"), opsOrig),
       h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Valor (R$)"), h("div", { class: "crm-filtros-linha" }, vMin, vMax), erroValor),
       h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Parados na etapa"), parado),
-      h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Criados entre"), h("div", { class: "crm-filtros-linha" }, de, ate), erroData),
+      h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Criados entre"), h("div", { class: "crm-filtros-linha" }, de, ate),
+        h("div", { class: "crm-filtros-linha crm-filtros-atalhos" }, atalhoPeriodo("Este mês", "mes"), atalhoPeriodo("Mês passado", "mes_passado")), erroData),
+      h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Mensagens"), h("label", { class: "crm-op" }, soNaoLidas, h("span", null, "Só com mensagem não lida"))),
+      selServico ? h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, k.v.servico || "Serviço"), selServico) : null,
+      h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Temperatura"), selTemp),
+      selCampanha ? h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Campanha"), selCampanha) : null,
       grupoCampo ? grupoCampo.el : null,
       h("fieldset", { class: "crm-filtros-grupo crm-filtros-fech" }, h("legend", { class: "rotulo" }, "Fechados no quadro"), segFech),
       btLink,
@@ -2196,9 +2562,20 @@ export async function montarKanban(k, el, rota) {
       if (parado.value) nf.parado_dias = Number(parado.value);
       if (de.value) nf.criado_de = de.value;
       if (ate.value) nf.criado_ate = ate.value;
+      if (soNaoLidas.checked) nf.nao_lidas = true;      // plano 2000d · DR-024/025/027
+      if (selServico && selServico.value) nf.servico = selServico.value;
+      if (selTemp.value) nf.temperatura = selTemp.value;
+      if (selCampanha && selCampanha.value) nf.campanha = selCampanha.value;      // plano 2000d · DR-026
       if (grupoCampo) { const c = grupoCampo.ler(); if (c.erro) return { erro: c.erro, foco: null }; if (c.campo) nf.campo = c.campo; }
       else if (S.filtro.campo) nf.campo = S.filtro.campo;
       return { nf };
+    }
+    /** O erro do formulário junto do campo (valor, datas) ou num aviso — o mesmo para «Aplicar» e para «Copiar link» (DR-003). */
+    function mostrarErro(r) {
+      if (r.valor) { erroValor.textContent = r.erro; erroValor.hidden = false; r.foco.setAttribute("aria-invalid", "true"); r.foco.setAttribute("aria-describedby", erroValor.id); }
+      else if (r.data) { erroData.textContent = r.erro; erroData.hidden = false; for (const x of [de, ate]) { x.setAttribute("aria-invalid", "true"); x.setAttribute("aria-describedby", erroData.id); } }     // plano 1500c · RC-323
+      else ui.toast(r.erro, { tipo: "erro" });
+      if (r.foco) r.foco.focus();
     }
     const mudancas = () => { const r = lerNovo(); return r.nf ? canonico(r.nf) !== canonico(S.filtro) || fechSel !== S.fechadosDias : true; };
     /** CR-215: a escolha dos fechados vale junto com os filtros (Aplicar ou fechar o popover). → mudou? */
@@ -2228,13 +2605,7 @@ export async function montarKanban(k, el, rota) {
       for (const x of [vMin, vMax, de, ate]) x.removeAttribute("aria-invalid");
       erroValor.hidden = true; erroValor.textContent = "";
       erroData.hidden = true; erroData.textContent = "";        // plano 1500c · RC-323
-      if (!r.nf) {
-        if (r.valor) { erroValor.textContent = r.erro; erroValor.hidden = false; r.foco.setAttribute("aria-invalid", "true"); r.foco.setAttribute("aria-describedby", erroValor.id); }
-        else if (r.data) { erroData.textContent = r.erro; erroData.hidden = false; for (const x of [de, ate]) { x.setAttribute("aria-invalid", "true"); x.setAttribute("aria-describedby", erroData.id); } }     // plano 1500c · RC-323
-        else ui.toast(r.erro, { tipo: "erro" });
-        if (r.foco) r.foco.focus();
-        return;
-      }
+      if (!r.nf) { mostrarErro(r); return; }
       resolvido = true;
       aplicarFech();
       S.filtro = r.nf; gravarLocal(); pop.fechar(); carregar({ silencioso: true });
@@ -2245,7 +2616,8 @@ export async function montarKanban(k, el, rota) {
   const cancelarPulso = ctx.pulso && ctx.pulso.assinar ? ctx.pulso.assinar(() => {
     // plano 1000 (CR-003): só os movimentos ainda NÃO enviados (os 7 s do «Desfazer») seguram o pulso; um já enviado e sem confirmação não pode
     // travar a atualização do quadro (a recarga reaplica o cartão no destino enquanto a conferência roda)
-    if (!S.vivo || S.arrasto || S.teclado || document.hidden || [...S.pend.values()].some(m => !m.efetivado)) return;
+    if (S.vivo && document.hidden) { S.pulsoPendente = true; return; }      // plano 2000d · DR-052: oculta não recarrega; recarrega ao voltar
+    if (!S.vivo || S.arrasto || S.teclado || [...S.pend.values()].some(m => !m.efetivado)) return;
     if (Date.now() - S.ultimaRecarga < PULSO_MIN_MS) return;
     if (document.querySelector("dialog[open]")) return;
     carregar({ silencioso: true });
@@ -2296,6 +2668,7 @@ export async function montarKanban(k, el, rota) {
       document.removeEventListener("keydown", aoTeclaGlobal);
       if (cancelarPulso) cancelarPulso();
       if (cancelarBase) cancelarBase();
+      if (controlesVisoes && typeof controlesVisoes.desmontar === "function") controlesVisoes.desmontar();      // plano 2000d · DR-044
     },
   };
 }

@@ -184,7 +184,7 @@
         </button>
         <button class="nav-b" data-aba="pacientes" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.8a3.4 3.4 0 0 1 0 6.4M18.5 14.8c1.7.8 2.8 2.5 3.2 5.2"/></svg>
-          Pacientes
+          <span data-rot-pessoas>Pacientes</span>
         </button>
         <button class="nav-b" data-aba="radar" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l6.4-6.4"/></svg>
@@ -208,7 +208,8 @@
           <p><b id="side-nome"></b><span id="side-papel"></span></p>
           <button class="pill pill-ghost-dark" id="btn-sair" type="button">Sair</button>
         </div>
-        <p class="side-assina">Preparado pela<br><b>Nexus · Taubaté</b></p>
+        <!-- plano 2000d · KX-043: quem assina vem da agência do cliente (painel.js · aplicarAgencia) -->
+        <p class="side-assina">Preparado pela<br><b id="side-assina-nome">Nexus · Taubaté</b></p>
       </div>
     </aside>
 
@@ -239,6 +240,8 @@
           <h1 id="top-h1">Visão geral</h1>
           <div class="top-sync-row">
             <p class="top-sync" id="top-sync"></p>
+            <!-- plano 2000d · DA-387: a mesma tela no Órbita (app novo) -->
+            <a class="link-orbita" id="link-orbita" href="https://orbita-nexus-ads.netlify.app/app/" target="_blank" rel="noopener" hidden>Ver no Órbita →</a>
             <div class="sync-box">
               <button class="sync-pill" id="sync-pill" type="button" aria-expanded="false" aria-controls="sync-pop" hidden><i class="sync-pt" aria-hidden="true"></i><span id="sync-txt"></span></button>
               <div class="sync-pop" id="sync-pop" role="group" aria-label="Leitura dos anúncios" hidden></div>
@@ -266,6 +269,8 @@
               <button type="button" role="radio" data-v="google" aria-checked="false">Google</button>
             </div>
           </div>
+          <!-- plano 2000d · DA-390: vibrar o celular a cada venda nova (opcional, só onde o aparelho vibra) -->
+          <label class="op-vibrar" id="op-vibrar-l" hidden><input type="checkbox" id="op-vibrar"> Vibrar a cada venda nova</label>
           <button class="pill pill-ghost" id="btn-tour" type="button" aria-label="Tour de 1 minuto" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
             <span>Tour<span class="tour-mais"> de 1 minuto</span></span>
@@ -394,6 +399,8 @@
                 <h2>Criativos</h2>
                 <p class="sub">Frequência acima de 3 = as mesmas pessoas vendo o mesmo anúncio. Hora de trocar.</p>
               </div>
+              <!-- plano 2000d · KX-087: os criativos em planilha também (o que a tabela mostra: período, plataforma e ordem) -->
+              <button class="pill pill-ghost pill-sm" id="btn-csv-cri" type="button">Baixar planilha (CSV)</button>
             </header>
             <div class="tbl-wrap" id="tbl-criativos"></div>
           </article>
@@ -410,7 +417,7 @@
             </div>
             <div class="k-tools">
               <label class="busca">
-                <span class="sr-only">Buscar paciente por nome ou telefone</span>
+                <span class="sr-only" id="k-busca-l">Buscar paciente por nome, telefone ou tratamento</span>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
                 <input type="search" id="k-busca" placeholder="Buscar paciente" autocomplete="off">
               </label>
@@ -472,7 +479,7 @@
               <div class="fone fone-reto fone-aviso" data-tilt="6" data-foco>
                 <div class="fone-tela">
                   <div class="ph-screen">
-                    <div class="ph-top"><span class="ph-av"><svg class="nx-mono"><use href="#nx-mono"/></svg></span><div><b>Nexus · Radar</b><small>aviso automático</small></div></div>
+                    <div class="ph-top"><span class="ph-av" data-av-agencia><svg class="nx-mono"><use href="#nx-mono"/></svg></span><div><b id="ph-radar-t">Nexus · Radar</b><small>aviso automático</small></div></div>
                     <div class="ph-body wa-inline" id="wa-alerta"></div>
                   </div>
                 </div>
@@ -543,7 +550,7 @@
             <div class="fone fone-reto fone-chat" data-tilt="6" data-foco>
               <div class="fone-tela">
                 <div class="ph-screen">
-                  <div class="ph-top"><span class="ph-av"><svg class="nx-mono"><use href="#nx-mono"/></svg></span><div><b>Nexus · Tráfego</b><small>relatório automático</small></div></div>
+                  <div class="ph-top"><span class="ph-av" data-av-agencia><svg class="nx-mono"><use href="#nx-mono"/></svg></span><div><b id="ph-trafego-t">Nexus · Tráfego</b><small>relatório automático</small></div></div>
                   <div class="ph-body" id="ph-diario"></div>
                 </div>
                 <div class="fone-bloq" id="bloq-diario" aria-hidden="true" hidden></div>
@@ -582,6 +589,8 @@
             </div>
           </header>
           <ul class="rel-lista" id="rel-lista"></ul>
+          <!-- plano 2000d · DA-408: quando sai o próximo diário -->
+          <p class="nota rel-proximo" id="rel-proximo" aria-live="polite"></p>
         </article>
         <p class="nota" id="rel-nota"></p>
       </section>
@@ -692,7 +701,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg><span>Campanhas</span>
       </button>
       <button type="button" data-aba="pacientes">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.8a3.4 3.4 0 0 1 0 6.4M18.5 14.8c1.7.8 2.8 2.5 3.2 5.2"/></svg><span>Pacientes</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.8a3.4 3.4 0 0 1 0 6.4M18.5 14.8c1.7.8 2.8 2.5 3.2 5.2"/></svg><span data-rot-pessoas>Pacientes</span>
       </button>
       <button type="button" data-aba="radar">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l6.4-6.4"/></svg><span>Radar</span>
@@ -803,6 +812,8 @@
     <div class="folha-barra">
       <p class="folha-barra-t" id="folha-barra-t">Folha do mês</p>
       <button class="pill pill-bronze" id="folha-imprimir" type="button">Imprimir ou salvar PDF</button>
+      <!-- plano 2000d · DA-122: esconder o faturamento antes de imprimir -->
+      <button class="pill pill-ghost" id="folha-ocultar" type="button" aria-pressed="false">Ocultar valores de venda</button>
       <button class="pill pill-ghost" id="folha-fechar" type="button">Fechar</button>
     </div>
     <div class="folha-mesa" id="folha-mesa"><article class="folha" id="folha" hidden></article></div>

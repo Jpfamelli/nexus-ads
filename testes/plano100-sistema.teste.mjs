@@ -339,7 +339,8 @@ test("A2/A3 · app.js: o shell assina nao_lidas do pulso (avisa fora de Conversa
   // plano 1500c: UCC-018 — o pulso também passa o carimbo da última mensagem (servidor novo), e o shell repassa ao aviso
   assert.match(APP_JS, /aoNaoLidas: \(n, ultima\) => \{ E\.naoLidasPulsoEm = Date\.now\(\); E\.pulsoTemNaoLidas = true; definirBadge\("conversas", n\); avisarNaoLidas\(n, ultima\); \}/);
   const avisar = fnDoApp("function avisarNaoLidas(n, ultima = null) {");   // plano 1500c: UCC-018 — com o carimbo da última mensagem
-  assert.match(avisar, /E\.M\.pulso\.avisoDeNaoLidas\(\{ antes, depois: n, emConversas: !!\(E\.atual && E\.atual\.arquivo === "conversas\.js"\), escondida: !!document\.hidden, pref: lerAvisosConversas\(\),\s*ultimaAntes, ultimaDepois: ultima \}\)/);
+  // plano 2000d: DU-268 — o relógio vai junto (horário silencioso)
+  assert.match(avisar, /E\.M\.pulso\.avisoDeNaoLidas\(\{ antes, depois: n, emConversas: !!\(E\.atual && E\.atual\.arquivo === "conversas\.js"\), escondida: !!document\.hidden, pref: lerAvisosConversas\(\),\s*ultimaAntes, ultimaDepois: ultima, agora: new Date\(\) \}\)/);
   // plano 1500c: o aviso de área de trabalho recebe se o app já tocou o som (UCC-120: mudo nesse caso, com renotify no outro)
   assert.match(avisar, /if \(a\.som && \(papel === "lider" \|\| papel === "solo"\)\) tocarSomNaoLidas\(\);\s*if \(a\.tela\) notificarNaoLidas\(a\.novas, n, \{ somProprio:/);
   assert.match(fnDoApp("function lerAvisosConversas() {"), /LS\.ler\("nx-cv-avisos"\)/, "mesmas preferências do menu «Avisos» de Conversas");

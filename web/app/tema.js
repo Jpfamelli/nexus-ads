@@ -257,6 +257,7 @@ export function derivarTema(cores = {}) {
   };
   const primLuz = ajustarContraste(prim, fundo);
   primLuz.cor = luzNaPilula(primLuz.cor, primSuave);
+
   if (primLuz.mudou) avisos.push({ campo: "primaria", texto: escuro
     ? "A cor primária ficou escura demais sobre o fundo; usamos um tom mais claro para textos e links."
     : "A cor primária ficou clara demais sobre o fundo; usamos um tom mais escuro para texto." });
@@ -383,16 +384,18 @@ export function marcaEfetiva(marcaOrg = {}, temaCliente = {}, reserva = {}) {
 }
 
 /* ---------------- validação da marca (espelha o servidor: marca_invalida, hint = campo) ---------------- */
-export const LIMITES_MARCA = Object.freeze({ produto: 40, logo: 80000, logo_claro: 80000, favicon: 30000,
+export const LIMITES_MARCA = Object.freeze({ produto: 40, logo: 80000, logo_claro: 80000, favicon: 30000, icone_app: 80000,   // plano 2000d · DU-147
   login_titulo: 80, login_texto: 200, assinatura: 60 });
 
 /** Devolve [{campo, texto}] (vazio = ok). `soTema` = tema do cliente (só logo, logo_claro e cores). */
 export function validarMarca(m = {}, soTema = false) {
   const erros = [];
+  // plano 2000d · DU-145/DU-147 (pendência da frente config): as chaves novas da marca — o formato delas é conferido no config.js
   const permitidos = soTema ? ["logo", "logo_claro", "cores"]
-    : ["produto", "logo", "logo_claro", "favicon", "cores", "login_titulo", "login_texto", "suporte_wa", "assinatura"];
+    : ["produto", "logo", "logo_claro", "favicon", "cores", "login_titulo", "login_texto", "suporte_wa", "assinatura",
+      "suporte_email", "site", "termos_url", "privacidade_url", "email_remetente", "email_rodape", "icone_app", "teste_aberto"];
   for (const k of Object.keys(m || {})) if (!permitidos.includes(k)) erros.push({ campo: k, texto: "Campo não aceito." });
-  for (const k of ["logo", "logo_claro", "favicon"]) {
+  for (const k of ["logo", "logo_claro", "favicon", "icone_app"]) {
     if (m[k] == null || m[k] === "") continue;
     if (!permitidos.includes(k)) continue;
     if (!imagemSegura(m[k])) erros.push({ campo: k, texto: "Use PNG, JPEG ou WebP (nunca SVG)." });
