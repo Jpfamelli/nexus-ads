@@ -696,7 +696,7 @@ export function pode(papel, min) { return (RANK[papel] ?? -1) >= (RANK[min] ?? 9
 /** Dicas para erros do envio (texto que acompanha o "!"). */
 export function dicaErroEnvio(codigo) {
   // plano 1500c · CC-026: códigos da Meta chegam como «131026» ou «meta_131026» — o número decide a dica
-  // plano 2000d · DC-101: também o texto cru que a Meta grava na falha («(#131026) Message undeliverable»)
+  // plano 2000d · DC-101: também o texto cru que a Meta grava na falha («(código 131026) Message undeliverable»)
   const num = /(\d{6})$/.exec(String(codigo ?? "")) || /\(#(\d{6})\)/.exec(String(codigo ?? ""));
   const porMeta = num ? {
     131026: "O número não pôde receber: ele não tem WhatsApp, bloqueou o número da empresa ou usa um aplicativo muito antigo. Confira o número com o cliente por outro meio.",
@@ -2853,4 +2853,111 @@ export function respostasBoasVindas(respostas, departamento = null) {
   return (respostas || []).filter(r => r && (!departamento || !r.departamento_id || r.departamento_id === departamento)
     && (r.boas_vindas === true || /boas[- ]?vindas/.test(sa(r.titulo)) || /boas[- ]?vindas/.test(sa(r.atalho)) || sa(r.atalho) === "ola"))
     .sort((a, b) => (Number(b.boas_vindas === true) - Number(a.boas_vindas === true)) || ((Number(b.usos) || 0) - (Number(a.usos) || 0))).slice(0, 3);
+}
+
+
+/* ---------- plano 2000d · lote d4 (conversas) ---------- */
+/** DC-235: quantas mensagens do cliente há do separador «novas» em diante (msg e grade). */
+export function contarNovas(linhas, desde) {
+  let n = 0, achou = false;
+  for (const l of linhas || []) {
+    if (l && l.tipo === "novas") { achou = true; continue; }
+    if (!achou || !l) continue;
+    if (l.tipo === "msg" && l.msg && l.msg.direcao === "in") n++;
+    else if (l.tipo === "grade") n += (l.msgs || []).filter(m => m && m.direcao === "in").length;
+  }
+  return achou ? n : Number(desde) || 0;
+}
+/** DC-234: bolha colada do cliente com mais de 1 min da anterior mostra a hora (antes só no hover). */
+export function horaNaColada(msgs) {
+  const out = new Set();
+  let ant = null;
+  for (const m of msgs || []) {
+    if (m && ant && m.direcao === "in" && ant.direcao === "in" && m.tipo !== "sistema" && ms(m.criado_em) - ms(ant.criado_em) >= 60000) out.add(m.id);
+    ant = m;
+  }
+  return out;
+}
+/** DC-240: link da conversa sem index.html nem query (o app instalado abre em /app/). */
+export function linkConversa(origin, pathname, id) {
+  const dir = String(pathname || "/app/").replace(/[?#].*$/, "").replace(/[^/]*$/, "") || "/app/";
+  return `${String(origin || "").replace(/\/+$/, "")}${dir}#/conversas/${encodeURIComponent(id)}`;
+}
+/** DC-259: tempo da 1ª resposta de cada atendimento → Map(id da 1ª saída → «respondido em 8 s»). */
+export function temposDeResposta(msgs) {
+  const out = new Map();
+  const entrada = new Map(), feito = new Set();
+  for (const m of msgs || []) {
+    if (!m || m.tipo === "sistema" || m.tipo === "nota" || m.local) continue;
+    const k = m.conversa_id ?? "-";
+    if (feito.has(k)) continue;
+    if (m.direcao === "in") { if (!entrada.has(k)) entrada.set(k, ms(m.criado_em)); continue; }
+    if (!entrada.has(k)) { feito.add(k); continue; }   // a empresa falou primeiro (modelo): não há tempo de resposta
+    const s = Math.max(0, Math.round((ms(m.criado_em) - entrada.get(k)) / 1000));
+    if (Number.isFinite(s)) out.set(m.id, `respondido em ${duracaoCurta(s)}`);
+    feito.add(k);
+  }
+  return out;
+}
+function duracaoCurta(s) {
+  if (s < 60) return `${s} s`;
+  const min = Math.round(s / 60);
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60), r = min % 60;
+  return h < 24 ? (r ? `${h} h ${r} min` : `${h} h`) : `${Math.round(h / 24)} d`;
+}
+/** DC-260: separador «Ana assumiu · 14:10» quando as saídas passam da IA para uma pessoa (mesmo atendimento). */
+export function inserirAutoria(linhas) {
+  const out = [];
+  const ultima = new Map();   // conversa → "ia" | "pessoa"
+  for (const l of linhas || []) {
+    const m = l && l.tipo === "msg" ? l.msg : l && l.tipo === "grade" ? (l.msgs || [])[0] : null;
+    if (m && m.direcao === "out" && m.tipo !== "nota" && m.tipo !== "sistema" && !m.local) {
+      const k = m.conversa_id ?? "-";
+      const quem = m.origem === "ia" ? "ia" : m.enviado_por && m.enviado_por.nome ? "pessoa" : null;
+      if (quem === "pessoa" && ultima.get(k) === "ia") out.push({ tipo: "autoria", chave: `t-${m.id}`, texto: `${primeiroNome(m.enviado_por.nome) || m.enviado_por.nome} assumiu · ${horaMsg(m.criado_em)}` });
+      if (quem) ultima.set(k, quem);
+    }
+    out.push(l);
+  }
+  return out;
+}
+/** DC-210: texto colado do Word/PDF — tira NBSP, tabs e \r e junta espaços; diz se mudou algo. */
+export function limparColado(t) {
+  const s = String(t ?? "");
+  const limpo = s.replace(/\r\n?/g, "\n").replace(/[\u00A0\u2007\u202F]/g, " ").replace(/\t/g, " ").replace(/[\u200B\uFEFF]/g, "").replace(/ {2,}/g, " ").replace(/ +\n/g, "\n").replace(/\n{3,}/g, "\n\n");
+  return { texto: limpo, mudou: limpo !== s };
+}
+/** DC-211: «Parece CAIXA ALTA» — mais de 20 letras e mais de 80% maiúsculas. */
+export function pareceCaixaAlta(t) {
+  const letras = String(t ?? "").match(/\p{L}/gu) || [];
+  if (letras.length <= 20) return false;
+  const mai = letras.filter(c => c !== c.toLowerCase() && c === c.toUpperCase()).length;
+  return mai / letras.length > 0.8;
+}
+/** DC-211: CAIXA ALTA → frases com a 1ª letra maiúscula. */
+export function semCaixaAlta(t) {
+  const s = String(t ?? "").toLocaleLowerCase("pt-BR");
+  return s.replace(/(^|[.!?]\s+|\n\s*)(\p{L})/gu, (_, a, b) => a + b.toLocaleUpperCase("pt-BR"));
+}
+/** DC-257: aviso da janela de 24 h — «fecha às 09:12» com menos de 3 h (o forte, de menos de 30 min, continua no avisoJanelaFechando). */
+export function avisoJanelaSuave(janela, agora = Date.now()) {
+  if (!janela || !janela.aberta || !janela.ate) return "";
+  const resta = ms(janela.ate) - agora;
+  if (!(resta > 30 * 60000) || resta >= 3 * 3600000 - 60000) return "";   // «3 h» redondas (com segundos de folga) ainda não avisam
+  return `A janela de 24 h fecha às ${horaMsg(janela.ate)}.`;
+}
+/** DC-267: custo aproximado por mensagem de modelo (Brasil, tabela da Meta de 2025, em reais; a empresa ajusta em cfg.preco_modelos). */
+export const PRECO_MODELO_BR = Object.freeze({ MARKETING: 0.35, UTILITY: 0.05, AUTHENTICATION: 0.18 });
+export function precoModelo(categoria, tabela = null) {
+  const c = String(categoria || "").toUpperCase();
+  const v = tabela && Number.isFinite(Number(tabela[c])) ? Number(tabela[c]) : PRECO_MODELO_BR[c];
+  if (!(v > 0)) return "";
+  return `≈ ${v.toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 2 })} por mensagem`;
+}
+/** DC-258: link wa.me do número da empresa (para mandar por SMS/e-mail e o cliente escrever de novo). */
+export function linkWaMe(telefone, texto = "") {
+  const d = String(telefone || "").replace(/\D/g, "");
+  if (d.length < 10) return "";
+  return `https://wa.me/${d}${texto ? `?text=${encodeURIComponent(texto)}` : ""}`;
 }

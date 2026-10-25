@@ -995,8 +995,9 @@ await teste("R119: «Sim, chegou» no teste do assistente marca «Mensagem de te
   assert.equal(CW.marcarTesteLocal(arm, "c1", "u1"), true);
   const p = JSON.parse(loja.get("nx-onb:c1:u1"));
   assert.deepEqual([p.dispensadoAte, p.pulados], [99, ["colega_convidado", "mensagem_teste"]], "acrescenta sem apagar o resto (dispensadoAte, outros pulados) — na MESMA chave do Início");
-  CW.marcarTesteLocal(arm, "c1", null);
-  assert.ok(loja.has("nx-onb:c1:-"), "sem conta: o mesmo «-» do Início");
+  // plano 2000d: sem conta não grava — o Início e o config.js não leem mais «nx-onb:<cliente>:-» (REV-09/DR-333)
+  assert.equal(CW.marcarTesteLocal(arm, "c1", null), false);
+  assert.ok(!loja.has("nx-onb:c1:-"), "sem conta: nada gravado");
   assert.match(cw, /marcarTesteLocal\(localStorage, ctx\.cliente\.id, ctx\.sessao && ctx\.sessao\.conta && ctx\.sessao\.conta\.id\)/);
   assert.match(cw, /chegou\.addEventListener\("click", \(\) => \{ testeChegou = true; marcarTesteNoChecklist\(\);/);
   assert.ok(L.ONBOARDING_ITENS.some(i => i.id === "mensagem_teste"), "o id marcado existe no checklist");

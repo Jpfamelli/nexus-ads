@@ -178,8 +178,9 @@ test("G6 marcarTesteLocal: o teste do assistente conta como mensagem_teste neste
   assert.deepEqual(p.pulados, ["agenda_faixas", "mensagem_teste"]);
   assert.ok(Number.isFinite(p.teste_local_em));
   assert.equal(CV.marcarTesteLocal({ getItem() { throw new Error("x"); } }, "cli", "conta"), false);
-  CV.marcarTesteLocal(st, "cli", null);
-  assert.ok(mem.has("nx-onb:cli:-"));
+  // plano 2000d: sem conta não grava (REV-09/DR-333 — a chave «nx-onb:<cliente>:-» ninguém lê mais)
+  assert.equal(CV.marcarTesteLocal(st, "cli", null), false);
+  assert.ok(!mem.has("nx-onb:cli:-"));
 });
 
 test("G2 resumoUsoIA + dolar: totais, séries, custo incompleto (dias antes do custo gravado) e banco antigo", () => {

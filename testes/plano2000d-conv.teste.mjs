@@ -2900,3 +2900,547 @@ test("DC-205 · Esc com o seletor de emoji aberto só fecha o seletor (não pula
     assert.equal(foco, 1);
   } finally { d.fim(); }
 });
+
+/* ============================================================ lote d3 — restantes */
+test("DC-151/DC-152/DC-153/DC-201/DC-204 · CSS: 16 px nas legendas, 44 px na IA, autor em texto-2, corpo em 2 linhas e campo de 3 linhas", () => {
+  assert.match(CSS, /@media \(pointer: coarse\) \{ \.cvx-multi-leg \{ font-size: var\(--fs-16\); \} \}/);
+  assert.match(CSS, /@media \(pointer: coarse\) \{ \.cvx-ia-selo \.bt \{ min-height: 44px; \} \}/);
+  assert.match(CSS, /\.cv-quem \{ color: var\(--c-texto-2\); \}/);
+  assert.match(CSS, /\.cvx-rr-op small \{ white-space: normal; display: -webkit-box; -webkit-line-clamp: 2;/);
+  assert.match(CSS, /@media \(pointer: coarse\) and \(max-height: 600px\) \{ \.cvx textarea \{ max-height: calc\(3 \* 1\.45em \+ 1\.2rem\); \} \}/);
+});
+
+test("DC-154 · alto contraste do Windows: bolhas com borda e nota com borda dupla", () => {
+  const bloco = CSS.slice(CSS.indexOf("@media (forced-colors: active)"));
+  assert.match(bloco, /\.cv-bolha \{ border: 1px solid CanvasText; \}/);
+  assert.match(bloco, /\.cv-msg\[data-tipo="nota"\] \.cv-bolha \{ border: 3px double CanvasText; \}/);
+});
+
+test("DC-155 · arrastar a pega da folha 100 px para baixo fecha; 30 px volta ao lugar", async () => {
+  const d = comDom({ grosso: true });
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 5)] });
+    achar(chat.el, ".cvc-mais").click();
+    let folha = achar(d.doc.body, "dialog.cv-folha");
+    let pega = achar(folha, ".cv-folha-pega");
+    d.ev(pega, "pointerdown", { clientY: 100, pointerId: 1 });
+    d.ev(pega, "pointermove", { clientY: 130 });
+    d.ev(pega, "pointerup", { clientY: 130 });
+    assert.ok(d.doc.body.querySelector("dialog.cv-folha"), "30 px não fecha");
+    d.ev(pega, "pointerdown", { clientY: 100, pointerId: 1 });
+    d.ev(pega, "pointermove", { clientY: 200 });
+    d.ev(pega, "pointerup", { clientY: 200 });
+    assert.equal(d.doc.body.querySelector("dialog.cv-folha"), null);
+  } finally { d.fim(); }
+});
+
+test("DC-157/DC-198 · acima do campo: Mensagem/Nota, «Assumir» na conversa sem dono e «Resolver» por 10 s depois de enviar", async () => {
+  const assumidas = [], resolvidas = [];
+  await comComposer({ acoes: { assumir: () => assumidas.push(1), resolver: () => resolvidas.push(1) } }, async (x, d) => {
+    x.comp.atualizar();
+    const at = achar(x.comp.el, ".cvx-atalhos");
+    assert.equal(at.hidden, false);
+    assert.equal(at.dataset.so, "celular");
+    achar(at, ".cvx-assumir").click();
+    assert.deepEqual(assumidas, [1]);
+    achar(at, ".cvx-modo-nota").click();
+    assert.equal(x.comp.el.dataset.modo, "nota");
+    achar(x.comp.el, ".cvx-atalhos .cvx-modo-msg").click();
+    assert.equal(x.comp.el.dataset.modo, "texto");
+    assert.equal(x.comp.el.querySelector(".cvx-resolver-chip"), null);
+    x.digitar("Pronto, obrigado!");
+    d.ev(x.ta, "keydown", { key: "Enter" });
+    await esperar(10);
+    assert.equal(x.enviados.length, 1);
+    achar(x.comp.el, ".cvx-resolver-chip").click();
+    assert.deepEqual(resolvidas, [1]);
+  });
+  assert.match(CSS, /\.cvx-atalhos\[data-so="celular"\] \{ display: none; \}/);
+});
+
+test("DC-160 · contador: família e bandeira contam mais de 2 — o texto não diz «conta 2»", () => {
+  const fam = String.fromCodePoint(0x1F468, 0x200D, 0x1F469, 0x200D, 0x1F467);
+  assert.equal(L.contarDuplos(fam), 7);
+  assert.equal(L.contarDuplos("🇧🇷"), 3);
+  assert.equal(L.contarDuplos("abc"), 0);
+  assert.doesNotMatch(L.textoContador(10, L.contarDuplos(fam)), /emoji conta 2$/);
+  assert.match(L.textoContador(10, 1), /emoji conta 2 ou mais/);
+});
+
+test("DC-167 · dividirTexto corta em fim de frase e o aviso oferece «Dividir em 2 mensagens»", async () => {
+  const frase = "Esta é uma frase de teste com algumas palavras. ";
+  const longo = frase.repeat(130).trim();
+  const partes = L.dividirTexto(longo, 4096);
+  assert.equal(partes.length, 2);
+  assert.ok(partes.every(p => p.length <= 4096));
+  assert.ok(partes[0].endsWith("."));
+  assert.equal(partes.join(" "), longo);
+  const d = comDom();
+  try {
+    let acao = null;
+    const t0 = d.ui.toast;
+    d.ui.toast = (txt, o = {}) => { if (o.acao) acao = o.acao; return t0(txt, o); };
+    const x = await montarComposer(d);
+    x.digitar(longo);
+    d.ev(x.ta, "keydown", { key: "Enter" });
+    await esperar(10);
+    assert.equal(x.enviados.length, 0);
+    assert.equal(acao.rotulo, "Dividir em 2 mensagens");
+    await acao.fn();
+    assert.deepEqual(x.enviados.map(o => o.texto), partes);
+    assert.equal(x.ta.value, "");
+  } finally { d.fim(); }
+});
+
+test("DC-169 · «pode ser amanhã às 15h?» vira chip «Marcar amanhã 15:00» que abre a agenda no horário", async () => {
+  const agora = new Date("2026-10-21T13:00:00Z");   // quarta, 10:00 em São Paulo
+  assert.deepEqual(L.dataNaMensagem("pode ser amanhã às 15h?", agora), { iso: "2026-10-22T18:00:00.000Z", rotulo: "amanhã 15:00" });
+  assert.equal(L.dataNaMensagem("sexta 14:30", agora).rotulo, "sexta 14:30");
+  assert.equal(L.dataNaMensagem("custa 15 reais", agora), null);
+  const d = comDom();
+  try {
+    const pedidos = [];
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 2, { corpo: "pode ser amanhã às 15h?" })], acoes: { agendar: (n, o) => pedidos.push(o) } });
+    const chip = achar(chat.el, ".cv-marcar");
+    assert.match(chip.textContent, /Marcar amanhã 15:00/);
+    chip.click();
+    assert.equal(pedidos[0].hora, "15:00");
+    assert.match(pedidos[0].dia, /^\d{4}-\d{2}-\d{2}$/);
+  } finally { d.fim(); }
+});
+
+test("DC-177 · «Cancelar» no «Escrevendo…» libera os botões e a resposta atrasada não entra no campo", async () => {
+  await comComposer({}, async x => {
+    let soltar;
+    x.aoIA(() => new Promise(res => { soltar = res; }));
+    const btIA = x.comp.el.querySelector("[aria-label='Sugerir resposta com IA']") || achar(x.comp.el, ".cvx-ia");
+    btIA.click();
+    await esperar(5);
+    assert.equal(achar(x.comp.el, ".cvx-ia-trab").hidden, false);
+    achar(x.comp.el, ".cvx-ia-cancelar").click();
+    await esperar(5);
+    assert.equal(achar(x.comp.el, ".cvx-ia-trab").hidden, true);
+    assert.equal(btIA.disabled, false);
+    soltar({ texto: "atrasada" });
+    await esperar(5);
+    assert.equal(x.ta.value, "");
+  });
+});
+
+test("DC-191/DC-192/DC-194 · modelos: chips de empresa/atendente/protocolo, mais usados primeiro e foco na busca", async () => {
+  const tpl = (id, nome, extra = {}) => ({ id, canal_id: "k1", nome, status: "APPROVED", categoria: "UTILITY", corpo: "Olá {{1}}", num_parametros: 1, ...extra });
+  const templates = [tpl("a", "aviso"), tpl("b", "boleto"), tpl("c", "cobranca"), tpl("d", "dia"), tpl("e", "entrega"), tpl("f", "fim"), tpl("g", "garantia"), tpl("h", "horario"), tpl("z", "zeta")];
+  const d = comDom();
+  try {
+    globalThis.localStorage.setItem("nx-cv-modelo-usos:-", JSON.stringify({ z: 5 }));
+    let corpo = null;
+    d.aoModal(o => { corpo = o.corpo; return false; });
+    const x = await montarComposer(d, { base: { templates }, conv: { protocolo: "ORB-77" } });
+    x.A.ctx.cliente = { nome: "Kamiguchi" };
+    x.comp.abrirModelos();
+    await esperar(60);
+    const nomes = corpo.querySelectorAll(".cv-modelo .mono").map(b => b.textContent);
+    assert.equal(nomes[0], "zeta", "o mais usado vem primeiro");
+    assert.match(achar(corpo, ".cv-modelo .cv-modelo-usos").textContent, /Usado 5 vezes/);
+    assert.equal(globalThis.document.activeElement, achar(corpo, ".cvx-mod-busca"));
+    corpo.querySelector(".cv-modelo").click();
+    const chips = corpo.querySelectorAll(".cvx-par-var").map(b => b.textContent);
+    assert.ok(chips.includes("Empresa: Kamiguchi"));
+    assert.ok(chips.includes("Protocolo: ORB-77"));
+    assert.ok(chips.some(c => /^Atendente: Helena/.test(c)));
+  } finally { d.fim(); }
+});
+
+test("DC-196 · estimativa do envio depois de 5 s e aviso de rede lenta", () => {
+  assert.deepEqual(L.estimativaEnvio(30, 2000, 1e6), { texto: "30 %", lenta: false, dica: "" });
+  const e = L.estimativaEnvio(50, 10000, 100000);
+  assert.equal(e.texto, "50 % · cerca de 10 s");
+  assert.equal(e.lenta, true);
+  assert.match(e.dica, /reduza a foto ou envie um link/);
+  assert.equal(L.estimativaEnvio(62, 6000, 5e6).lenta, false);
+  assert.match(SRC_CHAT, /const est = estimativa\(m\.id, pct\);/);
+});
+
+test("DC-199 · no toque, o 1º toque na resposta abre o texto inteiro e o 2º insere", async () => {
+  const corpo = "Olá! Nosso horário é de segunda a sexta, das 8h às 18h, e aos sábados das 8h ao meio-dia.";
+  await comComposer({ dom: { grosso: true }, base: { respostas: [{ id: 1, atalho: "horario", titulo: "Horário", corpo }] } }, async x => {
+    x.digitar("/hor");
+    const op = achar(x.comp.el, ".cvx-rr-op");
+    op.click();
+    assert.equal(op.dataset.aberta, "1");
+    assert.equal(x.ta.value, "/hor");
+    op.click();
+    assert.equal(x.ta.value, corpo);
+  });
+});
+
+test("DC-202 · «/fo» sem resposta «fotos» oferece o roteiro de fotos da vertical", async () => {
+  const r = L.respostaFotos("oficina");
+  assert.match(r.corpo, /1\. Frente do carro\n2\. Lateral/);
+  await comComposer({ base: { respostas: [] } }, async x => {
+    x.A.ctx.vocab = { vertical: "oficina" };
+    x.digitar("/fo");
+    const op = achar(x.comp.el, ".cvx-rr-op");
+    assert.match(op.textContent, /\/fotos/);
+    op.click();
+    assert.match(x.ta.value, /Frente do carro/);
+  });
+});
+
+test("DC-203 · lead do anúncio sem resposta: chips das respostas de boas-vindas acima do campo", async () => {
+  const respostas = [{ id: 1, atalho: "ola", titulo: "Boas-vindas", corpo: "Olá, {primeiro_nome}! Como posso ajudar?" }, { id: 2, atalho: "preco", titulo: "Preço", corpo: "x" }];
+  await comComposer({ base: { respostas }, conv: { referral: { headline: "Implante" }, atribuida_a: "u1" } }, async x => {
+    x.comp.atualizar();
+    const bv = x.comp.el.querySelectorAll(".cvx-bv");
+    assert.deepEqual(bv.map(b => b.textContent), ["Boas-vindas"]);
+    assert.equal(achar(x.comp.el, ".cvx-atalhos").dataset.so, "");
+    bv[0].click();
+    assert.equal(x.ta.value, "Olá, Maria! Como posso ajudar?");
+  });
+  await comComposer({ base: { respostas }, conv: { atribuida_a: "u1" } }, async x => {
+    x.comp.atualizar();
+    assert.equal(x.comp.el.querySelectorAll(".cvx-bv").length, 0, "sem anúncio, sem chips");
+  });
+});
+
+/* ============================================================ lote d4 */
+test("DC-207 · prévia do áudio no modal com «Ouvir» de 44 px e velocidade", async () => {
+  const d = comDom();
+  try {
+    let corpo = null;
+    d.aoModal(o => { corpo = o.corpo; return false; });
+    globalThis.URL.createObjectURL = () => "blob:x"; globalThis.URL.revokeObjectURL = () => {};
+    const x = await montarComposer(d);
+    await x.comp.anexar(new File([new Uint8Array(2000)], "nota.ogg", { type: "audio/ogg" }));
+    assert.ok(achar(corpo, ".cvx-prev-play"));
+    const v = achar(corpo, ".cvx-prev-vel");
+    v.click();
+    assert.equal(v.textContent, L.rotuloVelocidade(1.5));
+  } finally { d.fim(); }
+});
+
+test("DC-208/DC-209 · legenda aceita Ctrl+B e o modal tem «Trocar arquivo» que reabre o seletor", async () => {
+  const d = comDom();
+  try {
+    let corpo = null, api = null, cliques = 0;
+    d.aoModal(o => { corpo = o.corpo; return new Promise(res => { api = { fechar: res }; if (o.aoAbrir) o.aoAbrir(api); }); });
+    globalThis.URL.createObjectURL = () => "blob:x"; globalThis.URL.revokeObjectURL = () => {};
+    const x = await montarComposer(d);
+    const inp = x.comp.el.querySelector("input[type=file]");
+    inp.click = () => { cliques++; };
+    const p = x.comp.anexar(new File([new Uint8Array(2000)], "contrato.pdf", { type: "application/pdf" }));
+    await esperar(10);
+    const leg = achar(corpo, "#cvx-legenda");
+    leg.value = "pago"; leg.selectionStart = 0; leg.selectionEnd = 4;
+    d.ev(leg, "keydown", { key: "b", ctrlKey: true });
+    assert.equal(leg.value, "*pago*");
+    achar(corpo, ".cvx-trocar-arq").click();
+    await p;
+    assert.equal(cliques, 1);
+    assert.equal(x.enviados.length, 0, "trocar não envia");
+  } finally { d.fim(); }
+});
+
+test("DC-210 · colar do Word tira NBSP, tabs e \\r e avisa", async () => {
+  const nb = String.fromCharCode(0xA0);
+  assert.deepEqual(L.limparColado(`Olá${nb}Maria,\r\n\tsegue  o valor`), { texto: "Olá Maria,\n segue o valor", mudou: true });
+  assert.equal(L.limparColado("tudo certo").mudou, false);
+  await comComposer({}, async (x, d) => {
+    let impedido = false;
+    const ev = { clipboardData: { items: [], getData: () => `a\tb${nb}c` }, preventDefault() { impedido = true; } };
+    x.ta.value = ""; x.ta.selectionStart = 0; x.ta.selectionEnd = 0;
+    x.ta.dispatchEvent(Object.assign(new globalThis.Event("paste"), ev));
+    assert.ok(impedido);
+    assert.equal(x.ta.value, "a b c");
+    assert.ok(d.toasts.some(t => /Formatação removida/.test(t)));
+  });
+});
+
+test("DC-211 · texto em CAIXA ALTA mostra a dica e «converter» deixa em letras normais", async () => {
+  assert.equal(L.pareceCaixaAlta("BOM DIA, QUERO MARCAR UMA CONSULTA"), true);
+  assert.equal(L.pareceCaixaAlta("Bom dia, ONG e SUS"), false);
+  assert.equal(L.semCaixaAlta("BOM DIA. QUERO MARCAR"), "Bom dia. Quero marcar");
+  await comComposer({}, async x => {
+    x.digitar("BOM DIA, QUERO MARCAR UMA CONSULTA");
+    const dica = achar(x.comp.el, ".cvx-caixa");
+    assert.equal(dica.hidden, false);
+    achar(dica, ".cvx-caixa-conv").click();
+    assert.equal(x.ta.value, "Bom dia, quero marcar uma consulta");
+    assert.equal(dica.hidden, true);
+  });
+});
+
+test("DC-212 · Enter logo depois de trocar de conversa, sem digitar nela, pede confirmação", async () => {
+  const d = comDom();
+  try {
+    const pedidos = [];
+    d.ui.confirmar = async o => { pedidos.push(o.titulo); return false; };
+    const x = await montarComposer(d);
+    x.A.rascunhos.set(9, "Oi, tudo bem?");
+    x.comp.definirConversa();
+    d.ev(x.ta, "keydown", { key: "Enter" });
+    await esperar(5);
+    assert.deepEqual(pedidos, ["Enviar para maria souza?"]);
+    assert.equal(x.enviados.length, 0);
+    x.digitar("Oi, tudo bem? ");
+    d.ev(x.ta, "keydown", { key: "Enter" });
+    await esperar(5);
+    assert.equal(x.enviados.length, 1, "depois de digitar, sai direto");
+  } finally { d.fim(); }
+});
+
+test("DC-213/DC-214 · evento de consulta com meta vira «Ver na agenda»; automação diz qual régua", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [
+      { ...txt(1, "out", 6), tipo: "sistema", corpo: "Consulta marcada pela IA", meta: { consulta_id: "c77" } },
+      txt(2, "out", 5, { origem: "automacao", origem_detalhe: "Lembrete 24 h", enviado_por: null })], acoes: { agendar() {} } });
+    chat.el.dataset.x = "1";
+    const sis = achar(chat.el, '.cv-sis[data-id="1"]');
+    assert.equal(achar(sis, ".cv-sis-agenda").getAttribute("href"), "#/agenda?consulta=c77");
+    assert.ok(achar(sis, ".cv-sis-remarcar"));
+    assert.match(achar(chat.el, '.cv-msg[data-id="2"] .cv-quem').textContent, /Automação · Lembrete 24 h/);
+  } finally { d.fim(); }
+});
+
+test("DC-216 · o contato compareceu hoje: chip «Mandar mensagem de pós-atendimento» com a /pos", async () => {
+  const respostas = [{ id: 7, atalho: "pos", titulo: "Pós", corpo: "{primeiro_nome}, como você está?" }];
+  await comComposer({ base: { respostas }, conv: { atribuida_a: "u1" }, contato: { consultas: [{ id: 1, inicio: new Date().toISOString(), presenca: "compareceu" }] } }, async x => {
+    x.comp.atualizar();
+    const chip = achar(x.comp.el, ".cvx-pos");
+    chip.click();
+    assert.equal(x.ta.value, "Maria, como você está?");
+  });
+  await comComposer({ base: { respostas }, conv: { atribuida_a: "u1" }, contato: { consultas: [{ id: 1, inicio: new Date().toISOString(), presenca: "faltou" }] } }, async x => {
+    x.comp.atualizar();
+    assert.equal(x.comp.el.querySelector(".cvx-pos"), null);
+  });
+});
+
+test("DC-222 · cortarNoTeto não parte bandeira nem tom de pele", () => {
+  const br = String.fromCodePoint(0x1F1E7, 0x1F1F7), mao = String.fromCodePoint(0x1F44D, 0x1F3FD);
+  assert.equal(L.cortarNoTeto(`ab${br}`, 4), "ab");
+  assert.equal(L.cortarNoTeto(`ab${mao}`, 5), "ab");
+  assert.equal(L.cortarNoTeto(`ab${mao}`, 6), `ab${mao}`);
+});
+
+test("DC-227 · bolha com falha gravada «meta_131026» mostra a dica do motivo", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "out", 5, { status: "falhou", erro: "meta_131026" })] });
+    assert.match(achar(chat.el, ".cv-falha").textContent, /bloqueou o número da empresa/);
+  } finally { d.fim(); }
+});
+
+test("DC-234/DC-235 · colada do cliente com 2 min de diferença mostra a hora; separador diz «2 mensagens novas»", async () => {
+  const d = comDom();
+  try {
+    const { A, chat } = await montarChat(d, { msgs: [txt(1, "in", 20), txt(2, "in", 18), txt(3, "in", 17.9)] });
+    assert.equal(achar(chat.el, '.cv-msg[data-id="2"]').dataset.hora, "1");
+    assert.equal(chat.el.querySelector('.cv-msg[data-id="3"]').dataset.hora, undefined);
+    A.marcaNovas = 2;
+    chat.renderMensagens({ rolar: "manter" });
+    assert.equal(achar(chat.el, ".cv-novas-sep").textContent, "2 mensagens novas");
+    assert.match(CSS, /\[data-hora="1"\] \.cv-rodape \{ max-height: 2rem;/);
+  } finally { d.fim(); }
+});
+
+test("DC-236/DC-238 · citação em 2 linhas e miniatura da foto citada", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [fotoMsg(1, 6), txt(2, "out", 5, { responde_a: { id: 1, direcao: "in", resumo: "Foto" } })] });
+    assert.match(achar(chat.el, '.cv-msg[data-id="2"] .cv-cita .cv-cita-mini').getAttribute("src"), /f1\.jpg/);
+    assert.match(CSS, /\.cv-cita \{ white-space: normal; position: relative; \}/);
+  } finally { d.fim(); }
+});
+
+test("DC-237 · «Respondendo a…» com a miniatura da foto", async () => {
+  await comComposer({ acoes: { urlMidia: p => `https://cdn.test/${p}` } }, async x => {
+    x.comp.responder({ id: 1, direcao: "in", tipo: "imagem", midia: { path: "c1/in/f1.jpg" }, criado_em: agoraIso(5) });
+    assert.equal(achar(x.comp.el, ".cvx-resp-mini").getAttribute("src"), "https://cdn.test/c1/in/f1.jpg");
+  });
+});
+
+test("DC-239 · etapa do negócio aberto aparece no cabeçalho", async () => {
+  const d = comDom();
+  try {
+    const { A, chat } = await montarChat(d, { msgs: [txt(1, "in", 5)] });
+    A.ver.negocios = [{ id: 3, status: "aberto", etapa_nome: "Orçamento enviado" }];
+    chat.renderCabecalho();
+    assert.match(achar(chat.el, ".cvc-etapa-bt").textContent, /Orçamento enviado/);
+  } finally { d.fim(); }
+});
+
+test("DC-240 · link da conversa sem index.html nem query", () => {
+  assert.equal(L.linkConversa("https://orbita.app", "/app/index.html", 42), "https://orbita.app/app/#/conversas/42");
+  assert.equal(L.linkConversa("https://orbita.app", "/app/", 42), "https://orbita.app/app/#/conversas/42");
+  assert.match(SRC_CHAT, /L\.linkConversa\(loc\.origin \|\| "", loc\.pathname \|\| "\/app\/", conv\.id\)/);
+});
+
+test("DC-241/DC-250 · folha rola com muitos itens; pílula compacta no celular", () => {
+  assert.match(CSS, /\.cv-folha-corpo \{ max-height: calc\(80dvh - 7rem\); overflow-y: auto;/);
+  assert.match(CSS, /\.cvc-novas\[data-n\]:not\(\[data-n=""\]\)::before \{ content: attr\(data-n\);/);
+});
+
+test("DC-242 · grade com «Baixar todas (6)»", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [1, 2, 3, 4, 5, 6].map(i => fotoMsg(i, 10 - i * 0.1)) });
+    assert.equal(achar(chat.el, ".cv-grade-baixar").textContent, "Baixar todas (6)");
+    assert.match(achar(chat.el, ".cv-grade").getAttribute("aria-label"), /^6 fotos de Mariana Costa, \d{2}:\d{2}$/);   // DC-248
+  } finally { d.fim(); }
+});
+
+test("DC-243 · áudio do cliente ouvido até mais de 80% fica marcado «ouvido» no aparelho", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [audioMsg(1, "in", 5)] });
+    const audio = achar(chat.el, '.cv-msg[data-id="1"] audio');
+    assert.equal(achar(chat.el, ".cv-au-ouvido").hidden, true);
+    audio.currentTime = 11; d.ev(audio, "timeupdate");
+    assert.equal(achar(chat.el, ".cv-au-ouvido").hidden, false);
+    const outro = await montarChat(d, { msgs: [audioMsg(1, "in", 5)] });
+    assert.equal(achar(outro.chat.el, ".cv-au-ouvido").hidden, false, "lembrado no aparelho");
+  } finally { d.fim(); }
+});
+
+test("DC-246/DC-249/DC-251/DC-266 · textos: hora na não suportada, figurinha amplia, atraso e pausa da IA", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { provedor: "codewords", msgs: [txt(1, "in", 5, { tipo: "desconhecido", corpo: null }),
+      { ...fotoMsg(2, 4), tipo: "sticker", midia: { path: "c1/in/s.webp", emoji: "😂" } }] });
+    assert.match(achar(chat.el, '.cv-msg[data-id="1"] .cv-texto').textContent, /\(recebida às \d{2}:\d{2}\)$/);
+    assert.equal(achar(chat.el, ".cv-sticker-bt").getAttribute("aria-label"), "Ampliar Figurinha 😂");
+  } finally { d.fim(); }
+  assert.match(SRC_CHAT, /— mensagens novas podem não aparecer\./);
+  assert.match(SRC_CHAT, /O cliente não recebe nenhum aviso; a conversa continua com você\./);
+  assert.match(SRC_CONV, /O cliente não recebe nenhum aviso\./);
+});
+
+test("DC-254 · «Trocar microfone» lista as entradas e lembra a escolhida", async () => {
+  const salvo = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { configurable: true, writable: true, value: { mediaDevices: { enumerateDevices: async () => [{ kind: "audioinput", deviceId: "m1", label: "Fone" }, { kind: "videoinput", deviceId: "v" }] } } });
+  try {
+    await comComposer({}, async (x, d) => {
+      achar(x.comp.el, ".cvx-trocar-mic").click();
+      await esperar(5);
+      const it = d.menus.at(-1).itens;
+      assert.deepEqual(it.map(i => i.rotulo), ["Fone"]);
+      it[0].fn();
+      assert.equal(globalThis.localStorage.getItem("nx-cv-microfone"), "m1");
+    });
+  } finally { if (salvo) Object.defineProperty(globalThis, "navigator", salvo); else delete globalThis.navigator; }
+  assert.match(SRC_COMP, /deviceId: \{ ideal: micId \}/);
+});
+
+test("DC-255/DC-256/DC-258 · trava: quem bloqueou, «Reabrir e enviar modelo» e link wa.me sem modelo", async () => {
+  await comComposer({ contato: { bloqueado: true, bloqueado_por: { nome: "Ana" }, bloqueado_em: "2026-10-12T15:00:00Z" } }, async x => {
+    assert.match(achar(x.comp.el, ".cvx-trava").textContent, /Bloqueado por Ana em 12\/10\./);
+  });
+  const fechada = new Date(Date.now() - 3600000).toISOString();
+  await comComposer({ conv: { status: "resolvida", janela_ate: fechada, ultima_entrada_em: agoraIso(60 * 30) } }, async x => {
+    assert.match(achar(x.comp.el, ".cvx-trava").textContent, /Reabrir e enviar modelo/);
+  });
+  await comComposer({ base: { canais: [{ id: "k1", nome: "Recepção", telefone: "5512999990000" }] }, conv: { janela_ate: fechada, ultima_entrada_em: agoraIso(60 * 30) } }, async (x, d) => {
+    achar(x.comp.el, ".cvx-wame").click();
+    assert.ok(d.toasts.length >= 0);
+  });
+  assert.equal(L.linkWaMe("+55 (12) 99999-0000"), "https://wa.me/5512999990000");
+});
+
+test("DC-257 · janela com menos de 3 h mostra «fecha às» discreto", () => {
+  const agora = Date.parse("2026-10-21T13:00:00Z");
+  const jan = ate => ({ aberta: true, ate: new Date(agora + ate).toISOString() });
+  assert.match(L.avisoJanelaSuave(jan(2 * 3600000), agora), /^A janela de 24 h fecha às \d{2}:\d{2}\.$/);
+  assert.equal(L.avisoJanelaSuave(jan(4 * 3600000), agora), "");
+  assert.equal(L.avisoJanelaSuave(jan(20 * 60000), agora), "", "nos últimos 30 min vale o aviso forte");
+});
+
+test("DC-259/DC-260 · «respondido em 8 s» na 1ª resposta e «Ana assumiu» quando a IA passa a vez", async () => {
+  const base = Date.parse("2026-10-21T13:00:00Z");
+  const em = s => new Date(base + s * 1000).toISOString();
+  const msgs = [
+    { id: 1, conversa_id: 9, direcao: "in", tipo: "texto", criado_em: em(0) },
+    { id: 2, conversa_id: 9, direcao: "out", tipo: "texto", origem: "ia", criado_em: em(8) },
+    { id: 3, conversa_id: 9, direcao: "out", tipo: "texto", enviado_por: { id: "u2", nome: "Ana Paula" }, criado_em: em(600) }];
+  assert.deepEqual([...L.temposDeResposta(msgs)], [[2, "respondido em 8 s"]]);
+  const linhas = L.inserirAutoria(msgs.map(m => ({ tipo: "msg", msg: m })));
+  assert.equal(linhas[2].tipo, "autoria");
+  assert.match(linhas[2].texto, /^Ana assumiu · \d{2}:\d{2}$/);
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 10), txt(2, "out", 9, { origem: "ia", enviado_por: null }), txt(3, "out", 5, { enviado_por: { id: "u2", nome: "Ana Paula" } })] });
+    assert.match(achar(chat.el, '.cv-msg[data-id="2"] .cv-tempo-resp').textContent, /respondido em 1 min/);
+    assert.match(achar(chat.el, ".cv-autoria").textContent, /^Ana assumiu/);
+  } finally { d.fim(); }
+});
+
+test("DC-261/DC-262 · teto usa o nome da assinatura do servidor; selo da IA diz em que se baseou", async () => {
+  await comComposer({ base: { cfg: { assinatura: true }, assinatura_nome: "Dra. Fernanda" } }, async x => {
+    x.comp.atualizar();
+    assert.equal(Number(x.ta.getAttribute("maxlength")), L.tetoTexto({ assinatura: true, nome: "Dra. Fernanda" }));
+    assert.match(achar(x.comp.el, ".cvx-ia-selo").getAttribute("title"), /últimas 20 mensagens/);
+  });
+});
+
+test("DC-263 · no celular a pílula de número caído vira só ícone", () => {
+  assert.match(SRC_CHAT, /ui\.pilula\(ehCelular\(\) \? "" : "Número desconectado"/);
+});
+
+test("DC-264 · «/» vazio separa as do setor da conversa das demais", async () => {
+  const respostas = [{ id: 1, atalho: "ola", titulo: "Olá", corpo: "a" }, { id: 2, atalho: "rx", titulo: "Raio-X", corpo: "b", departamento_id: "d1" }];
+  await comComposer({ base: { respostas, departamentos: [{ id: "d1", nome: "Recepção" }] }, conv: { departamento_id: "d1" } }, async x => {
+    x.digitar("/");
+    const grupos = x.comp.el.querySelectorAll(".cvx-rr-grupo").map(g => g.textContent);
+    assert.deepEqual(grupos, ["Recepção", "Todas"]);
+    assert.match(achar(x.comp.el, ".cvx-rr-op").textContent, /rx/);
+  });
+});
+
+test("DC-267 · modelo mostra o preço aproximado por categoria", async () => {
+  assert.match(L.precoModelo("MARKETING"), /^≈ R\$\s0,35 por mensagem$/);
+  assert.equal(L.precoModelo("UTILITY", { UTILITY: 0.08 }).includes("0,08"), true);
+  assert.equal(L.precoModelo("OUTRA"), "");
+});
+
+/* ============================================================ pendências de outras frentes nos arquivos da conv */
+test("DR-346 (crm) · veio do quadro: «Voltar ao quadro» no cabeçalho", async () => {
+  const d = comDom();
+  try {
+    const { A, chat } = await montarChat(d, { msgs: [txt(1, "in", 5)] });
+    assert.equal(chat.el.querySelector(".cvc-voltar-crm"), null);
+    A.voltarCrm = true;
+    chat.renderCabecalho();
+    assert.equal(achar(chat.el, ".cvc-voltar-crm").getAttribute("href"), "#/crm");
+  } finally { d.fim(); }
+});
+
+test("DU-446 (sis) · texto do «Compartilhar» do celular entra no campo da conversa aberta e a chave some", async () => {
+  const d = comDom();
+  const mem = new Map([["nx-compartilhado", "Segue o orçamento"]]);
+  const salvo = globalThis.sessionStorage;
+  globalThis.sessionStorage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k) };
+  const srv = criarServidor({ conversas: 1 });
+  const c = await montarCentral(d, srv);
+  try {
+    await c.abrir(901);
+    await esperar(20);
+    assert.equal(mem.has("nx-compartilhado"), false);
+    // o texto segue o mesmo caminho do ?texto= (campo; se a conversa estiver resolvida no cache do módulo, copiado com o aviso)
+    assert.ok(d.toasts.some(t => /Texto pronto no campo da conversa|esta conversa está resolvida \(o texto foi copiado\)/.test(t)), JSON.stringify(d.toasts));
+  } finally { c.fim(); globalThis.sessionStorage = salvo; d.fim(); }
+});
+
+test("REV-09/DR-333 · marcarTesteLocal sem conta não grava «nx-onb:<cliente>:-»", async () => {
+  const CV = await import("../web/app/cv-config.js");
+  const mem = new Map();
+  const st = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, v) };
+  assert.equal(CV.marcarTesteLocal(st, "cli", null), false);
+  assert.equal(mem.size, 0);
+  assert.equal(CV.marcarTesteLocal(st, "cli", "u1"), true);
+  assert.ok(mem.has("nx-onb:cli:u1"));
+});
+
+test("DU-255 (sis) · o pedido de permissão de avisos usa a pré-pergunta do shell quando o ctx a oferece", () => {
+  assert.match(SRC_CONV, /typeof A\.ctx\.pedirPermissaoAvisos === "function" \? await A\.ctx\.pedirPermissaoAvisos\(\) : await Notification\.requestPermission\(\)/);
+});

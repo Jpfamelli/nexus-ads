@@ -592,7 +592,8 @@ async function menuAvisos(ancora) {
         const p = lerAvisos();
         if (p.tela && perm === "granted") { p.tela = false; gravarAvisos(p); ui.toast("Avisos na área de trabalho desligados.", { tipo: "info" }); A.lista.render(); return; }
         let r = perm;
-        if (r === "default") { try { r = await Notification.requestPermission(); } catch { r = "denied"; } }
+        // plano 2000d · DU-255 (pendência da frente sis): a pré-pergunta do shell, quando o app a oferece no ctx
+        if (r === "default") { try { r = typeof A.ctx.pedirPermissaoAvisos === "function" ? await A.ctx.pedirPermissaoAvisos() : await Notification.requestPermission(); } catch { r = "denied"; } }
         if (r === "granted") { p.tela = true; gravarAvisos(p); ui.toast("Pronto: avisamos na área de trabalho quando chegar mensagem com a aba escondida.", { tipo: "ok" }); }
         else ui.toast("O navegador bloqueou os avisos deste site. Libere em Configurações do site (cadeado ao lado do endereço).", { tipo: "info", ms: 8000 });
         if (A) A.lista.render();
@@ -749,8 +750,14 @@ async function aplicarRota(r) {
   const abaRota = abaDaRota(r);
   if (abaRota && abaRota !== A.aba) mudarLista({ aba: abaRota });
   const textoPronto = textoProntoDaRota(query);
+  // plano 2000d · DR-346 (pendência da frente crm): veio do quadro do CRM — «Voltar ao quadro» no cabeçalho do chat
+  A.voltarCrm = query.de === "crm";
   if (id) {
     await selecionar(id);
+    // plano 2000d · DU-446 (pendência da frente sis): texto recebido pelo «Compartilhar» do celular vai para o campo desta conversa
+    let compartilhado = "";
+    try { compartilhado = sessionStorage.getItem("nx-compartilhado") || ""; if (compartilhado) sessionStorage.removeItem("nx-compartilhado"); } catch { compartilhado = ""; }
+    if (compartilhado && !textoPronto) colocarTextoPronto(id, compartilhado.replace(/\r/g, "").slice(0, 4000));
     if (query.msg && /^\d+$/.test(query.msg)) irParaMensagem(Number(query.msg));
     if (textoPronto) colocarTextoPronto(id, textoPronto);
     return;
@@ -1307,7 +1314,8 @@ const acoes = {
       }
       delta(); carregarLista({});
       const prazo = horas === 0 ? "A IA só volta quando alguém devolver." : horas ? `A IA volta em ${horas} ${horas === 1 ? "hora" : "horas"}.` : "A IA volta conforme o prazo configurado.";
-      A.ui.toast(atribuida ? `Você assumiu a conversa. ${prazo}` : "A IA foi pausada; não foi possível atribuir a conversa a você.", { tipo: atribuida ? "ok" : "info" });
+      // plano 2000d · DC-266: o cliente não percebe a pausa (não recebe aviso)
+      A.ui.toast(atribuida ? `Você assumiu a conversa. ${prazo} O cliente não recebe nenhum aviso.` : "A IA foi pausada (o cliente não recebe aviso); não foi possível atribuir a conversa a você.", { tipo: atribuida ? "ok" : "info" });
     }
   },
   async devolverIA(botao) {
@@ -1470,7 +1478,7 @@ const acoes = {
     return r;
   },
   /** D11: atalho «Agenda» da lateral — marcar consulta (agenda.js) já com o negócio da conversa; sem a agenda, abre a tela. */
-  async agendar(negocio = null) {
+  async agendar(negocio = null, { dia = null, hora = null } = {}) {   // plano 2000d · DC-169: o dia/hora que o cliente pediu (marcarConsulta já aceita)
     const E = A;
     try {
       const m = await import(`./agenda.js?v=${encodeURIComponent(E.ctx.versao || "dev")}`);
@@ -1497,7 +1505,7 @@ const acoes = {
         if (r && r.config && typeof r.config === "object") { config = r.config; servico = E.L.servicoCitado(E.msgs, Object.keys(config.duracoes || {})); }
       } catch { /* sem a configuração: a janela pede como sempre */ }
       if (negocio && servico && !negocio.servico) negocio = { ...negocio, servico };
-      await m.marcarConsulta(E.ctx, { negocio: negocio || null, avisar, aoMudar: () => { if (A === E) recarregarVer(); }, ...(busca ? { busca } : {}), ...(config ? { config } : {}), ...(servico ? { servico } : {}) });
+      await m.marcarConsulta(E.ctx, { negocio: negocio || null, avisar, aoMudar: () => { if (A === E) recarregarVer(); }, ...(busca ? { busca } : {}), ...(config ? { config } : {}), ...(servico ? { servico } : {}), ...(dia ? { dia } : {}), ...(hora ? { hora } : {}) });
       if (A === E) recarregarVer();
     } catch (e) {
       console.error("conversas: marcar consulta", e);

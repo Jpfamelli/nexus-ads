@@ -61,7 +61,20 @@ export function criarComposer(A) {
   // CA-030: barrinha do nível do microfone e o aviso de silêncio (microfone errado ou mudo)
   const nivelMic = h("span", { class: "cvx-rec-nivel", "aria-hidden": "true" }, h("i", null));
   // plano 2000d · DC-107: role=status (não alert) e com histerese no timer — o leitor de tela não repete o aviso a cada oscilação
-  const avisoMudo = h("span", { class: "cvx-rec-mudo", role: "status", hidden: true }, "Não estamos ouvindo nada — confira o microfone.");
+  // plano 2000d · DC-254: «Trocar microfone» no aviso (o notebook pode estar ouvindo o microfone do fone desligado)
+  const btTrocarMic = h("button", { type: "button", class: "link cvx-trocar-mic" }, "Trocar microfone");
+  const avisoMudo = h("span", { class: "cvx-rec-mudo", role: "status", hidden: true }, "Não estamos ouvindo nada — confira o microfone. ", btTrocarMic);
+  btTrocarMic.addEventListener("click", async () => {
+    let lista = [];
+    try { lista = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "audioinput"); } catch { lista = []; }
+    if (!lista.length) { ui.toast("Não achamos outro microfone neste aparelho.", { tipo: "info" }); return; }
+    const atual = (() => { try { return localStorage.getItem("nx-cv-microfone") || ""; } catch { return ""; } })();
+    ui.menu(btTrocarMic, lista.map((d, i) => ({ rotulo: `${d.deviceId === atual ? "✓ " : ""}${d.label || `Microfone ${i + 1}`}`, icone: "microfone", fn: () => {
+      try { localStorage.setItem("nx-cv-microfone", d.deviceId); } catch { /* sem storage */ }
+      if (gravacao) pararGravacao(true);
+      ui.toast("Microfone trocado. Grave de novo.", { tipo: "info" });
+    } })));
+  });
   const avisoFimGravacao = h("span", { class: "cvx-rec-fim", hidden: true }, "");
   const pintarNivel = n => { try { nivelMic.style.setProperty("--nivel", Number(n).toFixed(2)); } catch { /* sem estilo: só a barrinha não anda */ } };
   // plano 1500c · CC-095: pausar e continuar a gravação (interrupção no balcão não obriga a regravar); o relógio para junto
@@ -95,6 +108,9 @@ export function criarComposer(A) {
   const trava = h("div", { class: "cvx-trava", id: "cvx-trava", hidden: true });   // plano 1000b · CB-139: id para o aria-describedby do Enviar
   // plano 1000 · CA-074: a janela de 24 h fecha em menos de 30 min — a hora aparece no próprio campo (a pílula lá em cima passa despercebida)
   const avisoJanelaTxt = h("span", null, "");
+  // plano 2000d · DC-211: «Parece CAIXA ALTA · converter» (discreto, abaixo do campo)
+  const btCaixa = h("button", { type: "button", class: "link cvx-caixa-conv" }, "converter");
+  const dicaCaixa = h("p", { class: "sub cvx-caixa", hidden: true }, "Parece CAIXA ALTA — no WhatsApp soa como grito · ", btCaixa);
   const avisoJanela = h("p", { class: "cvx-janela-aviso", role: "status", hidden: true }, ui.icone("relogio"), avisoJanelaTxt);
   // plano 1000b · CB-043: o número da conversa caiu — o aviso fica em cima do campo (a pílula do cabeçalho passa despercebida); o envio continua
   const avisoCaidoTxt = h("span", null, "");
@@ -127,7 +143,7 @@ export function criarComposer(A) {
   const btPausarIA = h("button", { type: "button", class: "bt bt-fant bt-p cvx-ia-pausar" }, "Pausar IA e escrever");
   const faixaIA = h("p", { class: "cvx-janela-aviso cvx-ia-ativa", role: "status", hidden: true }, ui.icone("ia"), h("span", null, "A IA está atendendo esta conversa: se você escrever, o cliente pode receber as duas respostas."), btPausarIA);
   let perguntouIA = null;
-  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, rrStatus, resp, iaTrab, trava, avisoJanela, avisoCaido, faixaColega, faixaIA, capInfo, painelGravacao, faixaAudioGuardado, seloRasc, atalhos, linha, dica, arquivo);
+  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, rrStatus, resp, iaTrab, trava, avisoJanela, avisoCaido, faixaColega, faixaIA, capInfo, painelGravacao, faixaAudioGuardado, seloRasc, atalhos, linha, dicaCaixa, dica, arquivo);
 
   ta.setAttribute("aria-controls", "cvx-rr");
   ta.setAttribute("aria-autocomplete", "list");
@@ -137,7 +153,8 @@ export function criarComposer(A) {
   const btDescartarIA = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Descartar");
   // CA-062: outra sugestão sem descartar e pedir de novo (respeita a trava D7 e a cota: é o mesmo sugerir())
   const btOutraIA = h("button", { type: "button", class: "bt bt-fant bt-p cvx-ia-outra" }, "Outra sugestão");
-  const seloIA = h("div", { class: "cvx-ia-selo", role: "status", hidden: true }, ui.icone("ia"), h("span", null, "Sugestão da IA no campo — revise antes de enviar."), btDescartarIA, btOutraIA);
+  // plano 2000d · DC-262: o title diz em que a sugestão se baseou (o que o nx-ia lê)
+  const seloIA = h("div", { class: "cvx-ia-selo", role: "status", hidden: true, title: "Baseada nas últimas 20 mensagens desta conversa e no cadastro da empresa." }, ui.icone("ia"), h("span", null, "Sugestão da IA no campo — revise antes de enviar."), btDescartarIA, btOutraIA);
   el.insertBefore(seloIA, linha);
   function mostrarSeloIA(textoNoCampo, antes) { sugestaoIA = textoNoCampo; textoAntesIA = antes; seloIA.hidden = false; }
   function esconderSeloIA() { sugestaoIA = null; textoAntesIA = ""; seloIA.hidden = true; }
@@ -213,7 +230,7 @@ export function criarComposer(A) {
     el.dataset.modo = modoNota ? "nota" : "texto";
     // plano 1000b · CB-019: a trava só é refeita quando muda (situação + texto); o relógio de 60 s e o recarregarVer não tiram mais o
     // foco de quem está no «Reabrir» / «Desbloquear»
-    const assinTrava = [s, modoNota ? 1 : 0, s === "resolvida" ? textoResolvida(c) : "", s === "bloqueado" ? String(!!A.acoes.pode("supervisor")) : "",
+    const assinTrava = [s, modoNota ? 1 : 0, s === "resolvida" ? textoResolvida(c) + (L.canalTemJanela(provedorCanal()) && c && !L.janela(c).aberta ? "|m" : "") : "",   // DC-256 s === "bloqueado" ? String(!!A.acoes.pode("supervisor")) : "",
       s === "janela" ? String(!!(c && c.ultima_entrada_em)) : "", s === "sem_token" ? String(!!A.acoes.pode("admin")) : ""].join("|");
     const refazer = trava.dataset.assin !== assinTrava;
     if (refazer) { ui.limpar(trava); trava.dataset.assin = assinTrava; }
@@ -227,9 +244,12 @@ export function criarComposer(A) {
       trava.hidden = false; linha.hidden = !modoNota; dica.hidden = true;
       if (refazer) {
         // plano 1500c · CC-141: «Reabrir e responder» — reabre e já põe o cursor no campo
-        const b = h("button", { type: "button", class: "bt bt-prim bt-p", dataset: { acao: "reabrir" } }, A.icone("reabrir"), "Reabrir e responder");
+        // plano 2000d · DC-256: com a janela de 24 h fechada, reabrir só serve para mandar modelo — o botão diz isso e já abre os modelos
+        const soModelo = c && L.canalTemJanela(provedorCanal()) && !L.janela(c).aberta;
+        const b = h("button", { type: "button", class: "bt bt-prim bt-p", dataset: { acao: "reabrir" } }, A.icone("reabrir"), soModelo ? "Reabrir e enviar modelo" : "Reabrir e responder");
         b.addEventListener("click", async () => {
           try { await A.acoes.status("aberta", b); } catch { return; }
+          if (soModelo) { setTimeout(() => { if (el.isConnected) abrirModelos(); }, 0); return; }
           setTimeout(() => { if (el.isConnected && podeTexto()) { try { ta.focus(); } catch { /* ok */ } } }, 0);
         });
         trava.append(ui.icone("check"), h("p", null, textoResolvida(c)), b,
@@ -240,8 +260,12 @@ export function criarComposer(A) {
       trava.hidden = false; linha.hidden = !modoNota; dica.hidden = true;
       const sup = A.acoes.pode("supervisor");
       const bDesb = sup ? h("button", { type: "button", class: "bt bt-sec bt-p cvx-desbloquear", on: { click: () => A.acoes.ocultar(false) } }, ui.icone("check"), "Desbloquear") : null;
-      if (refazer) trava.append(...[ui.icone("cadeado"), h("p", null, sup ? "Este contato está bloqueado: nada é enviado para ele. Desbloqueie para responder."
-        : "Este contato está bloqueado: nada é enviado para ele. Peça a um supervisor para desbloquear (menu ⋮ da conversa)."), bDesb,
+      // plano 2000d · DC-255: «Bloqueado por Ana em 12/10» quando o servidor mandar contato.bloqueado_por/bloqueado_em
+      const ctB = contato();
+      const porB = ctB.bloqueado_por && (ctB.bloqueado_por.nome || ctB.bloqueado_por), emB = ctB.bloqueado_em ? L.diaSP(ctB.bloqueado_em).split("-").reverse().slice(0, 2).join("/") : "";
+      const quemB = porB || emB ? ` Bloqueado${porB ? ` por ${porB}` : ""}${emB ? ` em ${emB}` : ""}.` : "";
+      if (refazer) trava.append(...[ui.icone("cadeado"), h("p", null, (sup ? "Este contato está bloqueado: nada é enviado para ele. Desbloqueie para responder."
+        : "Este contato está bloqueado: nada é enviado para ele. Peça a um supervisor para desbloquear (menu ⋮ da conversa).") + quemB), bDesb,
         h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => alternarNota(true) } }, ui.icone("nota"), "Nota interna")].filter(Boolean));
     } else if (s === "sem_canal") {
       trava.hidden = false; dica.hidden = true;
@@ -253,7 +277,12 @@ export function criarComposer(A) {
       const b = h("button", { type: "button", class: "bt bt-prim bt-p", "data-modelos": "" }, A.icone("modelo"), "Modelos");
       b.addEventListener("click", () => abrirModelos());
       // CA-089: sem «janela» nem «modelo» soltos — o que aconteceu e o que dá para fazer
-      if (refazer) trava.append(ui.icone("relogio"), h("p", null, c && c.ultima_entrada_em ? L.JANELA_FECHADA_LONGO : L.JANELA_NUNCA_LONGO), b);
+      // plano 2000d · DC-258: sem modelo aprovado, o link wa.me do número da empresa (SMS/e-mail) para o cliente escrever de novo
+      const temModelo = ((A.base && A.base.templates) || []).some(t => t && c && t.canal_id === c.canal_id && String(t.status || "").toUpperCase() === "APPROVED");
+      const kJ = ((A.base && A.base.canais) || []).find(x => x && c && x.id === c.canal_id) || (c && c.canal) || {};
+      const wa = !temModelo ? L.linkWaMe(kJ.telefone || kJ.numero || "") : "";
+      const bWa = wa ? h("button", { type: "button", class: "bt bt-fant bt-p cvx-wame", on: { click: () => ui.copiar(wa, { aviso: "Link copiado: mande por SMS ou e-mail para o cliente escrever de novo." }) } }, ui.icone("copiar"), "Copiar link wa.me") : null;
+      if (refazer) trava.append(...[ui.icone("relogio"), h("p", null, c && c.ultima_entrada_em ? L.JANELA_FECHADA_LONGO : L.JANELA_NUNCA_LONGO), b, bWa].filter(Boolean));
     } else if (s === "sem_token" && !modoNota) {
       trava.hidden = false;
       // plano 1000b · CB-117: só o admin configura o token — atendente e supervisor são mandados ao administrador
@@ -269,7 +298,10 @@ export function criarComposer(A) {
       : s === "janela" ? (c && c.ultima_entrada_em ? "Passaram 24 h: só mensagem aprovada (modelo)" : "Para começar, só mensagem aprovada (modelo)")
       : viaCanal(estreito);   // CC-123 · plano 2000d · DC-166
     // CA-074: a janela fecha em menos de 30 min — a hora no próprio campo
-    const avisoJ = s === "ok" && !modoNota && c && L.canalTemJanela(provedorCanal()) ? L.avisoJanelaFechando(L.janela(c)) : "";
+    const avisoForte = s === "ok" && !modoNota && c && L.canalTemJanela(provedorCanal()) ? L.avisoJanelaFechando(L.janela(c)) : "";
+    // plano 2000d · DC-257: entre 3 h e 30 min, um aviso discreto com a hora (o forte continua nos últimos 30 min)
+    const avisoJ = avisoForte || (s === "ok" && !modoNota && c && L.canalTemJanela(provedorCanal()) ? L.avisoJanelaSuave(L.janela(c)) : "");
+    avisoJanela.dataset.nivel = avisoForte ? "forte" : "suave";
     avisoJanela.hidden = !avisoJ;
     if (avisoJanelaTxt.textContent !== avisoJ) avisoJanelaTxt.textContent = avisoJ;
     // plano 1000b · CB-043: número desconectado (A.acoes.canalCaido) — «a mensagem espera até reconectar»; nota interna não depende do número
@@ -283,7 +315,7 @@ export function criarComposer(A) {
     if (avisoColega && (avisoColega.conversa !== (c && c.id) || modoNota)) esconderAvisoColega();
     if (citaPendente) restaurarCita();   // DC-113: as mensagens chegaram depois do rascunho
     // CA-077: assinatura ligada — o prefixo que o cliente vai ver
-    const pref = !modoNota && s === "ok" && A.base && A.base.cfg && A.base.cfg.assinatura ? L.prefixoAssinatura((A.eu && A.eu.nome) || "") : "";
+    const pref = !modoNota && s === "ok" && A.base && A.base.cfg && A.base.cfg.assinatura ? L.prefixoAssinatura((A.base && A.base.assinatura_nome) || (A.eu && A.eu.nome) || "")   /* DC-261 */ : "";
     rotAssin.hidden = !pref;
     if (pref && rotAssin.dataset.pref !== pref) { ui.limpar(rotAssin); rotAssin.append("Sai como: ", h("b", { class: "mono" }, pref), " …"); rotAssin.dataset.pref = pref; }
     btEnviar.disabled = !ok;
@@ -361,7 +393,7 @@ export function criarComposer(A) {
     // DC-157: conversa sem dono — «Assumir» acima do campo (celular)
     if (s === "ok" && c && !c.atribuida_a && !modoNota && typeof A.acoes.assumir === "function" && A.podeEscrever) {
       assin.push("a");
-      partes.push(() => h("button", { type: "button", class: "bt bt-sec bt-p cvx-assumir", on: { click: ev => A.acoes.assumir(ev.currentTarget) } }, ui.icone("pessoa"), "Assumir"));
+      partes.push(() => h("button", { type: "button", class: "bt bt-sec bt-p cvx-assumir", on: { click: ev => A.acoes.assumir(ev.currentTarget) } }, ui.icone("usuario"), "Assumir"));
     }
     // DC-157: «Resolver» como chip por 10 s depois de enviar
     if (s === "ok" && c && c.status !== "resolvida" && !modoNota && Date.now() < resolverAte && typeof A.acoes.resolver === "function") {
@@ -376,13 +408,25 @@ export function criarComposer(A) {
       partes.push(() => h("div", { class: "cvx-boas-vindas", role: "group", "aria-label": "Respostas de boas-vindas" },
         ...bv.map(r => h("button", { type: "button", class: "cvx-chip cvx-bv", title: L.aplicarVariaveis(r.corpo, varsAtuais()), on: { click: () => aplicarResposta(r) } }, r.titulo || `/${r.atalho}`))));
     }
+    // plano 2000d · DC-216: o contato compareceu hoje — chip «Mandar mensagem de pós-atendimento» com a resposta /pos
+    const pos = s === "ok" && c && !modoNota && !ta.value.trim() ? respostaPos() : null;
+    if (pos) {
+      assin.push("p", pos.id);
+      partes.push(() => h("button", { type: "button", class: "cvx-chip cvx-pos", title: L.aplicarVariaveis(pos.corpo, varsAtuais()), on: { click: () => aplicarResposta(pos) } }, ui.icone("check"), "Mandar mensagem de pós-atendimento"));
+    }
     const chave = assin.join("|");
     if (atalhos.dataset.assin === chave) return;
     atalhos.dataset.assin = chave;
     ui.limpar(atalhos);
     for (const f of partes) atalhos.appendChild(f());
     atalhos.hidden = !partes.length;
-    atalhos.dataset.so = bv.length || assin.includes("r") || assin.includes("a") ? "" : "celular";
+    atalhos.dataset.so = bv.length || pos ? "" : "celular";   // sem boas-vindas, o resto é só do celular
+  }
+  function respostaPos() {
+    const hoje = L.diaSP(Date.now());
+    const foi = (contato().consultas || []).some(x => x && x.presenca === "compareceu" && x.inicio && L.diaSP(x.inicio) === hoje);
+    if (!foi) return null;
+    return ((A.base && A.base.respostas) || []).find(r => r && String(r.atalho || "").toLowerCase() === "pos") || null;
   }
   function veioDeAnuncio(c) {
     return !!(c.referral || c.origem === "anuncio" || c.ctwa_clid || (A.msgs || []).some(m => m && m.direcao === "in" && m.referral));
@@ -461,6 +505,7 @@ export function criarComposer(A) {
     pararGravacao(true);
     ui.toast(`Gravação descartada: ${motivo}. Nada foi enviado.`, { tipo: "info", ms: 7000 });
   }
+  let trocouEm = 0, digitouDesdeTroca = false;   // plano 2000d · DC-212
   function definirConversa() {
     if (gravacao) descartarGravacao("você abriu outra conversa");
     // o rascunho da conversa ANTERIOR sai antes de o campo mudar: desligado depois, ele gravaria o texto da conversa nova na chave da antiga
@@ -483,6 +528,7 @@ export function criarComposer(A) {
     ligarRascunho();
     atualizar();
     el.hidden = false;
+    trocouEm = Date.now(); digitouDesdeTroca = false;   // DC-212: depois de restaurar o rascunho (o restaurar não conta como digitar)
     if (!matchMedia("(pointer: coarse)").matches && podeTexto()) setTimeout(() => ta.focus({ preventScroll: true }), 30);
   }
 
@@ -495,7 +541,8 @@ export function criarComposer(A) {
   /** D14: o teto que vale: 4096 menos a assinatura «*Nome:*» que o servidor põe na frente (nota interna não leva assinatura). */
   function teto() {
     if (modoNota) return L.LIMITE_TEXTO;
-    return L.tetoTexto({ assinatura: !!(A.base && A.base.cfg && A.base.cfg.assinatura), nome: (A.eu && A.eu.nome) || "" });
+    // plano 2000d · DC-261: o nome que o servidor põe na assinatura (nx_cv_base.assinatura_nome), quando vier; senão o da sessão
+    return L.tetoTexto({ assinatura: !!(A.base && A.base.cfg && A.base.cfg.assinatura), nome: (A.base && A.base.assinatura_nome) || (A.eu && A.eu.nome) || "" });
   }
   /** plano 2000d · DC-166: «Mensagem via Recepção» quando a empresa tem 2+ números (no celular só no title — o campo é estreito). */
   function viaCanal(estreito) {
@@ -506,7 +553,20 @@ export function criarComposer(A) {
     if (!k || !k.nome) return "Mensagem";
     return estreito ? "Mensagem" : `Mensagem via ${k.nome}`;
   }
+  function pintarCaixaAlta() {   // DC-211
+    const v = !modoNota && L.pareceCaixaAlta(ta.value);
+    if (dicaCaixa.hidden === !v) return;
+    dicaCaixa.hidden = !v;
+  }
+  btCaixa.addEventListener("click", () => {
+    const ini = 0, fim = ta.value.length;
+    inserirNoCampo(L.semCaixaAlta(ta.value), ini, fim);
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    pintarCaixaAlta(); ta.focus();
+    ui.anunciar("Texto convertido para letras normais.");
+  });
   function atualizarContador() {
+    pintarCaixaAlta();   // plano 2000d · DC-211
     const t = teto();
     if (String(ta.getAttribute("maxlength")) !== String(t)) ta.setAttribute("maxlength", t);
     const valor = String(ta.value || "");
@@ -557,8 +617,11 @@ export function criarComposer(A) {
     if (!respondendo) return;
     // plano 1000b · CB-010: «Respondendo a Mariana» / «à sua mensagem» / «à IA» / «a Ana» (antes «Respondendo Você» para tudo que saiu)
     const rot = L.rotuloRespondendo(respondendo, { nomeContato: A.acoes.nomeContato(contato()), euId: A.eu && A.eu.id });
-    resp.append(A.icone("responder"), h("div", null, h("b", null, rot), L.resumoMensagem(respondendo, 120)),
-      h("button", { type: "button", class: "bt-icone", "aria-label": "Cancelar resposta", on: { click: () => { respondendo = null; desenharResposta(); guardarCita(); ta.focus(); } } }, ui.icone("fechar")));
+    // plano 2000d · DC-237: a foto citada aparece em miniatura (quando a URL já está resolvida)
+    const pathR = respondendo.midia && respondendo.midia.path;
+    const urlR = pathR && (respondendo.tipo === "imagem" || respondendo.tipo === "sticker") && typeof A.acoes.urlMidia === "function" ? A.acoes.urlMidia(pathR) : null;
+    resp.append(...[A.icone("responder"), urlR ? h("img", { class: "cvx-resp-mini", src: urlR, alt: "", "aria-hidden": "true" }) : null, h("div", null, h("b", null, rot), L.resumoMensagem(respondendo, 120)),
+      h("button", { type: "button", class: "bt-icone", "aria-label": "Cancelar resposta", on: { click: () => { respondendo = null; desenharResposta(); guardarCita(); ta.focus(); } } }, ui.icone("fechar"))].filter(Boolean));
   }
   /** plano 1000b · CB-011: por que não dá para responder citando — a janela só quando é a janela. */
   function motivoSemResposta(sit) {
@@ -647,7 +710,19 @@ export function criarComposer(A) {
       return;
     }
     const lista = h("div", { class: "cvx-rr-lista" });
+    // plano 2000d · DC-264: com o «/» vazio, as do departamento da conversa primeiro, com separadores («Recepção» / «Todas»)
+    const depConv = conv() && conv().departamento_id;
+    const agrupar = !termo && depConv && rrItens.some(r => r.departamento_id === depConv) && rrItens.some(r => !r.departamento_id);
+    if (agrupar) {
+      const ordem = [...rrItens.filter(r => r.departamento_id === depConv), ...rrItens.filter(r => r.departamento_id !== depConv)];
+      rrItens.splice(0, rrItens.length, ...ordem);
+    }
+    let grupoAnt = null;
     rrItens.forEach((r, i) => {
+      if (agrupar) {
+        const g = r.departamento_id === depConv ? (nomeDepartamento(depConv) || "Deste setor") : "Todas";
+        if (g !== grupoAnt) { lista.appendChild(h("div", { class: "cvx-rr-grupo rotulo", role: "presentation" }, g)); grupoAnt = g; }
+      }
       const dep = nomeDepartamento(r.departamento_id);
       const meta = [r.usos ? `${r.usos} ${r.usos === 1 ? "uso" : "usos"}` : null, dep || null].filter(Boolean).join(" · ");
       const op = h("button", { type: "button", role: "option", class: "cvx-rr-op", id: `cvx-rr-${i}`, "aria-selected": String(i === rrSel), tabindex: "-1" },
@@ -801,6 +876,10 @@ export function criarComposer(A) {
     }
   });
   btEnviar.addEventListener("click", () => enviarDoCampo());
+  // plano 2000d · DC-212: qualquer tecla que não seja Enter conta como «digitou nesta conversa»
+  ta.addEventListener("keydown", ev => { if (ev.key && ev.key !== "Enter" && !["Shift", "Control", "Alt", "Meta", "Tab", "Escape"].includes(ev.key)) digitouDesdeTroca = true; });
+  ta.addEventListener("pointerdown", () => { digitouDesdeTroca = true; });
+  ta.addEventListener("input", () => { digitouDesdeTroca = true; });
   /** plano 2000d · DC-148: põe o texto no campo pelo caminho que mantém o Ctrl+Z (execCommand insertText; sem ele, setRangeText). */
   function inserirNoCampo(texto, ini = ta.selectionStart ?? ta.value.length, fim = ta.selectionEnd ?? ini) {
     try { ta.focus(); } catch { /* ok */ }
@@ -874,6 +953,13 @@ export function criarComposer(A) {
       perguntouIA = id0;
       if (r === "pausar" && A.acoes.assumirIA) await A.acoes.assumirIA();
       if (!mesmaConversa(id0) || ta.value.trim() !== texto) return;
+    }
+    // plano 2000d · DC-212: Enter nos primeiros 800 ms depois de trocar de conversa, sem ter digitado nela — confirma o destino
+    if (!modoNota && !digitouDesdeTroca && Date.now() - trocouEm < 800) {
+      const id0 = idDoCampo;
+      const ok = await ui.confirmar({ titulo: `Enviar para ${nomeDestino()}?`, texto: "Você acabou de trocar de conversa. Confira se a mensagem é para este cliente.", rotulo: "Enviar" });
+      if (!ok || !mesmaConversa(id0) || ta.value.trim() !== texto) return;
+      digitouDesdeTroca = true;
     }
     const limite = teto();
     if (texto.length > limite) {
@@ -1147,7 +1233,10 @@ export function criarComposer(A) {
     const idGravacao = conv() ? conv().id : null;    // intenção capturada antes da permissão; não muda com a seleção do chat
     if (!idGravacao) return;
     try {
-      fluxo = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      // plano 2000d · DC-254: o microfone escolhido neste aparelho («Trocar microfone»), se ainda existir
+      const micId = (() => { try { return localStorage.getItem("nx-cv-microfone") || ""; } catch { return ""; } })();
+      const restricoes = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(micId ? { deviceId: { ideal: micId } } : {}) };
+      fluxo = await navigator.mediaDevices.getUserMedia({ audio: restricoes });
       if (!el.isConnected || !aceitaAnexo() || !mesmaConversa(idGravacao)) {
         fluxo.getTracks().forEach(t => t.stop());
         if (el.isConnected && !mesmaConversa(idGravacao)) ui.toast("A conversa mudou antes de liberar o microfone. A gravação não foi iniciada.", { tipo: "info", ms: 8000 });
@@ -1273,7 +1362,15 @@ export function criarComposer(A) {
       // CA-011: o texto colado não cabe (maxlength cortaria o fim calado): avisa com os números
       const colado = ev.clipboardData && typeof ev.clipboardData.getData === "function" ? String(ev.clipboardData.getData("text/plain") || ev.clipboardData.getData("text") || "") : "";
       const sel = Math.max(0, (ta.selectionEnd ?? 0) - (ta.selectionStart ?? 0));
-      const aviso = L.avisoColagem({ colado: colado.length, atual: String(ta.value || "").length, selecionado: sel, teto: teto() });
+      // plano 2000d · DC-210: do Word/PDF vêm NBSP, tabs e \r\n — o texto entra limpo e a pessoa fica sabendo
+      const lc = L.limparColado(colado);
+      if (lc.mudou) {
+        ev.preventDefault();
+        inserirNoCampo(lc.texto, ta.selectionStart ?? ta.value.length, ta.selectionEnd ?? ta.value.length);
+        ta.dispatchEvent(new Event("input", { bubbles: true }));
+        ui.toast("Formatação removida do texto colado (espaços e quebras estranhas).", { tipo: "info" });
+      }
+      const aviso = L.avisoColagem({ colado: lc.texto.length, atual: String(ta.value || "").length - (lc.mudou ? lc.texto.length : 0), selecionado: lc.mudou ? 0 : sel, teto: teto() });
       if (aviso) ui.toast(aviso, { tipo: "info", ms: 9000 });
       return;
     }
@@ -1437,7 +1534,18 @@ export function criarComposer(A) {
     let previa;
     if (v.tipo === "imagem") { url = URL.createObjectURL(escolhidoInicial); previa = h("img", { src: url, alt: "Prévia da foto" }); }
     else if (v.tipo === "video") { url = URL.createObjectURL(f); previa = h("video", { src: url, controls: true, preload: "metadata" }); }
-    else if (v.tipo === "audio") { url = URL.createObjectURL(f); previa = h("audio", { src: url, controls: true }); }
+    else if (v.tipo === "audio") {
+      url = URL.createObjectURL(f);
+      // plano 2000d · DC-207: play de 44 px e velocidade (como nas bolhas) — no celular, com uma mão, ouvir antes de mandar
+      const au = h("audio", { src: url, controls: true, class: "cvx-prev-audio" });
+      const btP = h("button", { type: "button", class: "bt bt-sec cvx-prev-play", "aria-label": "Ouvir o áudio" }, ui.icone("play"), "Ouvir");
+      const btV = h("button", { type: "button", class: "bt bt-fant cvx-prev-vel dado", "aria-label": "Velocidade 1 vez. Toque para mudar" }, "1×");
+      btP.addEventListener("click", () => { if (au.paused) { const pr = au.play(); if (pr && pr.catch) pr.catch(() => {}); } else au.pause(); });
+      au.addEventListener("play", () => { ui.limpar(btP); btP.append(ui.icone("pausa"), "Pausar"); btP.setAttribute("aria-label", "Pausar o áudio"); });
+      au.addEventListener("pause", () => { ui.limpar(btP); btP.append(ui.icone("play"), "Ouvir"); btP.setAttribute("aria-label", "Ouvir o áudio"); });
+      btV.addEventListener("click", () => { const vs = [1, 1.5, 2]; const nv = vs[(vs.indexOf(au.playbackRate || 1) + 1) % vs.length]; try { au.playbackRate = nv; } catch { /* ok */ } btV.textContent = L.rotuloVelocidade(nv); btV.setAttribute("aria-label", `Velocidade ${L.velocidadeFalada(nv)}. Toque para mudar`); });
+      previa = h("div", { class: "pilha-p cvx-prev-au" }, au, h("div", { class: "linha" }, btP, btV));
+    }
     else previa = h("div", { class: "cv-doc" }, h("span", { class: "cv-doc-ic" }, L.siglaArquivo(f.name, L.mimeDe(f))),   // plano 1000b · CB-109
       h("span", { class: "cv-doc-txt" }, h("b", null, f.name), h("small", null, L.tamanhoLegivel(f.size))));
     const leg = h("textarea", { id: "cvx-legenda", rows: 2, maxlength: 1024, lang: "pt-BR", dir: "auto" /* DC-150 */, placeholder: v.tipo === "audio" ? "Áudio vai sem legenda" : "Legenda (opcional)", disabled: v.tipo === "audio", "aria-describedby": "cvx-legenda-n" });
@@ -1446,6 +1554,35 @@ export function criarComposer(A) {
     const legN = h("small", { class: "cvx-legenda-n dado", id: "cvx-legenda-n", hidden: true });
     const legStatus = h("span", { class: "sr-only cvx-legenda-status", role: "status" });
     let legFaixa = 0;
+    // plano 2000d · DC-208: na legenda, os mesmos atalhos de formatação do campo (Ctrl+B/I, Ctrl+Shift+X/M)
+    leg.addEventListener("keydown", ev => {
+      if (!(ev.ctrlKey || ev.metaKey) || ev.altKey || ev.isComposing) return;
+      const k = String(ev.key || "").toLowerCase();
+      const marca = !ev.shiftKey && k === "b" ? "*" : !ev.shiftKey && k === "i" ? "_" : ev.shiftKey && k === "x" ? "~" : ev.shiftKey && k === "m" ? "```" : null;
+      if (!marca) return;
+      ev.preventDefault();
+      const a0 = leg.selectionStart ?? leg.value.length, b0 = leg.selectionEnd ?? a0, sel = leg.value.slice(a0, b0);
+      leg.value = `${leg.value.slice(0, a0)}${marca}${sel}${marca}${leg.value.slice(b0)}`;
+      try { leg.setSelectionRange(a0 + marca.length, a0 + marca.length + sel.length); } catch { /* ok */ }
+      leg.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    // DC-208: emoji na legenda (os mesmos rápidos do campo)
+    const btEmojiLeg = L.aparelhoDeToque() || v.tipo === "audio" ? null : h("button", { type: "button", class: "bt-icone cvx-leg-emoji", "aria-label": "Inserir emoji na legenda", "aria-haspopup": "dialog" }, "😊");
+    if (btEmojiLeg) btEmojiLeg.addEventListener("click", () => {
+      const a0 = leg.selectionStart ?? leg.value.length, b0 = leg.selectionEnd ?? a0;
+      const grade = h("div", { class: "cvx-emojis", role: "group", "aria-label": "Emojis" }, L.EMOJIS_RAPIDOS.slice(0, 24).map(e => h("button", { type: "button", class: "cvx-emoji", "aria-label": `Inserir ${e}` }, e)));
+      const pop = ui.flutuante(btEmojiLeg, grade, { largura: 280 });
+      grade.addEventListener("click", ev => {
+        const b = ev.target && ev.target.closest ? ev.target.closest(".cvx-emoji") : null;
+        if (!b) return;
+        const e = b.textContent;
+        if (leg.value.length - (b0 - a0) + e.length > 1024) return;
+        leg.value = `${leg.value.slice(0, a0)}${e}${leg.value.slice(b0)}`;
+        try { pop.fechar(); } catch { /* ok */ }
+        leg.focus(); try { leg.setSelectionRange(a0 + e.length, a0 + e.length); } catch { /* ok */ }
+        leg.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    });
     leg.addEventListener("input", () => {
       const n = String(leg.value || "").length; legN.hidden = n < 900; legN.textContent = L.textoContador(1024 - n);
       const faixa = n >= 1024 ? 3 : n >= 1000 ? 2 : n >= 900 ? 1 : 0;
@@ -1471,13 +1608,16 @@ export function criarComposer(A) {
     const avisoVideo = codeWords && v.tipo === "video" ? h("p", { class: "sub cv-aviso-canal" }, "Neste número o vídeo chega como arquivo para baixar.") : null;
     const corpo = h("div", { class: "pilha" }, avisoJanela, h("div", { class: "cv-anexo-previa" }, previa), info, avisoVideo,
       chkOriginal ? h("label", { class: "chip-check cv-original", for: "cvx-original" }, chkOriginal, `Enviar a original (${L.tamanhoLegivel(f.size)})`) : null,
-      h("div", { class: "campo" }, h("label", { for: "cvx-legenda" }, "Legenda"), leg, legN, legStatus));
+      h("div", { class: "campo" }, h("label", { for: "cvx-legenda" }, "Legenda"), btEmojiLeg ? h("div", { class: "linha cvx-leg-linha" }, leg, btEmojiLeg) : leg, legN, legStatus));
+    // plano 2000d · DC-209: «Trocar arquivo» — abre o seletor (no mesmo toque) e fecha esta prévia; o novo arquivo ganha a prévia dele
+    let apiAnexo = null;
+    if (!gravado) corpo.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p cvx-trocar-arq", on: { click: () => { try { arquivo.click(); } catch { /* ok */ } if (apiAnexo) apiAnexo.fechar("trocar"); } } }, ui.icone("clipe"), "Trocar arquivo"));
     let ok;
     try {
-      ok = await ui.modal({ titulo: gravado ? `Enviar áudio gravado (${L.formatarDuracao(gravadoS)}) para ${nomeDestino()}` : `Enviar arquivo para ${nomeDestino()}`, corpo, largura: "m", aoAbrir: () => setTimeout(() => { if (!leg.disabled) leg.focus(); }, 40),
+      ok = await ui.modal({ titulo: gravado ? `Enviar áudio gravado (${L.formatarDuracao(gravadoS)}) para ${nomeDestino()}` : `Enviar arquivo para ${nomeDestino()}`, corpo, largura: "m", aoAbrir: api => { apiAnexo = api; setTimeout(() => { if (!leg.disabled) leg.focus(); }, 40); },
         acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Enviar", tipo: "primario", valor: true }] });
     } finally { if (url) { try { URL.revokeObjectURL(url); } catch { /* navegador já descartou a URL */ } } }
-    if (!ok) return;
+    if (!ok || ok === "trocar") return;   // DC-209: «trocar» — o seletor já abriu
     // a conversa mudou com o modal aberto (mensagem nova abriu outra, atalho de teclado): o arquivo não vai para quem não era o destino
     if (!mesmaConversa(idInicio)) { ui.toast("A conversa aberta mudou antes do envio: o arquivo não foi enviado. Anexe de novo na conversa certa.", { tipo: "info", ms: 8000 }); return; }
     if (!aceitaAnexo()) { avisarAnexoIndisponivel(); return; }
@@ -1716,7 +1856,9 @@ export function criarComposer(A) {
         "aria-disabled": disp.ok ? null : "true", "aria-describedby": disp.ok ? null : idMot, dataset: { categoria: cat, busca: L.semAcento(`${String(t.nome).replace(/_/g, " ")} ${t.nome} ${t.corpo || ""}`) } },
         h("span", { class: "cv-modelo-l1" }, h("span", { class: "mono" }, t.nome), ui.pilula(cat === "MARKETING" ? "Marketing" : cat === "UTILITY" ? "Utilidade" : cat === "AUTHENTICATION" ? "Autenticação" : (cat || "Modelo"), cat === "MARKETING" ? "aten" : "neutra",
             cat === "MARKETING" ? { title: L.dicaModeloMarketing(ct.optin_marketing) } : {}),
-          h("span", { class: "fraco", title: t.idioma || null }, L.rotuloIdioma(t.idioma))),   // plano 1500c · CX-069
+          h("span", { class: "fraco", title: t.idioma || null }, L.rotuloIdioma(t.idioma)),   // plano 1500c · CX-069
+          // plano 2000d · DC-267: quanto a Meta cobra, aproximado (tabela do Brasil; a empresa ajusta em cfg.preco_modelos)
+          L.precoModelo(cat, A.base && A.base.cfg && A.base.cfg.preco_modelos) ? h("span", { class: "fraco dado cv-modelo-preco" }, L.precoModelo(cat, A.base && A.base.cfg && A.base.cfg.preco_modelos)) : null),
         h("p", null, t.corpo || "(sem texto)"),
         usos[t.id] > 0 ? h("small", { class: "fraco cv-modelo-usos" }, `Usado ${usos[t.id]} ${usos[t.id] === 1 ? "vez" : "vezes"}`) : null,   // DC-192
         disp.ok ? null : h("small", { id: idMot }, disp.motivo));

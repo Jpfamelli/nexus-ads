@@ -2216,7 +2216,8 @@ test("CB-037/CB-236 (DOM) · áudio do medidor «suspended»: resume() e nada de
       await esperar(1300);
       Date.now = real;
       assert.equal(achar(comp.el, ".cvx-rec-mudo").hidden, true, "com o áudio suspenso não acusa microfone mudo");
-      const cancelar = comp.el.querySelectorAll("button").find(b => b.textContent === "Cancelar" && !b.closest(".cv-fila"));
+      // plano 2000d: o «Cancelar» da sugestão da IA (DC-177) vem antes no DOM — este é o da gravação
+      const cancelar = comp.el.querySelectorAll("button").find(b => b.textContent === "Cancelar" && !b.closest(".cv-fila") && !b.classList.contains("cvx-ia-cancelar"));
       if (cancelar) cancelar.click();
       await esperar(5);
       void d;

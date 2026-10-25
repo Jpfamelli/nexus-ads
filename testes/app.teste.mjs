@@ -1338,8 +1338,9 @@ await teste("T03: «Valor previsto» com texto que não é número não apaga o 
   for (const bom of ["", "   ", "1.500,50", "R$ 2.000", "2.000", "0", "1500.5"]) assert.equal(CRMLOG.dinheiroInvalido(bom), false, JSON.stringify(bom));
   assert.equal(CRMLOG.lerNumero("1.500,50"), 1500.5);
   const g = ler("crm-negocio.js");
-  assert.match(g, /validar: c => k\.L\.dinheiroInvalido\(c\.value\)[^\n]*\n\s*salvar: v => salvar\(\{ valor_previsto: v \}\)/, "Valor previsto valida antes de gravar");
-  assert.match(g, /validar: c => k\.L\.dinheiroInvalido\(c\.value\)[^\n]*\n\s*salvar: v => salvar\(\{ valor: v \}\)/, "Valor final também");
+  // plano 1500c · RX-071: o validar usa erroDinheiro (também recusa negativo) e cai no dinheiroInvalido
+  assert.match(g, /validar: c => \(k\.L\.erroDinheiro[^\n]*k\.L\.dinheiroInvalido\(c\.value\)[^\n]*\n\s*salvar: v => salvar\(\{ valor_previsto: v \}\)/, "Valor previsto valida antes de gravar");
+  assert.match(g, /validar: c => \(k\.L\.erroDinheiro[^\n]*k\.L\.dinheiroInvalido\(c\.value\)[^\n]*\n\s*salvar: v => salvar\(\{ valor: v \}\)/, "Valor final também");
   assert.match(g, /if \(invalido\) \{ mostrarInvalido\(invalido\); return; \}/, "inválido mostra o erro e NÃO chama salvar");
 });
 await teste("T03: aviso «Ao salvar» do funil concorda no singular (1 negócio vai, 2 vão)", () => {
@@ -1438,9 +1439,11 @@ await teste("T07: resumo mensal omite «Em relação a…» quando nenhum dos do
   assert.doesNotMatch(txt, /Em relação a/, "0 → 0 é ruído");
   assert.match(txt, /Resultados de setembro/);
   // com fechamento nos dois meses a comparação volta
+  // plano 1500c · AC-042: só compara com mês anterior que tem número na maior parte dos dias — agosto e setembro cheios
+  const cheias = ["2026-08", "2026-09"].flatMap(mes => Array.from({ length: mes === "2026-08" ? 31 : 30 }, (_, i) => ({ n: "campanha", d: `${mes}-${String(i + 1).padStart(2, "0")}`, p: "meta", c: "A", cn: "A", g: 10, imp: 100, cli: 1, conv: 1 })));
   const leads = [{ id: 1, data_conversa: "2026-09-10", plataforma: "meta", campanha_ext: "A", etapa: "fechou", data_agenda: "2026-09-12", servico: "Implante", valor: 3000 },
     { id: 2, data_conversa: "2026-08-10", plataforma: "meta", campanha_ext: "A", etapa: "fechou", data_agenda: "2026-08-12", servico: "Implante", valor: 3000 }];
-  const M2 = NUCLEO.montar(NUCLEO.datasetDeLinhas({ metricas, leads, hoje, dias: 130, cliente: { nome: "Clínica" } }));
+  const M2 = NUCLEO.montar(NUCLEO.datasetDeLinhas({ metricas: cheias, leads, hoje, dias: 130, cliente: { nome: "Clínica" } }));
   assert.match(M2.relMensal(M2.mesesDados().find(m => m.mes === 8 && m.completo)), /Em relação a agosto/);
 });
 

@@ -1551,3 +1551,80 @@ mark.cvx-pend { background: var(--c-aten-suave); color: var(--c-texto); border-r
 }
 /* plano 2000d · DC-204: celular com teclado aberto (altura < 600 px) — o campo cresce até 3 linhas e a conversa continua à vista */
 @media (pointer: coarse) and (max-height: 600px) { .cvx textarea { max-height: calc(3 * 1.45em + 1.2rem); } }
+/* plano 2000d · DC-157/DC-198/DC-203: atalhos acima do campo — Mensagem/Nota e Assumir só no celular; boas-vindas em todo tamanho */
+.cvx-atalhos { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: 0 .4rem .45rem; }
+.cvx-atalhos .cvx-chip, .cvx-atalhos .bt { min-height: 44px; }
+.cvx-modos { display: none; gap: .3rem; }
+.cvx-assumir, .cvx-resolver-chip { display: none; }
+.cvx-atalhos[data-so="celular"] { display: none; }
+.cvx-boas-vindas { display: flex; flex-wrap: wrap; gap: .4rem; }
+@media (max-width: 760px) {
+  .cvx-atalhos[data-so="celular"]:not([hidden]) { display: flex; }
+  .cvx-modos { display: inline-flex; }
+  .cvx-assumir, .cvx-resolver-chip { display: inline-flex; }
+}
+/* plano 2000d · DC-199: no toque, a resposta aberta mostra o texto inteiro antes de inserir */
+.cvx-rr-op[data-aberta="1"] small { white-space: pre-wrap; overflow: visible; display: block; -webkit-line-clamp: unset; }
+/* plano 2000d · DC-177: «Cancelar» no «Escrevendo…» da IA */
+.cvx-ia-cancelar { min-height: 44px; }
+/* plano 2000d · DC-192: quantas vezes o modelo foi usado neste aparelho */
+.cv-modelo-usos { display: block; font-size: var(--fs-12); }
+/* plano 2000d · DC-155: a pega da folha vira área de arrasto (44 px de altura de toque, sem rolar a página) */
+.cv-folha-pega { position: relative; touch-action: none; cursor: grab; }
+.cv-folha-pega::before { content: ""; position: absolute; left: -40px; right: -40px; top: -20px; bottom: -20px; }
+.cv-marcar { margin-top: .35rem; min-height: 44px; }   /* plano 2000d · DC-169 */
+/* plano 2000d · DC-234: bolha colada do cliente com mais de 1 min da anterior mostra a hora */
+.cv-msg[data-dir="in"][data-junta="1"][data-cauda="0"][data-hora="1"] .cv-rodape { max-height: 2rem; margin-top: .2rem; }
+/* plano 2000d · DC-236: citação longa com as 2 primeiras linhas */
+.cv-cita .cv-cita-txt, .cv-cita bdi { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; overflow: hidden; }
+/* plano 2000d · DC-241: folha de ações com muitos itens rola e mostra que há mais */
+.cv-folha { max-height: 80dvh; }
+.cv-folha-corpo { max-height: calc(80dvh - 7rem); overflow-y: auto; overscroll-behavior: contain;
+  background: linear-gradient(var(--c-sup) 30%, transparent) top / 100% 1.5rem no-repeat local, linear-gradient(transparent, var(--c-sup) 70%) bottom / 100% 1.5rem no-repeat local,
+    radial-gradient(farthest-side at 50% 0, var(--c-sombra), transparent) top / 100% .6rem no-repeat scroll, radial-gradient(farthest-side at 50% 100%, var(--c-sombra), transparent) bottom / 100% .6rem no-repeat scroll; }
+/* plano 2000d · DC-260: separador «Ana assumiu · 14:10» */
+.cv-autoria { display: flex; justify-content: center; margin: .4rem 0; font-family: var(--f-mono); font-size: var(--fs-11); color: var(--c-texto-2); }
+.cv-autoria span { padding: .1rem .6rem; border-top: 1px dashed var(--c-borda); }
+/* plano 2000d · DC-259: «respondido em 8 s» */
+.cv-tempo-resp { color: var(--c-texto-2); }
+/* plano 2000d · DC-249: figurinha amplia */
+.cv-sticker-bt { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; min-width: 44px; min-height: 44px; }
+.cv-sticker-bt:focus-visible { outline: 2px solid var(--c-prim); outline-offset: 2px; }
+/* plano 2000d · DC-213: «Ver na agenda» no evento do sistema */
+.cv-sis-acoes { display: inline-flex; gap: .5rem; margin-left: .5rem; align-items: center; }
+/* plano 2000d · DC-236: a citação quebra normalmente (2 linhas) · DC-238: miniatura da foto citada à direita */
+.cv-cita { white-space: normal; position: relative; }
+.cv-cita:has(.cv-cita-mini) { padding-right: 3.2rem; }
+.cv-cita-mini { position: absolute; right: .35rem; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; object-fit: cover; border-radius: 6px; }
+.cvc-etapa-bt { padding: 0; border: 0; background: none; cursor: pointer; min-height: 44px; display: inline-flex; align-items: center; }   /* plano 2000d · DC-239 */
+/* plano 2000d · DC-243: áudio já ouvido neste aparelho */
+.cv-au-ouvido { display: inline-flex; align-items: center; gap: .25rem; margin-left: .4rem; color: var(--c-texto-2); }
+.cv-au-ouvido::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--c-ok); }
+/* plano 2000d · DC-242: «Baixar todas» da grade */
+.cv-grade-baixar { margin: 0 0 .35rem; min-height: 44px; }
+/* plano 2000d · DC-250: no celular a pílula «Novas mensagens» vira ícone + número no canto direito, sem cobrir a última bolha do cliente */
+@media (max-width: 760px) {
+  .cvc-novas { left: auto; right: .75rem; bottom: .75rem; transform: none; min-width: 44px; min-height: 44px; padding: .3rem .7rem; }
+  .cvc-novas > span:first-child { display: none; }
+  .cvc-novas[data-n]:not([data-n=""])::before { content: attr(data-n); font-family: var(--f-mono); font-weight: 600; }
+}
+/* plano 2000d · DC-211: dica de CAIXA ALTA */
+.cvx-caixa { margin: 0 .9rem .3rem; font-size: var(--fs-12); }
+.cvx-caixa .link { min-height: 44px; }
+/* plano 2000d · DC-257: o aviso da janela com mais de 30 min é discreto */
+.cvx-janela-aviso[data-nivel="suave"] { background: none; border-color: transparent; color: var(--c-texto-2); }
+/* plano 2000d · DC-237: miniatura da foto na faixa «Respondendo a…» */
+.cvx-resp-mini { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; flex: none; }
+/* plano 2000d · DC-207: prévia do áudio com play de 44 px */
+.cvx-prev-au .bt { min-height: 44px; }
+/* plano 2000d · DC-208: emoji ao lado da legenda */
+.cvx-leg-linha { align-items: flex-start; flex-wrap: nowrap; }
+.cvx-leg-linha textarea { flex: 1; min-width: 0; }
+.cvx-leg-emoji { min-width: 44px; min-height: 44px; }
+/* plano 2000d · DC-209/DC-254/DC-258: links e botões de apoio */
+.cvx-trocar-arq, .cvx-wame { min-height: 44px; align-self: flex-start; }
+.cvx-trocar-mic { margin-left: .3rem; }
+/* plano 2000d · DC-264: separador de grupo na lista do «/» */
+.cvx-rr-grupo { padding: .5rem .8rem .2rem; color: var(--c-texto-2); }
+/* plano 2000d · DC-267: preço aproximado do modelo */
+.cv-modelo-preco { font-size: var(--fs-12); }

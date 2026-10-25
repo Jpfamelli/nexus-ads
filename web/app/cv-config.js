@@ -80,8 +80,10 @@ export function avisoAppSecret(canal, teste) {
 
 /** O teste do assistente («Sim, chegou») conta no checklist do Início NESTE aparelho (marca local honesta: o servidor não vê o teste). */
 export function marcarTesteLocal(armazenamento, clienteId, contaId) {
+  // plano 2000d · REV-09/DR-333 (pendência da revisão/início): sem conta não grava — «nx-onb:<cliente>:-» ninguém lê mais
+  if (!contaId) return false;
   try {
-    const chave = `nx-onb:${clienteId}:${contaId || "-"}`;
+    const chave = `nx-onb:${clienteId}:${contaId}`;
     const p = JSON.parse(armazenamento.getItem(chave) || "{}") || {};
     p.pulados = [...new Set([...(Array.isArray(p.pulados) ? p.pulados : []), "mensagem_teste"])];
     p.teste_local_em = Date.now();
