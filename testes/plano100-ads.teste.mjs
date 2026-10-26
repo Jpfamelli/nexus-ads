@@ -306,7 +306,8 @@ test("F7 · «Gerar chave de instalação» não duplica a tela (um cartão, um 
   assert.equal(t.alvo.querySelectorAll(".rastc").length, 1);
   assert.equal(t.alvo.querySelectorAll(".rastc-privacidade").length, 1);
   // plano 1000b: AB-204 acrescentou a versão para site com banner de cookies (data-consentimento) — o snippet padrão continua único
-  assert.equal(t.alvo.querySelectorAll("pre").filter(p => p.textContent.includes("data-chave=") && !p.textContent.includes("data-consentimento")).length, 1);
+  // plano 2000d: DA-304 acrescentou a versão «só esta visita» (data-dias="0") — o snippet padrão continua único
+  assert.equal(t.alvo.querySelectorAll("pre").filter(p => p.textContent.includes("data-chave=") && !p.textContent.includes("data-consentimento") && !p.textContent.includes("data-dias")).length, 1);
 });
 
 test("F7 · «Gerar nova chave» avisa que desliga o script E o formulário; depois só a chave nova aparece (a revogada some da tela)", async () => {
@@ -563,7 +564,8 @@ test("revisão · cartão de receita estimada não diz «valor informado» (clie
 test("revisão · painel clássico «Desde a sua última visita»: fechamento sem valor diz «sem valor» (não «R$ 0») e o total some quando é 0", () => {
   const p = ler("web/painel.js");
   assert.match(p, /\$\{M\.valorDe\(L\)\.semValor \? "sem valor" : brl0\(M\.valorLead\(L\)\)\}<\/span>/);
-  assert.match(p, /\$\{total > 0 \? ` · \$\{brl0\(total\)\}` : ""\}<\/h2>/);
+  // plano 2000d: o total diz «(estimativa)/(parte estimada)» quando há valor pela tabela (KX-071)
+  assert.match(p, /\$\{total > 0 \? ` · \$\{brl0\(total\)\}\$\{esc\(totalEst\)\}` : ""\}<\/h2>/);
 });
 
 test("revisão · data-dias=\"0\" vale na visita inteira: a página seguinte (sem parâmetros) mantém a origem; a próxima visita começa vazia", () => {

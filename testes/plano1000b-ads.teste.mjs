@@ -103,7 +103,7 @@ test("AB-001/AB-227 · nota do balde só com as partes não zeradas e plural cer
   assert.match(A.textoBalde({ conversas: 1, agendadas: 1, fecharam: 2, utms: ["a", "b", "c", "d"] }, N.int), /^Inclui 1 conversa, 1 agendamento e 2 fechamentos .* — campanha no link: «a», «b», «c» e mais 1\.$/);
   assert.equal(A.textoBalde({ conversas: 0, agendadas: 0, fecharam: 0 }), "");
   assert.doesNotMatch(A.textoBalde({ conversas: 0, agendadas: 3 }, N.int), /0 conversas/);
-  assert.match(ADS, /const txtBalde = textoBalde\(balde, N\.int\);/);
+  assert.match(ADS, /const txtBalde = textoBalde\(balde, N\.int, vert\);/);   // plano 2000d: DA-396 — com a vertical
 });
 
 test("AB-192 · frase do herói sem jargão", () => {
@@ -158,7 +158,8 @@ test("AB-072 · período do Anúncios guardado por cliente (a chave global antig
   assert.equal(A.periodoGuardado(lerL, "cli-A"), "mes_ant");
   assert.equal(A.periodoGuardado(lerL, "cli-B"), 7, "o «Mês passado» do A não vaza para o B");
   assert.match(ADS, /S\.dias = periodoGuardado\(lerLocal, ctx\.cliente\.id\);/);
-  assert.equal((ADS.match(/gravarLocal\(chaveDias\(ctx\.cliente\.id\)/g) || []).length, 2, "barra e folha gravam por cliente");
+  // plano 1500c: o vazio de Campanhas (AC-110) também amplia o período — 3 lugares gravam, todos por cliente
+  assert.equal((ADS.match(/gravarLocal\(chaveDias\(ctx\.cliente\.id\)/g) || []).length, 3, "barra, folha e «Ampliar» gravam por cliente");
   assert.doesNotMatch(ADS, /gravarLocal\("nx-app-ads-dias"/);
 });
 
@@ -240,7 +241,7 @@ test("AB-030 · ponto de cor do CPA com o nível em texto (sr-only)", () => {
   assert.deepEqual(Object.keys(A.TEXTO_NIVEL_CPA).sort(), ["aten", "bom", "neutro", "ruim"]);
   for (const nivel of ["bom", "aten", "ruim", "neutro"]) assert.ok(A.TEXTO_NIVEL_CPA[nivel]);
   assert.equal(A.TEXTO_NIVEL_CPA[L.nivelCpa(30, 20, 100)], "custo acima da meta");
-  assert.match(ADS, /h\("span", \{ class: "sr-only" \}, `\$\{TEXTO_NIVEL_CPA\[L\.nivelCpa\(r\.t\.cpa, meta, r\.t\.gasto\)\]/);
+  assert.match(ADS, /h\("span", \{ class: "sr-only" \}, `\$\{TEXTO_NIVEL_CPA\[L\.nivelCpa\(r\.t\.cpa, meta, r\.t\.gasto, minCor, tolC\)\]/);   // plano 2000d: DA-205 — o piso da cor pelo tamanho da conta · NX-070: e a tolerância do cliente
 });
 
 test("AB-214 · ordenar a tabela anuncia a nova ordem", () => {
@@ -263,7 +264,8 @@ test("AB-044 · com o filtro Google, o ranking fala de «conversão»", () => {
 test("AB-075 · criativos da campanha exportam CSV", () => {
   const cc = A.csvCriativos([{ k: { nome: "Vídeo 1", plat: "google" }, t: { gasto: 120.456, impressoes: 3000, ctr: 1.234, freq: null, conversoes: 1.5, cpa: 80.3 } }]);
   assert.deepEqual(cc.colunas, ["Criativo", "Plataforma", "Investido", "Impressões", "CTR %", "Frequência", "Conversões", "Custo por conversão"]);
-  assert.deepEqual(cc.linhas, [["Vídeo 1", "google", 120.46, 3000, 1.23, "", 1.5, 80.3]]);
+  // plano 2000d: NX-025 — a plataforma sai com o nome legível («Google»), não o código cru
+  assert.deepEqual(cc.linhas, [["Vídeo 1", "Google", 120.46, 3000, 1.23, "", 1.5, 80.3]]);
   assert.match(ADS, /botaoCsv\(`criativos-\$\{r\.c\.nome\}`, cc\.colunas, \(\) => cc\.linhas/);
 });
 
@@ -313,7 +315,7 @@ test("AB-080 · erro de envio do WhatsApp em português (o original vai no title
   assert.equal(L.erroEnvioPt("whatsapp não configurado"), "whatsapp não configurado", "sem padrão conhecido: como veio");
   const p = L.statusEnvio({ enviado_em: new Date().toISOString(), destinos: ["5511", "5512"], erro: "5512: (#131026) Message undeliverable" });
   assert.equal(p.k, "parcial"); assert.match(p.erro, /não recebeu/);
-  assert.match(ADS, /title: st\.erroOriginal \|\| st\.erro \|\| st\.rotulo \}, antes, st\.rotulo,/);
+  assert.match(ADS, /title: tituloEnvio\(st, eGestor\(ctx\)\) \}, antes, st\.rotuloData \|\| st\.rotulo,/   /* plano 2000d: DA-140/DA-258 — o original só para quem gere; a data do envio */);
 });
 
 test("AB-048 · o motivo do aviso que não saiu fica visível na lista de avisos enviados", () => {
@@ -378,7 +380,7 @@ test("AB-185 · cabeçalhos e rótulos das tabelas em 12 px", () => {
 /* ============================================================ Relatórios */
 test("AB-201 · «Este mês» e «Mês passado» em Relatórios", () => {
   assert.deepEqual(RL.periodoMes("2026-10-14", -1), { de: "2026-09-01", ate: "2026-09-30" });
-  assert.deepEqual(RL.periodoMes("2026-10-14", 0), { de: "2026-10-01", ate: "2026-10-14" });
+  assert.deepEqual(RL.periodoMes("2026-10-14", 0), { de: "2026-10-01", ate: "2026-10-13" });   // plano 2000d: DA-210 — «Este mês» termina ontem, como os presets
   assert.deepEqual(RL.periodoMes("2026-03-31", -1), { de: "2026-02-01", ate: "2026-02-28" });
   assert.deepEqual(RL.periodoMes("2027-01-05", -1), { de: "2026-12-01", ate: "2026-12-31" });
   assert.equal(RL.atalhoMesAtivo({ preset: "per", de: "2026-09-01", ate: "2026-09-30" }, "2026-10-14"), "mesant");
@@ -401,18 +403,25 @@ test("AB-085/AB-098 · «Atualizar» do mesmo recorte mantém os números; falha
   assert.match(CSS, /\.relat-atualizando \{ opacity: \.55;/);
 });
 test("AB-223 · legenda do período só é reescrita quando muda", () => {
-  assert.match(REL, /if \(legenda\.textContent !== textoLegenda\) legenda\.textContent = textoLegenda;/);
+  // plano 1500c: a legenda sai de textoLegenda() (AC-155: a janela que o servidor comparou) — a regra de só reescrever quando muda continua
+  assert.match(REL, /if \(legenda\.textContent !== textoLegenda0\) legenda\.textContent = textoLegenda0;/);
+  assert.match(REL, /if \(legenda\.textContent !== t\) legenda\.textContent = t;/);
 });
 test("AB-097 · Relatórios com o cache do shell ao alternar Vendas/Atendimento", () => {
   assert.match(REL, /const opcCache = \{ cache: true, aoCache: rc => \{/);
   assert.match(REL, /"nx_rel_vendas", \{ p_de: de, p_ate: ate, p_funil: P\.funil \|\| null \}, opcCache\)/);
   assert.match(REL, /"nx_rel_atendimento", \{ p_de: de, p_ate: ate, p_departamento: P\.dep \|\| null \}, opcCache\)/);
 });
-test("AB-091/AB-094/AB-258 · «mensagens» por extenso, CSV com o rótulo da tabela e a previsão ponderada explicada", () => {
+test("AB-091/AB-094/AB-258 · «mensagens» por extenso, CSV com o rótulo da tabela e a previsão ponderada explicada", async () => {
   assert.match(REL, /\$\{int\(f\.total\)\} \$\{\+f\.total === 1 \? "mensagem" : "mensagens"\}/);
   assert.doesNotMatch(REL, /msgs ·/);
-  assert.match(REL, /colunas: \["Responsável", "Criados", "Ganhos", "Receita", "Ticket médio", "Abertos agora"\],/);
-  assert.match(REL, /Previsão ponderada = valor de cada negócio × chance de fechar da etapa em que ele está\./);
+  // plano 1500c: + «Conversão» (AC-159) — o CSV continua com o mesmo rótulo da tabela
+  // plano 2000d: as colunas vêm de colunasDono(fem, csv) (NX-306) — no masculino, o mesmo rótulo da tabela, com «%» no CSV
+  const RLm = await import("../web/app/relatorios.js");
+  assert.deepEqual(RLm.colunasDono(false, true), ["Responsável", "Criados", "Ganhos", "Conversão %", "Receita", "Ticket médio", "Abertos agora"]);
+  assert.match(REL, /colunas: colunasDono\(fem, true\)/);
+  // plano 2000d: a explicação usa a palavra do vocabulário (NX-301/NX-302) — «valor de cada ${negSing} × chance … em que ele/ela está»
+  assert.match(REL, /Previsão ponderada = valor de cada \$\{negSing\} × chance de fechar da etapa em que \$\{fem \? "ela" : "ele"\} está\./);
 });
 
 /* ============================================================ Ajustes de anúncios e formulário */
@@ -427,7 +436,8 @@ test("AB-103 · serviço sem nome ou com valor inválido para o salvamento com o
   assert.deepEqual(AC.lerTickets([{ s: "", v: "300" }]).erro, { indice: 0, campo: "s", msg: "Dê um nome a este serviço (ou apague o valor)." });
   assert.equal(AC.lerTickets([{ s: "Implante", v: "1.500" }, { s: "Limpeza", v: "abc" }]).erro.indice, 1);
   assert.deepEqual(AC.lerTickets([{ s: "Implante", v: "1.500" }, { s: "", v: "" }]), { ticket: { Implante: 1500 } }, "linha vazia é ignorada");
-  assert.match(ADSCFG, /alvoErr\.setAttribute\("aria-invalid", "true"\)/);
+  // plano 1500c: aria-invalid + aria-describedby pela marcarInvalido (AC-153)
+  assert.match(ADSCFG, /if \(alvoErr\) \{ marcarInvalido\(alvoErr, "cfga-tk-erro"\); alvoErr\.focus\(\); \}/);
 });
 test("AB-109 · sugestões de serviço incluem os já salvos no valor por serviço", () => {
   assert.deepEqual(AC.servicosUsados([{ servico: "Limpeza" }], 40, ["Implante", "limpeza"]), ["Implante", "Limpeza"]);
@@ -835,7 +845,8 @@ test("AB-082 · no dia 1º «Este mês» e «Mês passado» dizem o nome do mês
   assert.equal(L.rotuloPeriodo("mes_ant", Md15).titulo, "Mês passado");
   assert.equal(L.rotuloPeriodo("mes").titulo, "Este mês", "sem M: como antes");
   assert.equal(L.numerosPeriodo(Md1, { dias: "mes" }).rotulo.titulo, "Setembro (até ontem)");
-  assert.match(ADSb, /L\.rotuloPeriodo\(S\.dias, M\)\.titulo\}\$\{S\.plat/);
+  // plano 1500c: o cabeçalho de impressão saiu para cabecalhoImpressaoAds (AC-128) — o período continua com o nome do mês
+  assert.match(ADSb, /periodo: L\.rotuloPeriodo\(S\.dias, M\)\.titulo,/);
 });
 test("AB-199 · «enviado» sem confirmação há mais de 24 h vira «sem confirmação de entrega»", () => {
   const agora = Date.now();
@@ -880,16 +891,18 @@ test("AB-086 · data inválida: aria-invalid e aria-describedby no campo culpado
   assert.match(RELb, /marcarDataInvalida\(v\.ok \? null : campoDataInvalida\(v\.erro, deIn\.value\) === "de" \? deIn : ateIn\);/);
 });
 test("AB-202/AB-099 · «Atualizar» confirma com toast; a hora envelhece em 10 min", () => {
-  assert.match(RELb, /btnAtualizar\.addEventListener\("click", \(\) => carregar\(\{ doBotao: true \}\)\);/);
+  // plano 2000d: NX-325 — ocupado por aria-disabled (o clique é ignorado enquanto carrega; o foco fica no botão)
+  assert.ok(RELb.includes(`btnAtualizar.addEventListener("click", () => { if (btnAtualizar.getAttribute("aria-disabled") === "true") return; carregar({ doBotao: true }); });`));
   assert.match(RELb, /if \(doBotao\) ui\.toast\("Números atualizados\.", \{ tipo: "ok", ms: 2500 \}\);/);
   assert.equal(RL.HORA_VELHA_MS, 600000);
   assert.match(RELb, /horaCarga\.classList\.add\("relat-hora-velha"\)/);
   assert.match(CSSb, /\.relat-hora-velha \{ color: var\(--c-texto-3\); font-style: italic; \}/);
 });
 test("AB-089/AB-092/AB-095/AB-259 · perdidos com milhar, «1 aberta agora», resumo semanal e parados com caminho", () => {
-  assert.match(RELb, /`\$\{int\(k\.perdidos\)\} \$\{fem/);
+  // plano 2000d: NX-301/NX-304 — o gênero vem de flexao(…, fem) e as séries de seriesVendas(fem) («Criadas e ganhas» no feminino)
+  assert.ok(RELb.includes("`${int(k.perdidos)} ${flexao(\"perdido\", k.perdidos, fem)}"));
   assert.match(RELb, /\$\{int\(d\.abertas_agora\)\} \$\{\+d\.abertas_agora === 1 \? "aberta" : "abertas"\} agora/);
-  assert.match(RELb, /resumo: `Criados e ganhos por \$\{semanal \? "semana" : "dia"\}:/);
+  assert.ok(RELb.includes("resumo: `${SV.criados} e ${SV.ganhos.toLowerCase()} por ${semanal ? \"semana\" : \"dia\"}:"));
   assert.match(RELb, /resumo: `Novas e resolvidas por \$\{semanal \? "semana" : "dia"\}:/);
   assert.match(RELb, /: h\("a", \{ class: "rel-link", href: "#\/crm" \}, "Abrir o CRM"\)\);/);
 });
@@ -926,7 +939,8 @@ test("AB-100 · «Sincronizar agora» confere sozinho em 90 s", () => {
   assert.equal(AC.resumoAposSync([{ canal: "google", ativo: true, status: "erro — token expirado" }], desde), "Resultado da sincronização — Google: a leitura falhou (token expirado).");
   assert.equal(AC.resumoAposSync([{ canal: "meta", ativo: false }], desde), "Nenhuma plataforma ligada para sincronizar.");
   assert.equal(AC.CONFERIR_SYNC_MS, 90000);
-  assert.match(ADSCFGb, /if \(tipo === "ciclo"\) conferirSync\(Date\.now\(\) - 5000\);/);
+  // plano 2000d: NX-068 — o pedido de leitura ganhou o descanso de 1 minuto no mesmo bloco
+  assert.match(ADSCFGb, /if \(tipo === "ciclo"\) \{\n\s+conferirSync\(Date\.now\(\) - 5000\);/);
   assert.match(ADSCFGb, /if \(!alvo\.isConnected\) return;\n\s+try \{\n\s+const nova = await api\.rpcC\("nx_integracoes_status", \{\}\);/);
 });
 test("AB-107/AB-110/AB-190 · teste percebe «Ligada» mudada; só o resultado é vivo; desabilitado com descrição", () => {
@@ -1029,7 +1043,8 @@ test("AB-203 · trocar a chave no Formulário cita também o script de rastreio"
 test("AB-101 · Metas e avisos não salvos: pergunta ao trocar de seção e ao fechar a aba", () => {
   assert.match(ADSCFGc, /addEventListener\("beforeunload", antesDeSair\)/);
   assert.match(ADSCFGc, /pendente: \(\) => sujo,\n\s+podeSair: \(\) => \(!sujo \? true : ui\.confirmar\(\{ titulo: "Sair sem salvar\?"/);
-  assert.match(ADSCFGc, /limpar: \(\) => \{ if \(typeof removeEventListener === "function"\) removeEventListener\("beforeunload", antesDeSair\); clearTimeout\(tConferir\); \}/);
+  // plano 2000d: NX-068 — a limpeza também solta o descanso do «Sincronizar agora»
+  assert.match(ADSCFGc, /limpar: \(\) => \{ if \(typeof removeEventListener === "function"\) removeEventListener\("beforeunload", antesDeSair\); clearTimeout\(tConferir\); clearTimeout\(tDescanso\); \}/);
 });
 test("AB-106 · situação da integração em português; o status cru vai para «Detalhes técnicos»", () => {
   const e = AC.explicarStatusIntegracao("erro — invalid_grant (Token has been expired or revoked.)");
@@ -1331,14 +1346,17 @@ test("AB-062/AB-071/AB-074 · modo do calor com estado; ordem do ranking por cli
   assert.match(ADSc, /k\.plat === "google" \? h\("span", \{ title: "O Google não informa frequência" \}, "não se aplica"\)/);
 });
 test("AB-219/AB-222/AB-225/AB-245 · prévia de outro dia, link para a regra, diário sugerido e ranking que abre a campanha", () => {
-  assert.deepEqual(A.diasPreviaDiario(100), [100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87]);
+  assert.deepEqual(A.diasPreviaDiario(100, 14), [100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87]);   // plano 2000d: DA-398 — o padrão agora é 45 dias
   assert.deepEqual(A.diasPreviaDiario(2), [2, 1, 0]);
   assert.match(ADSc, /texto: \(\) => M\.relDiario\(i\) \}\);/);
   assert.equal(A.idRegra("r1"), "ads-regra-r1");
   assert.match(ADSc, /h\("li", \{ id: idRegra\(r\.id\), tabindex: "-1" \}/);
   assert.match(ADSc, /on: \{ click: \(\) => irParaRegra\(e\.regra\) \} \}, "Ver a regra"\)/);
   assert.equal(A.diarioSugerido(3000, 2500, 5), 100); assert.equal(A.diarioSugerido(3000, 3100, 5), 0); assert.equal(A.diarioSugerido(3000, 100, 0), null);
-  assert.match(ADSc, /Orçamento diário sugerido: \$\{N\.brl\(diarioSugerido\(orc, m\.gasto, m\.restam\)\)\}/);
+  // plano 1500c: a frase do ritmo saiu para textoRitmo (AC-080) — o diário sugerido continua lá
+  // plano 2000d: NX-009 — com pausa nos dias fechados, o saldo divide pelos dias abertos que restam
+  assert.match(ADSc, /const sug = diarioSugerido\(orc, m\.gasto, abertos != null \? abertos : m\.restam\);/);
+  assert.match(ADSc, /Orçamento diário sugerido: \$\{brl\(sug\)\}/);
   assert.match(ADSc, /h\("button", \{ type: "button", class: "ads-rank-abrir", "aria-haspopup": "dialog"/);
   assert.match(CSSc, /\.ads-rank-abrir \{ all: unset;/);
 });

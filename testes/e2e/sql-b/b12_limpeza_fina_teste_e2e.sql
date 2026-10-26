@@ -27,6 +27,7 @@ begin
   -- 4) a sessão de 30 dias (até 29/10) da Conta E2E Órbita (a conta continua; é só o token dela que deixa de valer)
   delete from public.nx_sessoes where conta_id = (select c.id from public.nx_contas c where c.nome = 'Conta E2E Órbita' and c.papel = 'clinica');
   -- 5) a trilha de auditoria dos testes (criação do cliente, 8 entradas como suporte, convites, canal, chave do formulário)
+  perform set_config('nx.faxina', 'on', true);   -- plano 2000d · DS-153: a auditoria só aceita delete na retenção explícita
   delete from public.nx_auditoria where cliente_id = v_cli;
 end $$;
 -- conferência: deve dar 0 em tudo

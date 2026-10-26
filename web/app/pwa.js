@@ -38,6 +38,9 @@ export function decidirVersao(atual, remoto) {
   const v = typeof remoto.versao === "string" ? remoto.versao.trim() : "";
   if (!/^[A-Za-z0-9._-]{1,40}$/.test(v)) return { acao: "nada" };
   if (v === atual) return { acao: "nada" };
+  // plano 2000d · SX-087: versao.json velho (cache do CDN no meio da publicação) com data ANTERIOR à do app em uso não oferece «voltar» de versão
+  const data = s => (/^(\d{8})([a-z]?)$/.exec(String(s || "")) || []).slice(1).join("");
+  if (data(v) && data(atual) && data(v) < data(atual)) return { acao: "nada" };
   const notas = notasDaVersao(remoto);
   return notas.length ? { acao: "nova", versao: v, notas } : { acao: "nova", versao: v };
 }
@@ -81,6 +84,25 @@ export async function buscarVersaoComPrazo(buscarFn, url, prazoMs = PRAZO_VERSAO
     if (!r) return null;
     return r.ok ? await Promise.race([r.json(), prazo]) : null;
   } finally { clearTimeout(timer); }
+}
+
+/** plano 1500c · UCC-052: UMA leitura do versao.json para o app inteiro (a faixa de versão e a conferência de migração do shell): a resposta
+    vale `validadeMs` (60 s) e duas chamadas ao mesmo tempo dividem o mesmo pedido. Falha (null) não fica guardada. → {ler({forcar}), ultimo} */
+export function criarLeitorVersao(buscar, { agora = () => Date.now(), validadeMs = 60_000 } = {}) {
+  let valor = null, em = -Infinity, emVoo = null;
+  return {
+    get ultimo() { return valor; },
+    ler({ forcar = false } = {}) {
+      if (!forcar && valor && agora() - em < validadeMs) return Promise.resolve(valor);
+      if (emVoo) return emVoo;
+      emVoo = Promise.resolve().then(() => buscar()).catch(() => null).then(r => {
+        emVoo = null;
+        if (r && typeof r === "object") { valor = r; em = agora(); }
+        return r || null;
+      });
+      return emVoo;
+    },
+  };
 }
 
 /**
@@ -160,7 +182,10 @@ export function aplicarOuRecarregar(v, recarregar) {
   return p.catch(() => { recarregar(); return false; });
 }
 
-/** Faixa «Nova versão do Órbita pronta · Atualizar» (DOM só com ui.h). */
+/** Faixa «Nova versão do sistema pronta · Atualizar» (DOM só com ui.h).
+    plano 2000d · DU-155: sem o nome do produto (marca ainda não chegou) diz «do sistema» — nunca o nome da plataforma numa revenda.
+    plano 2000d · DU-257: o «o que mudou» fica atrás de «Ver novidades» (aria-expanded) — a faixa não ocupa 4 linhas no celular. */
+let seqFaixaVersao = 0;
 export function criarFaixaVersao(ui, produto, aoAtualizar, { notas = null, aoDepois = null } = {}) {
   const bt = ui.h("button", { type: "button", class: "bt bt-sec" }, "Atualizar");
   bt.addEventListener("click", () => aoAtualizar());
@@ -168,8 +193,21 @@ export function criarFaixaVersao(ui, produto, aoAtualizar, { notas = null, aoDep
   const lista = Array.isArray(notas) ? notas.filter(Boolean).slice(0, 3) : [];
   const depois = typeof aoDepois === "function" ? ui.h("button", { type: "button", class: "bt bt-fant" }, "Depois") : null;
   if (depois) depois.addEventListener("click", () => aoDepois());
-  const txt = [ui.h("p", null, `Nova versão do ${produto || "Órbita"} pronta.`)];
-  if (lista.length) txt.push(ui.h("ul", { class: "faixa-versao-notas" }, ...lista.map(t => ui.h("li", null, t))));
+  const nome = String(produto || "").trim();
+  const txt = [ui.h("p", null, nome ? `Nova versão do ${nome} pronta.` : "Nova versão do sistema pronta.")];
+  let ver = null;
+  if (lista.length) {
+    const id = `faixa-versao-notas-${++seqFaixaVersao}`;
+    const ul = ui.h("ul", { class: "faixa-versao-notas", id, hidden: true }, ...lista.map(t => ui.h("li", null, t)));
+    ver = ui.h("button", { type: "button", class: "link faixa-versao-ver", "aria-expanded": "false", "aria-controls": id }, "Ver novidades");
+    ver.addEventListener("click", () => {
+      const abrir = ul.hidden;
+      ul.hidden = !abrir;
+      ver.setAttribute("aria-expanded", String(abrir));
+      ver.textContent = abrir ? "Esconder novidades" : "Ver novidades";
+    });
+    txt.push(ver, ul);
+  }
   return ui.h("div", { class: "faixa faixa-versao", role: "status" }, ...[ui.icone("info"), ui.h("div", { class: "faixa-versao-txt" }, ...txt), bt, depois].filter(Boolean));
 }
 
@@ -201,7 +239,11 @@ export function iniciar(o) {
   };
   const mostrarFaixa = pronta => {
     if (!o.alvo || faixa) return;
-    faixa = criarFaixaVersao(o.ui, o.produto ? o.produto() : "Órbita", () => { aplicarOuRecarregar(v, recarregar); },   // plano 1000b · UB-172
+    faixa = criarFaixaVersao(o.ui, o.produto ? o.produto() : "", () => {   // plano 2000d · DU-155: sem produto, «do sistema»
+      // plano 1500c · UC-037: as notas vão junto para a versão nova (que as mostra uma vez)
+      if (pronta && pronta.versao && pronta.notas) { try { guardarNovidades(globalThis.localStorage, pronta.versao, pronta.notas); } catch { /* sem armazenamento */ } }
+      aplicarOuRecarregar(v, recarregar);
+    },   // plano 1000b · UB-172
       { notas: pronta && pronta.notas, aoDepois: () => { v.dispensar(); if (faixa) { faixa.remove(); faixa = null; } } });
     o.alvo.appendChild(faixa);   // plano 1000b · UB-169: a faixa já é role=status — um ui.anunciar a mais fazia o leitor falar duas vezes
   };
@@ -221,10 +263,13 @@ export function iniciar(o) {
     try { for (const n of await globalThis.caches.keys()) if (n.startsWith("orbita-")) await globalThis.caches.delete(n); } catch { /* ok */ }
     recarregar();
   };
+  // plano 1500c · UCC-052: a leitura é a mesma que o shell usa (o.leitorVersao); sem ela, um leitor próprio
+  const leitor = o.leitorVersao || criarLeitorVersao(() => buscarVersaoComPrazo(buscarFn, new URL(`versao.json?t=${Date.now()}`, loc.href).href, o.prazoVersaoMs));
   const v = criarVersao({
     versao: o.versao,
     // plano 1000b · UB-171: prazo de 5 s (rede presa não acumula consultas penduradas)
-    buscar: () => buscarVersaoComPrazo(buscarFn, new URL(`versao.json?t=${Date.now()}`, loc.href).href, o.prazoVersaoMs),
+    // a faixa sempre lê de novo (o ritmo dela já é 1/min no máximo); o resultado fica valendo 60 s para o shell (versaoRemota) não repetir o pedido
+    buscar: () => leitor.ler({ forcar: true }),
     ocupado: () => temDialogo() || !!(o.ocupado && o.ocupado()),
     recarregou: () => lerNum(CHAVE_RECARGA),
     aoPronta: pronta => mostrarFaixa(pronta),
@@ -259,6 +304,7 @@ export function iniciar(o) {
   const api = {
     get versao() { return v; },
     get registro() { return reg; },
+    leitorVersao: leitor,   // plano 1500c · UCC-052
     aplicar: () => v.aplicar(),
     verificar: () => v.verificar(),
     /** Manda ao service worker as telas que ainda não foram abertas (e tudo que a página já carregou). */
@@ -281,13 +327,15 @@ export function iniciar(o) {
 
   // ociosidade: qualquer toque, tecla ou rolagem zera o relógio
   for (const ev of ["pointerdown", "keydown", "touchstart", "wheel"]) ouvir(doc, ev, () => v.interagiu(), { passive: true, capture: true });
-  const ocio = setInterval(() => { v.tique(); }, INTERVALO_OCIOSIDADE_MS);
+  // plano 1500c · UCC-053: com a aba escondida o tique não roda (a volta à aba confere de novo; uma aba esquecida não recarrega no escuro)
+  const ocio = setInterval(() => { if (doc && doc.hidden) return; v.tique(); }, INTERVALO_OCIOSIDADE_MS);
   fins.push(() => clearInterval(ocio));
   // versão: ao voltar para a aba, ao reconectar (no máximo 1 vez por minuto — AS-207) e a cada 10 min
   ouvir(doc, "visibilitychange", () => { if (doc.visibilityState === "visible") v.verificar({ seNaoRecente: true }); });
   ouvir(jan, "online", () => { v.verificar({ seNaoRecente: true }); });
   // plano 1000b · UB-170: com a aba escondida o relógio não busca o versao.json (a volta à aba já confere)
-  const relogio = setInterval(() => { verificarSeVisivel(doc, v); }, o.verificarMs || VERIFICAR_A_CADA_MS);
+  // plano 1500c · UCC-129: um relógio só de 10 min — o shell pendura nele o que também roda nesse ritmo (o.aoVerificar: a conferência de migração)
+  const relogio = setInterval(() => { if (verificarSeVisivel(doc, v) === null) return; if (typeof o.aoVerificar === "function") { try { o.aoVerificar(); } catch { /* o relógio continua */ } } }, o.verificarMs || VERIFICAR_A_CADA_MS);
   fins.push(() => clearInterval(relogio));
 
   // AS-295: o desligamento de emergência recarregou esta aba — diz o porquê uma vez
@@ -341,16 +389,59 @@ export function quandoOcioso(jan, fn, { prazoMs = 5000 } = {}) {
    ============================================================ */
 
 /** O objeto do manifesto (puro). URLs ABSOLUTAS: um manifesto em blob: não resolve caminho relativo. */
-export function construirManifesto({ nome, base, workspace = null, rota = null, fundo, icones = [], lang = "pt-BR" }) {
+// plano 2000d · DU-261/UCC-054: atalhos do ícone (toque longo/botão direito) — só para módulos que a empresa tem; DU-446: share_target
+export function construirManifesto({ nome, base, workspace = null, rota = null, fundo, icones = [], lang = "pt-BR", atalhos = [], compartilhar = false }) {
   const escopo = new URL("./", base).href;
   const inicio = workspace ? `${escopo}?produto=${workspace}${rota ? `#/${rota}` : ""}` : escopo;
-  return {
+  const m = {
     id: workspace ? `${escopo}?produto=${workspace}` : escopo,
     name: nome.name, short_name: nome.short_name, description: nome.description, lang,
     start_url: inicio, scope: escopo, display: "standalone",
     background_color: fundo, theme_color: fundo,
     icons: icones,
+    categories: ["business", "productivity"],
   };
+  const lista = (Array.isArray(atalhos) ? atalhos : []).filter(a => a && a.nome && /^[a-z-]+(?:\/[a-z0-9-]+)?$/.test(String(a.rota || ""))).slice(0, 4);
+  // plano 2000d · SX-057: cada atalho com o ícone do app (sem ele o Android mostra um quadrado genérico)
+  const iconeAtalho = (Array.isArray(icones) ? icones : []).find(i => i && i.purpose !== "maskable" && /192/.test(String(i.sizes || "")));
+  if (lista.length) m.shortcuts = lista.map(a => ({ name: a.nome, short_name: a.curto || a.nome, url: `${escopo}${workspace ? `?produto=${workspace}` : ""}#/${a.rota}`,
+    ...(iconeAtalho ? { icons: [{ src: iconeAtalho.src, sizes: iconeAtalho.sizes, type: iconeAtalho.type || "image/png" }] } : {}) }));
+  // plano 2000d · SX-058: o que chega por «Compartilhar» abre no MESMO produto instalado (o app de Atendimento não vira o app geral)
+  if (compartilhar) m.share_target = { action: `${escopo}?${workspace ? `produto=${workspace}&` : ""}compartilhar=1`, method: "GET", params: { title: "titulo", text: "texto", url: "link" } };
+  // plano 2000d · SX-059: abrir pelo atalho/compartilhar com o app já aberto reaproveita a janela (não abre uma segunda cópia)
+  m.launch_handler = { client_mode: ["navigate-existing", "auto"] };
+  return m;
+}
+/** plano 2000d · DU-261: os atalhos do ícone pelos módulos liberados (Conversas, CRM, Agenda, nessa ordem); `rotulo(mod)` deixa a vertical renomear. */
+export const ATALHOS_ICONE = Object.freeze([{ rota: "conversas", nome: "Conversas" }, { rota: "crm", nome: "CRM" }, { rota: "agenda", nome: "Agenda" }]);
+/** plano 2000d · SX-056: o app de Anúncios instalado leva aos anúncios e relatórios (antes: Conversas/CRM/Agenda, que nem são dele). */
+export const ATALHOS_ICONE_ADS = Object.freeze([{ rota: "anuncios", nome: "Anúncios", modulo: "ads" }, { rota: "relatorios", nome: "Relatórios", modulo: "relatorios" }, { rota: "crm", nome: "CRM", modulo: "crm" }]);
+export function atalhosDoIcone(modulos = [], rotulo = null, workspace = null) {
+  const tem = new Set(Array.isArray(modulos) ? modulos : []);
+  const base = workspace === "ads" ? ATALHOS_ICONE_ADS : ATALHOS_ICONE;
+  return base.filter(a => tem.has(a.modulo || a.rota)).map(a => ({ rota: a.rota, nome: (typeof rotulo === "function" && rotulo(a.rota)) || a.nome }));
+}
+/** plano 2000d · DU-446: o que o app instalado recebeu de «Compartilhar» (?compartilhar=1&titulo&texto&link) → um texto só (até 2000), ou null. */
+export function textoCompartilhado(busca) {
+  let q;
+  try { q = new URLSearchParams(String(busca || "")); } catch { return null; }
+  if (q.get("compartilhar") !== "1") return null;
+  const partes = [q.get("titulo"), q.get("texto"), q.get("link")].map(s => String(s || "").trim()).filter(Boolean);
+  // plano 2000d · SX-053: muitos apps mandam o link dentro do texto E no campo link — ele aparece uma vez só (e o título repetido no texto também)
+  const sem = partes.filter((p, i) => !partes.some((outra, j) => j !== i && outra !== p && outra.includes(p)));
+  const unico = [...new Set(sem)].join("\n").slice(0, 2000);
+  return unico || null;
+}
+/** plano 2000d · DU-408: o app instalado reabre na última tela principal (não sempre no Início). Só ao abrir (hash vazio/#/ /#/inicio),
+    só instalado e só rota principal conhecida («#/crm», «#/agenda»…), nunca login/convite. */
+export const CHAVE_ULTIMA_ROTA = "nx-ultima-rota";
+export function rotaAoAbrirInstalado({ instalado = false, hash = "", ultima = null, ligado = true } = {}) {
+  if (!instalado || !ligado) return null;
+  if (!["", "#", "#/", "#/inicio"].includes(String(hash || ""))) return null;
+  const u = String(ultima || "");
+  // plano 2000d · SX-094: também uma subtela fixa («#/relatorios/vendas», «#/config/equipe») — nunca um id nem uma query
+  if (!/^#\/[a-z-]{2,20}(\/[a-z-]{2,20})?$/.test(u) || /^#\/(inicio|login|entrar|convite|senha|trocar|testar|sair)(\/|$)/.test(u)) return null;
+  return u;
 }
 
 /** Ícones estáticos (PNG empacotados) em URL absoluta: valem quando o cliente não tem logo próprio ou a rasterização falha. */
@@ -429,9 +520,17 @@ export function atualizarMetasApple({ doc = globalThis.document, titulo, icone =
 }
 
 /* ---------- instalar o app (menu da conta e folha «Mais») ---------- */
+/** plano 1500c · UCC-058: instalado também quando abre em window-controls-overlay (desktop), minimal-ui ou tela cheia. */
+export const MODOS_INSTALADO = Object.freeze(["standalone", "window-controls-overlay", "minimal-ui", "fullscreen"]);
 export function emStandalone({ janela = globalThis.window, nav = globalThis.navigator } = {}) {
-  try { return !!(janela && janela.matchMedia && janela.matchMedia("(display-mode: standalone)").matches) || (nav && nav.standalone === true); } catch { return false; }
+  try {
+    if (nav && nav.standalone === true) return true;
+    return !!(janela && janela.matchMedia && MODOS_INSTALADO.some(m => janela.matchMedia(`(display-mode: ${m})`).matches));
+  } catch { return false; }
 }
+/** plano 1500c · UCC-061: Firefox no computador não instala app da web (não há beforeinstallprompt): o menu mostra o que dá para fazer. */
+export function ehFirefoxDesktop({ ua = "" } = {}) { return /firefox\//i.test(ua) && !/android|mobile|tablet/i.test(ua); }
+export const PASSOS_FIREFOX = Object.freeze(["O Firefox no computador não instala apps da web; dá para deixar o sistema sempre à mão:", "Clique com o botão direito na aba e escolha «Fixar aba» — ela fica aberta à esquerda.", "Ou abra no Chrome ou no Edge e use «Instalar o app» para ter o ícone na área de trabalho."]);
 export function ehIOS({ ua = "", plataforma = "", toques = 0 } = {}) {
   return /iphone|ipad|ipod/i.test(ua) || (plataforma === "MacIntel" && toques > 1);   // iPad com Safari "desktop"
 }
@@ -440,6 +539,57 @@ export function modoDeInstalacao({ evento = null, janela = globalThis.window, na
   if (emStandalone({ janela, nav })) return null;
   if (evento && typeof evento.prompt === "function") return "evento";
   if (ehIOS({ ua: (nav && nav.userAgent) || "", plataforma: (nav && nav.platform) || "", toques: (nav && nav.maxTouchPoints) || 0 })) return "ios";
+  if (ehFirefoxDesktop({ ua: (nav && nav.userAgent) || "" })) return "firefox";   // plano 1500c · UCC-061
   return null;
 }
 export const PASSOS_IOS = Object.freeze(["Toque no botão Compartilhar (o quadrado com a seta para cima).", "Escolha «Adicionar à Tela de Início».", "Confirme em «Adicionar»: o app aparece na tela do aparelho."]);
+/** plano 2000d · DU-258: os mesmos passos com o desenho do botão que a pessoa procura no Safari (ícone do sprite) e onde ele fica. */
+export const PASSOS_IOS_VISUAL = Object.freeze([
+  Object.freeze({ icone: "compartilhar", onde: "Na barra de baixo do Safari (no iPad, em cima)", texto: PASSOS_IOS[0] }),
+  Object.freeze({ icone: "mais", onde: "Role a lista de opções para baixo", texto: PASSOS_IOS[1] }),
+  Object.freeze({ icone: "check", onde: "No canto de cima, à direita", texto: PASSOS_IOS[2] }),
+]);
+
+/** plano 1500c · UCC-131/UCC-132/UCC-135: nome curto do navegador para o diagnóstico («Chrome 141», «Safari 18», «Firefox 140», «Edge 141»,
+    «Samsung Internet 28»). Só nome e versão principal: nada que identifique a pessoa. */
+export function nomeDoNavegador(ua = "") {
+  const s = String(ua || "");
+  // plano 2000d · SX-052: o Edge do iPhone/iPad (EdgiOS) também é Edge, não Safari
+  const tenta = [[/Edg(?:A|iOS)?\/(\d+)/, "Edge"], [/SamsungBrowser\/(\d+)/, "Samsung Internet"], [/OPR\/(\d+)/, "Opera"], [/Firefox\/(\d+)/, "Firefox"],
+    [/FxiOS\/(\d+)/, "Firefox"], [/CriOS\/(\d+)/, "Chrome"], [/Chrome\/(\d+)/, "Chrome"], [/Version\/(\d+)[\d.]* (?:Mobile\/\S+ )?Safari\//, "Safari"]];
+  for (const [re, nome] of tenta) { const m = re.exec(s); if (m) return `${nome} ${m[1]}`; }
+  return s ? "outro" : "—";
+}
+/** plano 1500c · UCC-131: o estado do modo sem internet para o «Sobre»: sem suporte, preparando (sem controlador) ou ativo com a versão do cache. */
+export function estadoDoSW(nav = globalThis.navigator) {
+  const sw = nav && nav.serviceWorker;
+  if (!sw) return { estado: "sem_suporte", texto: "Funciona sem internet: não (navegador sem suporte)" };
+  const ctl = sw.controller;
+  if (!ctl) return { estado: "preparando", texto: "Funciona sem internet: ainda não (preparando nesta abertura)" };
+  const v = versaoDaUrl(ctl.scriptURL);
+  return { estado: "ativo", versao: v, texto: `Funciona sem internet: sim (cópia da versão ${v || "—"})` };
+}
+
+/* plano 1500c · UC-037: as notas da versão aplicada ficam no aparelho (nx-novidades = {versao, notas, vistas}) — na primeira abertura da versão
+   nova o shell avisa «Atualizado: veja o que mudou» (uma vez) e o menu Ajuda mostra «Novidades» enquanto for a mesma versão. */
+export const CHAVE_NOVIDADES = "nx-novidades";
+export function guardarNovidades(ls, versao, notas) {
+  const lista = Array.isArray(notas) ? notas.filter(t => typeof t === "string" && t.trim()).map(t => t.trim().slice(0, 140)).slice(0, 3) : [];
+  if (!ls || !versao || !lista.length) return false;
+  try { ls.setItem(CHAVE_NOVIDADES, JSON.stringify({ versao: String(versao), notas: lista, vistas: false })); return true; } catch { return false; }
+}
+export function novidadesDaVersao(ls, versaoAtual) {
+  try {
+    const o = JSON.parse((ls && ls.getItem(CHAVE_NOVIDADES)) || "null");
+    if (!o || o.versao !== String(versaoAtual) || !Array.isArray(o.notas)) return { notas: [], vistas: true, abertas: true };
+    // plano 2000d · DU-286: `abertas` — a pessoa abriu a lista (o ponto no menu some); o toast de «Atualizado» só marca `vistas`
+    return { notas: o.notas.filter(t => typeof t === "string").slice(0, 3), vistas: !!o.vistas, abertas: !!o.abertas };
+  } catch { return { notas: [], vistas: true, abertas: true }; }
+}
+/** plano 2000d · DU-286: abriu «Novidades desta versão» → o ponto do menu sai. */
+export function marcarNovidadesAbertas(ls) {
+  try { const o = JSON.parse(ls.getItem(CHAVE_NOVIDADES) || "null"); if (o) { o.vistas = true; o.abertas = true; ls.setItem(CHAVE_NOVIDADES, JSON.stringify(o)); } } catch { /* ok */ }
+}
+export function marcarNovidadesVistas(ls) {
+  try { const o = JSON.parse(ls.getItem(CHAVE_NOVIDADES) || "null"); if (o) { o.vistas = true; ls.setItem(CHAVE_NOVIDADES, JSON.stringify(o)); } } catch { /* ok */ }
+}

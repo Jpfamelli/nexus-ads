@@ -407,6 +407,7 @@ begin
   -- ---------------------------------------------------------- transação SOMENTE LEITURA (fica por ÚLTIMO)
   -- o PostgREST roda RPC stable/immutable (e todo GET) em transação read only: o nx_ctx do
   -- super/gestor sem acesso próprio não pode cair por causa do insert da auditoria.
+  perform set_config('nx.faxina', 'on', true);   -- plano 2000d · DS-153: a auditoria só aceita delete na retenção explícita
   delete from public.nx_auditoria where conta_id = k_su;
   perform set_config('transaction_read_only', 'on', true);
   perform pg_temp.ok((public.nx_ctx('tok-f1-su', cA, 'leitura')).papel = 'super', 'nx_ctx do super em transação read only (sem cair na auditoria)');

@@ -127,7 +127,11 @@ export const GATILHOS = Object.freeze([
     rotulo: () => "Tarefa venceu sem ser concluída",
     descricao: "Quando o prazo de uma tarefa passa e ela continua aberta.",
     dica: () => "Olha as tarefas não concluídas que venceram (até 7 dias atrás).",
-    campos: [] },
+    // plano 1500c · UCA-002: os filtros que o servidor aceita desde a 20261015a (sem eles no catálogo, Salvar apagava os dois)
+    campos: [
+      { nome: "tipo_tarefa", tipo: "opcoes", opcoes: TIPOS_TAREFA, rotulo: "Só tarefas deste tipo", opcional: true, vazioRotulo: "Qualquer tipo" },
+      { nome: "dono_id", tipo: "pessoa", rotulo: "Só tarefas desta pessoa", opcional: true, vazioRotulo: "Qualquer pessoa" },
+    ] },
   { id: "antes_da_data", grupo: "Agenda", icone: "relogio",
     rotulo: vv => `Antes da ${palavraConsulta(vv.vertical)} marcada`,
     descricao: "Algumas horas antes de uma data marcada (lembretes).",
@@ -171,7 +175,13 @@ export const CAMPOS_CONDICAO = Object.freeze([
   { id: "texto", rotulo: "Texto da mensagem", valor: "texto" },
   { id: "valor", rotulo: "Valor", valor: "numero" },
   { id: "dono_id", rotulo: "Responsável", valor: "pessoa" },
+  // plano 1500c · UCA-001: o servidor aceita desde a 20261015a (campanha: contém/não contém; plataforma: é/não é)
+  { id: "campanha", rotulo: "Campanha do anúncio", valor: "campanha" },
+  { id: "plataforma", rotulo: "Plataforma do anúncio", valor: "plataforma" },
 ]);
+
+/** plano 1500c · UCA-001: as plataformas que a condição «Plataforma do anúncio» aceita (as mesmas do nx_auto_normalizar). */
+export const PLATAFORMAS = Object.freeze([["meta", "Meta (Facebook e Instagram)"], ["google", "Google"]]);
 
 export const OPERADORES = Object.freeze([
   { id: "igual", rotulo: "é", frase: "for" },
@@ -182,6 +192,21 @@ export const OPERADORES = Object.freeze([
   { id: "menor", rotulo: "menor que", frase: "for menor que" },
   { id: "vazio", rotulo: "está vazio", frase: "estiver vazio", semValor: true },
   { id: "preenchido", rotulo: "está preenchido", frase: "estiver preenchido", semValor: true },
+  // plano 2000d · DU-031: só para a data marcada (campo consulta_em, quando o servidor anunciar o recurso)
+  { id: "hoje", rotulo: "é hoje", frase: "for hoje", semValor: true },
+  { id: "amanha", rotulo: "é amanhã", frase: "for amanhã", semValor: true },
+]);
+
+/**
+ * plano 2000d · DU-006/DU-014/DU-031/DU-032/DU-017: campos de condição que dependem do servidor. Só aparecem no editor (e só passam na
+ * validação com a base carregada) quando `base.recursos` do nx_automacoes_listar traz o `recurso`. Sem o recurso, o servidor de hoje
+ * recusaria («escolha o campo»). `ops` = os operadores aceitos.
+ */
+export const CAMPOS_CONDICAO_NOVOS = Object.freeze([
+  { id: "consulta_em", rotulo: "Data marcada", valor: "data_marcada", recurso: "cond_consulta_em", ops: ["vazio", "preenchido", "hoje", "amanha"] },
+  { id: "ganhos_contato", rotulo: "Compras fechadas do contato", valor: "numero", recurso: "cond_ganhos_contato", ops: ["maior", "menor", "igual"] },
+  { id: "telefone_valido", rotulo: "Tem WhatsApp válido", valor: "sim_nao", recurso: "cond_telefone_valido", ops: ["igual"] },
+  { id: "fora_do_horario", rotulo: "Fora do horário de atendimento", valor: "sim_nao", recurso: "cond_fora_do_horario", ops: ["igual"] },
 ]);
 
 /** Grupos da paleta «Adicionar passo» do editor (ordem de exibição). */
@@ -227,7 +252,8 @@ export const ACOES = Object.freeze([
     // plano 1000b · UB-031: descrição neutra (quem só tem número da Meta não lê «CodeWords»); a paleta completa por onde sai
     descricao: "Manda um texto pelo WhatsApp.",
     campos: [{ nome: "texto", tipo: "texto_longo", rotulo: "Mensagem", obrigatorio: true, max: 4096, variaveis: true,
-      ajuda: "No WhatsApp oficial (Meta), só sai dentro da janela de 24 h desde a última mensagem do cliente; fora dela, use um modelo aprovado. No WhatsApp por aparelho (CodeWords), o texto livre sai a qualquer hora." }] },
+      // plano 2000d · DU-024/DU-088: sem nome de fornecedor; o editor troca esta ajuda pela dos números da empresa (L.ajudaMensagem)
+      ajuda: "No número oficial, só sai dentro da janela de 24 h desde a última mensagem do cliente; fora dela, use um modelo aprovado. No número conectado por aparelho, o texto livre sai a qualquer hora." }] },
   { id: "enviar_template", grupo: "Mensagens", icone: "whatsapp", mensagem: true, rotulo: () => "Enviar modelo aprovado",
     descricao: "Manda um modelo aprovado pela Meta (WhatsApp oficial).",
     campos: [
@@ -284,7 +310,8 @@ export const ACOES = Object.freeze([
   { id: "parar", grupo: "Sequência", icone: "parar", sequencia: true, rotulo: () => "Parar por aqui", campos: [],
     descricao: "Encerra a sequência: o que vem depois não roda." },
   { id: "ia_decidir", grupo: "Inteligência artificial", icone: "ia", ia: true, rotulo: () => "Deixar a IA decidir",
-    descricao: "A IA lê a conversa e escolhe entre opções que você definiu. Usa a cota de IA do mês.",
+    // plano 1500c · UCA-073: a pessoa não define opções — a IA escolhe entre o que já existe no sistema
+    descricao: "A IA lê a conversa e escolhe a etapa, resume numa nota ou pontua o interesse — sempre com o que já existe no sistema. Usa a cota de IA do mês.",
     campos: [
       { nome: "tarefa", tipo: "tarefa_ia", rotulo: "O que a IA faz", obrigatorio: true, padrao: "classificar_etapa" },
       { nome: "instrucao", tipo: "texto_longo", rotulo: "Instrução extra (opcional)", opcional: true, max: 500,
@@ -302,4 +329,20 @@ export const VARIAVEIS = Object.freeze([
   ["primeiro_nome", "Primeiro nome"], ["nome", "Nome completo"], ["empresa", "Nome da empresa"],
   ["protocolo", "Protocolo do atendimento"], ["etapa", "Etapa"], ["valor", "Valor"], ["atendente", "Atendente"],
   ["data_consulta", "Data marcada (29/09)"], ["hora_consulta", "Hora marcada (14:30)"],
+]);
+
+/**
+ * plano 2000d · DU-017/DU-034/DU-035/DU-036: variáveis que o motor do servidor ainda não troca. [chave, rótulo, recurso]. Só valem (e só
+ * aparecem nos chips) quando `base.recursos` traz o recurso — sem ele, a variável chegaria crua ao cliente. «{campo:placa}» usa o recurso
+ * `var_campo` e o campo precisa existir em Configurações → Campos.
+ */
+export const VARIAVEIS_NOVAS = Object.freeze([
+  ["dia_semana_consulta", "Dia da semana marcado (segunda-feira)", "var_dia_semana"],
+  ["profissional", "Profissional da agenda", "var_profissional"],
+  ["link_avaliacao", "Link de avaliação no Google", "var_link_avaliacao"],
+  ["proxima_abertura", "Próxima abertura (amanhã às 08:00)", "var_proxima_abertura"],
+  // plano 2000d · AX-076 (pendência DU-395 da frente config): os dados da empresa de Configurações → Empresa (nx_empresa_dados)
+  ["endereco", "Endereço da empresa", "var_dados_empresa"],
+  ["telefone_empresa", "Telefone da empresa", "var_dados_empresa"],
+  ["instagram", "Instagram da empresa (@)", "var_dados_empresa"],
 ]);

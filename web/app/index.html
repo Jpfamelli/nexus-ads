@@ -11,40 +11,42 @@
   <meta name="theme-color" content="#FAFAF8" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#07090C" media="(prefers-color-scheme: dark)">
   <meta name="referrer" content="strict-origin-when-cross-origin">
+  <!-- plano 2000d · SX-081: o iPhone não transforma telefone, data e endereço do app em link azul (quebrava o layout das listas e abria ligação por engano) -->
+  <meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
   <title>Órbita</title>
   <meta name="description" content="Anúncio, conversa e venda na mesma órbita: CRM, central de WhatsApp oficial e retorno do anúncio.">
   <link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%23FAFAF8'/%3E%3Ccircle cx='24' cy='24' r='8.5' fill='%23B0761F'/%3E%3Cellipse cx='24' cy='24' rx='18' ry='7.5' transform='rotate(-24 24 24)' fill='none' stroke='%230B1B2B' stroke-width='2.2'/%3E%3Ccircle cx='37.3' cy='14' r='3' fill='%236FA3CF'/%3E%3C/svg%3E">
-  <link rel="preload" href="antes.js?v=20261016a" as="script" fetchpriority="high">
+  <link rel="preload" href="antes.js?v=20261026a" as="script" fetchpriority="high">
   <!-- o app.js e os módulos base baixam JUNTOS, sem esperar o app.js executar (mesmo ?v= do app.js; o shell testa a igualdade) -->
-  <link rel="modulepreload" href="app.js?v=20261016a">
-  <link rel="modulepreload" href="../dados.js?v=20261016a">
-  <link rel="modulepreload" href="api.js?v=20261016a">
-  <link rel="modulepreload" href="ui.js?v=20261016a">
-  <link rel="modulepreload" href="tema.js?v=20261016a">
-  <link rel="modulepreload" href="vocab.js?v=20261016a">
-  <link rel="modulepreload" href="rotas.js?v=20261016a">
-  <link rel="modulepreload" href="pulso.js?v=20261016a">
-  <link rel="modulepreload" href="rede.js?v=20261016a">
-  <link rel="modulepreload" href="rascunho.js?v=20261016a">
-  <link rel="modulepreload" href="cache.js?v=20261016a">
-  <link rel="modulepreload" href="comandos.js?v=20261016a">
-  <link rel="modulepreload" href="prontos.js?v=20261016a">
+  <link rel="modulepreload" href="app.js?v=20261026a">
+  <link rel="modulepreload" href="../dados.js?v=20261026a">
+  <link rel="modulepreload" href="api.js?v=20261026a">
+  <link rel="modulepreload" href="ui.js?v=20261026a">
+  <link rel="modulepreload" href="tema.js?v=20261026a">
+  <link rel="modulepreload" href="vocab.js?v=20261026a">
+  <link rel="modulepreload" href="rotas.js?v=20261026a">
+  <link rel="modulepreload" href="pulso.js?v=20261026a">
+  <link rel="modulepreload" href="rede.js?v=20261026a">
+  <link rel="modulepreload" href="rascunho.js?v=20261026a">
+  <link rel="modulepreload" href="cache.js?v=20261026a">
+  <link rel="modulepreload" href="comandos.js?v=20261026a">
+  <link rel="modulepreload" href="prontos.js?v=20261026a">
   <!-- plano 1000 (AS-257): as duas fontes do 1º desenho (títulos e texto) saem junto com o CSS; o endereço é EXATAMENTE o do @font-face
        (com o ?v= próprio da fonte), senão o navegador baixaria duas vezes -->
   <link rel="preload" href="../fonts/clash-display-variable.woff2?v=1" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="../fonts/satoshi-variable.woff2?v=1" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="app.css?v=20261016a">
-  <link rel="stylesheet" href="shell.css?v=20261016a">
+  <link rel="stylesheet" href="app.css?v=20261026a">
+  <link rel="stylesheet" href="shell.css?v=20261026a">
   <link rel="manifest" id="manifest" href="manifest.webmanifest">
   <!-- instalar no iPhone/iPad (o iOS ignora o manifesto para o ícone): valores padrão; o shell troca pelos da marca do cliente -->
-  <link rel="apple-touch-icon" id="apple-icone" href="icones/apple-touch-icon.png?v=20261016a">
+  <link rel="apple-touch-icon" id="apple-icone" href="icones/apple-touch-icon.png?v=20261026a">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Órbita">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <!-- pinta a marca guardada antes da primeira pintura (a CSP proíbe script inline). Fica por ÚLTIMO no <head>: um script síncrono
        segura o que vem depois dele, e os preloads acima precisam sair junto com o pedido dele, não depois -->
-  <script src="antes.js?v=20261016a"></script>
+  <script src="antes.js?v=20261026a"></script>
 </head>
 <body>
   <!-- ícones (ESPEC §7.3) + marca padrão; tudo em currentColor ou tokens -->
@@ -71,6 +73,10 @@
       <symbol id="i-lua" viewBox="0 0 24 24"><path d="M19.7 15.2A8.4 8.4 0 0 1 8.8 4.3a8.5 8.5 0 1 0 10.9 10.9z"/><path d="M16.5 3.5v3m-1.5-1.5h3"/></symbol>
       <symbol id="i-busca" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m20.5 20.5-4.8-4.8"/></symbol>
       <symbol id="i-mais" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <!-- plano 2000d · DU-258: o botão Compartilhar do Safari (passo a passo de instalar no iPhone) -->
+      <!-- plano 2000d: o «Desfazer» do Kanban (crm-kanban.js pede i-desfazer) -->
+      <symbol id="i-desfazer" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+      <symbol id="i-compartilhar" viewBox="0 0 24 24"><path d="M12 3v12M8 7l4-4 4 4M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></symbol>
       <symbol id="i-fechar" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
       <symbol id="i-clipe" viewBox="0 0 24 24"><path d="M20.5 11.5 12.4 19.6a5 5 0 0 1-7-7l8.1-8.1a3.3 3.3 0 0 1 4.7 4.7l-8.1 8.1a1.7 1.7 0 0 1-2.4-2.4l7.4-7.4"/></symbol>
       <symbol id="i-microfone" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M8.5 21h7"/></symbol>
@@ -135,6 +141,8 @@
   <!-- atalhos de região da tela ativa (M22): aparecem ao receber o foco, na ordem do Tab, antes do «Pular para o conteúdo» -->
   <nav class="pular-regioes" id="pular-regioes" aria-label="Atalhos desta tela"></nav>
   <a class="pular" href="#vista">Pular para o conteúdo</a>
+  <!-- plano 2000d · DU-282: também direto para o menu -->
+  <a class="pular pular-menu" href="#lateral">Ir para o menu</a>
 
   <!-- palco noturno: dois brilhos estáticos + grão (sem canvas: a inbox fica aberta o dia inteiro) -->
   <div class="palco" aria-hidden="true"><i class="brilho-a"></i><i class="brilho-b"></i><i class="grao"></i></div>
@@ -156,7 +164,7 @@
 
   <!-- o app -->
   <div class="app" id="app" hidden>
-    <aside class="lateral" id="lateral" aria-label="Menu principal">
+    <aside class="lateral" id="lateral" aria-label="Menu principal" tabindex="-1">
       <div class="lat-marca">
         <a class="lat-home" id="lat-home" href="#/">
           <span class="lat-logo" id="lat-logo"><svg viewBox="0 0 48 48" aria-hidden="true"><use href="#marca-orbita"/></svg></span>
@@ -184,9 +192,12 @@
     <nav class="barra" id="barra" aria-label="Navegação principal"></nav>
   </div>
 
-  <div class="toasts" id="toasts" popover="manual" aria-live="polite"></div>
-  <div class="sr-only" id="anuncio" aria-live="polite"></div>
+  <!-- plano 1500c · UCC-068: os avisos falam pelo #anuncio (ui.anunciar), a caixa não é aria-live (uma voz só) -->
+  <div class="toasts" id="toasts" popover="manual"></div>
+  <div class="sr-only" id="anuncio" aria-live="polite" aria-atomic="true"></div>
+  <!-- plano 1500c · UCC-067: a região dos erros existe desde o início (criada na hora, o leitor de tela costuma perder o 1º anúncio) -->
+  <div class="sr-only" id="anuncio-urgente" aria-live="assertive" aria-atomic="true"></div>
 
-  <script type="module" src="app.js?v=20261016a"></script>
+  <script type="module" src="app.js?v=20261026a"></script>
 </body>
 </html>

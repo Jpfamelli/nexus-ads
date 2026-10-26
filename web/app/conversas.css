@@ -173,6 +173,7 @@
 }
 .cv-msg[data-dir="in"]:not([data-junta="1"]) .cv-bolha { border-top-left-radius: 6px; }
 .cv-msg[data-dir="out"] .cv-bolha { background: var(--c-bolha-out); border-color: color-mix(in srgb, var(--c-prim) 26%, transparent); }
+.cv-msg[data-dir="out"][data-origem="ia"] .cv-bolha { border-color: color-mix(in srgb, var(--c-info) 45%, transparent); border-style: dashed; } /* plano 1500c · CC-004: bolha da IA em qualquer número */
 .cv-msg[data-dir="out"]:not([data-junta="1"]) .cv-bolha { border-top-right-radius: 6px; }
 .cv-texto { white-space: pre-wrap; font-size: var(--fs-15); line-height: 1.45; }
 .cv-texto a { color: var(--c-prim-luz); }
@@ -1334,3 +1335,296 @@ mark.cvx-pend { background: var(--c-aten-suave); color: var(--c-texto); border-r
 .cvx-multi-tirar { min-height: 44px; align-self: flex-start; }                                  /* CB-080 */
 .cv-nv-caido { margin: 0; }                                                                 /* CB-044 */
 .cvt-sem-detalhes .sub { margin: 0; }                                                        /* CB-131 */
+
+/* ============================================================ plano 1500c · frente conv */
+/* plano 1500c · CC-042: a busca da lista com 44 px e 16 px de fonte no celular (o iPhone não dá zoom ao focar) */
+.cvl-busca .busca input { min-height: 44px; }
+@media (max-width: 760px), (pointer: coarse) { .cvl-busca .busca input { font-size: 16px; } }
+/* plano 1500c · CC-040 / CC-041: remover faixa e campos de hora do departamento com 44 px no toque */
+@media (max-width: 760px), (pointer: coarse) {
+  .cfg-faixa .bt-icone { width: 44px; height: 44px; }
+  .cfg-faixas input[type="time"] { min-height: 44px; font-size: 16px; }
+}
+/* plano 1500c · CC-044: responder/copiar da bolha com 44 px em qualquer tela de toque (tablet de 1280 px também) */
+@media (pointer: coarse) { .cv-msg-acoes .bt-icone { width: 44px; min-width: 44px; height: 44px; min-height: 44px; } }
+/* plano 1500c · CC-045: o avatar do responsável legível (antes 9,5 px) */
+.cvl-item .cvl-dono { width: 24px; height: 24px; font-size: var(--fs-11, 11px); }
+/* plano 1500c · CC-046: a sigla do documento no piso de 12 px (--fs-11) e peso 700 */
+.cv-doc-ic { font-size: var(--fs-11); font-weight: 700; }
+/* plano 1500c · CC-047: selo «ligado» da lateral em 12 px e cor de texto 2 (contraste AA) */
+.cvt-ligado { font-size: var(--fs-12, 12px); color: var(--c-texto-2); }
+/* plano 1500c · CC-052 / CC-057 / CC-058: «Selecionar todas», alfinete e sino da lista */
+.cvl-lote-todas { min-height: 44px; font-size: var(--fs-13); }
+.cvl-lote-todas[hidden] { display: none !important; }
+.cvl-fixada, .cvl-silenciada { display: inline-flex; align-items: center; color: var(--c-texto-2); }
+.cvl-fixada .ic, .cvl-silenciada .ic { width: 14px; height: 14px; }
+.cvl-silenciada { opacity: .7; }
+/* plano 1500c · CC-009: «Ver mais mensagens» na busca */
+.cvl-msgs-mais { margin: .5rem 1rem; min-height: 44px; }
+.cvf-origens .chip-check input[type="radio"] { accent-color: var(--c-prim); }
+[hidden] { display: none !important; }
+/* plano 1500c · CC-076: girar a foto no visualizador (90/270 trocam os limites de largura e altura) */
+.cv-lb-fig img { transform: rotate(var(--giro, 0deg)); transition: transform var(--t-ui) var(--e-out); }
+.cv-lb[data-giro="90"] .cv-lb-fig img, .cv-lb[data-giro="270"] .cv-lb-fig img { max-width: calc(100dvh - 11rem); max-height: 100vw; }
+@media (prefers-reduced-motion: reduce) { .cv-lb-fig img { transition: none; } }
+/* plano 1500c · CC-075: «Baixar» do vídeo logo abaixo do player */
+.cv-video-cx { display: flex; flex-direction: column; gap: .35rem; }
+@media (max-width: 760px), (pointer: coarse) { .cv-video-baixar, .cv-msg-mais, .cvt-prazo { min-height: 44px; } }
+/* plano 1500c · CC-085: antes/depois em cada foto da janela de várias fotos */
+.cvx-multi-ordem-bts { gap: .25rem; }
+@media (max-width: 760px), (pointer: coarse) { .cvx-multi-ordem-bts .bt-icone { width: 44px; height: 44px; } }
+/* plano 1500c · CC-088: interruptor «Ativa/Desligada» na linha das respostas rápidas */
+.cfg-resp-ativa { display: inline-flex; align-items: center; gap: .45rem; min-height: 44px; padding: 0 .4rem; border-radius: 999px; font-size: var(--fs-13); color: var(--c-texto-2); background: none; border: 0; cursor: pointer; }
+.cfg-resp-ativa-trilho { position: relative; width: 34px; height: 20px; border-radius: 999px; background: var(--c-sup-3); border: 1px solid var(--c-borda-2); flex: none; }
+.cfg-resp-ativa-trilho::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--c-texto-3); transition: transform var(--t-micro) var(--e-out); }
+.cfg-resp-ativa[aria-checked="true"] .cfg-resp-ativa-trilho { background: var(--c-ok-suave); border-color: var(--c-ok); }
+.cfg-resp-ativa[aria-checked="true"] .cfg-resp-ativa-trilho::after { transform: translateX(14px); background: var(--c-ok); }
+.cfg-resp-ativa:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .cfg-resp-ativa-trilho::after { transition: none; } }
+/* plano 1500c · CC-104: o alerta «Sem mensagem fora do horário · Ligar» é um botão */
+.cfg-dep-msg-bt { min-height: 44px; border: 0; background: none; padding: 0 .25rem; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; color: inherit; font: inherit; }
+.cfg-dep-msg-bt:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; border-radius: 6px; }
+/* plano 1500c · CC-137/CC-314: pílulas que viraram botão (assumir / registrar marketing) */
+.cv-pil-assumir, .cv-pil-optin { cursor: pointer; border: 0; font: inherit; }
+.cv-pil-assumir:hover, .cv-pil-optin:hover { filter: brightness(.96); }
+.cv-pil-assumir:focus-visible, .cv-pil-optin:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; }
+@media (max-width: 760px), (pointer: coarse) { .cv-pil-assumir, .cv-pil-optin, .cv-waze, .cv-tr-recado-chip, .cfg-ia-da-agenda { min-height: 44px; } }
+/* plano 1500c · CC-124: dono sem nome conhecido — ícone de pessoa no lugar do «?» */
+.cvl-dono-sem { display: inline-grid; place-items: center; }
+.cvl-dono-sem svg { width: 14px; height: 14px; }
+/* plano 1500c · CC-146: recados usados antes, acima do campo do transferir */
+.cv-tr-recados { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .35rem; }
+.cv-tr-recado-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-12); }
+.cv-tr-avisar textarea { margin-top: .35rem; }
+/* plano 1500c · CC-149: como o número digitado vai ficar */
+.cv-nv-tel-previa { color: var(--c-texto-2); }
+/* plano 1500c · CC-316 / CC-315 / CC-125: avisos das configurações */
+.cfg-sync-erro { display: block; margin-top: .25rem; font-size: var(--fs-12); color: var(--c-aten); }
+.cfg-dep-ninguem { margin: .25rem 0 0; font-size: var(--fs-13); }
+.cfg-ia-da-agenda { align-self: flex-start; margin-top: .35rem; }
+/* plano 1500c · CX-030: mensagem só com emoji aparece grande */
+.cv-texto.cv-texto-emoji { font-size: 2.25rem; line-height: 1.15; letter-spacing: .04em; }
+/* plano 1500c · CX-029: «+N contatos no texto da mensagem» */
+.cv-contato-mais { margin: 0 0 .25rem; font-size: var(--fs-12); }
+/* plano 1500c · CX-016: e-mail na mensagem */
+.cv-link-email { color: var(--c-prim-luz); text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
+/* plano 1500c · CX-064: lista com milhares de conversas — o navegador só desenha as linhas que aparecem (a altura reservada evita pulos) */
+.cvl-item { content-visibility: auto; contain-intrinsic-size: auto 76px; }
+/* plano 1500c · CX-065: alto contraste do Windows — a conversa aberta, a selecionada e o contador de não lidas não somem (eram só cor de fundo) */
+@media (forced-colors: active) {
+  .cvl-item[aria-current="true"], .cvl-item[data-sel="1"] { outline: 2px solid Highlight; outline-offset: -2px; }
+  .cvl-item[aria-current="true"]::before { background: Highlight; }
+  .cvl-badge { border: 1px solid CanvasText; }
+  .cv-texto mark, .cvl-msg-trecho mark { background: Mark; color: MarkText; }
+}
+/* plano 1500c · CX-066: no iPhone, campo com fonte menor que 16 px dá zoom ao focar — o campo de mensagem e os das janelas de Conversas ficam com 16 px no toque */
+@media (max-width: 760px), (pointer: coarse) {
+  .cvx textarea, #cv-nv-busca, #cv-nv-tel, #cv-nv-nome, #cv-enc-busca, .cv-teclas-filtro, .cvt-nome-ed input, .cvt-campo-caixa input { font-size: 16px; }
+}
+
+/* ============================================================ plano 2000d · frente conv */
+/* plano 2000d · DC-244: Word/Excel com «Ver» e «Baixar» (mesma caixa do PDF) */
+/* plano 2000d · DC-129/DC-131: faixa do lote de fotos com «Parar» */
+.cvx-lote { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.cvx-lote .bt { min-height: 44px; }
+/* plano 2000d · DC-136/DC-253: «Enviar» e «Ouvir antes» no painel da gravação */
+.cvx-gravacao .cvx-rec-enviar svg { width: 16px; height: 16px; }
+.cvx-rec-continuar { min-height: 44px; font-size: var(--fs-13); }
+.cvx-gravacao:focus-visible { outline: 2px solid var(--c-foco, var(--c-prim)); outline-offset: 2px; }
+/* plano 2000d · DC-252: no celular o painel fica preso acima do teclado ao rolar */
+@media (max-width: 760px) { .cvx-gravacao { position: sticky; bottom: 0; z-index: 2; } }
+/* plano 2000d · DC-091/DC-092: áudio gravado guardado (sem internet, resolvida, janela fechada) */
+.cvx-audio-guardado { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin: 0 0 .45rem; padding: .45rem .7rem; border: 1px solid var(--c-borda); border-radius: var(--r); background: var(--c-aten-suave, var(--c-poco)); color: var(--c-texto); font-size: var(--fs-13); }
+.cvx-audio-guardado > svg { width: 18px; height: 18px; flex: none; }
+.cvx-ag-bts { gap: .4rem; flex-wrap: wrap; }
+.cvx-ag-bts .bt { min-height: 44px; }
+/* plano 2000d · DC-013: etiquetar em lote com três estados (manter · acrescentar · tirar) */
+.cv-etl-linhas { display: grid; gap: .35rem; }
+.cv-etl-linha { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; padding: .25rem 0; border-bottom: 1px solid var(--c-borda); }
+.cv-etl-linha:last-child { border-bottom: 0; }
+.cv-etl-nome { flex: 1 1 10rem; min-width: 0; }
+.cv-etl-linha .chip-check { min-height: 44px; }
+.cv-etl-tirar-rot:has(input:checked) { border-color: var(--c-erro, var(--c-borda)); color: var(--c-erro, var(--c-texto)); }
+/* plano 2000d · DC-122: print comprido inteiro (reduzido) em vez do recorte do meio */
+.cv-img-comprida .cv-img-bt { position: relative; display: block; background: var(--c-poco, var(--c-fundo)); border-radius: inherit; }
+.cv-img-comprida img { object-fit: contain; max-height: 420px; }
+.cv-img-inteira { position: absolute; right: .4rem; bottom: .4rem; padding: .1rem .45rem; border-radius: 999px; background: color-mix(in srgb, var(--c-fundo) 80%, transparent); color: var(--c-texto); font-size: var(--fs-12, .75rem); pointer-events: none; }
+/* plano 2000d · DC-037: Jornada do lead na lateral */
+.cvt-jornada { list-style: none; margin: 0; padding: 0 0 0 .9rem; border-left: 2px solid var(--c-borda); display: grid; gap: .45rem; }
+.cvt-jornada-item { position: relative; display: grid; gap: .05rem; font-size: var(--fs-13); }
+.cvt-jornada-item::before { content: ""; position: absolute; left: calc(-.9rem - 5px); top: .35rem; width: 8px; height: 8px; border-radius: 50%; background: var(--c-prim); }
+.cvt-jornada-hora { color: var(--c-texto-2, var(--c-texto)); font-size: var(--fs-12, .75rem); }
+/* plano 2000d · DC-053: nota da prévia da assinatura */
+.cfg-previa-ass-nota { display: block; margin-top: .45rem; white-space: normal; font-weight: 400; }
+/* plano 2000d · DC-045: modelos aprovados no próprio modal da Nova conversa */
+.cv-nv-modelos { border: 0; margin: 0; padding: 0; display: grid; gap: .4rem; min-width: 0; }
+.cv-nv-modelos-lista { display: grid; gap: .35rem; max-height: 14rem; overflow: auto; }
+.cv-nv-modelo { min-height: 44px; text-align: left; }
+.cv-nv-modelo small { display: block; }
+/* plano 2000d · DC-060: um botão «Reconectar» por número caído */
+.cvl-caido-bts { flex-wrap: wrap; gap: .4rem; }
+.cvl-caido-bts .bt { min-height: 44px; }
+/* plano 2000d · DC-087/DC-088: ações da seção Consultas */
+.cvt-consulta-acoes .bt { min-height: 44px; }
+/* plano 2000d · DC-057: visões salvas acima das abas */
+.cvl-visoes-salvas { display: flex; flex-wrap: wrap; gap: .35rem; padding: 0 var(--esp-3, .75rem) .4rem; }
+.cvl-visao-cx { display: inline-flex; align-items: center; border: 1px solid var(--c-borda); border-radius: 999px; background: var(--c-fundo); }
+.cvl-visao { min-height: 44px; padding: 0 .75rem; border: 0; background: none; color: var(--c-texto); font-size: var(--fs-13); border-radius: 999px; cursor: pointer; }
+.cvl-visao[aria-pressed="true"] { color: var(--c-prim); font-weight: 600; }
+.cvl-visao-x { min-width: 44px; min-height: 44px; }
+.cvl-visao:focus-visible, .cvl-visao-x:focus-visible { outline: 2px solid var(--c-foco, var(--c-prim)); outline-offset: 2px; }
+/* plano 2000d · DC-055/DC-056 */
+.cvf-etq-modo, .cvf-sem-etq { margin-top: .4rem; }
+/* plano 2000d · DC-072: «Próximo · 4» flutuante no celular, no alcance do polegar e acima da barra do app */
+.cvl-proximo-fab { display: none; }
+@media (max-width: 760px) {
+  .cvl-proximo-fab:not([hidden]) { display: inline-flex; align-items: center; gap: .35rem; position: fixed; right: 16px; bottom: calc(var(--barra, 64px) + 16px + env(safe-area-inset-bottom, 0px)); z-index: 5; min-height: 56px; padding: 0 1.1rem; border-radius: 999px; box-shadow: var(--sombra-2, var(--sombra, none)); }
+  html.cv-chat-aberto .cvl-proximo-fab { display: none; }
+}
+@media (prefers-reduced-motion: no-preference) { .cvl-proximo-fab { transition: transform var(--t-ui) var(--e-out); } .cvl-proximo-fab:active { transform: scale(.97); } }
+/* plano 2000d · DC-123: 5+ fotos — a 4ª célula mostra «+N» */
+.cv-grade-mais { position: relative; }
+.cv-grade-mais-n { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--c-texto) 55%, transparent); color: var(--c-fundo); font-size: var(--fs-20, 1.25rem); font-weight: 700; pointer-events: none; }
+/* plano 2000d · DC-086: outros telefones do contato */
+.cvt-tel-extras { list-style: none; margin: .5rem 0 0; padding: 0; display: grid; gap: .35rem; }
+.cvt-tel-extra { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; font-size: var(--fs-13); }
+.cvt-tel-extra-acoes { margin-left: auto; gap: .25rem; }
+.cvt-tel-extra-acoes .bt { min-height: 44px; }
+/* plano 2000d · DC-142: bolha com o foco do teclado */
+.cv-msg:focus-visible { outline: 2px solid var(--c-foco, var(--c-prim)); outline-offset: 2px; border-radius: 12px; }
+/* plano 2000d · DC-158: «Selecionar texto» libera a seleção nativa */
+.cv-selecionavel .cv-texto { -webkit-user-select: text; user-select: text; }
+/* plano 2000d · DC-168: telefone na mensagem */
+.cv-tel { text-decoration: underline; text-underline-offset: 2px; cursor: pointer; color: inherit; }
+/* plano 2000d · DC-171/DC-172: resposta a botão e botões do modelo */
+.cv-chip-resp { display: inline-flex; align-items: center; gap: .35rem; padding: .25rem .6rem; border-radius: 999px; border: 1px solid var(--c-borda); background: var(--c-poco); font-size: var(--fs-13); }
+.cv-chip-resp .ic { width: 14px; height: 14px; }
+.cv-modelo-botoes { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .45rem; }
+.cv-modelo-bt { padding: .3rem .7rem; border-radius: 999px; border: 1px solid var(--c-borda); color: var(--c-texto-2); font-size: var(--fs-13); background: var(--c-fundo); }
+/* plano 2000d · DC-173: anúncio com miniatura e link */
+.cv-rot-anuncio { flex-wrap: wrap; }
+.cv-anuncio-mini { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; flex: none; }
+.cv-anuncio-link { margin-left: auto; min-height: 44px; display: inline-flex; align-items: center; }
+/* plano 2000d · DC-174: IA digitando */
+.cv-ia-digitando { display: flex; align-items: center; gap: .5rem; padding: .4rem 0; color: var(--c-texto-2); font-size: var(--fs-13); }
+.cv-ia-dig-bolha { display: inline-flex; gap: 3px; padding: .5rem .7rem; border-radius: 14px; background: var(--c-poco); }
+.cv-ia-dig-bolha i { width: 6px; height: 6px; border-radius: 50%; background: var(--c-texto-2); }
+@media (prefers-reduced-motion: no-preference) {
+  .cv-ia-dig-bolha i { animation: cv-ia-pulo var(--t-lento, 1.2s) var(--e-out) infinite; }
+  .cv-ia-dig-bolha i:nth-child(2) { animation-delay: .15s; }
+  .cv-ia-dig-bolha i:nth-child(3) { animation-delay: .3s; }
+}
+@keyframes cv-ia-pulo { 0%, 60%, 100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-3px); opacity: 1; } }
+/* plano 2000d · DC-176: avaliar a IA */
+.cv-ia-avaliar { display: inline-flex; gap: .15rem; }
+/* plano 2000d · DC-182/DC-183: apagada e editada pelo cliente */
+.cv-apagada { display: flex; align-items: center; gap: .3rem; margin: .35rem 0 0; font-size: var(--fs-12, .75rem); color: var(--c-texto-2); font-style: italic; }
+.cv-apagada .ic { width: 14px; height: 14px; }
+.cv-editada { font-style: italic; }
+/* plano 2000d · DC-190: «Só notas» */
+.cvc[data-filtro="notas"] .cv-msg:not([data-tipo="nota"]), .cvc[data-filtro="notas"] .cv-msg-grade, .cvc[data-filtro="notas"] .cv-sis, .cvc[data-filtro="notas"] .cv-sis-fino { display: none; }
+/* plano 2000d · DC-197: resumo da fila */
+.cv-fila-resumo { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin: .5rem auto; padding: .4rem .8rem; border-radius: 999px; border: 1px solid var(--c-borda); background: var(--c-poco); font-size: var(--fs-13); width: fit-content; max-width: 100%; }
+.cv-fila-resumo .ic { width: 16px; height: 16px; }
+.cv-fila-resumo .bt { min-height: 44px; }
+/* plano 2000d · DC-159: número grande para ligar do computador */
+.cvc-ligar-num { font-size: var(--fs-24, 1.5rem); font-weight: 700; margin: 0; }
+/* plano 2000d · DC-185: «Responder» no visualizador */
+.cv-lb-responder { min-height: 44px; }
+/* plano 2000d · DC-151: legendas das várias fotos com 16 px no toque (o Safari não amplia a tela ao focar) */
+@media (pointer: coarse) { .cvx-multi-leg { font-size: var(--fs-16); } }
+/* plano 2000d · DC-152: «Descartar» e «Outra sugestão» da IA com 44 px no toque */
+@media (pointer: coarse) { .cvx-ia-selo .bt { min-height: 44px; } }
+/* plano 2000d · DC-153: o autor da bolha («Assistente · IA») em texto-2 — o texto-3 ficava abaixo do AA no escuro (o --fs-11 já tem piso de 12 px) */
+.cv-quem { color: var(--c-texto-2); }
+/* plano 2000d · DC-154: alto contraste do Windows — bolhas com borda, nota com borda dupla, «lida» sempre escrito */
+@media (forced-colors: active) {
+  .cv-bolha { border: 1px solid CanvasText; }
+  .cv-msg[data-tipo="nota"] .cv-bolha { border: 3px double CanvasText; }
+  .cv-msg[data-dir="out"] .cv-bolha { border-style: solid; border-width: 1px 3px 1px 1px; }
+  .cv-msg:focus-visible { outline: 2px solid Highlight; }
+}
+/* plano 2000d · DC-201: na barra «/» sem prévia lateral, o corpo da resposta em 2 linhas */
+@media (min-width: 761px) {
+  .cvx-rr-op small { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-clamp: 2; }
+  .cvx-rr-corpo .cvx-rr-op small { display: none; }
+}
+/* plano 2000d · DC-204: celular com teclado aberto (altura < 600 px) — o campo cresce até 3 linhas e a conversa continua à vista */
+@media (pointer: coarse) and (max-height: 600px) { .cvx textarea { max-height: calc(3 * 1.45em + 1.2rem); } }
+/* plano 2000d · DC-157/DC-198/DC-203: atalhos acima do campo — Mensagem/Nota e Assumir só no celular; boas-vindas em todo tamanho */
+.cvx-atalhos { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: 0 .4rem .45rem; }
+.cvx-atalhos .cvx-chip, .cvx-atalhos .bt { min-height: 44px; }
+.cvx-modos { display: none; gap: .3rem; }
+.cvx-assumir, .cvx-resolver-chip { display: none; }
+.cvx-atalhos[data-so="celular"] { display: none; }
+.cvx-boas-vindas { display: flex; flex-wrap: wrap; gap: .4rem; }
+@media (max-width: 760px) {
+  .cvx-atalhos[data-so="celular"]:not([hidden]) { display: flex; }
+  .cvx-modos { display: inline-flex; }
+  .cvx-assumir, .cvx-resolver-chip { display: inline-flex; }
+}
+/* plano 2000d · DC-199: no toque, a resposta aberta mostra o texto inteiro antes de inserir */
+.cvx-rr-op[data-aberta="1"] small { white-space: pre-wrap; overflow: visible; display: block; -webkit-line-clamp: unset; }
+/* plano 2000d · DC-177: «Cancelar» no «Escrevendo…» da IA */
+.cvx-ia-cancelar { min-height: 44px; }
+/* plano 2000d · DC-192: quantas vezes o modelo foi usado neste aparelho */
+.cv-modelo-usos { display: block; font-size: var(--fs-12); }
+/* plano 2000d · DC-155: a pega da folha vira área de arrasto (44 px de altura de toque, sem rolar a página) */
+.cv-folha-pega { position: relative; touch-action: none; cursor: grab; }
+.cv-folha-pega::before { content: ""; position: absolute; left: -40px; right: -40px; top: -20px; bottom: -20px; }
+.cv-marcar { margin-top: .35rem; min-height: 44px; }   /* plano 2000d · DC-169 */
+/* plano 2000d · DC-234: bolha colada do cliente com mais de 1 min da anterior mostra a hora */
+.cv-msg[data-dir="in"][data-junta="1"][data-cauda="0"][data-hora="1"] .cv-rodape { max-height: 2rem; margin-top: .2rem; }
+/* plano 2000d · DC-236: citação longa com as 2 primeiras linhas */
+.cv-cita .cv-cita-txt, .cv-cita bdi { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; overflow: hidden; }
+/* plano 2000d · DC-241: folha de ações com muitos itens rola e mostra que há mais */
+.cv-folha { max-height: 80dvh; }
+.cv-folha-corpo { max-height: calc(80dvh - 7rem); overflow-y: auto; overscroll-behavior: contain;
+  background: linear-gradient(var(--c-sup) 30%, transparent) top / 100% 1.5rem no-repeat local, linear-gradient(transparent, var(--c-sup) 70%) bottom / 100% 1.5rem no-repeat local,
+    radial-gradient(farthest-side at 50% 0, var(--c-sombra), transparent) top / 100% .6rem no-repeat scroll, radial-gradient(farthest-side at 50% 100%, var(--c-sombra), transparent) bottom / 100% .6rem no-repeat scroll; }
+/* plano 2000d · DC-260: separador «Ana assumiu · 14:10» */
+.cv-autoria { display: flex; justify-content: center; margin: .4rem 0; font-family: var(--f-mono); font-size: var(--fs-11); color: var(--c-texto-2); }
+.cv-autoria span { padding: .1rem .6rem; border-top: 1px dashed var(--c-borda); }
+/* plano 2000d · DC-259: «respondido em 8 s» */
+.cv-tempo-resp { color: var(--c-texto-2); }
+/* plano 2000d · DC-249: figurinha amplia */
+.cv-sticker-bt { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; min-width: 44px; min-height: 44px; }
+.cv-sticker-bt:focus-visible { outline: 2px solid var(--c-prim); outline-offset: 2px; }
+/* plano 2000d · DC-213: «Ver na agenda» no evento do sistema */
+.cv-sis-acoes { display: inline-flex; gap: .5rem; margin-left: .5rem; align-items: center; }
+/* plano 2000d · DC-236: a citação quebra normalmente (2 linhas) · DC-238: miniatura da foto citada à direita */
+.cv-cita { white-space: normal; position: relative; }
+.cv-cita:has(.cv-cita-mini) { padding-right: 3.2rem; }
+.cv-cita-mini { position: absolute; right: .35rem; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; object-fit: cover; border-radius: 6px; }
+.cvc-etapa-bt { padding: 0; border: 0; background: none; cursor: pointer; min-height: 44px; display: inline-flex; align-items: center; }   /* plano 2000d · DC-239 */
+/* plano 2000d · DC-243: áudio já ouvido neste aparelho */
+.cv-au-ouvido { display: inline-flex; align-items: center; gap: .25rem; margin-left: .4rem; color: var(--c-texto-2); }
+.cv-au-ouvido::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--c-ok); }
+/* plano 2000d · DC-242: «Baixar todas» da grade */
+.cv-grade-baixar { margin: 0 0 .35rem; min-height: 44px; }
+/* plano 2000d · DC-250: no celular a pílula «Novas mensagens» vira ícone + número no canto direito, sem cobrir a última bolha do cliente */
+@media (max-width: 760px) {
+  .cvc-novas { left: auto; right: .75rem; bottom: .75rem; transform: none; min-width: 44px; min-height: 44px; padding: .3rem .7rem; }
+  .cvc-novas > span:first-child { display: none; }
+  .cvc-novas[data-n]:not([data-n=""])::before { content: attr(data-n); font-family: var(--f-mono); font-weight: 600; }
+}
+/* plano 2000d · DC-211: dica de CAIXA ALTA */
+.cvx-caixa { margin: 0 .9rem .3rem; font-size: var(--fs-12); }
+.cvx-caixa .link { min-height: 44px; }
+/* plano 2000d · DC-257: o aviso da janela com mais de 30 min é discreto */
+.cvx-janela-aviso[data-nivel="suave"] { background: none; border-color: transparent; color: var(--c-texto-2); }
+/* plano 2000d · DC-237: miniatura da foto na faixa «Respondendo a…» */
+.cvx-resp-mini { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; flex: none; }
+/* plano 2000d · DC-207: prévia do áudio com play de 44 px */
+.cvx-prev-au .bt { min-height: 44px; }
+/* plano 2000d · DC-208: emoji ao lado da legenda */
+.cvx-leg-linha { align-items: flex-start; flex-wrap: nowrap; }
+.cvx-leg-linha textarea { flex: 1; min-width: 0; }
+.cvx-leg-emoji { min-width: 44px; min-height: 44px; }
+/* plano 2000d · DC-209/DC-254/DC-258: links e botões de apoio */
+.cvx-trocar-arq, .cvx-wame { min-height: 44px; align-self: flex-start; }
+.cvx-trocar-mic { margin-left: .3rem; }
+/* plano 2000d · DC-264: separador de grupo na lista do «/» */
+.cvx-rr-grupo { padding: .5rem .8rem .2rem; color: var(--c-texto-2); }
+/* plano 2000d · DC-267: preço aproximado do modelo */
+.cv-modelo-preco { font-size: var(--fs-12); }

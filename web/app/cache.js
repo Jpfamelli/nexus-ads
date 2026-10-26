@@ -16,6 +16,10 @@
 export const NOME_BANCO = "orbita-cache";
 export const VERSAO_FORMATO = 1;
 export const TTL_MS = 12 * 3600 * 1000;
+/** plano 1500c · UCC-024: a sessão (nome da pessoa, e-mail, empresas) vale só 1 h no aparelho — num aparelho compartilhado ela aparecia até 12 h
+    depois, antes de o login ser conferido. As demais leituras seguem com 12 h. */
+export const TTL_POR_NOME = Object.freeze({ nx_app_sessao: 3600 * 1000 });
+export function ttlDe(nome) { return TTL_POR_NOME[nome] || TTL_MS; }
 export const TETO_ENTRADA_BYTES = 1024 * 1024;     // resposta maior que 1 MB não fica (padrão)
 /** Plano 1000 (pedido de Anúncios): respostas que costumam passar de 1 MB têm teto próprio. O total (TETO_TOTAL_BYTES, 20 MB) continua
     valendo na varredura, e nenhuma entrada pode passar de 1/4 dele: uma conta grande não expulsa o resto do cache de uma vez. */
@@ -23,6 +27,7 @@ export const TETOS_POR_NOME = Object.freeze({ nx_dados: 4 * 1024 * 1024, nx_rel_
 export function tetoDaEntrada(nome) { return Math.min(TETOS_POR_NOME[nome] || TETO_ENTRADA_BYTES, Math.floor(TETO_TOTAL_BYTES / 4)); }
 export const TETO_ENTRADAS = 200;                  // cada filtro do Kanban e cada semana da agenda viram uma entrada: sem teto o banco só cresce
 export const TETO_TOTAL_BYTES = 20 * 1024 * 1024;
+export const TETO_POR_RPC = 30;                    // plano 2000d · SX-034: respostas guardadas por nome de RPC (as mais novas ficam)
 export const VARRER_A_CADA_MS = 3600 * 1000;
 export const VARRER_AO_ABRIR_MS = 5000;            // a 1ª varredura espera a abertura do app terminar (ela percorre o banco inteiro)
 export const PRAZO_IDB_MS = 1800;                   // cache local é opcional; uma aba não pode esperar um IndexedDB preso
@@ -124,17 +129,26 @@ export function criarArmazemIDB(idb = globalThis.indexedDB, { prazoMs = PRAZO_ID
       let req;
       try { req = idb.open(NOME_BANCO, VERSAO_FORMATO); } catch { concluir(null); return; }
       req.onupgradeneeded = () => { try { if (!req.result.objectStoreNames.contains("rpc")) req.result.createObjectStore("rpc", { keyPath: "k" }); } catch { /* ok */ } };
-      req.onsuccess = () => concluir(req.result);
+      req.onsuccess = () => {
+        const db = req.result;
+        // plano 1500c · UCC-022: outra aba abriu uma versão nova do banco — esta fecha a conexão na hora (senão a outra fica bloqueada) e
+        // a próxima operação reabre
+        try { if (db) db.onversionchange = () => { try { db.close(); } catch { /* ok */ } if (dbP === p) dbP = null; }; } catch { /* ok */ }
+        concluir(db);
+      };
       req.onerror = req.onblocked = () => concluir(null);
     });
     p = abertura.then(db => { if (!db && dbP === p) dbP = null; return db; });
     dbP = p;
     return p;
   };
-  const operar = async (modo, fn) => {
+  /** plano 1500c · UCC-023: uma conexão fechada por baixo (InvalidStateError ao abrir a transação) desligava o cache até recarregar: zera e
+      reabre UMA vez. */
+  const operar = async (modo, fn, reaberto = false) => {
     const db = await abrir();
     if (!db) return null;
-    return new Promise(resolve => {
+    let fechada = false;
+    const r = await new Promise(resolve => {
       let tx = null, terminou = false;
       const concluir = v => { if (terminou) return; terminou = true; clearTimeout(timer); resolve(v); };
       const timer = setTimeout(() => {
@@ -149,8 +163,10 @@ export function criarArmazemIDB(idb = globalThis.indexedDB, { prazoMs = PRAZO_ID
         if (r) { r.onsuccess = () => { resultado = r.result; }; r.onerror = () => { resultado = null; }; }
         tx.oncomplete = () => concluir(resultado);
         tx.onerror = tx.onabort = () => concluir(null);
-      } catch { concluir(null); }
+      } catch (e) { if (e && (e.name === "InvalidStateError" || /closing|closed/i.test(String(e.message || "")))) fechada = true; concluir(null); }
     });
+    if (fechada && !reaberto) { dbP = null; return operar(modo, fn, true); }
+    return r;
   };
   return {
     ler: k => operar("readonly", l => l.get(k)).then(v => (v && v.k === k ? v : null)),
@@ -167,7 +183,7 @@ export function criarArmazemIDB(idb = globalThis.indexedDB, { prazoMs = PRAZO_ID
         const x = cur.value || {};
         let bytes = Number(x.b);
         if (!Number.isFinite(bytes)) { try { bytes = JSON.stringify(x.dados ?? null).length * 2; } catch { bytes = 0; } }
-        itens.push({ k: cur.primaryKey, v: x.v, em: x.em, bytes });
+        itens.push({ k: cur.primaryKey, v: x.v, em: x.em, bytes, nome: x.nome });   // nome: o TTL de cada RPC (plano 1500c · UCC-024)
         cur.continue();
       };
     }).then(v => (Array.isArray(v) ? v : [])),
@@ -187,7 +203,7 @@ export function criarCache(o = {}) {
   let armazem = o.disco === false ? null : o.armazem !== undefined ? o.armazem : criarArmazemIDB();
   const agora = o.agora || (() => Date.now());
   const memoria = new Map();            // o que foi lido/gravado nesta aba (e o único cache se o IndexedDB não abrir)
-  const noPrazo = v => !!v && v.v === VERSAO_FORMATO && Number.isFinite(v.em) && agora() - v.em <= TTL_MS;
+  const noPrazo = v => !!v && v.v === VERSAO_FORMATO && Number.isFinite(v.em) && agora() - v.em <= (v.nome ? ttlDe(v.nome) : TTL_MS);   // UCC-024
   const valido = v => noPrazo(v) && v.dados !== undefined;
   const listar = async () => {
     if (!armazem || typeof armazem.listar !== "function") return [];
@@ -215,7 +231,10 @@ export function criarCache(o = {}) {
       try { texto = JSON.stringify(reduzir(nome, dados)); } catch { return false; }
       if (!texto || texto.length * 2 > tetoDaEntrada(nome)) return false;
       const v = { v: VERSAO_FORMATO, em: agora(), nome, b: texto.length * 2, dados: JSON.parse(texto) };
+      memoria.delete(chave);   // reinsere no fim: o Map fica na ordem de uso
       memoria.set(chave, v);
+      // plano 2000d · SX-035: a cópia na memória da aba também tem teto (uma aba aberta o dia todo filtrando o quadro crescia sem fim)
+      while (memoria.size > TETO_ENTRADAS) memoria.delete(memoria.keys().next().value);
       if (armazem) { try { await armazem.gravar(chave, v); } catch { /* sem IndexedDB: fica na memória */ } }
       return true;
     },
@@ -235,11 +254,26 @@ export function criarCache(o = {}) {
       for (const it of await listar()) (noPrazo(it) ? vivos : fora).push(it);
       vivos.sort((a, b) => b.em - a.em);                     // as mais novas ficam
       let total = 0;
-      vivos.forEach((it, i) => { total += Number(it.bytes) || 0; if (i >= TETO_ENTRADAS || total > TETO_TOTAL_BYTES) fora.push(it); });
+      // plano 2000d · SX-034 (DR-070 da frente crm): no máximo 30 respostas por RPC — cada filtro do quadro virava uma entrada e uma RPC só
+      // tomava as 200 vagas, expulsando o Início e a agenda
+      const porNome = new Map();
+      vivos.forEach((it, i) => {
+        const n = (porNome.get(it.nome || "") || 0) + 1; porNome.set(it.nome || "", n);
+        total += Number(it.bytes) || 0;
+        if (i >= TETO_ENTRADAS || total > TETO_TOTAL_BYTES || (it.nome && n > TETO_POR_RPC)) fora.push(it);
+      });
       return apagarVarios(fora.map(it => it.k));
     },
     /** nx_sair, queda de sessão e troca de conta: não sobra nada. */
     async limpar() { memoria.clear(); if (armazem) try { await armazem.limpar(); } catch { /* ok */ } return true; },
+    /** plano 1500c · UCC-026: o que há guardado neste aparelho, para o «Sobre» e o diagnóstico: {entradas, bytesAprox, emDisco}. */
+    async estatisticas() {
+      const lista = await listar();
+      const chaves = new Set(lista.map(x => x.k));
+      let bytes = lista.reduce((t, x) => t + (Number(x.bytes) || 0), 0);
+      for (const [k, v] of memoria) if (!chaves.has(k)) { chaves.add(k); bytes += Number(v && v.b) || 0; }
+      return { entradas: chaves.size, bytesAprox: bytes, emDisco: !!armazem };
+    },
     /** O disco está em uso? (false: aparelho compartilhado ou sem IndexedDB) */
     get emDisco() { return !!armazem; },
     /** Plano 1000 (AS-185): a pessoa marcou «aparelho compartilhado» depois de o app abrir — apaga o que havia no disco e passa a usar só a memória. */

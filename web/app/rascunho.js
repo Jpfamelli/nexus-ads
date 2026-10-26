@@ -108,7 +108,12 @@ export function criarRascunhos(o = {}) {
   function gravar(k, texto) {
     if (!storage) return false;
     if (!texto || !texto.trim()) { apagarChave(k); return true; }
-    if (texto.length * 2 > tetoUm) { apagarChave(k); return false; }
+    // plano 2000d · DC-218: grande demais — o último rascunho bom FICA (antes era apagado junto, calado); quem ligou é avisado (aoGrande)
+    if (texto.length * 2 > tetoUm) return false;
+    // plano 1500c · CX-042: o mesmo texto não é regravado — antes cada «salvarTudo» (esconder a aba, pagehide) renovava o «em» e o
+    // texto do paciente nunca vencia as 24 h do CA-122 enquanto a aba ia e voltava
+    const atual = ler(k);
+    if (atual && atual.t === texto && !venceu(k, atual)) return true;
     const bruto = JSON.stringify({ t: texto, em: agora() });
     const ok = seguro(() => { storage.setItem(k, bruto); return true; }, false);
     // CA-100: gravou bem — a varredura completa só se já faz 1 min da última (senão o índice cuida do teto); a cota cheia (setItem falhou)
@@ -116,19 +121,57 @@ export function criarRascunhos(o = {}) {
     if (ok) {
       indice.set(k, { em: agora(), bytes: (k.length + bruto.length) * 2 });
       if (agora() - ultimaVarredura >= intervaloVarrer) varrer(); else aparar();
-    } else { varrer(); seguro(() => storage.setItem(k, bruto)); }
-    return ok;
+      return true;
+    }
+    // plano 1500c · CC-021: a cota cheia varre e tenta de novo — se a 2ª deu certo, o rascunho FOI salvo (e entra no índice, senão o
+    // aparar seguinte não o conhecia); antes devolvia false mesmo assim
+    varrer();
+    const ok2 = seguro(() => { storage.setItem(k, bruto); return true; }, false);
+    if (ok2) indice.set(k, { em: agora(), bytes: (k.length + bruto.length) * 2 });
+    return ok2;
   }
 
-  function criarSelo(aoDescartar) {
+  /** plano 1500c · CC-023: «descartar» vira «Rascunho descartado · desfazer» por 7 s (um toque errado no celular não perde o texto). */
+  const DESFAZER_MS = 7000;
+  /** CX-040: «de 25 min atrás », «de 3 h atrás », «de 2 dias atrás » (com o espaço) ou "" quando é de agora há pouco (até 10 min). */
+  function quandoRascunho(em) {
+    const d = Number.isFinite(em) ? agora() - em : 0;
+    if (!(d > 10 * 60000)) return "";
+    if (d < 3600000) return `de ${Math.floor(d / 60000)} min atrás `;
+    if (d < 86400000) return `de ${Math.floor(d / 3600000)} h atrás `;
+    const dias = Math.floor(d / 86400000);
+    return `de ${dias} ${dias === 1 ? "dia" : "dias"} atrás `;
+  }
+  function criarSelo(aoDescartar, aoDesfazer, aoFim, em = null, depois = 0) {
     if (!doc || typeof doc.createElement !== "function") return null;
     const p = doc.createElement("p");
     p.className = "rascunho-selo";
     p.setAttribute("role", "status");
-    p.appendChild(doc.createTextNode("Rascunho restaurado · "));
+    // plano 1500c · CX-040: rascunho antigo diz de quando é («Rascunho de 3 h atrás restaurado») — a pessoa sabe se ainda vale
+    // plano 2000d · DC-110: e quantas mensagens vieram depois dele («· 3 mensagens depois dele»)
+    const n = Number(depois) || 0;
+    const txt = doc.createTextNode(`Rascunho ${quandoRascunho(em)}restaurado${n > 0 ? ` · ${n} ${n === 1 ? "mensagem" : "mensagens"} depois dele` : ""} · `);
+    p.appendChild(txt);
     const b = doc.createElement("button");
     b.type = "button"; b.className = "link"; b.textContent = "descartar";
-    b.addEventListener("click", () => aoDescartar());
+    // plano 1500c · CX-041: o leitor de tela ouve o que o botão faz (só «descartar», solto, não diz o quê)
+    b.setAttribute("aria-label", "Descartar o rascunho restaurado");
+    let modo = "restaurado", t = null;
+    b.addEventListener("click", () => {
+      if (modo === "restaurado") {
+        aoDescartar();
+        if (typeof aoDesfazer !== "function") { if (aoFim) aoFim(); return; }
+        modo = "descartado";
+        txt.data = "Rascunho descartado · "; if (typeof txt.textContent === "string") txt.textContent = "Rascunho descartado · ";
+        b.textContent = "desfazer";
+        b.setAttribute("aria-label", "Desfazer: devolver o rascunho ao campo");   // CX-041
+        t = agendar(() => { t = null; modo = "fim"; if (aoFim) aoFim(); }, DESFAZER_MS);
+      } else if (modo === "descartado") {
+        if (t) { cancelar(t); t = null; }
+        modo = "fim";
+        aoDesfazer();
+      }
+    });
     p.appendChild(b);
     return p;
   }
@@ -145,23 +188,68 @@ export function criarRascunhos(o = {}) {
       let timer = null, selo = null, nosso = false, restaurado = false;
       let parado = false;       // depois de parar() (logout) nada mais é gravado: o desligar() da tela que desmonta em seguida não pode ressuscitar o rascunho
       const valor = () => (campo.isContentEditable && campo.value === undefined ? String(campo.textContent || "") : String(campo.value ?? ""));
-      const salvarAgora = () => { if (timer) { cancelar(timer); timer = null; } if (parado) return; gravar(k, valor()); };
+      // plano 2000d · DC-206: devolve se gravou (o composer só apaga a chave antiga depois de a nova ter ficado)
+      const salvarAgora = () => { if (timer) { cancelar(timer); timer = null; } if (parado) return false; return gravar(k, valor()); };
       const tirarSelo = () => { if (selo && selo.parentNode) selo.parentNode.removeChild(selo); selo = null; };
+      let avisouGrande = false;
       const aoDigitar = () => {
         if (nosso) return;                                    // o evento que NÓS disparamos ao restaurar não é digitação
         tirarSelo();                                          // a pessoa mexeu: o texto agora é dela
         if (timer) cancelar(timer);
-        timer = agendar(() => { timer = null; gravar(k, valor()); }, debounce);
+        timer = agendar(() => {
+          timer = null;
+          const v = valor();
+          const ok = gravar(k, v);
+          // plano 2000d · DC-218: «rascunho grande demais para guardar» — uma vez, até o texto voltar a caber
+          if (!ok && v.length * 2 > tetoUm) { if (!avisouGrande && typeof opcoes.aoGrande === "function") { avisouGrande = true; try { opcoes.aoGrande(); } catch { /* ok */ } } }
+          else avisouGrande = false;
+        }, debounce);
       };
+      // plano 2000d · DC-111: a mesma conversa aberta em outra aba (dois monitores) mudou este rascunho — avisa em vez de gravar por cima calado
+      const aoStorage = ev => {
+        if (!ev || ev.key !== k || parado) return;
+        let deLa = null;
+        try { const d = ev.newValue ? JSON.parse(ev.newValue) : null; deLa = d && typeof d.t === "string" ? d.t : null; } catch { deLa = null; }
+        if (deLa === null || deLa === valor()) return;
+        if (typeof opcoes.aoConflito === "function") { try { opcoes.aoConflito(deLa); } catch { /* ok */ } return; }
+        if (!doc || typeof doc.createElement !== "function") return;
+        tirarSelo();
+        const p = doc.createElement("p");
+        p.className = "rascunho-selo rascunho-outra-aba";
+        p.setAttribute("role", "status");
+        p.appendChild(doc.createTextNode("Este rascunho foi alterado em outra aba · "));
+        const b = doc.createElement("button");
+        b.type = "button"; b.className = "link"; b.textContent = "usar o de lá";
+        b.addEventListener("click", () => {
+          if (campo.isContentEditable && campo.value === undefined) campo.textContent = deLa; else campo.value = deLa;
+          nosso = true; try { campo.dispatchEvent(new (globalThis.Event || function Ev(t) { this.type = t; })("input", { bubbles: true })); } catch { /* ok */ } nosso = false;
+          tirarSelo();
+        });
+        p.appendChild(b);
+        selo = p;
+        const alvo = opcoes.seloEm || null;
+        if (alvo && typeof alvo.appendChild === "function") alvo.appendChild(p);
+        else if (campo.parentNode && typeof campo.parentNode.insertBefore === "function") campo.parentNode.insertBefore(p, campo.nextSibling);
+      };
+      if (jan && typeof jan.addEventListener === "function") jan.addEventListener("storage", aoStorage);
+      const soltarStorage = () => { if (jan && typeof jan.removeEventListener === "function") jan.removeEventListener("storage", aoStorage); };
       const guardado = ler(k);
       if (guardado && venceu(k, guardado)) apagarChave(k);
       else if (guardado && !valor().trim()) {
-        campo.value = guardado.t;
+        // plano 1500c · CC-022: campo contentEditable (editor de nota rica) recebe o texto em textContent
+        const porTexto = t => { if (campo.isContentEditable && campo.value === undefined) campo.textContent = t; else campo.value = t; };
+        porTexto(guardado.t);
         restaurado = true;
         nosso = true;
         try { campo.dispatchEvent(new (globalThis.Event || function Ev(t) { this.type = t; })("input", { bubbles: true })); } catch { /* sem DOM */ }
         nosso = false;
-        selo = criarSelo(() => { campo.value = ""; nosso = true; try { campo.dispatchEvent(new (globalThis.Event || function Ev(t) { this.type = t; })("input", { bubbles: true })); } catch { /* ok */ } nosso = false; apagarChave(k); tirarSelo(); });
+        const disparar = () => { nosso = true; try { campo.dispatchEvent(new (globalThis.Event || function Ev(t) { this.type = t; })("input", { bubbles: true })); } catch { /* ok */ } nosso = false; };
+        const textoGuardado = guardado.t;
+        selo = criarSelo(
+          () => { porTexto(""); disparar(); apagarChave(k); },
+          () => { if (!valor().trim()) { porTexto(textoGuardado); disparar(); gravar(k, textoGuardado); } tirarSelo(); },   // CC-023: o Desfazer devolve o texto
+          () => tirarSelo(), guardado.em,
+          (() => { try { return typeof opcoes.depoisDe === "function" ? opcoes.depoisDe(guardado.em) : 0; } catch { return 0; } })());   // DC-110
         const alvo = opcoes.seloEm || null;
         if (selo) {
           if (alvo && typeof alvo.appendChild === "function") alvo.appendChild(selo);
@@ -174,9 +262,9 @@ export function criarRascunhos(o = {}) {
         salvarAgora,
         /** O servidor confirmou o envio: some o rascunho e o selo. */
         apagar() { if (timer) { cancelar(timer); timer = null; } apagarChave(k); tirarSelo(); },
-        desligar() { salvarAgora(); campo.removeEventListener && campo.removeEventListener("input", aoDigitar); tirarSelo(); ativos.delete(ctl); },
+        desligar() { salvarAgora(); campo.removeEventListener && campo.removeEventListener("input", aoDigitar); soltarStorage(); tirarSelo(); ativos.delete(ctl); },
         /** Para de guardar SEM gravar (logout, troca de conta): um flush depois (salvarAgora, desligar) não pode ressuscitar o que foi apagado. */
-        parar() { parado = true; if (timer) { cancelar(timer); timer = null; } campo.removeEventListener && campo.removeEventListener("input", aoDigitar); tirarSelo(); ativos.delete(ctl); },
+        parar() { parado = true; if (timer) { cancelar(timer); timer = null; } campo.removeEventListener && campo.removeEventListener("input", aoDigitar); soltarStorage(); tirarSelo(); ativos.delete(ctl); },
       };
       ativos.add(ctl);
       return ctl;
@@ -192,10 +280,13 @@ export function criarRascunhos(o = {}) {
     /** Quantos rascunhos do escopo atual foram mexidos nos últimos 10 min: segura a atualização automática do app. */
     pendentes() {
       const base = `${PREFIXO}${o.conta ? o.conta() || "-" : "-"}:${o.cliente ? o.cliente() || "-" : "-"}:`;
+      // plano 2000d · DC-217: pelo índice em memória (o «em» já está nele) — sem ler e decodificar todas as chaves a cada chamada
       let n = 0;
-      for (const k of todasChaves()) { if (!k.startsWith(base)) continue; const d = ler(k); if (d && agora() - d.em <= RECENTE_MS) n++; }
+      for (const [k, x] of indice) if (k.startsWith(base) && agora() - x.em <= RECENTE_MS) n++;
       return n;
     },
+    /** plano 2000d · DC-113: guarda um valor curto ao lado do rascunho (ex.: «conversa:9:cita» = id da mensagem citada); "" apaga. */
+    guardar(chave, texto) { return gravar(chaveDe(chave), String(texto || "")); },
     varrer,
     total() { return todasChaves().length; },
   };

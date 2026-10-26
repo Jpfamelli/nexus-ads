@@ -506,7 +506,8 @@ test("UB-013 + UB-055 + UB-057 + UB-077 editor: chips de variável com nome; «A
     const e = await abrirTela(d, { partes: ["a1"], extra: { vocab: VOCAB_V } });
     const v = e.raiz.querySelector(".au-var");
     assert.match(v.getAttribute("aria-label"), /^Inserir /);
-    assert.match(v.textContent, /^\{.+\}$/, "o texto visível continua a chave");
+    // plano 2000d · DU-037: a chave na 1ª linha e o exemplo na 2ª («→ Alex»)
+    assert.match(v.querySelector(".au-var-chave").textContent, /^\{.+\}$/, "o texto visível continua a chave");
     const mais = e.raiz.querySelectorAll(".au-mais").find(b => /Adicionar passo/.test(b.textContent));
     const pal = e.raiz.querySelector(`#${mais.getAttribute("aria-controls")}`);
     assert.ok(pal && pal.classList.contains("au-paleta"));
@@ -831,7 +832,7 @@ test("UB-043 + UB-249 + UB-031 + UB-064 + UB-029: nome da cópia, resumo do rasc
     "o nome, 2 passos e 1 condição mudaram");
   assert.doesNotMatch(L.viaTextoLivre([{ id: 1, provedor: "meta" }]), /CodeWords/);
   assert.match(L.viaTextoLivre([{ id: 1, provedor: "meta" }]), /24 h/);
-  assert.match(L.viaTextoLivre([{ id: 1, provedor: "codewords" }]), /CodeWords/);
+  assert.match(L.viaTextoLivre([{ id: 1, provedor: "codewords" }]), /conectado por aparelho/);   // plano 2000d · DU-025
   assert.equal(L.viaTextoLivre([]), "");
   assert.equal(L.viaTextoLivre([{ id: 1 }]), "", "sem provedor: não promete nada");
   assert.deepEqual(L.palavrasCurtas(["oi", "preço", "a", " é ", "valor"]), ["oi", "a", "é"]);
@@ -1179,13 +1180,13 @@ test("UB-031 + UB-066 paleta: «Enviar mensagem» sem CodeWords para quem só te
     let e = await abrirTela(d, { partes: ["a2"], dados });
     const tile = e.raiz.querySelector('.au-tile[data-acao="enviar_mensagem"] small');
     assert.doesNotMatch(textoDe(tile), /CodeWords/);
-    assert.match(textoDe(tile), /número oficial \(Meta\)/);
+    assert.match(textoDe(tile), /número oficial/);   // plano 2000d · DU-025
     const tit = e.raiz.querySelectorAll(".au-esc-tit").map(textoDe);
     assert.ok(tit.includes("Pontuar o interesse") && !tit.some(t => /lead/.test(t)));
     e.A.desmontar(); d.doc.body.removeChild(e.raiz);
     const dados2 = dadosLista(); dados2.base = { ...BASE, canais: [{ id: U(61), nome: "Recepção", provedor: "codewords" }] };
     e = await abrirTela(d, { partes: ["a2"], dados: dados2 });
-    assert.match(textoDe(e.raiz.querySelector('.au-tile[data-acao="enviar_mensagem"] small')), /CodeWords/);
+    assert.match(textoDe(e.raiz.querySelector('.au-tile[data-acao="enviar_mensagem"] small')), /conectado por aparelho/);   // plano 2000d · DU-025
     e.A.desmontar();
   } finally { d.fim(); }
 });

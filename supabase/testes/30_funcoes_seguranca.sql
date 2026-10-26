@@ -31,6 +31,7 @@ declare
   tel text := '5512997' || lpad((floor(random() * 900000) + 100000)::text, 6, '0');
   email_l text := 'login-30-' || sfx || '@teste.local';
   ip1 text := '198.51.100.' || (floor(random() * 200) + 1)::int; ip2 text := '203.0.113.' || (floor(random() * 200) + 1)::int;
+  hip1 text := 'h' || left(public.nx_hash(ip1), 32); hip2 text := 'h' || left(public.nx_hash(ip2), 32);   -- plano 1500c: SC-108 as chaves de limite levam o RESUMO do IP (nx_login_ip devolve h + 32 hex), não o IP
   ct bigint; cv bigint; m1 bigint; m2 bigint; m3 bigint; m4 bigint;
   p1 text; p2 text; p3 text;
   j json; jb jsonb; n int; i int; v_def text;
@@ -187,11 +188,11 @@ begin
   for i in 1..9 loop j := public.nx_entrar(email_l, 'errada'); end loop;
   j := public.nx_entrar(email_l, 'senha-30-ok');
   perform pg_temp.ok(length(j ->> 'token') = 64, 'login: 9 erradas + a certa entra');
-  perform pg_temp.ok(not exists (select 1 from public.nx_login_falhas where chave in ('conta:' || email_l, 'contaip:' || email_l || '|' || ip1))
-                 and (select count(*) from public.nx_login_falhas where chave = 'ip:' || ip1) = 9, 'login: a certa zera as falhas da conta (as do IP ficam)');
+  perform pg_temp.ok(not exists (select 1 from public.nx_login_falhas where chave in ('conta:' || email_l, 'contaip:' || email_l || '|' || hip1))
+                 and (select count(*) from public.nx_login_falhas where chave = 'ip:' || hip1) = 9, 'login: a certa zera as falhas da conta (as do IP ficam)');
   j := public.nx_entrar(email_l, 'errada');
   perform pg_temp.ok((j ->> 'message') = 'credenciais_invalidas', 'login: depois do sucesso, 1 errada não bloqueia');
-  delete from public.nx_login_falhas where chave in ('conta:' || email_l, 'ip:' || ip1, 'contaip:' || email_l || '|' || ip1);
+  delete from public.nx_login_falhas where chave in ('conta:' || email_l, 'ip:' || hip1, 'contaip:' || email_l || '|' || hip1);
   for i in 1..10 loop perform public.nx_entrar(email_l, 'errada'); end loop;
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_entrar(%L,%L)', email_l, 'senha-30-ok')) like 'muitas_tentativas|%', 'login: 10 falhas do IP 1 bloqueiam o IP 1');
   perform set_config('request.headers', json_build_object('x-forwarded-for', ip2)::text, true);
@@ -202,7 +203,7 @@ begin
   j := public.nx_entrar(email_l, 'errada');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_entrar(%L,%L)', email_l, 'senha-30-ok')) like 'muitas_tentativas|%', 'login: 50 falhas da conta (vários IPs) bloqueiam');
   perform pg_temp.ok(exists (select 1 from public.nx_notificacoes where conta_id = k_log and titulo = 'Muitas tentativas de entrar na sua conta'), 'login: a conta é avisada no limite alto');
-  delete from public.nx_login_falhas where chave like 'conta:' || email_l or chave like 'contaip:' || email_l || '%' or chave in ('ip:' || ip1, 'ip:' || ip2, 'ip:192.0.2.77');
+  delete from public.nx_login_falhas where chave like 'conta:' || email_l or chave like 'contaip:' || email_l || '%' or chave in ('ip:' || hip1, 'ip:' || hip2, 'ip:192.0.2.77');
   perform set_config('request.headers', json_build_object('x-forwarded-for', ip2)::text, true);
   for i in 1..24 loop j := public.nx_entrar(email_l, 'senha-30-ok'); end loop;
   perform pg_temp.ok((select count(*) from public.nx_sessoes where conta_id = k_log) = 20 and exists (select 1 from public.nx_sessoes where token_hash = public.nx_hash(j ->> 'token')),

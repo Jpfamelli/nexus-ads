@@ -18,6 +18,10 @@ export const AVISO_SEM_HORARIO = "«Respeitar horário» está ligado, mas o dep
 export const SERIE_MS = 5 * 60 * 1000;
 /** plano 1000b · UB-078: onde fica lembrado se a pessoa abriu ou recolheu o «Ver o fluxo» (por aparelho). */
 export const CHAVE_FLUXO = "nx-au-fluxo";
+/** plano 1500c · UCA-086: o rascunho da aba é gravado este tempo depois da última tecla (sair/esconder a página grava na hora). */
+export const RASCUNHO_MS = 400;
+/** plano 1500c · UCA-092: o estado vai para a pilha do Desfazer este tempo depois da última mudança (uma palavra digitada = um passo). */
+export const HISTORICO_MS = 600;
 
 export function telaEditor(ctx, raiz, dados, item, amb) {
   const { ui } = ctx;
@@ -39,9 +43,10 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   if (item) { auto = copia(item); origem = "salva"; }
   else if (amb.rascunho && amb.rascunho.auto) { rascunho = amb.rascunho; auto = copia(rascunho.auto); origem = "ia"; }
   else if (q.modelo && L.MODELOS.some(m => m.id === q.modelo)) {
-    auto = L.aplicarModelo(q.modelo, base, vv);
-    // receitas que mandam mensagem ao cliente ou gastam cota de IA nascem desligadas: a pessoa confere e liga
-    auto.ativo = !L.faltaModelo(auto) && !L.enviaMensagem(auto) && !L.temIA(auto) && L.validar(auto, { base, ligar: true }).ok;
+    auto = L.aplicarModelo(q.modelo, base, vv, { tom: q.tom === "formal" ? "formal" : undefined });   // plano 2000d · DU-419: o tom escolhido na galeria
+    // plano 1500c · UCA-037: toda receita nasce desligada (como diz a lista e a novaAutomacao): «Pós-venda» não cria tarefa para todos
+    // os ganhos ao primeiro Salvar sem a pessoa ter escolhido ligar
+    auto.ativo = false;
     origem = "modelo";
   } else auto = L.novaAutomacao("negocio_estagio");
   auto.condicoes = auto.condicoes || [];
@@ -54,7 +59,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   const sujo = () => JSON.stringify(L.limpar(auto)) !== salvoJson;
   let ultimoTexto = null;            // último campo com variáveis focado (os chips inserem nele)
   // plano 1000b · UB-073: a etapa do exemplo vem do funil padrão desta empresa
-  const exemplo = L.exemploVariaveis({ empresa: ctx.cliente ? ctx.cliente.nome : "", atendente: ctx.sessao && ctx.sessao.conta ? ctx.sessao.conta.nome : "Ana", base: dados.base });
+  const exemplo = L.exemploVariaveis({ empresa: ctx.cliente ? ctx.cliente.nome : "", atendente: ctx.sessao && ctx.sessao.conta ? ctx.sessao.conta.nome : "Ana", base: dados.base, vertical });   // plano 2000d · DU-038
   // blocos que já "contam" para a validação ao vivo (um rascunho pronto — receita, IA, automação salva — mostra tudo desde o início)
   const tocado = new Set(origem === "branco" ? [] : ["nome", "quando", "se", "entao"]);
   const frescos = new Set();   // passos recém-adicionados, ainda sem a pessoa ter tido chance de preencher
@@ -108,7 +113,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     notaAtivo.hidden = !dif;
     notaAtivo.textContent = dif ? (auto.ativo ? "Liga ao salvar" : "Desliga ao salvar") : "";
   };
-  const swAtivo = interruptor({ ligado: !!auto.ativo, rotulo: "Ligada", mostrarTexto: true, desabilitado: !podeEditar,
+  // plano 1500c · UCA-011: nome acessível neutro (antes: «Ligada, interruptor, desligado»)
+  const swAtivo = interruptor({ ligado: !!auto.ativo, rotulo: "Automação ativa", mostrarTexto: true, desabilitado: !podeEditar,
     aoMudar: v => { auto.ativo = v; pintarNotaAtivo(); mudou(); } });
   swAtivo.setAttribute("aria-describedby", notaAtivo.id);
   // revisão 1000b · UB-122: data-escrita — sem internet o shell (app.js SEL_ESCRITA) marca este botão aria-disabled com a dica antes do clique
@@ -156,7 +162,18 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     else if (!oferta) rasc.apagar(idRasc);          // voltou ao que estava salvo: nada a recuperar (um rascunho ainda oferecido não é apagado)
   }
   /** Ao salvar ou descartar: o rascunho some. Um rascunho antigo ainda oferecido (e não tocado) continua guardado. */
-  function apagarRascunho() { if (rasc && (gravouRascunho || !oferta)) rasc.apagar(idRasc); }
+  function apagarRascunho() { clearTimeout(tRascunho); tRascunho = null; if (rasc && (gravouRascunho || !oferta)) rasc.apagar(idRasc); }
+  // plano 1500c · UCA-086: o rascunho é gravado 400 ms depois da última tecla (com 10 mensagens longas eram ~40 KB a cada letra);
+  // sair da aba ou esconder a página grava na hora
+  let tRascunho = null;
+  function agendarRascunho() { if (!rasc) return; clearTimeout(tRascunho); tRascunho = setTimeout(() => { tRascunho = null; guardarRascunho(); }, RASCUNHO_MS); }
+  function gravarRascunhoJa() { if (tRascunho) { clearTimeout(tRascunho); tRascunho = null; guardarRascunho(); } }
+  if (rasc && typeof addEventListener === "function" && amb.aoSair) {
+    const aoEsconder = () => { if (typeof document === "undefined" || document.visibilityState !== "visible") gravarRascunhoJa(); };
+    addEventListener("pagehide", gravarRascunhoJa);
+    if (typeof document !== "undefined" && document.addEventListener) document.addEventListener("visibilitychange", aoEsconder);
+    amb.aoSair(() => { gravarRascunhoJa(); removeEventListener("pagehide", gravarRascunhoJa); if (typeof document !== "undefined" && document.removeEventListener) document.removeEventListener("visibilitychange", aoEsconder); });
+  }
 
   /** Sair do editor («Cancelar» e o link «‹ Automações»): pergunta antes de perder o que não foi salvo. */
   async function sair() {
@@ -204,29 +221,49 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     btTestar ? { rotulo: "Testar (sem enviar nada)", icone: "olho", fn: () => testar(btMaisEd) } : null,
     btSalvarSeguir ? { rotulo: "Salvar e continuar aqui", icone: "check", fn: () => salvar(btSalvarSeguir, { continuar: true }) } : null,
     btDuplicar ? { rotulo: rotuloDuplicar(), icone: "copiar", desabilitado: noLimite, fn: () => amb.duplicar(ctx, auto, btDuplicar) } : null,
+    // plano 1500c · UCA-103: leva a automação para outro cliente pelos NOMES (etapa, etiqueta, modelo); lá, «Colar automação» na lista
+    { rotulo: "Copiar para outro cliente (texto)", icone: "copiar", fn: () => ui.copiar(JSON.stringify(L.exportarAutomacao(auto, base, vv)),   /* plano 2000d · DU-056: leva a vertical */ { aviso: "Automação copiada. No outro cliente, use «Colar automação» na lista de automações." }) },
+    // plano 2000d · DU-107: volta ao texto da receita de origem (mantém nome e ligado/desligado)
+    podeEditar && L.restaurarReceita(auto, base, vv) ? { rotulo: "Voltar ao texto da receita", icone: "reabrir", fn: () => voltarAReceita() } : null,
     { rotulo: podeEditar ? "Cancelar" : "Voltar", icone: "fechar", fn: sair },
   ].filter(Boolean)));
+  async function voltarAReceita() {
+    const r = L.restaurarReceita(auto, base, vv);
+    if (!r) return;
+    const ok = await ui.confirmar({ titulo: "Voltar ao texto da receita?", rotulo: "Voltar à receita",
+      texto: "Gatilho, condições e passos voltam a ser os da receita. O nome e o ligado/desligado ficam como estão. Nada é salvo até você salvar." });
+    if (!ok) return;
+    auto = Object.assign(r, { condicoes: r.condicoes || [], acoes: r.acoes || [], config: r.config || {} });
+    pintarQuando(); pintarSe(); pintarEntao(); mudou();
+    ui.toast("Texto da receita de volta. Confira e salve.", { tipo: "ok" });
+  }
   /** plano 1000b · UB-212: «Alterada por Ana, há 2 dias» — só quando o servidor mandar atualizado_em (e o autor, se vier); sem isso, nada. */
-  function linhaAutor() {
-    if (!item || !item.atualizado_em) return null;
-    const quem = String(item.atualizado_por_nome || item.atualizado_por || "").trim();
-    const nomeQuem = quem && !/^[0-9a-f-]{36}$/i.test(quem) ? quem.split(/\s+/)[0] : "";
-    const rel = typeof ui.relativo === "function" ? ui.relativo(item.atualizado_em) : "";
+  // plano 1500c · UCA-091: recebe o item (o salvo depois de «Salvar e continuar» também) e mora numa caixa que é repintada em gravar()
+  function linhaAutor(it = item) {
+    if (!it || !it.atualizado_em) return null;
+    const quem = String(it.atualizado_por_nome || it.atualizado_por || "").trim();
+    const meuId = ctx.sessao && ctx.sessao.conta ? ctx.sessao.conta.id : null;
+    const nomeQuem = meuId && it.atualizado_por === meuId ? "você" : quem && !/^[0-9a-f-]{36}$/i.test(quem) ? quem.split(/\s+/)[0] : "";
+    const rel = typeof ui.relativo === "function" ? ui.relativo(it.atualizado_em) : "";
     if (!rel) return null;
-    return h("p", { class: "sub au-ed-autor", title: typeof ui.dataHoraBR === "function" ? ui.dataHoraBR(item.atualizado_em) : null },
+    return h("p", { class: "sub au-ed-autor", title: typeof ui.dataHoraBR === "function" ? ui.dataHoraBR(it.atualizado_em) : null },
       nomeQuem ? `Alterada por ${nomeQuem}, ${rel}` : `Alterada ${rel}`);
   }
-  const rotuloOrigem = item ? "Automação" : origem === "ia" ? "Nova automação · montada pela IA" : modelo ? "Nova automação · a partir de uma receita" : "Nova automação";
+  const caixaAutor = h("div", { class: "au-ed-autor-caixa" }, linhaAutor());
+  const repintarAutor = it => { ui.limpar(caixaAutor); const l = linhaAutor(it); if (l) caixaAutor.appendChild(l); };
+  // plano 1500c · UCA-103: a colada de outro cliente diz de onde veio (não «montada pela IA»)
+  const colada = !!(rascunho && rascunho.colada);
+  const rotuloOrigem = item ? "Automação" : colada ? "Nova automação · colada de outro cliente" : origem === "ia" ? "Nova automação · montada pela IA" : modelo ? "Nova automação · a partir de uma receita" : "Nova automação";
   // título da página para leitor de tela (o nome visível é um campo editável, não um cabeçalho)
   const h1Pag = h("h1", { class: "sr-only" }, item ? `Automação: ${item.nome}` : "Nova automação");
   raiz.appendChild(h("header", { class: "au-ed-cab" },
     h1Pag,
     linkVoltar,
     h("div", { class: "au-ed-linha" },
-      h("div", { class: "au-ed-nome" }, h("label", { class: "rotulo", for: nomeId }, rotuloOrigem), inpNome, contNome, avisoNome, btSugestao, linhaAutor()),
+      h("div", { class: "au-ed-nome" }, h("label", { class: "rotulo", for: nomeId }, rotuloOrigem), inpNome, contNome, avisoNome, btSugestao, caixaAutor),
       h("div", { class: "linha au-ed-acoes" }, h("span", { class: "au-sw-caixa" }, swAtivo, notaAtivo), btTestar, btDuplicar, btCancelar, btSalvarSeguir, btSalvar, btMaisEd))));
   if (!podeEditar) raiz.appendChild(h("p", { class: "aviso au-aviso-papel" }, ui.icone("cadeado"),
-    h("span", null, "Somente leitura: administradores editam automações.")));
+    h("span", null, `Somente leitura: administradores editam automações. ${L.frasePedirAdmin(base.usuarios)}`.trim())));   // plano 2000d · DU-080: diz quem é admin
   // plano 1000 · AS-269: o erro do servidor ao salvar (limite do plano, sem permissão…) fica aqui até a próxima tentativa — o toast sumia
   const erroSalvar = h("div", { class: "aviso aviso-ruim au-erro-salvar", role: "alert", tabindex: "-1", hidden: true });
   raiz.appendChild(erroSalvar);
@@ -268,7 +305,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     // plano 1000b · UB-248: só a frase é região viva; os botões ficam fora dela (o leitor não lê «Recuperar… Descartar…» como anúncio)
     oferta = h("div", { class: "aviso aviso-aten au-rasc" }, ui.icone("relogio"),
       h("div", { class: "pilha-p" },
-        h("p", { role: "status" }, item ? `Há mudanças desta automação que ficaram sem salvar${quandoTxt}.` : `Você deixou uma automação sem salvar${nomeTxt}${quandoTxt}.`,
+        h("p", { role: "status" }, item ? `Há mudanças desta automação que ficaram sem salvar${quandoTxt}.` : `Você deixou uma automação sem salvar${quandoTxt}: ${L.resumoRascunhoNova(guardado.auto, vv)}.`,   // plano 2000d · DU-106
           // plano 1000b · UB-249: o que mudou em relação ao que está salvo («o nome, 2 passos e 1 condição mudaram»)
           item && L.resumoDiferencas(guardado.auto, auto) ? ` ${L.resumoDiferencas(guardado.auto, auto).replace(/^./, c => c.toUpperCase())}.` : ""),
         h("div", { class: "linha" }, btRecuperar, btDescartar)));
@@ -282,7 +319,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       h("div", { class: "au-ia-ped-cab" },
         h("span", { class: "au-ia-ped-ic", "aria-hidden": "true" }, ui.icone("ia")),
         h("div", { class: "au-ia-ped-tit" },
-          h("p", { class: "rotulo" }, "Montada pela IA"),
+          h("p", { class: "rotulo" }, colada ? "Colada de outro cliente" : "Montada pela IA"),
           h("h2", { class: "titulo-sec" }, "Confira antes de salvar")),
         h("button", { type: "button", class: "bt-icone", "aria-label": "Fechar este aviso", on: { click: () => {
           const tinhaFoco = caixa.contains(document.activeElement);
@@ -296,7 +333,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         h("span", null, `A conferência reprovou esta montagem: ${rascunho.reprovada.motivo}. Complete o que falta abaixo antes de salvar.`)) : null,
       rascunho.explicacao ? h("p", { class: "au-ia-ped-txt" }, rascunho.explicacao) : null,
       avisosIA.length ? h("ul", { class: "au-ia-ped-avisos", role: "list" }, avisosIA.map(t => h("li", null, ui.icone("alerta"), h("span", null, t)))) : null,
-      h("p", { class: "sub" }, "Nada foi salvo ainda. Ajuste o que quiser abaixo e toque em «Criar automação». A IA só escolhe entre as etapas, etiquetas e pessoas que já existem no seu sistema."));
+      h("p", { class: "sub" }, colada ? "Nada foi salvo ainda. Escolha o que ficou faltando e toque em «Criar automação»."
+        : "Nada foi salvo ainda. Ajuste o que quiser abaixo e toque em «Criar automação». A IA só escolhe entre as etapas, etiquetas e pessoas que já existem no seu sistema."));
     raiz.appendChild(caixa);
     // plano 1000 · AS-231: fechou a caixa? um botão discreto no cabeçalho traz a explicação e os avisos de volta
     const btVerIA = h("button", { type: "button", class: "bt bt-fant bt-p au-ver-ia", hidden: true }, ui.icone("ia"), "Ver o que a IA explicou");
@@ -334,14 +372,21 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   const frase = h("p", { class: "au-frase" });   // sem aria-live: é reescrita a cada tecla e o leitor de tela repetiria a frase inteira
   const estado = h("p", { class: "au-estado" });
   const avisos = h("div", { class: "au-avisos" });
-  const chips = h("div", { class: "au-vars-lista" }, L.VARIAVEIS.map(([k, rot]) => {
+  // plano 2000d · DU-034/DU-035: as variáveis que o servidor anuncia e os {campo:chave} dos campos da empresa também viram chips
+  const chips = h("div", { class: "au-vars-lista" }, L.variaveisAceitas(dados.base).concat(L.variaveisDeCampo(dados.base)).map(([k, rot]) => {
     // plano 1000b · UB-013: «Inserir Primeiro nome» em vez de «chave primeiro_nome chave» (o texto visível continua {chave})
-    const b = h("button", { type: "button", class: "au-var", title: rot, "aria-label": `Inserir ${rot}`, disabled: !podeEditar }, `{${k}}`);
+    // plano 2000d · DU-037: o chip mostra o valor de exemplo numa segunda linha («→ Alex») e o diz no aria-label
+    const ch = L.rotuloChipVariavel(k, rot, exemplo);
+    const b = h("button", { type: "button", class: "au-var", title: rot, "aria-label": ch.aria, disabled: !podeEditar }, h("span", { class: "au-var-chave" }, ch.chave),
+      ch.exemplo ? h("span", { class: "au-var-ex", "aria-hidden": "true" }, ch.exemplo) : null);
     b.addEventListener("mousedown", ev => ev.preventDefault());       // não rouba o foco do campo
     b.addEventListener("click", () => inserirVariavel(`{${k}}`));
     return b;
   }));
-  const areaSim = h("div", { class: "au-sim", "aria-live": "polite" });
+  // plano 1500c · UCA-081: sem aria-live (o leitor despejava a lista inteira); um status curto anuncia o resumo
+  const areaSim = h("div", { class: "au-sim" });
+  const statusSim = h("p", { class: "sr-only au-sim-status", role: "status" });
+  const areaSimOriginal = areaSim;
   const btTestarLado = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("olho"), "Testar agora");
   // plano 1000 · AS-044: «Testar com…» um registro específico (nx_auto_simular aceita p_negocio): «por que não rodou para a Maria?»
   let negocioTeste = null;
@@ -419,7 +464,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     h("div", { class: "linha" }, btTestarLado),
     campoTesteCom, notaTesteConversa,
     escolhidoTeste,
-    areaSim) : null;
+    areaSim, statusSim) : null;
   // diagrama ao vivo do fluxo (item 53): SVG gerado de gatilho/condições/passos, redesenhado a cada mudança; cada nó leva ao bloco
   const caixaDiagrama = h("div", { class: "au-dg-caixa", id: novoId("dg") });
   // no celular a lateral vem depois do formulário: o diagrama sobe para o topo (CSS) e nasce recolhido, para não empurrar os campos
@@ -449,8 +494,29 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   const cartaoDiagrama = h("div", { class: "cartao au-dg" },
     h("div", { class: "au-dg-cab" }, h("div", null, h("p", { class: "rotulo" }, "Fluxo"), h("span", { class: "sub au-dg-dica" }, "Toque num bloco para ir até ele.")), btFluxo),
     caixaDiagrama);
-  const resumoNos = h("span", { class: "au-dg-resumo mono" });
+  const resumoNos = h("span", { class: "au-dg-resumo mono", id: novoId("dgres") });
   cartaoDiagrama.querySelector(".au-dg-cab > div").appendChild(resumoNos);
+  const avisoDiagrama = h("p", { class: "sr-only", role: "status", "aria-live": "polite" });   // plano 2000d · DU-094
+  // plano 2000d · DU-061: as outras automações neste gatilho (ligadas e desligadas) — a pessoa vê o que mais roda junto
+  const caixaOutras = h("div", { class: "au-outras", hidden: true });
+  cartaoDiagrama.append(avisoDiagrama, caixaOutras);
+  let ultimasOutras = null;
+  function pintarOutras() {
+    const l = L.outrasNoGatilho(auto, dados.itens, base, vv);
+    const chave = JSON.stringify(l);
+    if (chave === ultimasOutras) return;
+    ultimasOutras = chave;
+    ui.limpar(caixaOutras);
+    caixaOutras.hidden = !l.length;
+    if (!l.length) return;
+    caixaOutras.append(h("p", { class: "rotulo" }, "Outras automações neste gatilho"),
+      h("ul", { class: "au-outras-lista", role: "list" }, l.slice(0, 6).map(o => h("li", null,
+        h("a", { href: `#/automacoes/${encodeURIComponent(o.id)}` }, o.nome), " ",
+        ui.pilula(o.ativo ? "Ligada" : "Desligada", o.ativo ? "ok" : "neutra"),
+        o.frase ? h("small", { class: "sub" }, o.frase) : null))),
+      ...[l.length > 6 ? h("p", { class: "sub" }, `e mais ${l.length - 6}`) : null].filter(Boolean),   // plano 2000d · AX-001: sem null no append
+      h("p", { class: "sub" }, "Todas rodam quando o gatilho acontece; uma não espera a outra."));
+  }
   let ultimoDiagrama = null, tDiagrama = null;
   /** plano 1000 · AS-028: o SVG não é refeito a cada tecla — espera 150 ms parado e pula quando os nós são os mesmos. */
   function agendarDiagrama() { clearTimeout(tDiagrama); tDiagrama = setTimeout(() => { tDiagrama = null; pintarDiagrama(); }, DIAGRAMA_MS); }
@@ -459,9 +525,15 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const chave = JSON.stringify(nos);
     if (chave === ultimoDiagrama && caixaDiagrama.firstChild) return;
     ultimoDiagrama = chave;
-    const svg = P.diagrama({ nos, aoFocar: focarNo, largura: 300 });
+    const svg = P.diagrama({ nos, aoFocar: focarNo, largura: 300, tl: L.linhaDoTempo(auto.acoes) });   // plano 2000d · DU-317
     ui.limpar(caixaDiagrama);
     caixaDiagrama.appendChild(svg);
+    // plano 2000d · DU-094: a figura aponta para o texto do fluxo; a mudança é anunciada (sem repetir na primeira pintura)
+    svg.setAttribute("aria-describedby", resumoNos.id);
+    const novoResumo = L.resumoFluxo(auto, base, vv);
+    if (avisoDiagrama.dataset.pintado && resumoNos.textContent !== novoResumo) avisoDiagrama.textContent = `Fluxo atualizado: ${novoResumo}`;
+    avisoDiagrama.dataset.pintado = "1";
+    pintarOutras();
     // plano 1000 · AS-230: recolhido (celular), o resumo diz o gatilho e os passos («Etapa X → 3 passos (1 espera)»), não só «0 passos»
     resumoNos.textContent = L.resumoFluxo(auto, base, vv);
   }
@@ -485,10 +557,18 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     setTimeout(() => cartaoAlvo.classList.remove("au-foco-brilho"), 1200);
   }
 
+  // plano 1500c · UCA-106: a frase + o passo a passo em texto simples, para mandar ao cliente aprovar
+  const btCopiarFrase = h("button", { type: "button", class: "bt bt-fant bt-p au-previa-copiar", "aria-label": "Copiar a frase e o passo a passo" }, ui.icone("copiar"), "Copiar");
+  btCopiarFrase.addEventListener("click", () => ui.copiar(L.textoParaCompartilhar(auto, base, vv), { aviso: "Frase e passo a passo copiados. Cole na conversa com o cliente." }));
+  // plano 2000d · DU-432: atalho para pular o diagrama (o Tab não precisa atravessar o fluxo para chegar ao resumo)
+  const idPrevia = novoId("previa");
+  const btPularFluxo = h("button", { type: "button", class: "pular au-dg-pular" }, "Pular o fluxo");
+  btPularFluxo.addEventListener("click", () => { const p = raiz.querySelector(`#${idPrevia}`); if (p) p.focus({ preventScroll: false }); });
+  cartaoDiagrama.insertBefore(btPularFluxo, cartaoDiagrama.firstChild);
   const lado = h("aside", { class: "au-lado", "aria-label": "Resumo da automação" },
     cartaoDiagrama,
-    h("div", { class: "cartao au-previa" },
-      h("p", { class: "rotulo" }, "Em uma frase"), frase, estado, avisos),
+    h("div", { class: "cartao au-previa", id: idPrevia, tabindex: "-1" },
+      h("div", { class: "au-previa-cab" }, h("p", { class: "rotulo" }, "Em uma frase"), btCopiarFrase), frase, estado, avisos),
     cartaoTeste,
     h("div", { class: "cartao au-vars" },
       h("p", { class: "rotulo" }, "Variáveis"),
@@ -508,8 +588,10 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       grp.opcoes.push({ valor: gt.id, rotulo: L.rotuloGatilho(gt.id, vv) });
     }
     const sel = seletor({ rotulo: "Gatilho", valor: auto.gatilho, opcoes: grupos, desabilitado: !podeEditar, classe: "au-sel-gat",
-      ajuda: g && g.descricao ? g.descricao : null,
-      aoMudar: v => { Object.assign(auto, L.trocarGatilho(auto, v, memoriaGatilho)); pintarQuando(); mudou("quando"); } });
+      ajuda: g && g.descricao ? L.descricaoGatilho(auto.gatilho, vv) : null,   // plano 2000d · DU-355: no vocabulário do segmento
+      // plano 1500c · UCA-082: o select é recriado — o foco volta para ele (no Windows cada seta dispara change)
+      aoMudar: v => { Object.assign(auto, L.trocarGatilho(auto, v, memoriaGatilho)); pintarQuando(); mudou("quando");
+        const s = blocoQuando.querySelector(".au-sel-gat select"); if (s) s.focus({ preventScroll: true }); } });
     const campos = h("div", { class: "au-campos" }, (g ? g.campos : []).map(f => { const el = campoConfig(f); if (el) el.dataset.cfg = f.nome; return el; }));
     const dica = L.dicaGatilho(auto.gatilho, vv);
     blocoQuando.append(
@@ -608,6 +690,17 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           ajuda: "Horário de Brasília." /* plano 1000b · UB-058: quem é de outra cidade entende que é o fuso oficial */, aoMudar: x => set(x || null) });
       case "dias_semana":
         return P.campoDias({ rotulo: f.rotulo, valor: v, desabilitado: !podeEditar, aoMudar: dias => { auto.config[f.nome] = dias; mudou("quando"); } });
+      // plano 1500c · UCA-002: os filtros opcionais do «Tarefa venceu» (tipo e pessoa) — antes não havia campo e Salvar apagava os dois
+      case "opcoes":
+        return seletor({ rotulo: f.rotulo, valor: v, vazio: f.opcional ? (f.vazioRotulo || "Qualquer um") : "Escolha…", desabilitado: !podeEditar,
+          opcoes: (f.opcoes || []).map(([k, r]) => ({ valor: k, rotulo: r })), aoMudar: x => set(x || null) });
+      case "pessoa": {
+        const op = opcoesBase(dados, "pessoa");
+        // a pessoa que saiu da empresa continua visível (rotulada) — senão a tela mentiria «Qualquer pessoa»
+        if (v && !op.some(o => o.valor === v)) op.push({ valor: v, rotulo: "(pessoa sem acesso)" });
+        return seletor({ rotulo: f.rotulo, valor: v, vazio: f.opcional ? (f.vazioRotulo || "Qualquer pessoa") : "Escolha…", opcoes: op, desabilitado: !podeEditar,
+          ajuda: !op.length ? semOpcoes("pessoa") : null, aoMudar: x => set(x || null) });
+      }
       default: return null;
     }
   }
@@ -635,7 +728,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     };
     if (btMais) {
       btMais.setAttribute("aria-haspopup", "menu");
-      btMais.addEventListener("click", () => ui.menu(btMais, L.camposCondicao(base, vv).map(c => ({ rotulo: c.rotulo, fn: () => novaCondicao(c.valor) }))));
+      // plano 1500c · UCA-020: «Texto da mensagem» só nos gatilhos de mensagem
+      btMais.addEventListener("click", () => ui.menu(btMais, L.camposCondicao(base, vv, auto.gatilho).map(c => ({ rotulo: c.rotulo, fn: () => novaCondicao(c.valor) }))));
     }
     blocoSe.append(
       noFluxo("filtro"),
@@ -651,7 +745,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   function linhaCondicao(cd, i) {
     const tipo = L.tipoValorCondicao(cd.campo);
     const ops = L.operadoresDe(cd.campo).map(o => ({ valor: o, rotulo: L.rotuloOperador(o) }));
-    const selCampo = seletor({ rotulo: "Campo", valor: cd.campo, opcoes: L.camposCondicao(base, vv), desabilitado: !podeEditar, classe: "au-cond-campo",
+    const selCampo = seletor({ rotulo: "Campo", valor: cd.campo, opcoes: L.camposCondicao(base, vv, auto.gatilho, cd.campo), desabilitado: !podeEditar, classe: "au-cond-campo",   // plano 1500c · UCA-020
       aoMudar: v => {
         // plano 1000b · UB-252: trocar o campo zera comparação e valor — se havia valor, o aviso oferece «Desfazer» (volta o campo e o valor)
         const antes = { campo: cd.campo, op: cd.op, valor: cd.valor };
@@ -664,12 +758,25 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         } });
       } });
     const selOp = seletor({ rotulo: "Comparação", valor: cd.op, opcoes: ops, desabilitado: !podeEditar, classe: "au-cond-op",
-      aoMudar: v => { cd.op = v; if (L.operadorSemValor(v)) delete cd.valor; pintarSe(); mudou("se"); } });
+      aoMudar: v => {
+        // plano 1500c · UCA-125: «está vazio» apaga o valor — com valor, o aviso oferece «Desfazer» (como a troca de campo)
+        const antes = { op: cd.op, valor: cd.valor };
+        const perdeu = L.operadorSemValor(v) && !(cd.valor === "" || cd.valor == null);
+        cd.op = v; if (L.operadorSemValor(v)) delete cd.valor; pintarSe(); mudou("se");
+        // plano 1500c · UCA-083: o select foi recriado — o foco volta para a mesma comparação
+        const s = blocoSe.querySelectorAll(".au-cond")[i]; const so = s && s.querySelector(".au-cond-op select"); if (so) so.focus({ preventScroll: true });
+        if (perdeu) ui.toast(`Comparação trocada: o valor «${String(antes.valor).slice(0, 40)}» foi limpo.`, { tipo: "info", desfazer: () => {
+          if (!auto.condicoes.includes(cd)) return;
+          Object.assign(cd, antes); pintarSe(); mudou("se");
+        } });
+      } });
     let ctlValor = null;
     if (!L.operadorSemValor(cd.op)) {
       const set = v => { cd.valor = v; mudou("se"); };
       const mapa = { funil: "funil", estagio: "estagio", canal: "canal", departamento: "departamento", etiqueta: "etiqueta", pessoa: "pessoa" };
       if (tipo === "origem") ctlValor = seletor({ rotulo: "Valor", valor: cd.valor, vazio: "Escolha…", opcoes: L.ORIGENS.map(([k, r]) => ({ valor: k, rotulo: r })), desabilitado: !podeEditar, aoMudar: set, classe: "au-cond-val" });
+      // plano 1500c · UCA-001: plataforma do anúncio (Meta ou Google); a campanha cai no campo de texto («contém black»)
+      else if (tipo === "plataforma") ctlValor = seletor({ rotulo: "Valor", valor: cd.valor, vazio: "Escolha…", opcoes: L.PLATAFORMAS.map(([k, r]) => ({ valor: k, rotulo: r })), desabilitado: !podeEditar, aoMudar: set, classe: "au-cond-val" });
       else if (mapa[tipo]) ctlValor = seletor({ rotulo: "Valor", valor: cd.valor, vazio: "Escolha…", opcoes: opcoesBase(dados, mapa[tipo]), desabilitado: !podeEditar, aoMudar: set, classe: "au-cond-val" });
       else if (tipo === "numero") {
         // plano 1000 · AS-221 / AS-222: moeda brasileira («1.500,00») e o rótulo diz de quê é o valor
@@ -706,6 +813,16 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   }
 
   // ------------------------------------------------ Então (linha do tempo de passos)
+  // plano 1500c · UCA-118/119: o que mudou nos passos (mover, arrastar, acrescentar, duplicar) é anunciado ao leitor de tela
+  const statusPassos = h("p", { class: "sr-only au-passos-status", role: "status" });
+  raiz.appendChild(statusPassos);
+  const anunciar = t => { statusPassos.textContent = ""; setTimeout(() => { statusPassos.textContent = t; }, 30); };
+  /** plano 1500c · UCA-084: depois de redesenhar o «Então», o foco volta ao mesmo controle do mesmo passo (não cai no <body>). */
+  const refocarNoPasso = (i, seletorCtl) => {
+    const li = i >= 0 ? blocoEntao.querySelectorAll(".au-passo")[i] : null;
+    const ctl = li && (li.querySelector(seletorCtl) || li.querySelector("select, input, textarea"));
+    if (ctl) ctl.focus({ preventScroll: true });
+  };
   let arrastando = null;
   let paletaAberta = false;
 
@@ -784,6 +901,20 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const status = h("p", { class: "sr-only", role: "status", "aria-live": "polite" });
     pal.appendChild(h("div", { class: "au-paleta-busca" }, h("label", { class: "sr-only", for: idBusca }, "Buscar passo"),
       h("span", { class: "busca" }, ui.icone("busca"), busca)));
+    // plano 2000d · DU-093: os mais usados com este gatilho, no topo (os mesmos passos continuam no grupo deles)
+    const sugeridas = L.acoesSugeridas(auto.gatilho);
+    if (sugeridas.length) pal.appendChild(h("section", { class: "au-paleta-grupo au-paleta-sug" },
+      h("h3", { class: "rotulo" }, "Mais usados com este gatilho"),
+      h("div", { class: "au-paleta-grade" }, sugeridas.map(id => {
+        const a = L.ACAO[id];
+        const b = h("button", { type: "button", class: ["au-tile", a.ia && "au-tile-ia"], dataset: { acao: a.id } },
+          h("span", { class: "au-tile-ic", "aria-hidden": "true" }, ui.icone(a.icone)),
+          h("span", { class: "au-tile-txt" }, h("strong", null, L.rotuloAcao(a.id, vv)),
+            h("small", null, a.id === "enviar_mensagem" && L.viaTextoLivre(base.canais) ? `${a.descricao || ""} ${L.viaTextoLivre(base.canais)}`.trim() : a.descricao || ""),
+            iaOff && a.ia ? h("small", { class: "au-tile-off" }, "IA ainda desligada: o passo seria pulado") : null));
+        b.addEventListener("click", () => adicionar(a.id));
+        return b;
+      }))));
     for (const grupo of L.GRUPOS_ACAO) {
       const itens = L.ACOES.filter(a => a.grupo === grupo && a.disponivel !== false && a.menu !== false);
       if (!itens.length) continue;
@@ -801,6 +932,13 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         }))));
     }
     pal.append(semNada, status);
+    // plano 2000d · AX-074: no limite de esperas, o «Esperar» da paleta já aparece desabilitado com o motivo (antes entrava e só depois dava erro)
+    if (auto.acoes.filter(x => x && x.tipo === "esperar").length >= L.LIMITES.esperas)
+      for (const t of pal.querySelectorAll('.au-tile[data-acao="esperar"]')) {
+        t.disabled = true;
+        const txt = t.querySelector(".au-tile-txt");
+        if (txt) txt.appendChild(h("small", { class: "au-tile-off" }, `Limite de ${L.LIMITES.esperas} esperas por automação`));
+      }
     busca.addEventListener("input", () => {
       const ok = new Set(L.acoesDaBusca(busca.value, vv));
       let n = 0;
@@ -814,7 +952,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     });
     busca.addEventListener("keydown", ev => {
       if (ev.key !== "Enter") return;
-      const primeiro = [...pal.querySelectorAll(".au-tile")].find(t => !t.hidden && !(t.closest(".au-paleta-grupo") || {}).hidden);
+      const primeiro = [...pal.querySelectorAll(".au-tile")].find(t => !t.hidden && !t.disabled && !(t.closest(".au-paleta-grupo") || {}).hidden);   // plano 2000d · AX-074
       if (primeiro) { ev.preventDefault(); primeiro.click(); }
     });
     return pal;
@@ -826,6 +964,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     auto.acoes.push(ac);
     paletaAberta = false;
     pintarEntao(); mudou("entao");
+    anunciar(`Passo «${L.rotuloAcao(tipo, vv)}» acrescentado como ${auto.acoes.length}º.`);     // plano 1500c · UCA-119
     const cards = blocoEntao.querySelectorAll(".au-passo");
     const ult = cards[cards.length - 1];
     // plano 1000 · AS-043: logo abaixo do passo novo, «Outro passo» reabre a paleta (montar 5 passos não exige voltar ao fim do bloco)
@@ -849,13 +988,22 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const n = auto.acoes.length;
     const seq = !!(def && def.sequencia);
     const corpo = h("div", { class: "au-acao-corpo" }, (def ? def.campos : []).filter(f => !f.quando || Object.entries(f.quando).every(([k, v]) => L.valorCampo(ac, k) === v))
-      .filter(f => f.tipo !== "parametros").map(f => campoAcao(ac, f, i)));
+      .filter(f => f.tipo !== "parametros").map(f => { const el = campoAcao(ac, f, i); if (el && el.dataset) el.dataset.campo = f.nome; return el; }));   // plano 1500c · UCA-084: data-campo para devolver o foco
     if (def && !def.campos.length && def.descricao) corpo.appendChild(h("p", { class: "sub au-passo-desc" }, def.descricao));
     const alca = podeEditar ? h("span", { class: "au-alca", title: "Arraste para reordenar", "aria-hidden": "true" }, ui.icone("arrastar")) : null;
     const btSobe = podeEditar ? h("button", { type: "button", class: "bt-icone", "aria-label": `Subir o passo ${i + 1}`, disabled: i === 0 }, ui.icone("seta-baixo", "au-gira")) : null;
     const btDesce = podeEditar ? h("button", { type: "button", class: "bt-icone", "aria-label": `Descer o passo ${i + 1}`, disabled: i === n - 1 }, ui.icone("seta-baixo")) : null;
     const btX = podeEditar ? h("button", { type: "button", class: "bt-icone au-x", "aria-label": `Tirar o passo ${i + 1}` }, ui.icone("lixeira")) : null;
+    // plano 1500c · UCA-041: duplicar o passo logo abaixo (no limite de passos/esperas o botão fica desabilitado)
+    const podeDuplicar = L.duplicarPasso(auto.acoes, i).length > n;
+    const btDup = podeEditar ? h("button", { type: "button", class: "bt-icone au-dup", "aria-label": `Duplicar o passo ${i + 1}`, title: "Duplicar passo", disabled: !podeDuplicar }, ui.icone("copiar")) : null;
+    if (btDup) btDup.addEventListener("click", () => {
+      auto.acoes = L.duplicarPasso(auto.acoes, i); pintarEntao(); mudou("entao");
+      anunciar(`Passo «${L.rotuloAcao(ac.tipo, vv)}» duplicado: a cópia é o ${i + 2}º.`);
+      const b = blocoEntao.querySelectorAll(".au-passo")[i + 1]; const f = b && b.querySelector("input,select,textarea"); if (f) f.focus({ preventScroll: true });
+    });
     const mover = para => { auto.acoes = L.mover(auto.acoes, i, para); pintarEntao(); mudou("entao");
+      anunciar(`Passo «${L.rotuloAcao(ac.tipo, vv)}» agora é o ${para + 1}º.`);     // plano 1500c · UCA-118
       const b = blocoEntao.querySelectorAll(".au-passo")[para]; if (b) { const alvo = b.querySelector(para < i ? "[aria-label^='Subir']" : "[aria-label^='Descer']"); (alvo && !alvo.disabled ? alvo : b.querySelector("button")).focus(); } };
     if (btSobe) btSobe.addEventListener("click", () => mover(i - 1));
     if (btDesce) btDesce.addEventListener("click", () => mover(i + 1));
@@ -883,7 +1031,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         h("span", { class: "au-acao-n", "aria-hidden": "true" }, String(i + 1)),
         h("h3", { class: "au-acao-tit" }, h("span", { class: "sr-only" }, `Passo ${i + 1}: `), L.rotuloAcao(ac.tipo, vv)),
         resumo,
-        h("span", { class: "au-acao-bts" }, btSobe, btDesce, btX)),
+        h("span", { class: "au-acao-bts" }, btSobe, btDesce, btDup, btX)),
       iaOff && def && def.ia ? h("p", { class: "aviso aviso-aten au-passo-ia-off" }, ui.icone("ia"), h("span", null, L.AVISO_IA_DESLIGADA)) : null,
       corpo,
       h("p", { class: "au-item-erro", role: "alert", hidden: true }));
@@ -908,7 +1056,19 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     li.addEventListener("dragover", ev => { if (arrastando === null || arrastando === i) return; ev.preventDefault(); li.classList.add("au-alvo"); });
     li.addEventListener("dragleave", () => li.classList.remove("au-alvo"));
     li.addEventListener("drop", ev => { ev.preventDefault(); if (arrastando === null || arrastando === i) return;
-      auto.acoes = L.mover(auto.acoes, arrastando, i); arrastando = null; pintarEntao(); mudou("entao"); });
+      const tipoMovido = (auto.acoes[arrastando] || {}).tipo;
+      auto.acoes = L.mover(auto.acoes, arrastando, i); arrastando = null; pintarEntao(); mudou("entao");
+      anunciar(`Passo «${L.rotuloAcao(tipoMovido, vv)}» agora é o ${i + 1}º.`); });     // plano 1500c · UCA-118
+    // plano 2000d · DU-433: Alt+↑/↓ (fora de campo de texto) move o passo, como os botões Subir/Descer
+    if (podeEditar) li.addEventListener("keydown", ev => {
+      if (!ev.altKey || (ev.key !== "ArrowUp" && ev.key !== "ArrowDown")) return;
+      const tg = ev.target && ev.target.tagName;
+      if (tg === "TEXTAREA" || (tg === "INPUT" && !/^(checkbox|radio|button)$/.test(ev.target.type || ""))) return;
+      const para = ev.key === "ArrowUp" ? i - 1 : i + 1;
+      if (para < 0 || para >= auto.acoes.length) return;
+      ev.preventDefault();
+      mover(para);
+    });
     return li;
   }
 
@@ -957,17 +1117,23 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         const cont = f.max ? h("small", { class: "au-cont mono" }) : null;
         const bolha = ac.tipo === "enviar_mensagem" ? h("div", { class: "au-bolha" }) : null;
         const previa = bolha ? h("figure", { class: "au-msg-previa" }, h("figcaption", { class: "rotulo" }, "Como chega no WhatsApp (exemplo)")) : null;
-        const pintarCont = val => { if (!cont) return; const c = L.contadorTexto(val, f.max); cont.textContent = c.texto; cont.dataset.tom = c.tom; };
+        // plano 2000d · DU-039: no «Enviar mensagem», a assinatura da empresa (quando o servidor mandar base.assinatura) entra na conta
+        const assinatura = ac.tipo === "enviar_mensagem" && base && typeof base.assinatura === "string" ? base.assinatura : "";
+        const pintarCont = val => { if (!cont) return; const c = L.contadorTexto(val, f.max, { assinatura }); cont.textContent = c.texto; cont.dataset.tom = c.tom; };
         // plano 1000b · UB-253: sem texto, a instrução fica FORA da bolha (a bolha verde não finge ser uma mensagem)
         const vazioPrevia = bolha ? h("p", { class: "sub au-bolha-vazia" }, "Escreva a mensagem para ver a prévia.") : null;
         const pintarBolha = val => {
           if (!bolha) return;
           const tem = !!String(val || "").trim();
-          bolha.textContent = tem ? L.aplicarVariaveis(val, exemplo) : "";
+          // plano 1500c · UCA-099: *negrito*, _itálico_, ~riscado~ e ```mono``` como o cliente vê (spans por textContent, sem HTML)
+          ui.limpar(bolha);
+          if (tem) for (const p of L.partesWhatsApp(L.aplicarVariaveis(val, exemplo))) bolha.appendChild(p.estilo ? h("span", { class: `au-wa-${p.estilo}` }, p.t) : document.createTextNode(p.t));
           bolha.hidden = !tem; vazioPrevia.hidden = tem;
         };
         const bolhaDepois = ui.debounce(pintarBolha, 150);
-        const el = entrada({ rotulo: f.rotulo, valor: v ?? "", tipo: "textarea", max: f.max, variaveis: f.variaveis, desabilitado: dis, ajuda: f.ajuda,
+        // plano 2000d · DU-088: a ajuda do «Enviar mensagem» vem dos números desta empresa (só aparelho: nada de janela da Meta)
+        const ajudaCampo = ac.tipo === "enviar_mensagem" ? L.ajudaMensagem(base && base.canais) : f.ajuda;
+        const el = entrada({ rotulo: f.rotulo, valor: v ?? "", tipo: "textarea", max: f.max, variaveis: f.variaveis, desabilitado: dis, ajuda: ajudaCampo,
           obrigatorio: f.obrigatorio, aoMudar: x => { ac[f.nome] = x; pintarCont(x); bolhaDepois(x); mudou("entao"); } });
         if (cont) el.appendChild(cont);
         if (previa) { previa.append(vazioPrevia, bolha); el.appendChild(previa); }
@@ -986,9 +1152,18 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       case "opcoes":
         return seletor({ rotulo: f.rotulo, valor: v ?? f.padrao, opcoes: f.opcoes.map(([k, r]) => ({ valor: k, rotulo: r })), desabilitado: dis, aoMudar: set });
       case "estagio": {
-        const funil = f.filtraPor ? ac[f.filtraPor] : null;
-        return seletor({ rotulo: f.rotulo, valor: v, opcoes: opcoesBase(dados, "estagio", { funil, atual: v }), vazio: f.opcional ? "Primeira etapa do funil" : "Escolha a etapa…",
-          desabilitado: dis, obrigatorio: f.obrigatorio, aoMudar: x => set(x || null) });
+        // plano 1500c · UCA-087: «Mover de etapa» é do mesmo funil — com o funil definido pelo gatilho, só as etapas dele (a já escolhida de
+        // outro funil continua visível, com o aviso de usar «Mover de funil»)
+        const funilGat = ac.tipo === "mover_estagio" ? L.funilDoGatilho(auto, base) : null;
+        const funil = f.filtraPor ? ac[f.filtraPor] : funilGat;
+        const op = opcoesBase(dados, "estagio", { funil, atual: v });
+        if (funilGat && v && !op.some(g => (g.opcoes || [g]).some(o => o.valor === v))) {
+          const e = L.indexarBase(base).estagios.get(v);
+          if (e) op.push({ grupo: `${e.funil_nome} (outro funil)`, opcoes: [{ valor: v, rotulo: e.nome }] });
+        }
+        const avisoFunil = L.avisoEtapaOutroFunil(auto, ac, base);
+        return seletor({ rotulo: f.rotulo, valor: v, opcoes: op, vazio: f.opcional ? "Primeira etapa do funil" : "Escolha a etapa…",
+          desabilitado: dis, obrigatorio: f.obrigatorio, ajuda: avisoFunil, aoMudar: x => { set(x || null); if (ac.tipo === "mover_estagio") { pintarEntao(); refocarNoPasso(i, ".au-acao-corpo select"); } } });
       }
       case "funil":
         return seletor({ rotulo: f.rotulo, valor: v, opcoes: opcoesBase(dados, "funil"), vazio: f.semPadrao ? "Escolha o funil…" : "Funil padrão", desabilitado: dis, obrigatorio: f.obrigatorio,
@@ -1027,7 +1202,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           ...(opcoesBase(dados, "pessoa").length ? [{ grupo: "Uma pessoa", opcoes: opcoesBase(dados, "pessoa") }] : [])] });
       case "para":
         return seletor({ rotulo: f.rotulo, valor: v ?? "responsavel", desabilitado: dis,
-          aoMudar: x => { ac.para = x; if (x !== "departamento") delete ac.departamento_id; pintarEntao(); mudou("entao"); },
+          aoMudar: x => { ac.para = x; if (x !== "departamento") delete ac.departamento_id; pintarEntao(); mudou("entao"); refocarNoPasso(i, "[data-campo=para] select"); },   // plano 1500c · UCA-084
           opcoes: [
             { valor: "responsavel", rotulo: "O responsável (ou os administradores, se não houver)" },
             { valor: "admins", rotulo: "Administradores e supervisores" },
@@ -1050,7 +1225,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       case "modo_atribuir":
         return seletor({ rotulo: f.rotulo, valor: L.valorCampo(ac, f.nome) ?? "rodizio", desabilitado: dis,
           ajuda: L.ehAtribuirAntigo(ac) ? "Automação criada antes: só a conversa muda e vale a regra de distribuição do departamento. Ao escolher outra opção, passa a trocar também o responsável do negócio." : null,
-          aoMudar: x => { ac.dono = x; delete ac.modo; if (x !== "conta") delete ac.conta_id; pintarEntao(); mudou("entao"); },
+          aoMudar: x => { ac.dono = x; delete ac.modo; if (x !== "conta") delete ac.conta_id; pintarEntao(); mudou("entao"); refocarNoPasso(i, "[data-campo=dono] select"); },   // plano 1500c · UCA-084
           opcoes: [{ valor: "rodizio", rotulo: "Rodízio (quem tem menos atendimentos)" }, { valor: "conta", rotulo: "Uma pessoa" },
             ...(opcoesBase(dados, "departamento").length ? [{ valor: "departamento", rotulo: "Um departamento" }] : [])] });
       case "tarefa_ia":
@@ -1077,7 +1252,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           h("p", null, todos.length ? "Nenhum modelo deste número foi aprovado pela Meta ainda." : "Ainda não há modelos da Meta sincronizados para este cliente."),
           h("p", null, "Crie e aprove na Meta um modelo de categoria Utilidade, por exemplo:"),
           h("blockquote", { class: "au-tpl-sugerido" }, sugerido),
-          h("p", { class: "sub" }, "Depois da aprovação, toque em «Sincronizar agora» aqui mesmo (ou em Configurações → Números de WhatsApp). Enquanto isso, você pode salvar esta automação desligada. Ou use «Enviar mensagem» (texto livre, pelo CodeWords)."),
+          h("p", { class: "sub" }, "Depois da aprovação, toque em «Sincronizar agora» aqui mesmo (ou em Configurações → Números de WhatsApp). Enquanto isso, você pode salvar esta automação desligada. Ou use «Enviar mensagem» (texto livre, pelo número conectado por aparelho)."),
           h("div", { class: "linha" }, btCopiar, botaoSincronizar(ac)))));
       if (ac.template_nome) box.appendChild(h("p", { class: "sub" }, `Modelo esperado: «${ac.template_nome}».`));
       return box;
@@ -1101,6 +1276,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         const pars = (ac.parametros || []).slice(0, np); while (pars.length < np) pars.push("");
         ac.parametros = pars;
         pintarEntao(); mudou("entao");
+        refocarNoPasso(auto.acoes.indexOf(ac), ".au-tpl select");     // plano 1500c · UCA-084
       } }));
     const t = todos.find(y => y.id === ac.template_id);
     box.appendChild(h("div", { class: "linha au-tpl-sinc" }, botaoSincronizar(ac)));
@@ -1118,11 +1294,24 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     while (pars.length < np) pars.push("");
     const prev = h("p", { class: "au-tpl-prev-txt" });
     const pintarPrev = () => { prev.textContent = L.previaModelo(t.corpo || "", pars, exemplo); };
+    // plano 2000d · DU-416: o que cada {{n}} parece pedir (pelo texto em volta) vira sugestão e um botão preenche os vazios
+    const sugestoes = L.montarParametrosTemplate(t.corpo || "");
+    const sugDe = k => (sugestoes.find(x => x.n === k + 1) || {}).sugestao || "";
+    const vaziosComSug = () => pars.slice(0, np).some((v, k) => !String(v || "").trim() && sugDe(k));
+    if (np && podeEditar && vaziosComSug()) {
+      const btSug = h("button", { type: "button", class: "bt bt-sec bt-p au-tpl-sugerir" }, ui.icone("raio"), "Preencher com o sugerido");
+      btSug.addEventListener("click", () => {
+        for (let k = 0; k < np; k++) if (!String(pars[k] || "").trim() && sugDe(k)) pars[k] = sugDe(k);
+        pintarEntao(); mudou("entao");
+        refocarNoPasso(auto.acoes.indexOf(ac), ".au-tpl-pars input");
+      });
+      box.appendChild(h("div", { class: "linha" }, btSug));
+    }
     if (np) box.appendChild(h("div", { class: "au-tpl-pars" }, Array.from({ length: np }, (_, k) =>
       // plano 1000b · UB-059: «1º espaço do modelo» + o trecho do corpo em volta de {{1}} («Olá, ___!») em vez do jargão «Parâmetro {{1}}»
       entrada({ rotulo: `${k + 1}º espaço do modelo`, ajuda: L.trechoParametro(t.corpo, k + 1) ? `No texto: «${L.trechoParametro(t.corpo, k + 1)}»` : null,
         valor: pars[k] ?? "", variaveis: true, max: 200, desabilitado: !podeEditar, obrigatorio: true,
-        placeholder: "{primeiro_nome}", aoMudar: x => { pars[k] = x; pintarPrev(); mudou("entao"); } }))));
+        placeholder: sugDe(k) || "{primeiro_nome}", aoMudar: x => { pars[k] = x; pintarPrev(); mudou("entao"); } }))));
     pintarPrev();
     box.appendChild(h("div", { class: "au-tpl-prev" },
       h("p", { class: "rotulo" }, "Prévia com um exemplo"),
@@ -1163,7 +1352,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         const passoLi = idx >= 0 ? blocoEntao.querySelector(`.au-passo[data-i="${idx}"]`) : null;
         const novo = (passoLi && passoLi.querySelector("select, .au-tpl-sincronizar")) || blocoEntao.querySelector(".au-passo-enviar_template select, .au-tpl-sincronizar");
         if (novo) novo.focus({ preventScroll: true });
-      } catch (e) { ui.toast(L.erroAutomacao(e, ctx.api.mensagemErro(e)), { tipo: "erro" }); }
+      } catch (e) { ui.toast(L.erroAutomacao(e, ctx.api.mensagemErro(e), base.usuarios), { tipo: "erro" }); }
       finally { sincronizando = false; }
     });
     return b;
@@ -1186,6 +1375,9 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const t = ultimoTexto && ultimoTexto.isConnected ? ultimoTexto : blocoEntao.querySelector("[data-variaveis='1']");
     if (!t || t.disabled) { ui.toast("Toque num texto de um passo e depois na variável.", { tipo: "info" }); return; }   // plano 1000b · UB-060: vale no celular
     const ini = t.selectionStart ?? t.value.length, fim = t.selectionEnd ?? t.value.length;
+    // plano 1500c · UCA-040: mudar o value direto ignora o maxlength — confere antes (o parâmetro do modelo vai até 200, o título até 160)
+    const teto = Number(t.maxLength);
+    if (teto > 0 && t.value.length - (fim - ini) + tok.length > teto) { ui.toast(`Não cabe: o campo vai até ${teto} caracteres.`, { tipo: "info" }); t.focus(); return; }
     t.value = t.value.slice(0, ini) + tok + t.value.slice(fim);
     try { t.setSelectionRange(ini + tok.length, ini + tok.length); } catch { /* ok */ }
     t.focus();
@@ -1200,7 +1392,9 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   function analisar() {
     const ps = L.problemas(auto, { base, ligar: !!auto.ativo });
     return { ps, r: ps[0] ? { ok: false, motivo: ps[0].motivo, onde: ps[0].onde, indice: ps[0].indice } : { ok: true },
-      vars: L.variaveisDosPassos(auto), cads: L.cadeiasDeAutomacao(auto, dados.itens || [], base) };
+      vars: L.variaveisDosPassos(auto, base), cads: L.cadeiasDeAutomacao(auto, dados.itens || [], base),
+      // plano 2000d · AX-095: os avisos de estrutura UMA vez por mudança (antes: duas, na lateral e nos passos); com a base (AX-016/AX-091)
+      est: L.avisosEstruturaDetalhados(auto, vv, { iaAtendimentoLigada: L.iaAtendimentoLigada(dados), base }) };
   }
   /** Os avisos da lateral esperam a pessoa parar de digitar (120 ms); dentro do passo, na hora. */
   let tAvisos = null;
@@ -1225,8 +1419,9 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     // plano 1000 · AS-232: o trecho das 24 h da Meta só quando há número da Meta (sem saber o provedor dos números, continua o texto completo)
     if (L.enviaMensagem(auto)) {
       const meta = L.temCanalMeta(base);
-      bloqs.push(meta === false ? "Mensagens de WhatsApp saem pelo número conectado pelo CodeWords (texto livre a qualquer hora)."
-        : "Mensagens de WhatsApp saem pelo CodeWords (número por aparelho). No WhatsApp oficial (Meta), texto livre só dentro de 24 h da última mensagem do cliente; fora disso, só modelo aprovado.");
+      // plano 2000d · DU-024: sem o nome do fornecedor
+      bloqs.push(meta === false ? "Mensagens de WhatsApp saem pelo número conectado por aparelho (texto livre a qualquer hora)."
+        : "Mensagens de WhatsApp saem pelo número conectado por aparelho. No WhatsApp oficial (Meta), texto livre só dentro de 24 h da última mensagem do cliente; fora disso, só modelo aprovado.");
     }
     if (L.faltaModelo(auto)) bloqs.push("Sem modelo aprovado escolhido: dá para salvar desligada e ligar quando a Meta aprovar.");
     if (auto.gatilho === "antes_da_data" && auto.acoes.some(a => a.tipo === "enviar_template" && (a.parametros || []).some(p => /\{hora_consulta\}/.test(p))))
@@ -1234,13 +1429,18 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     // plano 1000b · UB-189: o mesmo cuidado para «Depois da data» e para «Enviar mensagem» com {hora_consulta} / {data_consulta}
     else { const av = L.avisoDataHoraConsulta(auto, vertical); if (av) bloqs.push(av); }
     if (iaOff && L.temIA(auto)) bloqs.push(L.AVISO_IA_DESLIGADA);
-    for (const t of L.avisosEstrutura(auto)) bloqs.push(t);
+    // plano 1500c · UCA-017/018/019/020/022/111/112: os avisos de estrutura falam a língua da vertical
+    for (const t of (an.est || []).map(x => x.texto)) bloqs.push(t);   // plano 2000d · DU-018 · AX-095
     // plano 1000 · AS-035: variável escrita errada chega crua ao cliente — avisa (e não deixa LIGAR; salvar desligada pode)
     for (const v of an.vars) bloqs.push(`Passo ${v.indice + 1}: ${L.fraseVariaveis(v)}. Assim o cliente receberia o texto entre chaves.`);
     // plano 1000 · AS-278: um passo daqui dispara outra automação ligada (e, no pior caso, ela devolve: laço)
+    // plano 1500c · UCA-015/016: laço de 3+ automações com o caminho, e a que dispara a si mesma
     for (const c of an.cads)
-      bloqs.push(c.laco ? `Laço: o passo ${c.indice + 1} usa ${c.por}, que dispara «${c.outra.nome}» — e ela dispara esta de volta. As duas vão se repetir até o limite e encher as execuções de erro.`
+      bloqs.push(c.laco ? `Passo ${c.indice + 1} (usa ${c.por}): ${L.fraseLaco(c)} As execuções vão se encher de erro.`
         : `O passo ${c.indice + 1} usa ${c.por}, que dispara «${c.outra.nome}» (ligada). Confira se é isso mesmo.`);
+    // plano 1500c · UCA-088: outra automação ligada com o mesmo gatilho também manda mensagem — o cliente receberia duas seguidas
+    for (const o of L.automacoesConcorrentes(auto, dados.itens || []))
+      bloqs.push(`«${o.nome}» (ligada) tem o mesmo gatilho e também manda mensagem: o cliente pode receber as duas, uma atrás da outra.`);
     // plano 1000b · UB-024: com «respeitar horário» e um departamento padrão sem horário nenhum, a mensagem nunca sairia
     if (L.linhaDoTempo(auto.acoes, opcoesTempo()).some(t => t.semHorario)) bloqs.push(AVISO_SEM_HORARIO);
     for (const t of bloqs) avisos.appendChild(h("p", { class: "au-aviso-lat" }, ui.icone("info"), h("span", null, t)));
@@ -1249,10 +1449,12 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   function pintarAvisosPassos(an = analisar()) {
     const vars = new Map(an.vars.map(v => [v.indice, v]));
     const cads = an.cads;
+    // plano 1500c · UCA-111: os avisos de estrutura com passo (esperas seguidas, passo sem conversa…) também aparecem no próprio passo
+    const est = (an.est || []).filter(x => x.indice != null && x.tipo !== "parar");   // plano 2000d · AX-095
     blocoEntao.querySelectorAll(".au-passo").forEach((li, i) => {
       let el = li.querySelector(".au-passo-aviso");
-      const v = vars.get(i), c = cads.find(x => x.indice === i && x.laco) || cads.find(x => x.indice === i);
-      const txt = v ? `Atenção: ${L.fraseVariaveis(v)}.` : c ? (c.laco ? `Laço com «${c.outra.nome}»: uma dispara a outra.` : `Dispara também «${c.outra.nome}».`) : "";
+      const v = vars.get(i), c = cads.find(x => x.indice === i && x.laco) || cads.find(x => x.indice === i), e = est.find(x => x.indice === i);
+      const txt = v ? `Atenção: ${L.fraseVariaveis(v)}.` : c ? (c.laco ? L.fraseLaco(c) : `Dispara também «${c.outra.nome}».`) : e ? e.texto : "";
       if (!txt) { if (el) el.remove(); return; }
       if (!el) { el = h("p", { class: "aviso aviso-aten au-passo-aviso" }); const cart = li.querySelector(".au-acao"); (cart || li).appendChild(el); }
       ui.limpar(el); el.append(ui.icone("alerta"), h("span", null, txt));
@@ -1300,8 +1502,41 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     if (opcoes && opcoes.tempo) atualizarTempos();
     pintarValidacao(an.ps);
     pintarTesteCom();
-    guardarRascunho();
+    agendarRascunho();       // plano 1500c · UCA-086
+    agendarHistorico();      // plano 1500c · UCA-092
   }
+
+  // ------------------------------------------------ plano 1500c · UCA-092: desfazer / refazer (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z) fora dos campos de texto
+  const hist = L.historicoEdicao(30);
+  let tHist = null, restaurando = false;
+  function agendarHistorico() {
+    if (restaurando || !podeEditar) return;
+    clearTimeout(tHist);
+    tHist = setTimeout(() => { tHist = null; hist.empilhar(copia(auto)); }, HISTORICO_MS);
+  }
+  function restaurar(estado, rotulo) {
+    if (!estado) { ui.toast(rotulo === "desfazer" ? "Nada para desfazer." : "Nada para refazer.", { tipo: "info" }); return; }
+    restaurando = true;
+    const id = auto.id;
+    auto = estado;
+    if (id != null) auto.id = id; else delete auto.id;
+    auto.condicoes = auto.condicoes || []; auto.acoes = auto.acoes || []; auto.config = auto.config || {};
+    inpNome.value = auto.nome || "";
+    swAtivo.definir(!!auto.ativo); pintarNotaAtivo();
+    pintarQuando(); pintarSe(); pintarEntao();
+    mudou();
+    restaurando = false;
+    anunciar(rotulo === "desfazer" ? "Mudança desfeita." : "Mudança refeita.");
+  }
+  if (podeEditar && typeof ui.atalho === "function" && amb.aoSair) {
+    const emTexto = () => { const a = document.activeElement; return !!a && (a.tagName === "TEXTAREA" || (a.tagName === "INPUT" && !["checkbox", "radio", "button"].includes(a.type)) || a.isContentEditable); };
+    const podeAtalho = ev => raiz.isConnected && !emTexto() && !(() => { try { return document.querySelector("dialog[open]"); } catch { return null; } })();
+    try {
+      amb.aoSair(ui.atalho("mod+z", ev => { if ((ev && ev.shiftKey) || !podeAtalho(ev)) return; if (ev && ev.preventDefault) ev.preventDefault(); if (tHist) { clearTimeout(tHist); tHist = null; hist.empilhar(copia(auto)); } restaurar(hist.desfazer(), "desfazer"); }) || (() => {}));
+      amb.aoSair(ui.atalho("mod+shift+z", ev => { if (!podeAtalho(ev)) return; if (ev && ev.preventDefault) ev.preventDefault(); restaurar(hist.refazer(), "refazer"); }) || (() => {}));
+    } catch { /* sem atalhos, os «Desfazer» dos avisos continuam */ }
+  }
+  if (amb.aoSair) amb.aoSair(() => clearTimeout(tHist));
 
   function mostrarErro(r) {
     frescos.clear();
@@ -1342,10 +1577,32 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       // plano 1000 · AS-025: ligar no editor algo que manda WhatsApp (ou gasta IA) pede a MESMA confirmação da lista — só quando estava desligada/nova
       const estavaLigada = !!(salvoItem && salvoItem.ativo);
       if (auto.ativo && !estavaLigada && (L.enviaMensagem(auto) || L.temIA(auto))) {
-        const ok = await ui.confirmar({ titulo: `Ligar «${auto.nome}»?`, rotulo: "Salvar e ligar",
-          texto: L.enviaMensagem(auto) ? "Esta automação envia mensagens de WhatsApp para clientes. Assim que salvar ligada, quem se encaixar no gatilho começa a receber. Dá para desligar a qualquer momento."
-            : "Esta automação usa a IA a cada execução (gasta a cota do mês). Assim que salvar ligada, ela começa a rodar." });
+        // plano 1500c · UCA-017/018: disparo em massa (todo dia para todos, ou resposta a toda mensagem) ganha uma confirmação reforçada
+        // plano 2000d · DU-018: o conflito com a IA de atendimento também reforça a confirmação
+        const massa = L.avisosEstruturaDetalhados(auto, vv, { iaAtendimentoLigada: L.iaAtendimentoLigada(dados) }).find(x => x.tipo === "massa_diaria" || x.tipo === "toda_mensagem" || x.tipo === "conflito_ia");
+        // plano 2000d · DU-040: automação de tempo/diária com mensagem: quantos recebem AGORA (acima de 50, digitar o número)
+        let quem = null;
+        if (L.contarAoLigar(auto)) {
+          try { const resp = await ctx.api.rpcC("nx_auto_simular", { p_automacao: L.limpar(auto) }); quem = L.fraseQuemRecebe(L.normalizarSimulacao(resp, auto, base, vv).total, { auto }); /* plano 2000d · AX-057 */ } catch { quem = null; }
+        }
+        const reforco = !!massa || !!(quem && quem.massa);
+        const ok = await ui.confirmar({ titulo: `Ligar «${auto.nome}»?`, rotulo: reforco ? "Ligar mesmo assim" : "Salvar e ligar", perigo: reforco,
+          digitar: quem && quem.digitar ? quem.digitar : null,
+          texto: [massa ? `Atenção: ${massa.texto} Assim que salvar ligada, as mensagens começam a sair. Dá para desligar a qualquer momento.`
+            : L.enviaMensagem(auto) ? "Esta automação envia mensagens de WhatsApp para clientes. Assim que salvar ligada, quem se encaixar no gatilho começa a receber. Dá para desligar a qualquer momento."
+            : "Esta automação usa a IA a cada execução (gasta a cota do mês). Assim que salvar ligada, ela começa a rodar.", quem ? quem.texto : ""].filter(Boolean).join(" ") });
         if (!ok) return false;
+      }
+      // plano 2000d · DU-108: salvar uma LIGADA que manda mensagem mostra o que muda antes (o cliente sente a mudança na hora)
+      if (auto.ativo && estavaLigada && L.enviaMensagem(auto) && salvoJson) {
+        let antes = null; try { antes = JSON.parse(salvoJson); } catch { antes = null; }
+        const dif = antes ? L.resumoDiferencas({ ...antes, nome: auto.nome }, L.limpar(auto)) : "";   // só o nome mudou: não pergunta
+        if (dif) {
+          // plano 2000d · DU-442: quem já está no meio da sequência (em espera) também é dito — os passos que faltam para eles seguem o texto salvo
+          const esp = item ? Number(item.em_espera) || 0 : 0;
+          const ok = await ui.confirmar({ titulo: `Salvar «${auto.nome}» ligada?`, rotulo: "Salvar", texto: `O que muda: ${dif}. Ela continua ligada e a mudança vale já para os próximos envios.${esp ? ` ${esp === 1 ? "1 pessoa está" : `${esp} pessoas estão`} no meio da sequência: o que ainda falta para ${esp === 1 ? "ela" : "elas"} sai com o texto novo.` : ""}` });
+          if (!ok) return false;
+        }
       }
       // plano 1000 · AS-277: salvar DESLIGADA o que estava ligado cancela as esperas em andamento — avisa quem perde os próximos passos
       const avisoEspera = !auto.ativo && estavaLigada ? L.avisoDesligarEspera(salvoItem) : null;
@@ -1372,6 +1629,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         // AS-051: fica no editor — o que está na tela passa a ser o salvo; a nova ganha o id (o próximo «Salvar» atualiza a mesma)
         if (salvo && salvo.id != null) auto.id = salvo.id;
         salvoItem = { ...(salvoItem || {}), ...salvo };
+        repintarAutor(salvoItem);       // plano 1500c · UCA-091: «Alterada por você, agora»
         salvoJson = JSON.stringify(L.limpar(auto));
         ativoSalvo = !!auto.ativo; pintarNotaAtivo();
         if (salvo && salvo.id != null && !item) {
@@ -1404,7 +1662,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       if (e && e.cancelado) return;          // a pessoa desistiu na confirmação: nada foi gravado
       const msg = e && e.codigo === "edicao_desatualizada"
         ? "Outra pessoa salvou esta automação enquanto você editava. Para não apagar o que ela fez, nada foi gravado: copie o que precisar, recarregue a página e refaça a sua mudança."
-        : L.erroAutomacao(e, ctx.api.mensagemErro(e));
+        : L.erroAutomacao(e, ctx.api.mensagemErro(e), base.usuarios);
       const lugar = e && e.codigo === "automacao_invalida" && e.hint ? L.ondeDoHint(e.hint) : null;
       if (lugar && lugar.onde) mostrarErro({ motivo: e.hint, onde: lugar.onde, indice: lugar.indice });
       else {
@@ -1445,7 +1703,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const naGaveta = botao !== btTestarLado && estreito() && typeof ui.gaveta === "function";
     let destino = areaSim;
     if (naGaveta) {
-      destino = h("div", { class: "au-sim au-sim-gaveta", "aria-live": "polite" });
+      destino = h("div", { class: "au-sim au-sim-gaveta" });     // plano 1500c · UCA-081: sem aria-live (o status curto anuncia)
       try { ui.gaveta({ titulo: "Teste da automação", corpo: destino, protegerTexto: false, aoFechar: () => { if (areaSimAtual === destino) areaSimAtual = areaSim; } }); }
       catch { destino = areaSim; }
     }
@@ -1472,7 +1730,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     try {
       const paraTeste = L.limpar(soGatilho ? { ...auto, nome: String(auto.nome || "").trim() || "Teste do gatilho" } : auto);
       const resp = await ui.carregando(botao, ctx.api.rpcC("nx_auto_simular", negocioTeste ? { p_automacao: paraTeste, p_negocio: negocioTeste.id } : { p_automacao: paraTeste }));
-      sim = L.normalizarSimulacao(resp, auto, base, vv);
+      // plano 1500c · UCA-123: com «Respeitar horário», a mensagem diz quando sai de verdade (próxima abertura do horário)
+      sim = L.normalizarSimulacao(resp, auto, base, vv, auto.respeitar_horario && horarioPadrao !== undefined ? { horario: horarioPadrao, agora: Date.now() } : {});
     } catch (e) { erro = e; } finally {
       testando = false;
       outros.forEach(b => { b.removeAttribute("aria-busy"); b.disabled = false; });
@@ -1490,7 +1749,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       const indisponivel = /could not find the function|pgrst202|http_404|funcao_invalida/i.test(c);
       areaSim.appendChild(h("p", { class: "aviso aviso-aten au-sim-aviso" }, ui.icone("alerta"),
         h("span", null, indisponivel ? "O teste ainda não está disponível neste ambiente. Abaixo está o passo a passo do que a automação faz."
-          : L.erroAutomacao(erro, ctx.api.mensagemErro(erro)))));
+          : L.erroAutomacao(erro, ctx.api.mensagemErro(erro), base.usuarios))));
       const plano = L.passosEmFrases(auto, base, vv);
       if (plano.length) areaSim.appendChild(blocoPlano(plano));
       return;
@@ -1499,12 +1758,27 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const rotuloTopo = sim.ehAmostra
       ? (n === 0 ? "Nenhum exemplo agora" : n === 1 ? "1 exemplo agora" : `${n} exemplos agora`)
       : (sim.total === 0 ? "Nenhum alvo agora" : sim.total === 1 ? "1 alvo agora" : `${sim.total} alvos agora`);
+    // plano 1500c · UCA-081: o título do resultado recebe o foco e o status curto diz o resumo (a lista não é lida inteira)
+    const tituloRes = h("p", { class: "au-sim-titulo", tabindex: "-1" }, sim.ehExemplo ? "Resultado com exemplo fictício" : "Resultado do teste");
+    areaSim.appendChild(tituloRes);
     areaSim.appendChild(h("div", { class: "au-sim-topo" },
-      ui.pilula(rotuloTopo, n === 0 && sim.total === 0 ? "neutra" : "prim", { icone: "olho" }),
-      h("span", { class: "sub" }, "Nada foi enviado nem salvo.")));
+      // plano 1500c · UCA-057: o exemplo de demonstração vem marcado
+      sim.ehExemplo ? ui.pilula("Exemplo fictício", "aten", { icone: "info" }) : ui.pilula(rotuloTopo, n === 0 && sim.total === 0 ? "neutra" : "prim", { icone: "olho" }),
+      h("span", { class: "sub" }, "Nada foi enviado nem salvo."),
+      // plano 2000d · DU-063: o resultado em texto (primeiro nome e telefone mascarado) para mandar a quem ajuda
+      !sim.ehExemplo && sim.alvos.length ? (() => { const b = h("button", { type: "button", class: "bt bt-fant bt-p au-sim-copiar" }, ui.icone("copiar"), "Copiar resultado");
+        b.addEventListener("click", () => ui.copiar(L.textoDoTeste(sim, auto), { aviso: "Resultado copiado (só o primeiro nome, telefones escondidos)." })); return b; })() : null));
     // plano 1000 · AS-270: quantas mensagens (e o que mais) sairiam agora, antes da lista
     const saidas = L.resumoSaidasSimulacao(sim);
-    if (saidas.texto) areaSim.appendChild(h("p", { class: "au-sim-saidas" }, ui.icone(saidas.mensagens ? "whatsapp" : "raio"), h("span", null, saidas.texto)));
+    if (saidas.texto && !sim.ehExemplo) areaSim.appendChild(h("p", { class: "au-sim-saidas" }, ui.icone(saidas.mensagens ? "whatsapp" : "raio"), h("span", null, saidas.texto)));
+    statusSim.textContent = `${sim.ehExemplo ? "Exemplo fictício" : rotuloTopo}.${saidas.texto && !sim.ehExemplo ? ` ${saidas.texto}` : ""}`;
+    if (raiz.contains(document.activeElement) || areaSim !== areaSimOriginal) setTimeout(() => { try { tituloRes.focus({ preventScroll: true }); } catch { /* ok */ } }, 30);
+    // plano 1500c · UCA-057: empresa sem registros (ninguém para mostrar) — dá para ver com 2 pessoas de exemplo
+    if (n === 0 && !sim.total && !sim.ehExemplo && auto.acoes.length) {
+      const btEx = h("button", { type: "button", class: "bt bt-sec bt-p au-sim-exemplo" }, ui.icone("olho"), "Ver com exemplo");
+      btEx.addEventListener("click", () => { ui.limpar(areaSim); pintarSimulacao(L.simulacaoDemonstracao(auto, base, vv), null); });
+      areaSim.appendChild(h("div", { class: "linha" }, btEx));
+    }
     if (sim.motivo) areaSim.appendChild(h("p", { class: "sub au-sim-motivo" }, sim.motivo));
     else if (n === 0) areaSim.appendChild(h("p", { class: "sub au-sim-motivo" }, sim.porEvento || sim.ehAmostra
       ? "Não há ninguém que esse gatilho pegaria agora. Quando acontecer, é isto que será feito:"
@@ -1522,8 +1796,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
             a.link ? h("a", { class: "au-sim-link", href: a.link, "aria-label": `Abrir ${a.titulo}` }, "Abrir") : null),
           a.ignorado ? h("p", { class: "au-sim-nota" }, ui.icone("info"), a.motivoIgnorado) : null,
           a.passos.length ? h("ol", { class: "au-sim-passos", role: "list" }, a.passos.map(p => h("li", { class: ["au-sim-passo", `au-sim-${p.estado}`] },
-            ui.pilula({ faria: "Faria", pularia: "Pularia", espera: "Esperaria", erro: "Daria erro" }[p.estado] || "Faria",
-              { faria: "ok", pularia: "aten", espera: "info", erro: "ruim" }[p.estado] || "neutra"),
+            // plano 2000d · DU-062: ícone por estado (não só a cor)
+            (pe => ui.pilula(pe.texto, { faria: "ok", pularia: "aten", espera: "info", erro: "ruim" }[p.estado] || "neutra", { icone: pe.icone }))(L.pilulaEstadoPasso(p.estado)),
             h("span", { class: "au-sim-passo-txt" }, p.rotulo, p.quando ? h("small", null, ` · ${p.quando}`) : null, p.motivo ? h("small", null, ` — ${p.motivo}`) : null)))) : null,
           // plano 1000b · UB-074: o resultado mostra até 12 passos — o que passou disso é dito
           a.passosOcultos > 0 ? h("p", { class: "sub au-sim-mais-passos" }, `e mais ${a.passosOcultos} ${a.passosOcultos === 1 ? "passo" : "passos"}`) : null,
@@ -1564,6 +1838,24 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   let execSeq = 0;      // plano 1000 · AS-055: só a carga mais nova pinta (Atualizar 2× ou «Carregar mais» + «Atualizar»)
   let serieGuardada = null;     // plano 1000b · UB-037: {em, valor, assinatura} da última série de 14 dias lida
   let conferindoNovas = false;  // plano 1000b · UB-076: a conferência silenciosa (foco na lista) em andamento
+  // plano 1500c · UCA-004/005/054: busca por pessoa (p_busca), «quem não passou nas condições» (p_filtradas) e o passo em que pararam
+  let execBusca = "";
+  let execFiltradas = false;
+  let execPasso = "";
+  let execExtrasOk = true;      // banco sem a 20261015a: cai na chamada antiga (sem busca nem filtradas) sem quebrar
+  /** A lista de execuções com os filtros do servidor que existirem. */
+  async function lerExecucoes() {
+    const p = { p_id: item.id, p_limite: execLimite };
+    const extras = execExtrasOk && (execBusca || execFiltradas);
+    if (extras) { if (execBusca) p.p_busca = execBusca; if (execFiltradas) p.p_filtradas = true; }
+    try { return await ctx.api.rpcC("nx_automacao_execucoes", p); }
+    catch (e) {
+      const c = String((e && (e.codigo || e.message)) || "");
+      if (!extras || !/could not find the function|pgrst202|http_404|funcao_invalida/i.test(c)) throw e;
+      execExtrasOk = false;
+      return ctx.api.rpcC("nx_automacao_execucoes", { p_id: item.id, p_limite: execLimite });
+    }
+  }
   /** Muda quando chega execução nova ou alguma muda de situação (id + estado das primeiras). */
   const assinaturaExec = l => { const a = Array.isArray(l) ? l : (l && Array.isArray(l.itens) ? l.itens : []); return `${a.length}|${a.slice(0, 20).map(x => `${x.id}:${x.status || x.estado || ""}`).join(",")}`; };
   async function pintarExecucoes(opc = {}) {
@@ -1571,7 +1863,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     // a lista é redesenhada (o botão antigo sai da tela): quem usa o teclado continua no mesmo botão
     // plano 1000b · UB-190: o botão é achado pelo data-acao (trocar o rótulo não quebra o foco depois da recarga)
     const ativo = document.activeElement;
-    const refoco = opc.foco || (painelExec.contains(ativo) ? (ativo.classList.contains("au-mais") ? "mais" : ativo.dataset && ativo.dataset.acao === "atualizar" ? "atualizar" : null) : null);
+    const refoco = opc.foco || (painelExec.contains(ativo) ? (ativo.classList.contains("au-mais") ? "mais" : ativo.dataset && ativo.dataset.acao ? ativo.dataset.acao : null) : null);
     // AS-056: a recarga automática é suave — sem esqueleto, a lista antiga fica até a nova chegar
     if (!opc.suave) { ui.limpar(painelExec); painelExec.appendChild(ui.esqueleto("lista", 5)); }
     try {
@@ -1580,17 +1872,20 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       let lista, porDiaServidor;
       if (opc.automatica && serieGuardada && Date.now() - serieGuardada.em < SERIE_MS) {
         // plano 1000b · UB-037: a recarga automática (20 s) relê só a lista; a série de 14 dias, a cada 5 min ou quando a lista mudou
-        lista = await ctx.api.rpcC("nx_automacao_execucoes", { p_id: item.id, p_limite: execLimite });
+        lista = await lerExecucoes();
         porDiaServidor = assinaturaExec(lista) === serieGuardada.assinatura ? serieGuardada.valor : await pedirSerie();
       } else {
-        [lista, porDiaServidor] = await Promise.all([ctx.api.rpcC("nx_automacao_execucoes", { p_id: item.id, p_limite: execLimite }), pedirSerie()]);
+        [lista, porDiaServidor] = await Promise.all([lerExecucoes(), pedirSerie()]);
       }
+      // plano 1500c · UCA-004: com busca, o gráfico é o da lista achada (a série do servidor é de todas)
+      if (execBusca && execExtrasOk) porDiaServidor = null;
       if (eu !== execSeq) return;           // chegou depois de uma carga mais nova: descarta
       serieGuardada = { em: serieGuardada && serieGuardada.valor === porDiaServidor ? serieGuardada.em : Date.now(), valor: porDiaServidor, assinatura: assinaturaExec(lista) };
       ui.limpar(painelExec);
       const arr = Array.isArray(lista) ? lista : (lista && Array.isArray(lista.itens) ? lista.itens : []);
       const contagem = { todas: arr.length, ok: 0, erro: 0, pulado: 0, espera: 0 };
       for (const x of arr) contagem[L.situacaoExecucao(x)]++;
+      contagem.envio = arr.filter(L.ehFalhaDeEnvio).length;   // plano 2000d · DU-066
       const btAtualizar = h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { acao: "atualizar" } }, ui.icone("relogio"), "Atualizar");
       // plano 1000b · UB-191: «Atualizar» gira no próprio botão (aria-busy) e a lista antiga fica até a nova chegar
       btAtualizar.addEventListener("click", () => { ui.carregando(btAtualizar, pintarExecucoes({ foco: "atualizar", suave: true })).catch(() => {}); });
@@ -1612,19 +1907,22 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       const desenhar = () => {
         ui.limpar(corpoLista);
         if (grafico && typeof grafico.marcarDia === "function") grafico.marcarDia(execDia);
-        const vis = arr.filter(x => (execFiltro === "todas" || L.situacaoExecucao(x) === execFiltro) && (!execDia || L.diaDaExecucao(x) === execDia));
+        // plano 1500c · UCA-054: situação, dia e passo combinados
+        const vis = L.filtrarExecucoes(arr, { situacao: execFiltro, dia: execDia, passo: execPasso || null });
         pintarChipDia();
         // plano 1000b · UB-038: com um dia escolhido no gráfico, as contagens dos chips são as DESSE dia (rótulo e aria-label juntos)
         const doDia = execDia ? arr.filter(x => L.diaDaExecucao(x) === execDia) : arr;
         const cont = { todas: doDia.length, ok: 0, erro: 0, pulado: 0, espera: 0 };
         for (const x of doDia) cont[L.situacaoExecucao(x)]++;
+        cont.envio = doDia.filter(L.ehFalhaDeEnvio).length;   // plano 2000d · DU-066
         for (const [k, rot, b] of chipsSit) {
           b.textContent = `${rot} · ${cont[k]}`;
           b.setAttribute("aria-label", `${rot}, ${cont[k]} ${cont[k] === 1 ? "execução" : "execuções"}${execDia ? ` em ${L.rotuloDia(execDia)}` : ""}`);
         }
         if (!vis.length) {
-          corpoLista.appendChild(ui.vazio({ titulo: arr.length ? "Nada nesta situação" : "Ainda não rodou", icone: "relogio", tema: "automacoes",
-            texto: arr.length ? "Tente outro filtro." : item.ativo ? "Assim que o gatilho acontecer, cada execução aparece aqui, com o que foi feito." : "Ela está desligada. Ligue para começar a rodar." }));
+          // plano 1500c · UCA-004: com busca, o vazio diz o que foi buscado
+          corpoLista.appendChild(ui.vazio({ titulo: execBusca && !arr.length ? `Nenhuma execução para «${execBusca}»` : arr.length ? "Nada nesta situação" : "Ainda não rodou", icone: "relogio", tema: "automacoes",
+            texto: execBusca && !arr.length ? "Confira o nome ou busque por parte dele." : arr.length ? "Tente outro filtro." : item.ativo ? "Assim que o gatilho acontecer, cada execução aparece aqui, com o que foi feito." : "Ela está desligada. Ligue para começar a rodar." }));
           return;
         }
         // linha do tempo agrupada por dia («Hoje», «Ontem», «seg, 02/10»), com entrada escalonada
@@ -1636,7 +1934,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
             h("h3", { class: "au-ex-dia-tit" }, h("span", null, grupo.rotulo), h("span", { class: "au-ex-dia-n mono" }, `${grupo.itens.length}`)), ul));
         }
       };
-      for (const [k, rot] of L.SITUACOES_EXECUCAO) {
+      // plano 2000d · DU-066: «Falha de envio» só aparece quando há alguma
+      for (const [k, rot] of [...L.SITUACOES_EXECUCAO, ...(contagem.envio || execFiltro === "envio" ? [["envio", "Falha de envio"]] : [])]) {
         const b = P.chip({ rotulo: `${rot} · ${contagem[k]}`, ligado: execFiltro === k, modo: "radio", aoClicar: () => {
           execFiltro = k; filtro.querySelectorAll(".au-chip").forEach(c => c.setAttribute("aria-checked", String(c === b))); desenhar(); } });
         // plano 1000 · AS-226: o leitor de tela ouve «Com erro, 2 execuções» (o «·» era lido de um jeito estranho)
@@ -1647,19 +1946,43 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       // quem edita pode impedir o que ainda ia sair (antes a única saída era desligar a automação inteira)
       // plano 1000b · UB-004: item.em_espera é abatido a cada cancelamento (cancelarEspera), então o número do diálogo não fica velho
       esperasNaTela = Number(item.em_espera) > 0 ? Number(item.em_espera) : contagem.espera;
-      const btCancelarTodas = podeEditar && contagem.espera > 0 ? h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("parar"), "Cancelar todas as esperas") : null;
+      // plano 1500c · UCA-056: as esperas podem estar fora das carregadas — vale o maior entre o item e a lista
+      const btCancelarTodas = podeEditar && Math.max(Number(item.em_espera) || 0, contagem.espera) > 0 ? h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("parar"), "Cancelar todas as esperas") : null;
       if (btCancelarTodas) btCancelarTodas.addEventListener("click", () => cancelarEspera(null, btCancelarTodas));
+      // plano 1500c · UCA-034: o histórico em CSV (Excel brasileiro) — guardar ou mandar antes de excluir
+      const btCsv = arr.length ? h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { acao: "csv" } }, ui.icone("baixar"), "Baixar CSV") : null;
+      if (btCsv) btCsv.addEventListener("click", () => baixarCsvExecucoes(arr));
+      // plano 1500c · UCA-004: busca por pessoa ou registro (p_busca), com espera de 300 ms
+      const idBuscaEx = novoId("exbusca");
+      const buscaEx = h("input", { id: idBuscaEx, type: "search", class: "au-ex-busca-inp", value: execBusca, placeholder: "Buscar por nome", autocomplete: "off", maxlength: 80, dataset: { acao: "busca" } });
+      buscaEx.addEventListener("input", ui.debounce(() => { const v = buscaEx.value.trim(); if (v === execBusca) return; execBusca = v; execDia = null; pintarExecucoes({ suave: true, foco: "busca" }); }, 300));
+      // plano 1500c · UCA-005: «quem não passou nas condições» (p_filtradas) explica «por que não rodou para a Maria»
+      const swFiltradas = P.interruptor({ ligado: execFiltradas, rotulo: "Incluir quem não passou nas condições",
+        aoMudar: v => { execFiltradas = v; pintarExecucoes({ suave: true, foco: "filtradas" }); } });
+      swFiltradas.dataset.acao = "filtradas";
+      // plano 1500c · UCA-054: filtrar pelo passo em que pararam
+      const passosEx = L.passosDasExecucoes(arr, auto, vv);
+      if (execPasso && !passosEx.some(p => p.valor === execPasso)) execPasso = "";
+      const selPasso = passosEx.length > 1 ? seletor({ rotulo: "Passo", valor: execPasso, vazio: "Todos os passos", opcoes: passosEx, classe: "au-ex-passo-sel",
+        aoMudar: v => { execPasso = v || ""; desenhar(); } }) : null;
       painelExec.appendChild(h("div", { class: "au-ex-cab" },
         // plano 1000b · UB-005: sem execução nenhuma, nada de «As últimas 0 execuções» (o vazio abaixo já explica)
-        h("p", { class: "sub" }, arr.length ? `${arr.length === 1 ? "A última execução" : `As últimas ${Math.min(arr.length, execLimite)} execuções`}. Erro numa automação não atrapalha as outras.`
+        h("p", { class: "sub" }, arr.length ? `${arr.length === 1 ? "A última execução" : `As últimas ${Math.min(arr.length, execLimite)} execuções`}${execBusca ? ` com «${execBusca}»` : ""}. Erro numa automação não atrapalha as outras.`
           : "Erro numa automação não atrapalha as outras."),
-        h("div", { class: "linha" }, btCancelarTodas, btAtualizar)));
+        h("div", { class: "linha" }, btCancelarTodas, btCsv, btAtualizar)));
+      painelExec.appendChild(h("div", { class: "au-ex-ferr" },
+        h("div", { class: "campo au-ex-busca" }, h("label", { for: idBuscaEx, class: "sr-only" }, "Buscar execuções por nome"), h("span", { class: "busca" }, ui.icone("busca"), buscaEx)),
+        execExtrasOk ? h("div", { class: "campo au-campo-sw au-ex-filtradas" }, h("span", { class: "au-campo-sw-rot" }, "Incluir quem não passou nas condições"), swFiltradas) : null,
+        selPasso));
       // gráfico de execuções por dia (item 54): calculado aqui a partir da lista, com estado vazio e versão em tabela.
       // A lista é só as últimas `execLimite`: cheia, pode faltar execução dentro dos 14 dias — a janela recorta no dia da mais
       // antiga carregada e o subtítulo avisa «nas últimas N execuções carregadas» (sem série do servidor, é o honesto).
       // Com a série do servidor (contrato 7) a janela de 14 dias é inteira e conta tudo, não só as carregadas.
       if (porDiaServidor && porDiaServidor.n > 0) {
         painelExec.appendChild(h("div", { class: "cartao au-ex-graf" }, (grafico = P.graficoDias({ serie: porDiaServidor.serie, dias: porDiaServidor.dias, n: porDiaServidor.n, servidor: true, aoEscolherDia: escolherDia, diaAtivo: execDia }))));
+        // plano 2000d · DU-068: esta semana × a anterior (só com a série completa do servidor)
+        const tend = L.tendencia(porDiaServidor.serie);
+        if (tend && tend.texto) painelExec.appendChild(h("p", { class: "sub au-ex-tendencia" }, ui.icone("info"), h("span", null, tend.texto)));
       } else if (arr.length) {
         const truncada = arr.length >= execLimite;
         const porDia = L.execucoesPorDia(arr, { dias: 14, recortar: truncada });
@@ -1686,12 +2009,24 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           h("span", null, `Mostrando as ${execLimite} execuções mais recentes. As mais antigas não aparecem nesta lista.`)));
       }
       execCarregadas = true;
-      if (refoco) { const alvo = (refoco === "mais" && painelExec.querySelector(".au-mais")) || btAtualizar; if (alvo) alvo.focus({ preventScroll: true }); }
+      if (refoco) {
+        // plano 1500c · UCA-004/005: a busca e o interruptor continuam com o foco depois de recarregar
+        const alvo = (refoco === "mais" && painelExec.querySelector(".au-mais")) || (refoco !== "atualizar" && refoco !== "mais" && painelExec.querySelector(`[data-acao="${refoco}"]`)) || btAtualizar;
+        if (alvo) alvo.focus({ preventScroll: true });
+        if (alvo && refoco === "busca") try { alvo.setSelectionRange(alvo.value.length, alvo.value.length); } catch { /* ok */ }
+      }
     } catch (e) {
       if (eu !== execSeq) return;
       ui.limpar(painelExec);
       painelExec.appendChild(ui.erroCartao(e, () => pintarExecucoes()));
     }
+  }
+
+  /** plano 1500c · UCA-034: baixa as execuções carregadas em CSV («execucoes-<nome>-AAAA-MM-DD.csv»). */
+  function baixarCsvExecucoes(lista) {
+    const nome = String(auto.nome || "automacao").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase().slice(0, 40) || "automacao";
+    const ok = P.baixarTexto(`execucoes-${nome}-${new Date().toISOString().slice(0, 10)}.csv`, L.execucoesParaCSV(lista, { vocab: vv }));
+    ui.toast(ok ? `${lista.length} ${lista.length === 1 ? "execução baixada" : "execuções baixadas"} em CSV.` : "O navegador não deixou baixar o arquivo.", { tipo: ok ? "ok" : "erro" });
   }
 
   /** Cancela a espera de um registro (x) ou todas as desta automação (x = null): os passos que ainda iam rodar não saem mais. */
@@ -1711,16 +2046,30 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       item.em_espera = Math.max(0, (Number(item.em_espera) || 0) - n);
       ui.toast(n === 0 ? "Não havia espera para cancelar: ela pode ter acabado de rodar." : n === 1 ? "1 espera cancelada." : `${n} esperas canceladas.`, { tipo: n ? "ok" : "info" });
       pintarExecucoes({ foco: "atualizar" });
-    } catch (e) { ui.toast(L.erroAutomacao(e, ctx.api.mensagemErro(e)), { tipo: "erro" }); }
+    } catch (e) { ui.toast(L.erroAutomacao(e, ctx.api.mensagemErro(e), base.usuarios), { tipo: "erro" }); }
   }
 
   function linhaExecucao(x) {
     const sit = L.situacaoExecucao(x);
     const detalhe = L.detalheLegivel(x.detalhe, c => ctx.api.mensagemErro({ codigo: c })) || (sit === "ok" ? "Feito." : sit === "espera" ? "Esperando para continuar." : sit === "pulado" ? "Pulada." : "Erro.");
     const passoTxt = L.passoDaExecucao(x);
-    const icone = sit === "ok" ? "check" : sit === "espera" ? "relogio" : sit === "pulado" ? "info" : "alerta";
-    const rotuloSit = sit === "ok" ? "Deu certo: " : sit === "espera" ? "Em espera: " : sit === "pulado" ? "Pulada ou parada: " : "Erro: ";
+    // plano 1500c · UCA-005: quem não passou nas condições tem ícone e rótulo próprios, e a frase das condições da automação
+    const filtrada = String(x.estado || "") === "filtrada";
+    const icone = filtrada ? "filtro" : sit === "ok" ? "check" : sit === "espera" ? "relogio" : sit === "pulado" ? "info" : "alerta";
+    const rotuloSit = filtrada ? "Não passou nas condições: " : sit === "ok" ? "Deu certo: " : sit === "espera" ? "Em espera: " : sit === "pulado" ? "Pulada ou parada: " : "Erro: ";
+    // plano 2000d · DU-104: com condicao_falhou do servidor, diz QUAL condição barrou (e o valor encontrado)
+    const barrada = filtrada ? L.fraseBarrada(x, auto, base) : "";
+    const fraseConds = barrada || (filtrada && auto.condicoes.length ? `Só roda se ${L.fraseCondicoes(auto.condicoes, base)}.` : "");
+    const falhaEnvio = L.ehFalhaDeEnvio(x);   // plano 2000d · DU-066
     const estadoTxt = L.estadoExecucaoTexto(x);
+    // plano 1500c · UCA-055: da execução com erro direto ao passo no editor
+    const nPassoErro = Number(x.passo ?? x.acao_indice);
+    const btCorrigir = podeEditar && sit === "erro" && Number.isInteger(nPassoErro) && nPassoErro >= 1 && nPassoErro <= auto.acoes.length
+      ? h("button", { type: "button", class: "bt bt-fant bt-p au-ex-corrigir" }, ui.icone("editar"), `Corrigir o passo ${nPassoErro}`) : null;
+    if (btCorrigir) btCorrigir.addEventListener("click", () => {
+      const aba = raiz.querySelector(".au-abas [role=tab]"); if (aba) aba.click(); else mostrarAba("regra");
+      focarNo({ onde: "entao", indice: nPassoErro - 1, tipo: "passo" });
+    });
     const retoma = sit === "espera" && x.continua_em ? ` · continua ${ui.dataHoraBR(x.continua_em)}` : "";
     const abrir = x.link && /^#\//.test(String(x.link)) ? h("a", { class: "bt bt-fant bt-p au-ex-abrir", href: x.link }, L.rotuloLinkExecucao(x.link, vv), ui.icone("seta-dir")) : null;
     // o que a IA decidiu (etapa, nota, resumo, ou por que não rodou), em destaque e com o motivo dela — antes ficava só no detalhe em texto
@@ -1759,17 +2108,18 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const btDet = h("button", { type: "button", class: "bt bt-fant bt-p au-ex-det-bt", "aria-expanded": "false", "aria-controls": idDet,
       "aria-label": `Detalhes da execução de ${ui.horaBR(x.criado_em)}${rotSitCurta ? ` (${rotSitCurta})` : ""}` }, "Detalhes", ui.icone("seta-baixo"));
     btDet.addEventListener("click", () => { const abre = det.hidden; det.hidden = !abre; btDet.setAttribute("aria-expanded", String(abre)); });
-    return h("li", { class: ["au-ex", sit === "erro" && "au-ex-erro", sit === "pulado" && "au-ex-pulado", sit === "espera" && "au-ex-espera"] },
+    return h("li", { class: ["au-ex", sit === "erro" && "au-ex-erro", sit === "pulado" && "au-ex-pulado", sit === "espera" && "au-ex-espera", filtrada && "au-ex-filtrada"] },
       h("span", { class: "au-ex-ic", "aria-hidden": "true" }, ui.icone(icone)),
       h("div", { class: "au-ex-txt" },
         passoTxt ? h("p", { class: "au-ex-passo mono" }, passoTxt) : null,
         estadoTxt ? h("p", { class: "au-ex-estado" }, `${estadoTxt}${retoma}`) : null,
         h("p", { class: "au-ex-det" }, h("span", { class: "sr-only" }, rotuloSit), detalhe),
-        sit === "erro" ? dicaErro(`${detalhe} ${x.detalhe || ""}`) : null,
+        fraseConds ? h("p", { class: "sub au-ex-conds" }, fraseConds) : null,
+        falhaEnvio ? h("p", { class: "au-dica-erro sub au-ex-envio" }, ui.icone("whatsapp"), h("span", null, L.DICA_FALHA_ENVIO)) : sit === "erro" ? dicaErro(`${detalhe} ${x.detalhe || ""}`) : null,
         blocoIA,
         h("p", { class: "au-ex-quando mono", title: ui.dataHoraBR(x.criado_em) }, `${ui.horaBR(x.criado_em)} · ${ui.relativo(x.criado_em)}`),
         det),
-      h("div", { class: "au-ex-acoes" }, btParar, abrir, btDet));
+      h("div", { class: "au-ex-acoes" }, btParar, btCorrigir, abrir, btDet));
   }
 
   function mostrarAba(id) {
@@ -1830,18 +2180,19 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
 
   // ------------------------------------------------ plano 1000 · AS-056: execuções se atualizam sozinhas enquanto a aba está à vista
   // (no máx. 1 recarga suave a cada 20 s, pelo pulso do app; sem esqueleto e sem tirar o filtro escolhido)
-  if (item && ctx.pulso && typeof ctx.pulso.assinar === "function" && amb.aoSair) {
+  // plano 1500c · UCA-029: assinado sempre — a nova salva com «Salvar e continuar» ganha a aba sem recarregar e o pulso já está lá
+  if (ctx.pulso && typeof ctx.pulso.assinar === "function" && amb.aoSair) {
     let ultimoExec = Date.now();
     try {
       amb.aoSair(ctx.pulso.assinar(() => {
-        if (painelExec.hidden || !execCarregadas || !raiz.isConnected || Date.now() - ultimoExec < 20000) return;
+        if (!item || painelExec.hidden || !execCarregadas || !raiz.isConnected || Date.now() - ultimoExec < 20000) return;
         ultimoExec = Date.now();
         // quem está lendo um «Detalhes» aberto ou com o foco dentro da lista não tem a lista trocada embaixo
         if ([...painelExec.querySelectorAll(".au-ex-mais")].some(d => !d.hidden) || painelExec.contains(document.activeElement)) {
           // plano 1000b · UB-076: mas confere em silêncio — se chegou execução nova, a faixa «Há execuções novas · Atualizar» avisa
           if (painelExec.querySelector(".au-ex-novas") || conferindoNovas) return;
           conferindoNovas = true;
-          ctx.api.rpcC("nx_automacao_execucoes", { p_id: item.id, p_limite: execLimite }).then(l => {
+          lerExecucoes().then(l => {
             if (!raiz.isConnected || painelExec.querySelector(".au-ex-novas") || !serieGuardada || assinaturaExec(l) === serieGuardada.assinatura) return;
             const bt = h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { acao: "atualizar" } }, ui.icone("reabrir"), "Atualizar");
             bt.addEventListener("click", () => { ui.carregando(bt, pintarExecucoes({ foco: "atualizar", suave: true })).catch(() => {}); });
@@ -1858,6 +2209,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
 
   // ------------------------------------------------ primeira pintura
   pintarQuando(); pintarSe(); pintarEntao(); atualizarPrevia(true); pintarNome(); pintarTesteCom();
+  if (podeEditar) hist.empilhar(copia(auto));      // plano 1500c · UCA-092: o ponto de partida do Desfazer
   if (amb.aoSair) amb.aoSair(() => clearTimeout(tDiagrama));
   if (salvoJson === null && item) salvoJson = JSON.stringify(L.limpar(auto));
   if (item && q.aba === "execucoes") mostrarAba("execucoes");

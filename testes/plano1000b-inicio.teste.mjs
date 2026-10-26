@@ -356,7 +356,8 @@ test("RB-163: listaEspera mantém o responsável que o servidor manda; perguntaA
 test("RB-172 + RB-064: validarMetas — negativo/zero é erro no campo; vazio é «sem meta»; com o leitor do CRM «1,234.56» = «1.234,56»", () => {
   assert.deepEqual(I.validarMetas({ vendas: "-5", consultas: "" }).erros, { meta_vendas: "Use um número maior que zero." });
   assert.deepEqual(I.validarMetas({ vendas: "", consultas: "0" }).erros, { meta_consultas: "Use um número maior que zero." });
-  assert.deepEqual(I.validarMetas({ vendas: "", consultas: "" }), { vendas: null, consultas: null, erros: {} });
+  // plano 2000d: DR-298 — a resposta traz também a meta de leads (null quando vazia)
+  assert.deepEqual(I.validarMetas({ vendas: "", consultas: "" }), { vendas: null, consultas: null, leads: null, erros: {} });
   const ok = I.validarMetas({ vendas: "1,234.56", consultas: "12" }, CL.lerNumero);
   assert.equal(ok.vendas, 1234.56); assert.equal(ok.consultas, 12);
   assert.equal(I.validarMetas({ vendas: "1.234,56" }, CL.lerNumero).vendas, 1234.56, "a mesma leitura do negócio");
@@ -423,11 +424,12 @@ test("RB-261: a dica visível não é região viva; a leitura sai 250 ms depois 
     const caixa = alvo.querySelector(".g-calcaixa"), dica = caixa.querySelector(".g-dica"), viva = caixa.querySelector(".g-dica-viva");
     assert.equal(dica.getAttribute("aria-live"), null); assert.equal(dica.getAttribute("role"), null);
     assert.equal(viva.getAttribute("aria-live"), "polite"); assert.ok(viva.classList.contains("sr-only"));
-    for (let i = 0; i < 5; i++) dom.ev(caixa, "keydown", { key: i ? "ArrowRight" : "ArrowDown" });
-    assert.equal(dica.textContent, "seg 12h: 13 msgs", "a dica visível anda na hora");
+    // plano 1500c: RC-244 — a 1ª seta começa na célula de MAIOR valor (sáb 23h nesta matriz), não mais em seg 8h; daí ← anda para trás
+    for (let i = 0; i < 5; i++) dom.ev(caixa, "keydown", { key: i ? "ArrowLeft" : "ArrowDown" });
+    assert.equal(dica.textContent, "sáb 19h: 25 msgs", "a dica visível anda na hora");
     assert.equal(viva.textContent, "", "nada lido ainda");
     await esperar(G.ATRASO_DICA_VIVA + 60);
-    assert.equal(viva.textContent, "seg 12h: 13 msgs", "só o ponto onde parou");
+    assert.equal(viva.textContent, "sáb 19h: 25 msgs", "só o ponto onde parou");
   } finally { dom.fim(); }
 });
 
@@ -451,7 +453,8 @@ test("RB-182 + RB-167: gráfico grande segue a largura real (mínimo 200, não 2
   const dom = comDom();
   const obs = [];
   const RO = globalThis.ResizeObserver;
-  globalThis.ResizeObserver = class { constructor(fn) { this.fn = fn; this.ligado = false; obs.push(this); } observe() { this.ligado = true; } disconnect() { this.ligado = false; } };
+  // plano 2000d: DR-310 — um observador só para todos os gráficos; quem sai da página é solto com unobserve (o observador segue para os outros)
+  globalThis.ResizeObserver = class { constructor(fn) { this.fn = fn; this.ligado = false; this.soltos = []; obs.push(this); } observe() { this.ligado = true; } unobserve(el) { this.soltos.push(el); } disconnect() { this.ligado = false; } };
   try {
     const alvo = dom.doc.body.appendChild(dom.doc.createElement("div"));
     const proto = Object.getPrototypeOf(alvo);
@@ -463,9 +466,11 @@ test("RB-182 + RB-167: gráfico grande segue a largura real (mínimo 200, não 2
     const sp = dom.doc.body.appendChild(dom.doc.createElement("span"));
     const ctl = G.sparkline(sp, { valores: [1, 2, 3], rotulo: "x" });
     const o = obs.at(-1);
+    assert.equal(obs.length, 1, "plano 2000d: DR-310 — o gráfico e a linha dividem o mesmo observador");
     assert.ok(o.ligado && typeof ctl.destruir === "function");
     sp.remove(); o.fn();
-    assert.equal(o.ligado, false, "fora da página: desliga sozinho");
+    assert.ok(o.soltos.includes(sp), "fora da página: a linha é solta sozinha");
+    assert.equal(o.ligado, true, "o gráfico que ficou continua observado");
   } finally { globalThis.ResizeObserver = RO; dom.fim(); }
 });
 
@@ -598,17 +603,19 @@ test("RB-166 + RB-180: «Trocar indicadores» fica aberto — troca 1 e 2 na mes
 test("RB-167 (DOM): redesenhos do Início não acumulam ResizeObserver das linhas dos KPIs", async () => {
   const dom = comDom({ agora: Date.parse(SP(HOJE, "10", "20")) });
   const RO = globalThis.ResizeObserver;
-  let vivos = 0;
   // só os das linhas dos KPIs (o ui.segmentado das barras tem o dele — pendência da frente sis)
-  globalThis.ResizeObserver = class { observe(el) { if (el && el.classList && el.classList.contains("ini-kpi-sp")) { vivos++; this.l = true; } } disconnect() { if (this.l) vivos--; this.l = false; } };
+  // plano 2000d: DR-310 — os gráficos dividem UM observador: conta os elementos observados (observe/unobserve/disconnect), não as instâncias
+  const observados = new Set();
+  globalThis.ResizeObserver = class { observe(el) { if (el && el.classList && el.classList.contains("ini-kpi-sp")) observados.add(el); } unobserve(el) { observados.delete(el); } disconnect() { observados.clear(); } };
+  const vivosAgora = () => observados.size;
   try {
     const r = await montarTela(NOVO(), { dom });
-    const base = vivos;
+    const base = vivosAgora();
     assert.ok(base > 0, "as linhas usam o observador");
     for (let i = 0; i < 5; i++) { const d = NOVO(); d.negocios.valor_aberto = 60000 + i; r.resp.d = d; dom.andar(31000); await r.pulso(); }
-    assert.equal(vivos, base, "5 redesenhos, o mesmo número de observadores vivos");
+    assert.equal(vivosAgora(), base, "5 redesenhos, o mesmo número de observadores vivos");
     I.desmontar();
-    assert.equal(vivos, 0, "desmontar solta todos");
+    assert.equal(vivosAgora(), 0, "desmontar solta todos");
   } finally { globalThis.ResizeObserver = RO; dom.fim(); }
 });
 
@@ -662,8 +669,9 @@ test("RB-171 + RB-172 (DOM): barra da meta diz o esperado para o leitor; «-5» 
     dom.mem.set(`nx-ini-metas:${ID_CLI}`, JSON.stringify({ vendas: 50000 }));
     const r = await montarTela(NOVO(), { dom });
     const barra = r.raiz.querySelector(".ini-metas .ini-meta-barra");
-    assert.match(barra.getAttribute("aria-label"), /^Vendas do mês: 57% da meta; esperado hoje: R\$\s?6\.452$/);
-    assert.match(r.raiz.querySelector(".ini-vendas .ini-meta-barra").getAttribute("aria-label"), /esperado hoje: R\$\s?6\.452/);
+    // plano 2000d: DR-250 — às 10:20 do dia 4 o esperado conta só o pedaço de hoje que passou (R$ 5.533, antes o dia inteiro: R$ 6.452)
+    assert.match(barra.getAttribute("aria-label"), /^Vendas do mês: 57% da meta; esperado hoje: R\$\s?5\.533$/);
+    assert.match(r.raiz.querySelector(".ini-vendas .ini-meta-barra").getAttribute("aria-label"), /esperado hoje: R\$\s?5\.533/);
     r.raiz.querySelector("[data-k=mt-editar]").click();
     const form = r.raiz.querySelector(".ini-metas-form");
     const inV = form.querySelector("[data-k=mt-v]"); inV.value = "-5";

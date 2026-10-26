@@ -101,15 +101,20 @@ export function abaDe(c, euId) {
 function soDigitos(s) { return String(s ?? "").replace(/\D/g, ""); }
 
 /** Pronomes de tratamento que não são o nome da pessoa (plano 1000 · CA-002): «Dra. Helena» atende como «Helena». */
-const TRATAMENTOS = new Set(["dr", "dra", "sr", "sra", "srta", "prof", "profa", "pe"]);
+// plano 1500c · CX-074: «Dona Maria», «Seu Zé», «Doutora Ana» — o jeito como o cliente se salva no WhatsApp; o nome é o que vem depois
+const TRATAMENTOS = new Set(["dr", "dra", "sr", "sra", "srta", "prof", "profa", "pe", "dona", "seu", "doutor", "doutora", "professor", "professora"]);
 /** "maria souza" → "Maria"; "Dra. Helena Souza" → "Helena" (só o título: o nome inteiro); telefone/vazio → "". */
 export function primeiroNome(nome) {
   const t = String(nome ?? "").trim();
   if (!t || /^[\d\s()+-]+$/.test(t)) return "";
-  const partes = t.split(/\s+/);
+  // plano 1500c · CX-006: «🌸 Maria Souza», «~Ana~» e «. Joana» — o nome é a 1ª palavra COM letra (emoji, símbolo e pontuação soltos ficam de fora)
+  const partes = t.split(/\s+/).map(p => p.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}.]+$/gu, "")).filter(p => /\p{L}/u.test(p));
+  if (!partes.length) return "";
   let i = 0;
   while (i < partes.length - 1 && TRATAMENTOS.has(semAcento(partes[i]).replace(/\.$/, ""))) i++;
-  const p = partes[i];
+  let p = partes[i];
+  // plano 1500c · CC-025: cadastro importado em CAIXA ALTA («MARIA») vira «Maria»; siglas de até 2 letras («JP») ficam como estão
+  if (p.length > 2 && p === p.toLocaleUpperCase("pt-BR") && p !== p.toLocaleLowerCase("pt-BR")) p = p.toLocaleLowerCase("pt-BR");
   return p.charAt(0).toLocaleUpperCase("pt-BR") + p.slice(1);
 }
 
@@ -133,7 +138,12 @@ export function aplicarVariaveis(texto, vars = {}) {
     empresa: vars.empresa ?? "",
     protocolo: vars.protocolo ?? "",
   };
-  let s = String(texto ?? "");
+  // plano 1500c · CX-047: «{Nome}», «{ primeiro nome }» e «{PROTOCOLO}» (resposta escrita à mão) valem como a variável — antes iam
+  // literalmente para o cliente
+  let s = String(texto ?? "").replace(/\{\s*([A-Za-zÀ-ÿ_ ]{3,20}?)\s*\}/g, (m, nome) => {
+    const k = semAcento(nome).replace(/\s+/g, "_");
+    return VARIAVEIS.includes(k) ? `{${k}}` : m;
+  });
   let marcou = false;
   for (const k of VARIAVEIS) {
     const val = String(v[k] ?? "").trim();
@@ -217,9 +227,11 @@ const ROTULO_TIPO = Object.freeze({
   desconhecido: "Mensagem não suportada",
 });
 
+// plano 1500c · CX-063: o corte nunca parte um emoji ao meio (aparecia «�» no fim da prévia da lista e do rascunho)
+function cortarSeguro(t, n) { let s = t.slice(0, n); const k = s.charCodeAt(s.length - 1); if (k >= 0xd800 && k <= 0xdbff) s = s.slice(0, -1); return s; }
 function umaLinha(s, max = 140) {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
-  return t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t;
+  return t.length > max ? cortarSeguro(t, max - 1).trimEnd() + "…" : t;
 }
 
 /** resumoMensagem(msg) → texto curto (lista, citação, notificação). */
@@ -236,6 +248,15 @@ export function resumoMensagem(m, max = 140) {
     case "documento": {
       const nome = m.midia && m.midia.nome;
       return umaLinha([nome ? `Documento: ${nome}` : "Documento", m.corpo].filter(Boolean).join(" · "), max);
+    }
+    // plano 1500c · CX-059: localização na lista/notificação sem as coordenadas («Localização: Oficina do Zé»)
+    case "localizacao": { const loc = localizacaoDe(m.corpo); return loc ? (loc.nome ? umaLinha(`Localização: ${loc.nome}`, max) : "Localização") : corpo || "Localização"; }
+    // plano 1500c · CX-060: contato compartilhado mostra os nomes, não a fileira de telefones («Contato: Ana e Bia»)
+    case "contato": {
+      const cs = contatosDe(m.corpo);
+      if (!cs.length) return corpo || "Contato";
+      const nomes = cs.map(c => c.nome || telefoneInternacional(c.telefone));
+      return umaLinha(`${cs.length > 1 ? "Contatos" : "Contato"}: ${nomes.length > 2 ? `${nomes.slice(0, 2).join(", ")} e mais ${nomes.length - 2}` : nomes.join(" e ")}`, max);
     }
     case "imagem": case "video": case "audio": case "sticker":
       return corpo ? umaLinha(`${ROTULO_TIPO[m.tipo]}: ${m.corpo}`, max) : ROTULO_TIPO[m.tipo];
@@ -257,7 +278,7 @@ export function iconeStatus(status) {
 
 /* ------------------------------------------------------------ respostas rápidas */
 export function semAcento(s) {
-  return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  return String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
 /** Termo depois da "/" no campo (só quando o texto começa com "/" e ainda não tem espaço). */
@@ -277,6 +298,9 @@ export function filtrarRespostas(lista, termo, { departamento = null, max = 8 } 
     if (a.includes(q)) return 3;
     if (t.includes(q)) return 2;
     if (c.includes(q)) return 1;
+    // plano 1500c · CX-007: várias palavras em qualquer ordem («preco limpeza» acha «Limpeza: preço e duração») — cada uma no atalho, título ou corpo
+    const ps = q.split(/\s+/).filter(Boolean);
+    if (ps.length > 1 && ps.every(p => a.includes(p) || t.includes(p) || c.includes(p))) return 1;
     return 0;
   };
   return (lista || [])
@@ -361,7 +385,7 @@ export function formatarWhats(texto, nivel = 0) {
     // plano 1000b · CB-027: como no WhatsApp, o marcador de fecho precisa vir seguido de espaço, pontuação ou fim («*promo*valida» e
     // «2*3*4» não são negrito); senão a busca continua do caractere seguinte
     if ((m[4] || m[5] || m[6]) && !depoisOk(ini + m[0].length)) { re.lastIndex = ini + 1; continue; }
-    if (ini > i) out.push({ tipo: "texto", v: s.slice(i, ini) });
+    if (ini > i) textoComEmail(out, s.slice(i, ini));
     // plano 1000b · CB-025: «…/Taubaté_(SP)» — o «)» final entra no link quando a URL tem «(» sem par (balanceamento simples)
     let url = m[1];
     if (url) {
@@ -378,8 +402,46 @@ export function formatarWhats(texto, nivel = 0) {
     else if (m[6]) out.push(comPartes("riscado", m[6]));
     i = m[1] ? ini + url.length : ini + m[0].length;
   }
-  if (i < s.length) out.push({ tipo: "texto", v: s.slice(i) });
+  if (i < s.length) textoComEmail(out, s.slice(i));
   return out;
+}
+/** plano 1500c · CX-016: e-mail no texto («mande para ana@clinica.com.br») vira link mailto: (como no WhatsApp do cliente). */
+const RE_EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+function textoComEmail(out, t) {
+  let i = 0, m;
+  RE_EMAIL.lastIndex = 0;
+  while ((m = RE_EMAIL.exec(t))) {
+    if (m.index > i) textoComDados(out, t.slice(i, m.index));
+    out.push({ tipo: "link", v: `mailto:${m[0]}`, texto: m[0], pessoal: true });   // plano 2000d · DC-170: e-mail é dado pessoal
+    i = m.index + m[0].length;
+  }
+  if (i < t.length) textoComDados(out, t.slice(i));
+}
+/** plano 2000d · DC-168/DC-170: telefone no texto vira segmento «tel» (Ligar · Nova conversa · Copiar) e CPF vira «pessoal» — os dois
+    borram no modo apresentação. Telefone: (12) 99123-4567 · 12 99123-4567 · +55 12 99123-4567 · 1299123-4567 (10–13 dígitos). */
+const RE_DADOS = /(\d{3}\.\d{3}\.\d{3}-\d{2})|((?:\+\d{1,3}[\s.-]?)?\(?\d{2}\)?[\s.-]?\d{4,5}[\s.-]?\d{4})/g;
+function textoComDados(out, t) {
+  let i = 0, m;
+  RE_DADOS.lastIndex = 0;
+  while ((m = RE_DADOS.exec(t))) {
+    const ini = m.index, fim = ini + m[0].length;
+    // não pega pedaço de número maior (protocolo, valor, código de barras)
+    if ((ini > 0 && /[\d/]/.test(t[ini - 1])) || (fim < t.length && /\d/.test(t[fim]))) continue;
+    let seg = null;
+    if (m[1]) seg = { tipo: "pessoal", v: m[1] };
+    else {
+      const dig = m[2].replace(/\D/g, "");
+      if (dig.length >= 10 && dig.length <= 13) {
+        const tel = telefoneDigitado(m[2]);
+        if (tel.numero) seg = { tipo: "tel", v: tel.numero, texto: m[2] };
+      }
+    }
+    if (!seg) continue;
+    if (ini > i) out.push({ tipo: "texto", v: t.slice(i, ini) });
+    out.push(seg);
+    i = fim;
+  }
+  if (i < t.length) out.push({ tipo: "texto", v: t.slice(i) });
 }
 
 /** CA-023: blocos de linha do WhatsApp — «> » citação, «- »/«* »/«• » lista e «1. » lista numerada; o resto é parágrafo (linhas
@@ -441,6 +503,8 @@ export function horaLista(iso, agora = new Date()) {
   if (dif <= 0) return _fmtHora.format(new Date(t));
   if (dif === 1) return "Ontem";
   if (dif < 7) return _fmtSem.format(new Date(t));
+  // plano 1500c · CX-018: conversa parada de outro ano não se confunde com a deste ano — «10/09/25»
+  if (diaSP(t).slice(0, 4) !== diaSP(agora).slice(0, 4)) return `${_fmtCurta.format(new Date(t))}/${diaSP(t).slice(2, 4)}`;
   return _fmtCurta.format(new Date(t));
 }
 export function horaMsg(iso) { const t = ms(iso); return Number.isFinite(t) ? _fmtHora.format(new Date(t)) : ""; }
@@ -463,11 +527,20 @@ const EXT_MIME = Object.freeze({
 });
 
 /** Tipo que o navegador informou, ou deduzido da extensão (arquivo sem type). */
+// plano 1500c · CX-003: o mesmo tipo com outro nome (Windows/Android antigos e alguns navegadores) — «image/jpg» era recusado como «tipo não aceito»
+const APELIDOS_MIME = Object.freeze({
+  "image/jpg": "image/jpeg", "image/pjpeg": "image/jpeg", "audio/x-m4a": "audio/mp4", "audio/m4a": "audio/mp4", "audio/mp3": "audio/mpeg",
+  "audio/x-mp3": "audio/mpeg", "audio/x-mpeg": "audio/mpeg", "audio/mpeg3": "audio/mpeg", "audio/x-aac": "audio/aac", "audio/opus": "audio/ogg",
+  "application/x-pdf": "application/pdf", "video/x-m4v": "video/mp4",
+});
+// plano 1500c · CX-004: tipo genérico (o arquivo veio de um app que não sabe o tipo) não decide nada — vale a extensão do nome
+const MIME_GENERICO = new Set(["application/octet-stream", "binary/octet-stream", "application/unknown", "application/x-download", "application/force-download"]);
 export function mimeDe(arquivo) {
   const t = String(arquivo && arquivo.type || "").toLowerCase().split(";")[0].trim();
-  if (t) return APELIDOS_WAV.has(t) ? MIME_WAV : t;
-  const ext = String(arquivo && arquivo.name || "").toLowerCase().split(".").pop();
-  return EXT_MIME[ext] || "";
+  if (t && !MIME_GENERICO.has(t)) return APELIDOS_WAV.has(t) ? MIME_WAV : (APELIDOS_MIME[t] || t);
+  const nome = String(arquivo && arquivo.name || "").toLowerCase();
+  const ext = nome.includes(".") ? nome.split(".").pop() : "";
+  return EXT_MIME[ext] || (t || "");
 }
 
 /**
@@ -488,7 +561,7 @@ export function validarArquivo(arquivo, { provedor = "meta" } = {}) {
   else if (mime.startsWith("audio/") && TIPOS_16.has(mime)) tipo = "audio";
   else if (TIPOS_16.has(mime) || mime.startsWith("application/vnd.openxmlformats-officedocument.")) tipo = "documento";
   if (!tipo) return { ok: false, erro: "midia_tipo", mime, tipo: null, limite };
-  if (size <= 0) return { ok: false, erro: "midia_tipo", mime, tipo, limite };
+  if (size <= 0) return { ok: false, erro: "midia_vazia", mime, tipo, limite };   // plano 1500c · CX-005: arquivo de 0 byte não é «tipo não aceito»
   if (size > limite) return { ok: false, erro: "midia_grande", mime, tipo, limite };
   return { ok: true, mime, tipo, limite };
 }
@@ -527,9 +600,10 @@ export function wavDePcm(amostras, taxa = WAV_TAXA) {
 export function tamanhoLegivel(bytes) {
   const n = Number(bytes);
   if (!Number.isFinite(n) || n < 0) return "";
-  if (n < 1024) return `${n} B`;
+  if (n < 1024) return `${Math.round(n)} B`;
   const f = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 });
-  if (n < MB) return `${f.format(n / 1024)} KB`;
+  // plano 1500c · CX-017: perto do limite o arredondamento dava «1.024 KB» (e «1023,5 B» com byte fracionado) — vira «1 MB»
+  if (Math.round(n / 1024 * 10) / 10 < 1024) return `${f.format(n / 1024)} KB`;
   return `${f.format(n / MB)} MB`;
 }
 
@@ -581,7 +655,17 @@ export function preencherModelo(corpo, params = []) {
     desconhecido (null) passa, é a regra do nx-enviar). */
 export function modeloDisponivel(t, { optin = null } = {}) {
   if (!t) return { ok: false, motivo: "Modelo inexistente." };
-  if (String(t.status || "").toUpperCase() !== "APPROVED") return { ok: false, motivo: "Ainda não aprovado pela Meta." };
+  // plano 1500c · CX-013: o motivo de cada situação da Meta (recusado não vai ser aprovado esperando; pausado volta sozinho)
+  const st = String(t.status || "").toUpperCase();
+  if (st !== "APPROVED") return { ok: false, motivo: {
+    REJECTED: "Recusado pela Meta: edite o texto e envie de novo para aprovação.",
+    PAUSED: "Pausado pela Meta por avaliações ruins dos clientes. Ela libera de novo sozinha em algumas horas.",
+    DISABLED: "Desativado pela Meta por avaliações ruins. Crie outro modelo com um texto diferente.",
+    FLAGGED: "Sinalizado pela Meta por avaliações ruins: pode ser pausado. Prefira outro modelo.",
+    IN_APPEAL: "Em recurso na Meta: aguarde a resposta.",
+    PENDING_DELETION: "Sendo excluído na Meta.",
+    DELETED: "Excluído na Meta.",
+  }[st] || "Ainda não aprovado pela Meta." };
   if (String(t.categoria || "").toUpperCase() === "MARKETING" && optin === false)
     return { ok: false, motivo: "O contato pediu para não receber marketing." };
   return { ok: true, motivo: "" };
@@ -611,7 +695,47 @@ export function pode(papel, min) { return (RANK[papel] ?? -1) >= (RANK[min] ?? 9
 
 /** Dicas para erros do envio (texto que acompanha o "!"). */
 export function dicaErroEnvio(codigo) {
+  // plano 1500c · CC-026: códigos da Meta chegam como «131026» ou «meta_131026» — o número decide a dica
+  // plano 2000d · DC-101: também o texto cru que a Meta grava na falha («(código 131026) Message undeliverable»)
+  const num = /(\d{6})$/.exec(String(codigo ?? "")) || /\(#(\d{6})\)/.exec(String(codigo ?? ""));
+  const porMeta = num ? {
+    131026: "O número não pôde receber: ele não tem WhatsApp, bloqueou o número da empresa ou usa um aplicativo muito antigo. Confira o número com o cliente por outro meio.",
+    131047: "Mais de 24 h desde a última mensagem do cliente. Envie um modelo aprovado.",
+    131051: "O WhatsApp não aceita esse tipo de mensagem. Envie como texto ou como documento.",
+    131053: "A mídia não pôde ser enviada (formato ou tamanho). Diminua o arquivo ou envie como documento.",
+    // plano 1500c · CX-008: limites de envio da Meta — esperar resolve
+    130429: "A Meta limitou a velocidade de envio deste número. A mensagem sai de novo em alguns minutos.",
+    131048: "A Meta segurou os envios deste número por excesso de mensagens parecidas (spam). Espere um pouco e reduza os envios em massa.",
+    131049: "A Meta não entregou para manter a boa experiência do cliente (muitas mensagens de marketing). Tente outro dia ou fale quando ele escrever.",
+    131056: "Muitas mensagens seguidas para o mesmo cliente. Espere alguns minutos antes de mandar a próxima.",
+    // plano 1500c · CX-009: problemas no modelo (template)
+    132000: "O número de campos preenchidos não bate com o modelo. Preencha todos os campos e tente de novo.",
+    132001: "Este modelo não existe na Meta (ou não neste idioma). Sincronize os modelos em Configurações › Números.",
+    132005: "O texto do modelo ficou longo demais depois de preenchido. Encurte o que foi colocado nos campos.",
+    132007: "O texto preenchido no modelo fere a política da Meta. Revise o que foi colocado nos campos.",
+    132012: "Um campo do modelo foi preenchido no formato errado. Confira os campos (data, valor, link).",
+    132015: "Este modelo foi pausado pela Meta por avaliações ruins. Use outro modelo.",
+    132016: "Este modelo foi desativado pela Meta. Use outro modelo.",
+    // plano 1500c · CX-080: erro passageiro da Meta e parâmetro do modelo faltando/errado
+    131000: "A Meta teve um erro passageiro. A mensagem é enviada de novo em instantes.",
+    131016: "O WhatsApp da Meta está instável agora. A mensagem é enviada de novo em instantes.",
+    131008: "Falta preencher um campo obrigatório do modelo. Preencha todos e tente de novo.",
+    131009: "Um campo do modelo foi preenchido com um valor que a Meta não aceita. Confira os campos.",
+    // plano 1500c · CX-010: problemas da conta/número na Meta
+    131021: "O destinatário é o próprio número da empresa. Confira o telefone do contato.",
+    131031: "A conta do WhatsApp Business está bloqueada pela Meta. O administrador precisa ver o aviso no Gerenciador do WhatsApp.",
+    131042: "Problema de pagamento na conta da Meta. O administrador precisa conferir a forma de pagamento no Gerenciador do WhatsApp.",
+    131045: "O número da empresa ainda não terminou o cadastro na Meta. Termine a conexão em Configurações › Números.",
+    133010: "O número da empresa não está registrado na Meta. Refaça a conexão em Configurações › Números.",
+  }[num[1]] : "";
+  if (porMeta) return porMeta;
   return {
+    codewords_desconectado: "O número está desconectado do aparelho. Reconecte em Configurações › Números e tente de novo.",
+    numero_sem_whatsapp: "Esse número não tem WhatsApp. Confira o número com o cliente.",
+    midia_grande: "Arquivo grande demais para o WhatsApp. Diminua o arquivo ou envie um link.",
+    // plano 1500c · CX-082: o servidor também recusa arquivo vazio e tipo não aceito — a bolha diz o que fazer
+    midia_vazia: "O arquivo chegou vazio (0 byte). Se ele está na nuvem, baixe para o aparelho e anexe de novo.",
+    midia_tipo: "O WhatsApp não aceita este tipo de arquivo. Envie como PDF, foto (JPG/PNG), vídeo MP4 ou áudio.",
     fora_da_janela: "Mais de 24 h desde a última mensagem do cliente. Envie um modelo aprovado.",
     conversa_resolvida: "Atendimento resolvido. Reabra para responder.",
     canal_sem_token: "Este número ainda não tem o token da Meta.",
@@ -789,11 +913,19 @@ export function dimensoesFoto(largura, altura, max = FOTO_LADO_MAX) {
 
 /** planoFoto({tipo, bytes, largura, altura}) → {acao: "manter"|"otimizar", w, h}.
     Foto pequena (≤ 300 KB e dentro de 1600 px) segue como veio; o resto é redimensionado e recodificado. HEIC sempre otimiza (o WhatsApp não aceita). */
-export function planoFoto({ tipo, bytes, largura, altura } = {}, { pequena = FOTO_PEQUENA, max = FOTO_LADO_MAX } = {}) {
+export function planoFoto({ tipo, bytes, largura, altura, texto = false } = {}, { pequena = FOTO_PEQUENA, max = FOTO_LADO_MAX } = {}) {
   const d = dimensoesFoto(largura, altura, max);
   const heic = /^image\/hei[cf]$/.test(String(tipo || ""));
+  // plano 2000d · DC-133: print de tela (PNG com texto) segue em PNG — o JPEG 0,82 borrava planilha e orçamento
+  if (texto && String(tipo || "") === "image/png") return { acao: d.mudou ? "redimensionar" : "manter", formato: "png", w: d.w, h: d.h };
   if (!heic && !d.mudou && Number(bytes) <= pequena) return { acao: "manter", w: d.w, h: d.h };
   return { acao: "otimizar", w: d.w, h: d.h };
+}
+
+/** plano 2000d · DC-133: parece um print com texto? Nome de captura de tela, ou poucas cores distintas na amostra (≤ 512 de 4096 pontos). */
+export function pareceCapturaDeTela(nome, coresDistintas = null) {
+  if (/(captura|screenshot|screen[ _-]?shot|print|tela)/i.test(String(nome || ""))) return true;
+  return Number.isFinite(coresDistintas) && coresDistintas > 0 && coresDistintas <= 512;
 }
 
 /** Qualidade da próxima tentativa (ou null quando acabaram): só insiste se ainda passou do alvo. */
@@ -867,6 +999,10 @@ export function classificarFalhaEnvio(e) {
   // plano 1000b · CB-024: limite de envios (nx-enviar: 429 limite_taxa; api: muitos_pedidos/aguarde) não é definitivo — backoff e sai sozinha
   if ((status === 429 || /^(limite_taxa|muitos_pedidos|aguarde)$/.test(cod)) && !salva)
     return { tipo: "rede", subtipo: "servidor", codigo: cod || "http_429", motivo: "Muitos envios em pouco tempo: tentando de novo." };
+  // plano 1500c · CX-011: o limite de velocidade DA META (130429) e o de mensagens seguidas ao mesmo cliente (131056) passam sozinhos —
+  // a mensagem espera com backoff em vez de virar «Não enviada»
+  // plano 1500c · CX-081: 131000 (erro passageiro) e 131016 (serviço instável) da Meta também esperam e tentam de novo
+  if (/(^|_)(130429|131056|131000|131016)$/.test(cod) && !salva) return { tipo: "rede", subtipo: "servidor", codigo: cod, motivo: dicaErroEnvio(cod) };
   if (REDE_SERVIDOR.test(cod) || (status >= 500 && !salva)) return { tipo: "rede", subtipo: "servidor", codigo: cod || `http_${status}`, motivo: "O servidor está ocupado: tentando de novo." };
   return { tipo: "definitiva", codigo: cod || "envio_falhou", motivo: dicaErroEnvio(cod) || "", salva };
 }
@@ -958,7 +1094,7 @@ export function textoFila({ estado, motivo, proxima } = {}, agora = Date.now()) 
 export function textoRascunhoLista(texto, max = 80) {
   const t = String(texto ?? "").replace(/\s+/g, " ").trim();
   if (!t) return "";
-  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+  return t.length > max ? `${cortarSeguro(t, max - 1).trimEnd()}…` : t;   // CX-063
 }
 
 /* ------------------------------------------------------------ assistente do número CodeWords (M33): passo atual a partir do estado do servidor */
@@ -1037,6 +1173,8 @@ export function marcosMeta(canal, modelos = 0) {
 /** Os acordes da central. Dentro de campo só valem os com Alt (+Shift): Alt+Shift+letra evita o AltGr do ABNT2 (que chega como Ctrl+Alt). */
 export const ACORDES = Object.freeze([
   { id: "atender", teclas: "Alt+Shift+P", rotulo: "Atender o próximo (a que espera há mais tempo)", grupo: "Atender", dentroDeCampo: true },
+  // plano 2000d · DC-071: olhar a mais antiga da fila sem assumir (o supervisor)
+  { id: "ver_antiga", teclas: "Alt+Shift+V", rotulo: "Ver a que espera há mais tempo (sem assumir)", grupo: "Atender", dentroDeCampo: true },
   { id: "proxima", teclas: "Alt+↓", rotulo: "Próxima conversa", grupo: "Atender", dentroDeCampo: true },
   { id: "anterior", teclas: "Alt+↑", rotulo: "Conversa anterior", grupo: "Atender", dentroDeCampo: true },
   { id: "assumir", teclas: "Alt+Shift+A", rotulo: "Assumir a conversa", grupo: "Atender", dentroDeCampo: true },
@@ -1046,9 +1184,13 @@ export const ACORDES = Object.freeze([
   // plano 1000 · CA-157/CA-158: abrir o negócio ligado à conversa e as etiquetas sem o mouse
   { id: "abrir_negocio", teclas: "Alt+Shift+O", rotulo: "Abrir o negócio ligado à conversa", grupo: "Atender", dentroDeCampo: true },
   { id: "etiquetas", teclas: "Alt+Shift+E", rotulo: "Etiquetas da conversa", grupo: "Atender", dentroDeCampo: true },
+  // plano 1500c · CX-050: fixar/desafixar no topo sem abrir o ⋮
+  { id: "fixar", teclas: "Alt+Shift+F", rotulo: "Fixar ou desafixar a conversa no topo da lista", grupo: "Atender", dentroDeCampo: true },
   { id: "foco_lista", teclas: "Esc", rotulo: "No campo de mensagem: voltar o foco à lista", grupo: "Na lista", dentroDeCampo: true },
   { id: "mover_baixo", teclas: "J", rotulo: "Descer na lista (Enter abre)", grupo: "Na lista", dentroDeCampo: false },
   { id: "mover_cima", teclas: "K", rotulo: "Subir na lista", grupo: "Na lista", dentroDeCampo: false },
+  // plano 1500c · CX-049: Home/End da lista (CX-023) aparecem na folha de atalhos — a lista trata a tecla, aqui é só a descrição
+  { id: "lista_extremos", teclas: "Home / End", rotulo: "Primeira ou última conversa carregada", grupo: "Na lista", dentroDeCampo: false },
   { id: "buscar", teclas: "/", rotulo: "Buscar conversas", grupo: "Na lista", dentroDeCampo: false },
   { id: "ajuda", teclas: "?", rotulo: "Mostrar esta folha", grupo: "Na lista", dentroDeCampo: false },
 ]);
@@ -1066,7 +1208,7 @@ export function acordeDoEvento(ev, { emCampo = false } = {}) {
   if (ev.altKey) {
     if (!ev.shiftKey) return k === "ArrowDown" ? "proxima" : k === "ArrowUp" ? "anterior" : null;
     const letra = /^Key[A-Z]$/.test(cod) ? cod.slice(3).toLowerCase() : k.toLowerCase();     // no Mac Alt+letra muda o caractere: o código físico vale mais
-    return { a: "assumir", r: "resolver", n: "nota", t: "transferir", p: "atender", o: "abrir_negocio", e: "etiquetas" }[letra] || null;
+    return { a: "assumir", r: "resolver", n: "nota", t: "transferir", p: "atender", o: "abrir_negocio", e: "etiquetas", f: "fixar", v: "ver_antiga" }[letra] || null;   // CX-050: F · DC-071: V
   }
   if (emCampo) return null;
   // plano 1000b · CB-028: com Caps Lock o key vem «J»/«K» (sem Shift) — compara em minúscula; Shift+J continua sem atalho
@@ -1086,7 +1228,10 @@ export function rotuloEstadoCanal(c) {
   if (st === "erro") return "com erro";
   if (st === "pendente" || st === "configurando") return "configurando";
   if (String(c.estado || "") === "desconectado") return "desconectado";
-  if (st && st !== "ativo") return st;
+  // plano 1500c · CC-024: códigos conhecidos em português; o que a tela não conhece não aparece cru
+  const conhecidos = { inativo: "desativado", desativado: "desativado", banido: "bloqueado pela Meta", bloqueado: "bloqueado pela Meta", restrito: "com envio restrito pela Meta" };
+  if (conhecidos[st]) return conhecidos[st];
+  if (st && st !== "ativo") return "situação desconhecida — confira em Configurações › Números";
   return "";
 }
 
@@ -1247,6 +1392,8 @@ export function proximaVelocidade(v) {
 export function velocidadeValida(v) { const n = Number(v); return VELOCIDADES_AUDIO.includes(n) ? n : 1; }
 /** "1×" · "1,5×" · "2×" */
 export function rotuloVelocidade(v) { return `${String(velocidadeValida(v)).replace(".", ",")}×`; }
+/** plano 2000d · DC-138: para o leitor de tela — «1,5 vezes» (o «×» era lido «multiplicado»). */
+export function velocidadeFalada(v) { return `${String(velocidadeValida(v)).replace(".", ",")} vezes`; }
 /** 65 → "1:05"; 3725 → "1:02:05"; sem número → "–:––". */
 export function formatarDuracao(seg) {
   const s = Number(seg);
@@ -1491,11 +1638,23 @@ export function nomeAssinatura(nome) {
   return partes[i] || "";
 }
 /** Emoji e alguns símbolos contam 2 no limite do WhatsApp (unidades UTF-16): quantos o texto tem. */
-export function contarDuplos(texto) { return (String(texto ?? "").match(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g) || []).length; }
-/** «86 caracteres restantes» (+ «· emoji conta 2» quando há emoji no texto). */
+// plano 2000d · DC-160: conta as unidades EXTRAS de cada grafema (👍 = 1 extra, 👍🏽 = 3, 🇧🇷 = 3, 👨\u200D👩\u200D👧 = 7) — antes contava só os pares
+export function contarDuplos(texto) {
+  const s = String(texto ?? "");
+  if (!/[\uD800-\uDFFF\u200D\uFE0F]/.test(s)) return 0;
+  let extra = 0;
+  for (const g of grafemas(s)) if (g.length > 1 && /[\uD800-\uDFFF\u200D\uFE0F\u20E3]/.test(g)) extra += g.length - 1;
+  return extra;
+}
+function grafemas(s) {
+  try { if (typeof Intl !== "undefined" && Intl.Segmenter) return [...new Intl.Segmenter("pt-BR", { granularity: "grapheme" }).segment(s)].map(x => x.segment); } catch { /* sem Segmenter */ }
+  return Array.from(s);
+}
+/** «86 caracteres restantes» (+ «· emoji conta 2 ou mais» quando há emoji no texto). */
 export function textoContador(restantes, duplos = 0) {
   const r = Math.max(0, Number(restantes) || 0);
-  return `${r} caractere${r === 1 ? "" : "s"} restante${r === 1 ? "" : "s"}${duplos > 0 ? " · emoji conta 2" : ""}`;
+  // plano 2000d · DC-160: família, bandeira e tom de pele contam 4 a 8 — «conta 2» era errado
+  return `${r} caractere${r === 1 ? "" : "s"} restante${r === 1 ? "" : "s"}${duplos > 0 ? " · emoji conta 2 ou mais" : ""}`;
 }
 
 /* ---------- D13. telefone digitado em «Nova conversa» ---------- */
@@ -1505,6 +1664,12 @@ export const DDD_VALIDO = /^(1[1-9]|2[12478]|3[1-578]|4[1-9]|5[13-5]|6[1-9]|7[13
     mais de 11 dígitos (já com o 55) fica como foi digitado — a máscara nunca muda o número. */
 export function mascaraTelefone(txt) {
   const s = String(txt ?? "");
+  // plano 1500c · CX-048: «+55 12999990000» colado do WhatsApp também ganha a máscara («+55 (12) 99999-0000»); outro país fica como está
+  const br = /^\s*\+\s*55(?=[\s(]*[1-9])/.exec(s);
+  if (br) {
+    const resto = soDigitos(s.slice(br[0].length));
+    return resto.length >= 3 && resto.length <= 11 && resto[0] !== "0" ? `+55 ${mascaraTelefone(resto)}` : s;
+  }
   if (/^\s*(\+|00)/.test(s)) return s;
   const d = soDigitos(s);
   if (!d || d.length > 11 || d[0] === "0") return s;
@@ -1518,6 +1683,10 @@ export function mascaraTelefone(txt) {
 export function erroTelefone(txt) {
   const s = String(txt ?? "").trim();
   if (!s) return "Digite o telefone com DDD.";
+  // plano 1500c · CX-012: só letras («maria») — é um nome, não um telefone; antes dizia «você digitou 0»
+  if (!/\d/.test(s)) return "Digite só os números do telefone, com DDD (ex.: 12 99999-0000).";
+  // plano 1500c · CX-073: letra no meio dos números («12 9999-ABCD», «ramal 3») — antes contava só os dígitos e dizia «faltam números»
+  if (/\p{L}/u.test(s)) return "O telefone tem letras. Deixe só os números, com DDD (ex.: 12 99999-0000).";
   if (/^(\+|00)/.test(s)) {
     const d = soDigitos(s.replace(/^(\+|00)/, ""));
     return d.length >= 8 && d.length <= 15 ? "" : "Número de outro país: código do país e o número, de 8 a 15 dígitos (ex.: +1 415 555 1234).";
@@ -1644,6 +1813,8 @@ export function nivelEsperaUtil(desde, agora = new Date(), horario = null) {
 export function textoMinutos(min) {
   const m = Math.max(0, Math.floor(Number(min) || 0));
   if (m < 60) return `${m} min`;
+  // plano 1500c · CX-062: espera de mais de um dia vira «2 d 3 h» (antes «51 h 00 min», difícil de ler no selo da lista)
+  if (m >= 1440) { const d = Math.floor(m / 1440), hh = Math.floor((m % 1440) / 60); return hh ? `${d} d ${hh} h` : `${d} d`; }
   const h = Math.floor(m / 60), r = m % 60;
   return r ? `${h} h ${String(r).padStart(2, "0")} min` : `${h} h`;
 }
@@ -1708,6 +1879,51 @@ export function documentoIncomum(nome, mime = "") {
   return !MIME_SEGURO.test(String(mime || ""));
 }
 
+// plano 2000d · DC-245: o aviso do documento incomum diz qual é o tipo («Arquivo .apk (instalador de aplicativo)»)
+const TIPOS_INCOMUNS = {
+  apk: "instalador de aplicativo", exe: "programa do Windows", msi: "instalador do Windows", bat: "comando do Windows", cmd: "comando do Windows",
+  ps1: "comando do Windows", vbs: "script do Windows", js: "script", jar: "programa Java", sh: "script", dmg: "instalador do Mac", pkg: "instalador do Mac",
+  html: "página da web", htm: "página da web", svg: "desenho que pode conter código", xml: "arquivo de dados", zip: "arquivo compactado",
+  rar: "arquivo compactado", "7z": "arquivo compactado", iso: "imagem de disco", lnk: "atalho do Windows", scr: "programa do Windows"
+};
+export function descricaoIncomum(nome, mime = "") {
+  const n = String(nome || "").toLowerCase();
+  const ext = n.includes(".") ? n.split(".").pop() : "";
+  if (!ext) return "Arquivo de tipo incomum";
+  const tipo = TIPOS_INCOMUNS[ext];
+  return tipo ? `Arquivo .${ext} (${tipo})` : `Arquivo .${ext}`;
+}
+/** plano 2000d · DC-070: recuo do pulso com rede ruim → ms a esperar antes do próximo pulso do shell (0 = no ritmo normal de 3 s).
+    Pulso mais lento que o intervalo ou 2G: dobra (de 6 s até 24 s); pulso rápido de novo: cai pela metade até voltar ao normal. */
+export function recuoPulso(atualMs, duracaoMs, efetivo = "", intervaloMs = 3000) {
+  const lento = Number(duracaoMs) > intervaloMs || /(^|-)2g$/.test(String(efetivo || ""));
+  const a = Math.max(0, Number(atualMs) || 0);
+  if (lento) return Math.min(24000, Math.max(6000, a * 2));
+  if (!a) return 0;
+  const metade = Math.floor(a / 2);
+  return metade >= 6000 ? metade : 0;
+}
+/** plano 2000d · DC-006/DC-013: o que mudou entre as etiquetas vistas e as marcadas → { acrescentar, tirar } (ids, sem repetição). */
+export function diferencaEtiquetas(vistas = [], marcadas = []) {
+  const id = x => String(x && typeof x === "object" ? x.id : x);
+  const v = new Set((vistas || []).map(id)), m = new Set((marcadas || []).map(id));
+  const orig = new Map([...(vistas || []), ...(marcadas || [])].map(x => [id(x), x && typeof x === "object" ? x.id : x]));
+  return { acrescentar: [...m].filter(x => !v.has(x)).map(x => orig.get(x)), tirar: [...v].filter(x => !m.has(x)).map(x => orig.get(x)) };
+}
+/** plano 2000d · DC-130: «2 fotos ficaram de fora: a.heic (HEIC…), b.png (6 MB…)» — um aviso só para o lote. */
+export function resumoFotosRecusadas(lista) {
+  const l = (lista || []).filter(Boolean);
+  if (!l.length) return "";
+  const mostra = l.slice(0, 4).join(", ") + (l.length > 4 ? ` e mais ${l.length - 4}` : "");
+  return `${l.length} ${l.length === 1 ? "foto ficou" : "fotos ficaram"} de fora: ${mostra}.`;
+}
+/** plano 2000d · DC-244: Word, Excel, PowerPoint e afins ganham «Ver» e «Baixar» separados, como o PDF. */
+export function documentoOffice(nome, mime = "") {
+  const ext = String(nome || "").toLowerCase().split(".").pop();
+  if (["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf", "csv"].includes(ext)) return true;
+  return /msword|ms-(excel|powerpoint)|officedocument|opendocument/i.test(String(mime || ""));
+}
+
 /** CA-027: parâmetro de modelo que a Meta recusa (erro 132018): quebra de linha, tab ou mais de 4 espaços seguidos. "" quando vale. */
 export function erroParametroModelo(v, n) {
   const s = String(v ?? "");
@@ -1742,12 +1958,25 @@ export function microfoneMudo(amostras, { limiar = SILENCIO_LIMIAR, janelaMs = S
   return lista.filter(a => fim - Number(a.t) <= janelaMs).every(a => Number(a.nivel) < limiar);
 }
 
+/** plano 2000d · DC-107: histerese do «Não estamos ouvindo nada» — aparece com o silêncio (microfoneMudo já espera 3 s) e só some depois
+    de 2 s seguidos de som. → { visivel, somDesde } */
+export function histereseMudo(estado, mudo, agora, someMs = 2000) {
+  const e = estado || { visivel: false, somDesde: 0 };
+  if (mudo) return { visivel: true, somDesde: 0 };
+  if (!e.visivel) return { visivel: false, somDesde: 0 };
+  const desde = e.somDesde || agora;
+  return agora - desde >= someMs ? { visivel: false, somDesde: 0 } : { visivel: true, somDesde: desde };
+}
+
 /** CA-043: o que os pontos coloridos da linha dizem, em texto (celular): "Avaliação · Urgente +1". */
-export function textoMetaLista(etapa, etiquetas = []) {
+export function textoMetaLista(etapa, etiquetas = [], dono = "") {
   const nomes = (etiquetas || []).map(e => (e && e.nome) || "").filter(Boolean);
   const partes = [];
   if (etapa) partes.push(String(etapa));
   if (nomes.length) partes.push(nomes.length > 1 ? `${nomes[0]} +${nomes.length - 1}` : nomes[0]);
+  // plano 2000d · DC-066: no celular o dono por extenso («Com Ana») — as iniciais «A» de Ana e Amanda se confundiam no avatar
+  const primeiro = String(dono || "").trim().split(/\s+/)[0];
+  if (primeiro) partes.push(`Com ${primeiro}`);
   return partes.join(" · ");
 }
 
@@ -1852,7 +2081,7 @@ export function prefixoAssinatura(nome) {
 
 /** CA-232: a conversa em texto simples, na ordem: «13/10/2026 14:02 · Mariana: oi». Notas internas só com `notas`; o sistema entra como «Sistema». */
 const _fmtDataHoraExp = new Intl.DateTimeFormat("pt-BR", { timeZone: FUSO, day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
-export function textoExportacao(msgs, { contato = "Cliente", notas = false, titulo = "" } = {}) {
+export function textoExportacao(msgs, { contato = "Cliente", notas = false, titulo = "", cabecalho = [] } = {}) {
   const lista = (msgs || []).filter(m => m && !m.local && (notas || m.tipo !== "nota"))
     .slice().sort((a, b) => (ms(a.criado_em) - ms(b.criado_em)) || (Number(a.id) - Number(b.id)));
   const linhas = lista.map(m => {
@@ -1862,10 +2091,20 @@ export function textoExportacao(msgs, { contato = "Cliente", notas = false, titu
       : m.direcao === "in" ? contato : (m.enviado_por && m.enviado_por.nome) || (m.origem === "ia" ? "IA" : "Equipe");
     // plano 1000b · CB-085: foto/documento/vídeo/áudio com legenda não perdem o tipo — «Foto: raio-x» (resumoMensagem), não só a legenda
     const midia = ["imagem", "video", "audio", "documento", "sticker"].includes(m.tipo);
-    const corpo = (midia ? resumoMensagem(m, 300) || `[${m.tipo}]` : m.corpo ? String(m.corpo) : resumoMensagem(m, 300) || `[${m.tipo || "mensagem"}]`).split(CR).join("");
+    // plano 1500c · CC-098: a mídia diz o nome do arquivo e onde pegá-lo (o .txt não leva o arquivo)
+    const nomeArq = midia && m.midia && m.midia.nome ? String(m.midia.nome) : "";
+    const ondeArq = midia ? ` [${nomeArq ? `arquivo «${nomeArq}» — ` : ""}baixe pela conversa no Órbita]` : "";
+    const corpo = (midia ? `${resumoMensagem(m, 300) || `[${m.tipo}]`}${ondeArq}` : m.corpo ? String(m.corpo) : resumoMensagem(m, 300) || `[${m.tipo || "mensagem"}]`).split(CR).join("");
     return `${quando} · ${quem}: ${corpo.split(NL).join(`${NL}    `)}`;
   });
-  return (titulo ? [titulo, "", ...linhas] : linhas).join(NL) + NL;
+  // plano 1500c · CC-097: o cabeçalho (responsável, departamento, número e período) logo abaixo do título
+  const cab = (Array.isArray(cabecalho) ? cabecalho : []).filter(Boolean);
+  if (titulo && lista.length) {   // o período acompanha o título (o arquivo exportado sempre tem)
+    const ini = ms(lista[0].criado_em), fim = ms(lista[lista.length - 1].criado_em);
+    if (Number.isFinite(ini) && Number.isFinite(fim)) cab.push(`Período: ${_fmtDataHoraExp.format(new Date(ini)).replace(",", "")} a ${_fmtDataHoraExp.format(new Date(fim)).replace(",", "")}`);
+  }
+  const topo = titulo ? [titulo, ...cab, ""] : cab.length ? [...cab, ""] : [];
+  return [...topo, ...linhas].join(NL) + NL;
 }
 
 /** CA-121: o destino real de um link (hostname como o navegador lê — domínio internacional em punycode) e se é um encurtador conhecido. */
@@ -1980,4 +2219,745 @@ export function adiarTarefa(opcao, agora = new Date()) {
   if (opcao === "1h") return new Date(ms(agora) + 3600000).toISOString();
   if (opcao === "amanha9") return new Date(Date.parse(`${diaSP(ms(agora) + 86400000)}T09:00:00-03:00`)).toISOString();
   return null;
+}
+
+/* ============================================================ Plano 1500c (21/10/2026) — frente conv */
+
+/** plano 1500c · CC-002: o horário de atendimento que vale para a conversa (departamento dela ou o padrão). O admin recebe
+    base.config.departamentos; atendente e supervisor só base.departamentos (com o horário desde o 20261015a) — os dois servem.
+    undefined = a tela não conhece o horário (a espera conta minutos corridos). */
+export function horarioDoDepartamento(base, depId) {
+  const b = base || {};
+  const cfg = b.config && Array.isArray(b.config.departamentos) && b.config.departamentos.length ? b.config.departamentos : null;
+  const deps = cfg || (Array.isArray(b.departamentos) ? b.departamentos : []);
+  const d = deps.find(x => x && depId != null && x.id === depId) || deps.find(x => x && x.padrao);
+  return d && Object.prototype.hasOwnProperty.call(d, "horario") ? d.horario : undefined;
+}
+
+/** plano 1500c · CC-027: limites do SLA do departamento (sla_aten/sla_atraso/sla_critico em minutos, quando o servidor mandar);
+    sem os campos, os de sempre (15/30/60). Valores fora de ordem ou inválidos caem no padrão. */
+export function limitesSla(base, depId) {
+  const b = base || {};
+  const todos = [...((b.config && b.config.departamentos) || []), ...(b.departamentos || [])];
+  const d = todos.find(x => x && depId != null && x.id === depId) || todos.find(x => x && x.padrao);
+  const n = v => { const x = Number(v); return Number.isFinite(x) && x > 0 ? Math.round(x) : null; };
+  const aten = n(d && d.sla_aten), ruim = n(d && d.sla_atraso), critico = n(d && d.sla_critico);
+  if (!d || aten === null || ruim === null || critico === null || !(aten < ruim && ruim < critico)) return SLA_MINUTOS;
+  return Object.freeze({ aten, ruim, critico });
+}
+/** plano 1500c · CC-027: a faixa pelos limites dados. */
+export function nivelPorMinutos(minutos, limites = SLA_MINUTOS) {
+  const l = limites || SLA_MINUTOS;
+  return minutos >= l.critico ? "critico" : minutos >= l.ruim ? "ruim" : minutos >= l.aten ? "aten" : "ok";
+}
+/** plano 1500c · CC-001/CC-027: a espera da conversa com o horário e os limites do departamento dela. null quando não espera. */
+export function esperaDaConversa(c, base, agora = new Date()) {
+  if (!(c && c.status === "aberta" && c.aguardando && c.ultima_entrada_em)) return null;
+  const hor = horarioDoDepartamento(base, c.departamento_id);
+  const lim = limitesSla(base, c.departamento_id);
+  const r = hor === undefined ? { ...nivelEspera(c.ultima_entrada_em, agora), uteis: false, chegouFechado: false } : nivelEsperaUtil(c.ultima_entrada_em, agora, hor);
+  return { ...r, nivel: nivelPorMinutos(r.minutos, lim), limites: lim };
+}
+
+/** plano 1500c · CC-017: o aviso da área de trabalho para as conversas que chegaram juntas. Uma: o nome (ou neutro, sem «quem»);
+    várias: «3 conversas novas: Ana, Bruno e Carla» numa notificação só, com tag fixa (a nova substitui a anterior). */
+export function textoNotificacao(chegaram, { quem = true, texto = false } = {}, nomeDe = c => (c && c.contato && c.contato.nome) || "") {
+  const lista = Array.isArray(chegaram) ? chegaram.filter(Boolean) : [];
+  if (lista.length > 1) {
+    const nomes = lista.map(c => primeiroNome(nomeDe(c)) || nomeDe(c) || "Contato");
+    const mostrar = nomes.slice(0, 3);
+    const juntar = mostrar.length > 1 ? `${mostrar.slice(0, -1).join(", ")} e ${mostrar[mostrar.length - 1]}` : mostrar[0];
+    const resto = nomes.length > 3 ? ` e mais ${nomes.length - 3}` : "";
+    return { titulo: `${lista.length} conversas novas`, corpo: quem ? `${nomes.length > 3 ? mostrar.join(", ") : juntar}${resto}` : "Chegaram mensagens novas na central.", tag: "nx-cv-varias", id: null };
+  }
+  const c = lista[0];
+  if (!c) return { titulo: "Mensagem nova", corpo: "Chegou mensagem nova na central.", tag: "nx-cv", id: null };
+  return { titulo: quem ? nomeDe(c) || "Mensagem nova" : "Mensagem nova na central",
+    corpo: texto ? String(c.ultima_msg_resumo || "Mensagem nova").slice(0, 140) : "Mensagem nova", tag: `nx-cv-${c.id}`, id: c.id };
+}
+
+/** plano 1500c · CC-029: rótulo do número no filtro — «WhatsApp · final 9999» (dois números com o mesmo nome deixam de ficar iguais). */
+export function rotuloCanalFiltro(c) {
+  if (!c) return "";
+  const nome = String(c.nome || "WhatsApp");
+  const d = soDigitos(c.numero_exibicao || c.telefone || "");
+  return d.length >= 4 ? `${nome} · final ${d.slice(-4)}` : nome;
+}
+
+/** plano 2000d · DC-054: UMA tabela de rótulos de origem para a lista, a lateral e o filtro (antes eram três, com nomes diferentes). */
+export const ROTULO_ORIGEM = Object.freeze({ anuncio: "Anúncio", site: "Site", whatsapp: "WhatsApp", indicacao: "Indicação", organico: "Orgânico",
+  formulario: "Formulário", manual: "Cadastro manual", importacao: "Importação" });
+/** plano 1500c · CC-008: as origens que o nx_cv_listar aceita em p_filtro.origem (CB-209), com o rótulo dos chips (da tabela única). */
+export const ORIGENS_FILTRO = Object.freeze(["anuncio", "site", "whatsapp", "indicacao", "organico"].map(v => Object.freeze({ v, r: ROTULO_ORIGEM[v] })));
+
+/** plano 1500c · CC-033: «Recepção e Comercial estão desconectados» (até 3 nomes; mais que isso, «e mais N»). */
+export function textoCanaisCaidos(caidos) {
+  const nomes = (caidos || []).map(c => `«${(c && c.nome) || "WhatsApp"}»`);
+  if (nomes.length < 2) return "";
+  const tres = nomes.slice(0, 3), resto = nomes.length - tres.length;
+  const lista = resto > 0 ? `${tres.join(", ")} e mais ${resto}` : `${tres.slice(0, -1).join(", ")} e ${tres[tres.length - 1]}`;
+  return `Os números ${lista} estão desconectados: as mensagens não chegam nem saem por eles até reconectar.`;
+}
+
+/** plano 1500c · CC-057: conversas fixadas primeiro (na ordem em que foram fixadas), o resto na ordem do servidor. */
+export function ordenarFixadas(itens, fixadas) {
+  const f = (fixadas || []).map(Number);
+  if (!f.length) return itens || [];
+  const pos = new Map(f.map((id, i) => [id, i]));
+  const topo = [], resto = [];
+  for (const c of itens || []) (pos.has(Number(c.id)) ? topo : resto).push(c);
+  topo.sort((a, b) => pos.get(Number(a.id)) - pos.get(Number(b.id)));
+  return [...topo, ...resto];
+}
+export const MAX_FIXADAS = 5;
+/** plano 1500c · CC-057: fixa/desafixa; no máximo 5 (a 6ª recusa: {ok:false}). */
+export function alternarFixada(fixadas, id) {
+  const f = (fixadas || []).map(Number).filter(Number.isFinite);
+  const n = Number(id);
+  if (f.includes(n)) return { ok: true, fixadas: f.filter(x => x !== n), fixou: false };
+  if (f.length >= MAX_FIXADAS) return { ok: false, fixadas: f, fixou: false };
+  return { ok: true, fixadas: [...f, n], fixou: true };
+}
+
+/** plano 1500c · CC-058: silenciada agora? mapa {id: até_ms (0 = sempre)}. */
+export function estaSilenciada(mapa, id, agora = Date.now()) {
+  if (!mapa || id == null) return false;
+  const v = mapa[String(id)];
+  if (v === undefined || v === null) return false;
+  const n = Number(v);
+  return n === 0 || (Number.isFinite(n) && n > agora);
+}
+/** plano 1500c · CC-058: grava o silêncio (horas: 8, 24, 0 = sempre, null = tirar) e limpa os vencidos. */
+export function silenciar(mapa, id, horas, agora = Date.now()) {
+  const novo = {};
+  for (const [k, v] of Object.entries(mapa || {})) if (estaSilenciada(mapa, k, agora)) novo[k] = v;
+  if (horas === null || horas === undefined) delete novo[String(id)];
+  else novo[String(id)] = Number(horas) === 0 ? 0 : agora + Number(horas) * 3600000;
+  return novo;
+}
+
+/** plano 1500c · CC-028: vídeo .mov (QuickTime) do iPhone — o WhatsApp não aceita; a tela diz como resolver. */
+export function ehVideoIphone(arquivo) {
+  const mime = String(arquivo && arquivo.type || "").toLowerCase();
+  const ext = String(arquivo && arquivo.name || "").toLowerCase().split(".").pop();
+  return mime === "video/quicktime" || ext === "mov";
+}
+export const TEXTO_MOV_IPHONE = "Vídeo do iPhone (.mov) não é aceito pelo WhatsApp. No iPhone: Ajustes › Câmera › Formatos › Mais compatível, ou envie pelo próprio WhatsApp do celular.";
+
+/** plano 1500c · CC-050: as consultas do contato → as próximas 3 (mais cedo primeiro) e a última que já passou. */
+export function consultasDoContato(lista, agora = Date.now()) {
+  const vs = (Array.isArray(lista) ? lista : []).filter(c => c && Number.isFinite(ms(c.inicio)));
+  const fut = vs.filter(c => ms(c.inicio) >= ms(agora)).sort((a, b) => ms(a.inicio) - ms(b.inicio));
+  const pas = vs.filter(c => ms(c.inicio) < ms(agora)).sort((a, b) => ms(b.inicio) - ms(a.inicio));
+  return { proximas: fut.slice(0, 3), ultima: pas[0] || null };
+}
+/** plano 1500c · CC-050: o lembrete que vai para o campo (a pessoa revisa e envia). */
+// plano 1500c · CX-014: a palavra da vertical (vocab.compromisso: consulta · visita · entrega) — a oficina não lembra «da sua consulta»
+// plano 1500c · CX-015: «hoje»/«amanhã» no lugar da data quando é o caso (o cliente entende na hora)
+export function textoLembrarConsulta(c, nome = "", palavra = "consulta", agora = Date.now()) {
+  const t = ms(c && c.inicio);
+  if (!Number.isFinite(t)) return "";
+  const p = primeiroNome(nome);
+  const w = String(palavra || "consulta").trim().toLocaleLowerCase("pt-BR") || "consulta";
+  const dia = _fmtCurta.format(new Date(t)), hora = _fmtHora.format(new Date(t));
+  const dif = Math.round((Date.parse(diaSP(t)) - Date.parse(diaSP(ms(agora)))) / 86400000);
+  const quando = dif === 0 ? `hoje às ${hora}` : dif === 1 ? `amanhã (${dia}) às ${hora}` : `no dia ${dia} às ${hora}`;
+  return `Olá${p ? `, ${p}` : ""}! Passando para lembrar da sua ${w}${c.servico ? ` (${c.servico})` : ""} ${quando}. Podemos confirmar?`;
+}
+
+/** plano 1500c · CC-080: prazos rápidos da nova tarefa → valor do campo datetime-local no horário de SP («2026-10-21T17:00»).
+    hoje17 · amanha9 · segunda9 · semana (daqui a 7 dias, 9h). «Hoje fim do dia» depois das 17h vira 20h (ainda hoje). */
+export function prazoRapido(opcao, agora = Date.now()) {
+  const t = ms(agora);
+  const dia = d => diaSP(t + d * 86400000);
+  const horaSP = Number(_fmtHora.format(new Date(t)).slice(0, 2));
+  if (opcao === "hoje17") return `${dia(0)}T${horaSP >= 17 ? "20" : "17"}:00`;
+  if (opcao === "amanha9") return `${dia(1)}T09:00`;
+  if (opcao === "segunda9") {
+    const dow = new Date(Date.parse(`${dia(0)}T12:00:00-03:00`)).getUTCDay();
+    const faltam = ((8 - dow) % 7) || 7;
+    return `${dia(faltam)}T09:00`;
+  }
+  if (opcao === "semana") return `${dia(7)}T09:00`;
+  return "";
+}
+export const PRAZOS_RAPIDOS = Object.freeze([
+  { v: "hoje17", r: "Hoje, fim do dia" }, { v: "amanha9", r: "Amanhã 9h" }, { v: "segunda9", r: "Segunda 9h" }, { v: "semana", r: "Em 1 semana" },
+]);
+/** plano 1500c · CC-071: o título da tarefa a partir da mensagem (uma linha, até 160). */
+export function tituloTarefaDeMensagem(m) {
+  const t = umaLinha(m && m.corpo, 160);
+  return t || (m ? resumoMensagem(m, 160) : "");
+}
+
+/** plano 1500c · CC-081: no transferir, quem está fora do rodízio (recebe_conversas=false) vai por último e diz isso no nome. */
+export function ordenarPessoasTransferir(pessoas) {
+  return [...(pessoas || [])].sort((a, b) => Number(a && a.recebe_conversas === false) - Number(b && b.recebe_conversas === false));
+}
+export function rotuloPessoaTransferir(u, euId) {
+  if (!u) return "";
+  const base = u.id === euId ? `${u.nome} (você)` : u.nome;
+  return u.recebe_conversas === false ? `${base} — não recebe conversas agora` : base;
+}
+
+/** plano 1500c · CC-084: chips do parâmetro do modelo a partir da próxima consulta: «Data: 23/10», «Hora: 09:00», «Serviço: Limpeza». */
+export function sugestoesParametroConsulta(consultas, agora = Date.now()) {
+  const c = consultasDoContato(consultas, agora).proximas[0];
+  if (!c) return [];
+  const t = new Date(ms(c.inicio));
+  return [{ rotulo: "Data", valor: _fmtCurta.format(t) }, { rotulo: "Hora", valor: _fmtHora.format(t) }, c.servico ? { rotulo: "Serviço", valor: String(c.servico).slice(0, 60) } : null].filter(Boolean);
+}
+
+/** plano 1500c · CC-087: o atalho da cópia — «ola-copia», «ola-copia2»… (até 30 caracteres, sem repetir um existente). */
+export function atalhoDeCopia(atalho, respostas = []) {
+  const usados = new Set((respostas || []).map(r => String(r && r.atalho || "").toLowerCase()));
+  const raiz = String(atalho || "resposta").toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  for (let n = 1; n < 100; n++) {
+    const suf = n === 1 ? "-copia" : `-copia${n}`;
+    const a = `${raiz.slice(0, 30 - suf.length)}${suf}`;
+    if (!usados.has(a)) return a;
+  }
+  return `${raiz.slice(0, 24)}-copia`;
+}
+
+/** plano 1500c · CC-103: quando o departamento abre de novo — «hoje 14:00», «amanhã 08:00» ou «seg 08:00» (fuso de SP). "" sem horário ou sem faixa nos próximos 7 dias. */
+export function proximaAbertura(horario, agora = new Date()) {
+  if (!horario || typeof horario !== "object") return "";
+  const t = ms(agora);
+  if (!Number.isFinite(t)) return "";
+  const DIAS_C = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+  for (let k = 0; k <= 7; k++) {
+    const dia = diaSP(t + k * 86400000);
+    const dow = new Date(Date.parse(`${dia}T12:00:00-03:00`)).getUTCDay();
+    const fx = (horario[dow] ?? horario[String(dow)] ?? []).filter(Array.isArray).map(f => f[0]).sort();
+    for (const ini of fx) {
+      const quando = Date.parse(`${dia}T${ini}:00-03:00`);
+      if (quando > t) return `${k === 0 ? "hoje" : k === 1 ? "amanhã" : DIAS_C[dow]} ${ini}`;
+    }
+  }
+  return "";
+}
+
+/** plano 1500c · CC-105: «2:41» (minutos:segundos) para a contagem do código de pareamento. */
+export function textoContagem(seg) {
+  const s = Math.max(0, Math.floor(Number(seg) || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** plano 1500c · CC-099: o último resumo da IA guardado como nota interna («Resumo da IA: …») → {id, texto, em} | null. */
+export function resumoDaNota(msgs) {
+  const lista = Array.isArray(msgs) ? msgs : [];
+  for (let i = lista.length - 1; i >= 0; i--) {
+    const m = lista[i];
+    if (m && m.tipo === "nota" && /^Resumo da IA: /.test(String(m.corpo || ""))) return { id: m.id, texto: String(m.corpo).replace(/^Resumo da IA: /, ""), em: m.criado_em };
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------ plano 1500c · lote conv-c3 */
+
+/** plano 1500c · CC-313: horas inteiras até «HH:MM» de SP (hoje, ou amanhã se já passou) — o p_horas do nx_cv_ia_pausar (1 a 168). */
+export function horasAteHora(hhmm, agora = new Date()) {
+  const m = /^(\d{2}):(\d{2})$/.exec(String(hhmm || ""));
+  if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return null;
+  const t = ms(agora);
+  let alvo = Date.parse(`${diaSP(t)}T${m[1]}:${m[2]}:00-03:00`);
+  if (!(alvo > t)) alvo = Date.parse(`${diaSP(t + 86400000)}T${m[1]}:${m[2]}:00-03:00`);
+  return Math.max(1, Math.min(168, Math.ceil((alvo - t) / 3600000)));
+}
+
+/** plano 2000d · DC-105: valor inicial do «Pausar a IA até…» — a próxima hora cheia + 1 em Brasília (às 19h10 sugere 21:00, não 18:00). */
+export function horaPausaInicial(agora = new Date()) {
+  const t = ms(agora);
+  const h = (new Date(t - 3 * 3600000).getUTCHours() + 2) % 24;   // Brasília é UTC−3 (sem horário de verão), como o horasAteHora
+  return `${String(h).padStart(2, "0")}:00`;
+}
+/** plano 2000d · DC-105: a linha viva do modal — «A IA volta hoje às 15:00» / «amanhã às 18:00». */
+export function textoVoltaIA(hhmm, agora = new Date()) {
+  const hs = horasAteHora(hhmm, agora);
+  if (!hs) return "";
+  const t = ms(agora);
+  const m = /^(\d{2}):(\d{2})$/.exec(String(hhmm));
+  const hoje = Date.parse(`${diaSP(t)}T${m[1]}:${m[2]}:00-03:00`) > t;
+  return `A IA volta ${hoje ? "hoje" : "amanhã"} às ${m[1]}:${m[2]}.`;
+}
+
+/** plano 1500c · CC-152: rede em modo economia (saveData) ou lenta (2g/3g) — o vídeo só baixa quando a pessoa toca no play. */
+export function economiaDeDados(conexao) {
+  const c = conexao || null;
+  if (!c) return false;
+  return c.saveData === true || /(^|-)(2g|3g)$/.test(String(c.effectiveType || ""));
+}
+
+/** plano 1500c · CC-149: «Vai para +55 12 99999-0000» — como o número digitado vai ficar (vazio enquanto está incompleto). */
+export function previaTelefone(valor) {
+  if (erroTelefone(valor)) return "";
+  const n = normalizarTelefone(valor);
+  if (!n) return "";
+  if (n.startsWith("55") && (n.length === 12 || n.length === 13)) {
+    const ddd = n.slice(2, 4), resto = n.slice(4);
+    return `Vai para +55 ${ddd} ${resto.slice(0, resto.length - 4)}-${resto.slice(-4)}`;
+  }
+  return `Vai para +${n}`;
+}
+
+/** plano 1500c · CC-312: a nota do recado diz para quem foi — «Transferida para Ana (Financeiro): recado». */
+export function textoRecadoTransferencia({ pessoa = null, departamento = null, recado = "" } = {}) {
+  const p = pessoa ? String(pessoa).trim() : "", d = departamento ? String(departamento).trim() : "";
+  const para = p && d ? `${p} (${d})` : p || (d ? `a fila de ${d}` : "a fila");
+  return `Transferida para ${para}: ${String(recado || "").trim()}`;
+}
+
+/** plano 1500c · CC-326: os argumentos do nx_cv_atribuir — «manter o departamento» (dep vazio) manda null, nunca o 1º da lista. */
+export function argumentosTransferir(escolha = {}) {
+  return { p_conta: (escolha && escolha.conta) || null, p_departamento: (escolha && escolha.dep) || null };
+}
+
+/** plano 1500c · CC-307: «Restam 120 sugestões de IA este mês» (null sem limite). Perto do fim (≥ 90%) diz isso. */
+export function textoCotaIA(cota) {
+  if (!cota || cota.limite == null || !(Number(cota.limite) > 0)) return null;
+  const lim = Number(cota.limite), usadas = Math.max(0, Number(cota.usadas) || 0), resta = Math.max(0, lim - usadas);
+  if (!resta) return "A cota de IA do mês acabou";
+  const base = `Restam ${resta.toLocaleString("pt-BR")} ${resta === 1 ? "sugestão" : "sugestões"} de IA este mês`;
+  return usadas >= lim * 0.9 ? `${base} (quase no fim)` : base;
+}
+
+/** plano 1500c · CC-125: o horário da agenda em texto para o assistente («Seg a Sex 08:00–18:00 · … Pausas: 12:00–13:00»). */
+export function textoHorarioIA(horario, intervalos = []) {
+  const pausas = (Array.isArray(intervalos) ? intervalos : []).filter(f => Array.isArray(f) && f[0] && f[1]).map(f => `${f[0]}–${f[1]}`);
+  return `${resumoHorario(horario || null)} (horário de Brasília).${pausas.length ? ` Pausas: ${pausas.join(", ")}.` : ""}`;
+}
+
+/** plano 1500c · CC-126: «- Avaliação (30 min)» por serviço da agenda que o texto ainda não cita (sem repetir). */
+export function linhasServicosIA(duracoes, atual = "") {
+  const ja = semAcento(String(atual || ""));
+  return Object.entries(duracoes && typeof duracoes === "object" ? duracoes : {})
+    .filter(([nome]) => String(nome || "").trim() && !ja.includes(semAcento(String(nome).trim())))
+    .map(([nome, min]) => `- ${String(nome).trim()}${Number(min) > 0 ? ` (${Number(min)} min)` : ""}`);
+}
+
+/** plano 1500c · CC-311: o aviso ao cliente na transferência («Vou te passar para o Financeiro, já te respondem por aqui.»). */
+export function textoAvisoTransferencia({ pessoa = null, departamento = null } = {}) {
+  const p = pessoa ? primeiroNome(pessoa) : "", d = departamento ? String(departamento).trim() : "";
+  // plano 1500c · CX-075: «da Recepção», «para a Recepção» (antes «do Recepção», «para o Recepção»)
+  const art = d ? artigoDepartamento(d) : "o";
+  if (p) return `Vou te passar para ${p}${d ? `, d${art} ${d}` : ""}, que continua o seu atendimento por aqui.`;
+  if (d) return `Vou te passar para ${art} ${d}, já te respondem por aqui.`;
+  return "Vou te passar para a nossa equipe, já te respondem por aqui.";
+}
+
+/** plano 1500c · CC-121: a conversa exportada (texto do textoExportacao) numa página para imprimir ou salvar em PDF — tudo escapado. */
+export function htmlImpressao({ titulo = "Conversa", empresa = "", texto = "" } = {}) {
+  const esc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const linhas = String(texto || "").split(NL);
+  const corpo = linhas.map(l => (l.trim() ? `<p>${esc(l)}</p>` : "<br>")).join("");
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(titulo)}</title><style>`
+    + "body{font:12pt/1.45 Georgia,serif;color:black;margin:18mm}header{border-bottom:1px solid gray;margin-bottom:12px;padding-bottom:6px}"
+    + "header b{font:600 14pt/1.2 Arial,sans-serif}p{margin:0 0 4px;white-space:pre-wrap;break-inside:avoid}@page{margin:15mm}"
+    + `</style></head><body><header><b>${esc(empresa || "Órbita")}</b></header><main>${corpo}</main></body></html>`;
+}
+
+/** plano 1500c · CC-140: o link do WhatsApp do aparelho para o telefone (só os dígitos, com o 55). */
+export function linkWhatsApp(telefone) {
+  if (!String(telefone || "").replace(/[^0-9]/g, "")) return "";   // plano 1500c · CX-079: sem número não há link (antes «https://wa.me/», que abre a tela de erro do WhatsApp)
+  const n = String(normalizarTelefone(String(telefone || "")) || String(telefone || "").replace(/[^0-9]/g, ""));
+  return `https://wa.me/${n}`;
+}
+
+/** plano 1500c · CC-158: os 4 últimos dígitos do número do canal (para confirmar a exclusão do número certo); "" sem número. */
+export function finalNumero(canal) {
+  const c = canal || {};
+  const d = String(c.numero_exibicao || c.numero || c.telefone || "").replace(/[^0-9]/g, "");
+  return d.length >= 4 ? d.slice(-4) : "";
+}
+
+/* ------------------------------------------------------------ plano 1500c · complemento conv-x */
+
+/** plano 1500c · CX-030: o texto é só emoji (1 a 3, sem letra nem número)? — a bolha mostra grande, como no WhatsApp. */
+const RE_SO_EMOJI = /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}|[\u200d\ufe0f\u20e3]|\s)+$/u;
+export function soEmoji(texto) {
+  const s = String(texto ?? "").trim();
+  if (!s || !RE_SO_EMOJI.test(s) || !/\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(s)) return false;
+  let n = 0;
+  try {
+    for (const g of new Intl.Segmenter("pt-BR", { granularity: "grapheme" }).segment(s.replace(/\s+/g, ""))) { void g; n++; }
+  } catch { n = [...s.replace(/\s+/g, "")].filter(c => /\p{Extended_Pictographic}/u.test(c)).length; }
+  return n >= 1 && n <= 3;
+}
+
+/** plano 1500c · CX-069: o idioma do modelo como a pessoa lê («pt_BR» → «Português»); desconhecido fica o código. */
+const IDIOMAS = Object.freeze({ pt: "Português", en: "Inglês", es: "Espanhol", fr: "Francês", it: "Italiano", de: "Alemão" });
+export function rotuloIdioma(cod) {
+  const c = String(cod || "").trim();
+  if (!c) return "";
+  const base = c.toLowerCase().split(/[_-]/)[0];
+  const nome = IDIOMAS[base];
+  if (!nome) return c;
+  return /^pt[_-]pt$/i.test(c) ? "Português (Portugal)" : nome;
+}
+
+/** plano 1500c · CX-077: emojis recentes primeiro (até 8), sem repetir; o resto na ordem de sempre. */
+export function ordenarEmojis(recentes, todos) {
+  const rec = (Array.isArray(recentes) ? recentes : []).filter(e => typeof e === "string" && e && e.length <= 16).slice(0, 8);
+  return [...new Set([...rec, ...(todos || [])])];
+}
+export function lembrarEmoji(recentes, e) {
+  return [e, ...(Array.isArray(recentes) ? recentes : []).filter(x => x !== e)].slice(0, 8);
+}
+
+/** plano 1500c · CX-075: «o Financeiro» · «a Recepção» — o artigo do nome do departamento (feminino pelas terminações comuns). */
+export function artigoDepartamento(nome) {
+  const n = semAcento(String(nome || "").trim().split(/\s+/)[0] || "");
+  if (/(as|coes)$/.test(n)) return "as";
+  if (/os$/.test(n)) return "os";
+  return /(a|cao|dade|agem|ie)$/.test(n) && !/^(dia|mapa|sistema|programa|problema|tema)$/.test(n) ? "a" : "o";
+}
+
+// plano 2000d · DC-097: a saída gravada leva a assinatura de quem enviou («*Helena:*» + quebra) — encaminhar/reenviar/copiar tiram
+const RE_ASSINATURA = /^\*[^*\n]+:\*\n/;
+export function semAssinatura(texto) { return String(texto ?? "").replace(RE_ASSINATURA, ""); }
+
+// plano 2000d · DC-039: o serviço da agenda que o cliente citou nas últimas 10 mensagens dele («quero marcar uma limpeza» → «Limpeza»)
+export function servicoCitado(msgs, servicos) {
+  const nomes = (servicos || []).map(s => String(s || "").trim()).filter(Boolean);
+  if (!nomes.length) return "";
+  const doCliente = (msgs || []).filter(m => m && m.direcao === "in" && m.corpo).slice(-10).reverse();
+  const norm = t => " " + semAcento(String(t || "").toLowerCase()).replace(/[^a-z0-9]+/g, " ").trim() + " ";
+  // o nome mais comprido primeiro («Limpeza profunda» antes de «Limpeza»)
+  const ordem = nomes.slice().sort((a, b) => b.length - a.length);
+  for (const m of doCliente) {
+    const t = norm(m.corpo);
+    const achou = ordem.find(n => t.includes(norm(n)));
+    if (achou) return achou;
+  }
+  return "";
+}
+
+// plano 2000d · DC-038: «IA respondeu em 20 s · equipe assumiu 9 h depois» — pelas mensagens carregadas do atendimento (a partir de abertaEm).
+// → "" quando a 1ª saída não foi da IA (vale o «1ª resposta» de sempre)
+export function textoRespostaIA(msgs, abertaEm) {
+  const t0 = Date.parse(abertaEm || "");
+  if (!Number.isFinite(t0)) return "";
+  const saidas = (msgs || []).filter(m => m && m.direcao === "out" && !m.local && m.tipo !== "nota" && m.tipo !== "sistema" && (Date.parse(m.criado_em || "") || 0) >= t0)
+    .sort((a, b) => Date.parse(a.criado_em) - Date.parse(b.criado_em));
+  if (!saidas.length || saidas[0].origem !== "ia") return "";
+  const tIA = Date.parse(saidas[0].criado_em);
+  const seg = Math.max(0, Math.round((tIA - t0) / 1000));
+  const ia = seg < 60 ? `IA respondeu em ${seg} s` : `IA respondeu em ${textoMinutos(seg / 60)}`;
+  const pessoa = saidas.find(m => m.origem !== "ia");
+  if (!pessoa) return `${ia} · a equipe ainda não respondeu`;
+  const min = Math.max(0, Math.round((Date.parse(pessoa.criado_em) - tIA) / 60000));
+  return `${ia} · equipe assumiu ${min < 1 ? "em seguida" : `${textoMinutos(min)} depois`}`;
+}
+
+// plano 2000d · DC-037: a história do lead em marcos com hora — anúncio/origem → 1ª mensagem → 1ª resposta (IA ou quem) → consulta →
+// presença → negócio ganho. Só com o que a tela já tem (nx_cv_ver + mensagens carregadas). → [{ tipo, em, texto }] em ordem.
+export function jornadaDoContato(ver, msgs) {
+  const v = ver || {}, ct = v.contato || {}, conv = v.conversa || {}, an = v.anuncio || null;
+  const t = x => { const n = Date.parse(x || ""); return Number.isFinite(n) ? n : null; };
+  const marcos = [];
+  const doAnuncio = an || ct.origem === "anuncio";
+  const entrada = (msgs || []).filter(m => m && m.direcao === "in" && !m.local && m.tipo !== "sistema").sort((a, b) => (t(a.criado_em) || 0) - (t(b.criado_em) || 0))[0];
+  const emOrigem = t(an && (an.clique_em || an.criado_em)) ?? t(conv.aberta_em) ?? t(entrada && entrada.criado_em);
+  if (doAnuncio && emOrigem !== null) {
+    const nome = an && (an.anuncio_nome || an.campanha_nome);
+    marcos.push({ tipo: "origem", em: emOrigem, texto: nome ? `Clicou no anúncio «${nome}»` : "Veio do anúncio" });
+  }
+  if (entrada && t(entrada.criado_em) !== null) marcos.push({ tipo: "entrada", em: t(entrada.criado_em), texto: "Mandou a primeira mensagem" });
+  const t0 = entrada ? t(entrada.criado_em) : null;
+  const resp = t0 === null ? null : (msgs || []).filter(m => m && m.direcao === "out" && !m.local && m.tipo !== "nota" && m.tipo !== "sistema" && (t(m.criado_em) || 0) >= t0)
+    .sort((a, b) => (t(a.criado_em) || 0) - (t(b.criado_em) || 0))[0];
+  if (resp) {
+    const seg = Math.max(0, Math.round(((t(resp.criado_em) || 0) - t0) / 1000));
+    const quanto = seg < 60 ? `${seg} s` : textoMinutos(seg / 60);
+    const quem = resp.origem === "ia" ? "A IA" : (resp.enviado_por && resp.enviado_por.nome) || "A equipe";
+    marcos.push({ tipo: "resposta", em: t(resp.criado_em), texto: `${quem} respondeu em ${quanto}` });
+  }
+  for (const c of (Array.isArray(ct.consultas) ? ct.consultas : [])) {
+    const em = t(c && (c.marcada_em || c.criado_em)) ?? null, ini = t(c && c.inicio);
+    if (ini === null) continue;
+    marcos.push({ tipo: "consulta", em: em ?? ini, texto: `Consulta marcada${c.servico ? ` · ${c.servico}` : ""}`, inicio: ini });
+    if (c.presenca === "compareceu") marcos.push({ tipo: "presenca", em: ini, texto: "Compareceu" });
+    else if (c.presenca === "faltou") marcos.push({ tipo: "presenca", em: ini, texto: "Faltou" });
+  }
+  for (const n of (v.negocios || [])) {
+    if (n && (n.status === "ganho" || n.estagio_tipo === "ganho")) marcos.push({ tipo: "ganho", em: t(n.ganho_em || n.fechado_em || n.atualizado_em) ?? Date.now(), texto: `Negócio ganho${n.titulo ? ` · ${n.titulo}` : ""}` });
+  }
+  const ordemTipo = { origem: 0, entrada: 1, resposta: 2, consulta: 3, presenca: 4, ganho: 5 };
+  return marcos.sort((a, b) => (a.em - b.em) || (ordemTipo[a.tipo] - ordemTipo[b.tipo]));
+}
+
+// plano 2000d · DC-030: o arquivo exportado leva o protocolo (ou o número da conversa), não o nome do paciente («conversa-ORB-123-2026-10-25.txt»)
+export function nomeArquivoExportacao({ protocolo = "", id = "", dia = "", nome = "", comNome = false, ext = "txt" } = {}) {
+  const slug = s => semAcento(String(s || "").toLowerCase()).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const base = comNome && slug(nome) ? slug(nome) : protocolo ? String(protocolo).replace(/[^A-Za-z0-9-]+/g, "-").replace(/^-|-$/g, "") : id !== "" && id !== null ? `atendimento-${id}` : "cliente";
+  return `conversa-${base}${dia ? `-${dia}` : ""}.${ext}`;
+}
+
+// plano 2000d · DC-046: o termo da busca de contato — telefone (8+ dígitos, só com + ( ) - . e espaços) vira os dígitos sem o 55 do Brasil
+export function termoBuscaContato(texto) {
+  const t = String(texto ?? "").trim();
+  if (!/^[\d\s()+\-.]+$/.test(t)) return t;
+  const dig = t.replace(/\D/g, "");
+  if (dig.length < 8) return t;
+  return dig.length >= 12 && dig.startsWith("55") ? dig.slice(2) : dig;
+}
+
+// plano 2000d · DC-128: «Enviar endereço» — o endereço e o link do Google Maps (o Waze abre o mesmo link no celular)
+export function textoEndereco(endereco) {
+  const e = String(endereco || "").trim().replace(/\s+/g, " ");
+  if (!e) return "";
+  return `Nosso endereço: ${e}\nComo chegar: https://maps.google.com/?q=${encodeURIComponent(e)}`;
+}
+
+// plano 2000d · DC-055/DC-056: confere na tela «todas as etiquetas» e «sem etiqueta» (o servidor antigo ignora os dois campos)
+export function filtrarEtiquetasLocal(itens, filtro = {}) {
+  const lista = Array.isArray(itens) ? itens : [];
+  const f = filtro || {};
+  const marc = Array.isArray(f.etiquetas) ? f.etiquetas.map(String) : [];
+  if (f.sem_etiqueta && !marc.length) return lista.filter(c => !(c && Array.isArray(c.etiquetas) && c.etiquetas.length));
+  if (f.etiquetas_modo === "todas" && marc.length > 1) return lista.filter(c => { const tem = new Set(((c && c.etiquetas) || []).map(String)); return marc.every(id => tem.has(id)); });
+  return lista;
+}
+
+// plano 2000d · DC-096: hash curto (FNV-1a 32 bits, base 36) para assinaturas de desenho — muda quando o texto muda, mesmo tamanho
+export function hashCurto(texto) {
+  const s = String(texto ?? "");
+  let x = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { x ^= s.charCodeAt(i); x = Math.imul(x, 0x01000193) >>> 0; }
+  return x.toString(36);
+}
+
+// plano 2000d · DC-095: corta o texto no teto (unidades UTF-16, como o limite da Meta) sem partir emoji/sequência ZWJ ao meio
+export function cortarNoTeto(texto, teto) {
+  const s = String(texto ?? ""), n = Math.max(0, Number(teto) || 0);
+  if (s.length <= n) return s;
+  let out = "";
+  if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
+    for (const { segment } of new Intl.Segmenter("pt-BR", { granularity: "grapheme" }).segment(s)) {
+      if (out.length + segment.length > n) break;
+      out += segment;
+    }
+    return out;
+  }
+  for (const ch of s) { if (out.length + ch.length > n) break; out += ch; }   // sem Segmenter: ao menos não parte o par substituto
+  return out;
+}
+
+// plano 2000d · DC-043: data do «Lembrar de retomar» — 30 dias, 6 meses ou 1 ano a partir de agora, às 9h de São Paulo (12:00Z)
+export function dataRetomar(quando, agora = Date.now()) {
+  const d = new Date(Number.isFinite(agora) ? agora : Date.parse(agora));
+  if (quando === "30d") d.setUTCDate(d.getUTCDate() + 30);
+  else if (quando === "1a") d.setUTCFullYear(d.getUTCFullYear() + 1);
+  else d.setUTCMonth(d.getUTCMonth() + 6);
+  d.setUTCHours(12, 0, 0, 0);
+  return d.toISOString();
+}
+
+
+/* ---------- plano 2000d · DC-167: mensagem longa demais vira 2+ mensagens, cortadas em parágrafo, linha ou frase ---------- */
+/** dividirTexto(texto, teto) → [parte1, parte2, …], cada uma ≤ teto, cortada no último parágrafo; sem ele, na última linha, no fim de
+    frase («. », «! », «? ») e, em último caso, no último espaço. Nunca parte palavra se houver espaço na metade final do trecho. */
+export function dividirTexto(texto, teto = LIMITE_TEXTO) {
+  let resto = String(texto ?? "").trim();
+  const t = Math.max(20, Number(teto) || LIMITE_TEXTO);
+  const partes = [];
+  while (resto.length > t) {
+    const janela = resto.slice(0, t + 1);
+    const minimo = Math.floor(t * 0.4);
+    const corte = [/\n\s*\n/g, /\n/g, /[.!?…](?=\s)/g, /\s/g].map(re => {
+      let ult = -1;
+      for (const m of janela.matchAll(re)) { const fim = re.source.startsWith("[.!?") ? m.index + 1 : m.index; if (fim <= t && fim >= minimo) ult = fim; }
+      return ult;
+    }).find(i => i > 0);
+    const i = corte > 0 ? corte : t;
+    partes.push(resto.slice(0, i).trim());
+    resto = resto.slice(i).trim();
+  }
+  if (resto) partes.push(resto);
+  return partes;
+}
+
+/* ---------- plano 2000d · DC-196: envio de arquivo em rede lenta com estimativa ---------- */
+export const TAXA_LENTA = 20 * 1024;   // abaixo de 20 KB/s a rede é lenta para foto/vídeo
+/** estimativaEnvio(pct, decorridoMs, bytes) → {texto: "62 % · cerca de 40 s", lenta, dica}. Antes de 5 s (ou sem progresso) só a %. */
+export function estimativaEnvio(pct, decorridoMs, bytes = 0) {
+  const p = Math.max(0, Math.min(100, Math.floor(Number(pct) || 0)));
+  const ms = Number(decorridoMs) || 0;
+  const base = `${p} %`;
+  if (ms < 5000 || p <= 0 || p >= 100) return { texto: base, lenta: false, dica: "" };
+  const restanteS = Math.max(1, Math.round((ms / 1000) * (100 - p) / p));
+  const quanto = restanteS < 60 ? `${Math.max(5, Math.round(restanteS / 5) * 5)} s` : `${Math.round(restanteS / 60)} min`;
+  const taxa = Number(bytes) > 0 ? (Number(bytes) * p / 100) / (ms / 1000) : Infinity;
+  const lenta = taxa < TAXA_LENTA;
+  return { texto: `${base} · cerca de ${quanto}`, lenta, dica: lenta ? "Rede lenta: reduza a foto ou envie um link." : "" };
+}
+
+/* ---------- plano 2000d · DC-169: «pode ser amanhã às 15h?» sugere «Marcar amanhã 15:00» ---------- */
+const DIAS_SEMANA = ["domingo", "segunda", "terca", "quarta", "quinta", "sexta", "sabado"];
+const SEM_ACENTO_DT = s => String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+/** dataNaMensagem(texto, agora) → {iso, rotulo} com a data/hora pedida (fuso de São Paulo, UTC−3) ou null. Exige uma hora (15h, 14:30,
+    14h30, «às 9»); o dia vem de hoje/amanhã/depois de amanhã, dia da semana ou «dia 12» — sem dia, hoje (ou amanhã se a hora já passou). */
+export function dataNaMensagem(texto, agora = new Date()) {
+  const s = SEM_ACENTO_DT(texto);
+  const mh = s.match(/\b(?:as\s+)?([01]?\d|2[0-3])\s*(?:h|:)\s*([0-5]\d)?\b(?!\s*(?:min|%|reais))/) || s.match(/\bas\s+([01]?\d|2[0-3])\b(?![\d,.:])/);
+  if (!mh) return null;
+  const hora = Number(mh[1]), min = Number(mh[2] || 0);
+  const SP = 3 * 3600000;
+  const agoraMs = +agora;
+  const hojeSP = new Date(agoraMs - SP);   // campos UTC = relógio de São Paulo
+  let dia = new Date(Date.UTC(hojeSP.getUTCFullYear(), hojeSP.getUTCMonth(), hojeSP.getUTCDate()));
+  let rotuloDia = "hoje";
+  const semana = s.match(/\b(domingo|segunda|terca|quarta|quinta|sexta|sabado)\b/);
+  const md = s.match(/\bdia\s+(\d{1,2})\b/);
+  if (/\bdepois de amanha\b/.test(s)) { dia = new Date(+dia + 2 * 86400000); rotuloDia = "depois de amanhã"; }
+  else if (/\bamanha\b/.test(s)) { dia = new Date(+dia + 86400000); rotuloDia = "amanhã"; }
+  else if (semana) {
+    const alvo = DIAS_SEMANA.indexOf(semana[1]);
+    let dif = (alvo - dia.getUTCDay() + 7) % 7;
+    if (dif === 0) dif = 7;
+    dia = new Date(+dia + dif * 86400000);
+    rotuloDia = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"][alvo];
+  } else if (md) {
+    const n = Number(md[1]);
+    if (n < 1 || n > 31) return null;
+    let d2 = new Date(Date.UTC(dia.getUTCFullYear(), dia.getUTCMonth(), n));
+    if (d2.getUTCDate() !== n) return null;
+    if (+d2 < +dia) d2 = new Date(Date.UTC(dia.getUTCFullYear(), dia.getUTCMonth() + 1, n));
+    dia = d2;
+    rotuloDia = `dia ${n}`;
+  }
+  let ms = +dia + hora * 3600000 + min * 60000 + SP;
+  if (rotuloDia === "hoje" && ms <= agoraMs) { ms += 86400000; rotuloDia = "amanhã"; }
+  const hh = `${String(hora).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+  return { iso: new Date(ms).toISOString(), rotulo: `${rotuloDia} ${hh}` };
+}
+
+
+/* ---------- plano 2000d · DC-202: «/fotos» de exemplo por vertical (roteiro numerado que o WhatsApp formata) ---------- */
+const ROTEIRO_FOTOS = Object.freeze({
+  oficina: ["Frente do carro", "Lateral (o lado do problema)", "Placa", "Painel ligado (luzes acesas)", "De perto, onde está o problema"],
+  odonto: ["Sorriso de frente", "Dentes de cima (boca aberta)", "Dentes de baixo (boca aberta)", "Raio-X ou exame, se tiver"],
+  loja: ["Foto do produto inteiro", "Etiqueta ou código", "O detalhe que você quer mostrar", "Nota fiscal, se for troca"],
+  generico: ["Foto geral", "De perto, o detalhe", "Documento ou etiqueta, se tiver"],
+});
+/** respostaFotos(vertical) → {atalho:"fotos", titulo, corpo, exemplo:true} com a lista numerada da vertical. */
+export function respostaFotos(vertical) {
+  const itens = ROTEIRO_FOTOS[vertical] || ROTEIRO_FOTOS.generico;
+  return { id: null, atalho: "fotos", titulo: "Pedir fotos", exemplo: true,
+    corpo: `{primeiro_nome}, para ajudar mais rápido, me mande estas fotos:\n${itens.map((t, i) => `${i + 1}. ${t}`).join("\n")}\n\nPode mandar uma por vez, aqui mesmo.` };
+}
+/** plano 2000d · DC-203: as respostas marcadas como «boas-vindas» (campo boas_vindas, ou atalho/título com «boas-vindas»/«ola»), até 3. */
+export function respostasBoasVindas(respostas, departamento = null) {
+  const sa = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036F]/g, "").toLowerCase();
+  return (respostas || []).filter(r => r && (!departamento || !r.departamento_id || r.departamento_id === departamento)
+    && (r.boas_vindas === true || /boas[- ]?vindas/.test(sa(r.titulo)) || /boas[- ]?vindas/.test(sa(r.atalho)) || sa(r.atalho) === "ola"))
+    .sort((a, b) => (Number(b.boas_vindas === true) - Number(a.boas_vindas === true)) || ((Number(b.usos) || 0) - (Number(a.usos) || 0))).slice(0, 3);
+}
+
+
+/* ---------- plano 2000d · lote d4 (conversas) ---------- */
+/** DC-235: quantas mensagens do cliente há do separador «novas» em diante (msg e grade). */
+export function contarNovas(linhas, desde) {
+  let n = 0, achou = false;
+  for (const l of linhas || []) {
+    if (l && l.tipo === "novas") { achou = true; continue; }
+    if (!achou || !l) continue;
+    if (l.tipo === "msg" && l.msg && l.msg.direcao === "in") n++;
+    else if (l.tipo === "grade") n += (l.msgs || []).filter(m => m && m.direcao === "in").length;
+  }
+  return achou ? n : Number(desde) || 0;
+}
+/** DC-234: bolha colada do cliente com mais de 1 min da anterior mostra a hora (antes só no hover). */
+export function horaNaColada(msgs) {
+  const out = new Set();
+  let ant = null;
+  for (const m of msgs || []) {
+    if (m && ant && m.direcao === "in" && ant.direcao === "in" && m.tipo !== "sistema" && ms(m.criado_em) - ms(ant.criado_em) >= 60000) out.add(m.id);
+    ant = m;
+  }
+  return out;
+}
+/** DC-240: link da conversa sem index.html nem query (o app instalado abre em /app/). */
+export function linkConversa(origin, pathname, id) {
+  const dir = String(pathname || "/app/").replace(/[?#].*$/, "").replace(/[^/]*$/, "") || "/app/";
+  return `${String(origin || "").replace(/\/+$/, "")}${dir}#/conversas/${encodeURIComponent(id)}`;
+}
+/** DC-259: tempo da 1ª resposta de cada atendimento → Map(id da 1ª saída → «respondido em 8 s»). */
+export function temposDeResposta(msgs) {
+  const out = new Map();
+  const entrada = new Map(), feito = new Set();
+  for (const m of msgs || []) {
+    if (!m || m.tipo === "sistema" || m.tipo === "nota" || m.local) continue;
+    const k = m.conversa_id ?? "-";
+    if (feito.has(k)) continue;
+    if (m.direcao === "in") { if (!entrada.has(k)) entrada.set(k, ms(m.criado_em)); continue; }
+    if (!entrada.has(k)) { feito.add(k); continue; }   // a empresa falou primeiro (modelo): não há tempo de resposta
+    const s = Math.max(0, Math.round((ms(m.criado_em) - entrada.get(k)) / 1000));
+    if (Number.isFinite(s)) out.set(m.id, `respondido em ${duracaoCurta(s)}`);
+    feito.add(k);
+  }
+  return out;
+}
+function duracaoCurta(s) {
+  if (s < 60) return `${s} s`;
+  const min = Math.round(s / 60);
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60), r = min % 60;
+  return h < 24 ? (r ? `${h} h ${r} min` : `${h} h`) : `${Math.round(h / 24)} d`;
+}
+/** DC-260: separador «Ana assumiu · 14:10» quando as saídas passam da IA para uma pessoa (mesmo atendimento). */
+export function inserirAutoria(linhas) {
+  const out = [];
+  const ultima = new Map();   // conversa → "ia" | "pessoa"
+  for (const l of linhas || []) {
+    const m = l && l.tipo === "msg" ? l.msg : l && l.tipo === "grade" ? (l.msgs || [])[0] : null;
+    if (m && m.direcao === "out" && m.tipo !== "nota" && m.tipo !== "sistema" && !m.local) {
+      const k = m.conversa_id ?? "-";
+      const quem = m.origem === "ia" ? "ia" : m.enviado_por && m.enviado_por.nome ? "pessoa" : null;
+      if (quem === "pessoa" && ultima.get(k) === "ia") out.push({ tipo: "autoria", chave: `t-${m.id}`, texto: `${primeiroNome(m.enviado_por.nome) || m.enviado_por.nome} assumiu · ${horaMsg(m.criado_em)}` });
+      if (quem) ultima.set(k, quem);
+    }
+    out.push(l);
+  }
+  return out;
+}
+/** DC-210: texto colado do Word/PDF — tira NBSP, tabs e \r e junta espaços; diz se mudou algo. */
+export function limparColado(t) {
+  const s = String(t ?? "");
+  const limpo = s.replace(/\r\n?/g, "\n").replace(/[\u00A0\u2007\u202F]/g, " ").replace(/\t/g, " ").replace(/[\u200B\uFEFF]/g, "").replace(/ {2,}/g, " ").replace(/ +\n/g, "\n").replace(/\n{3,}/g, "\n\n");
+  return { texto: limpo, mudou: limpo !== s };
+}
+/** DC-211: «Parece CAIXA ALTA» — mais de 20 letras e mais de 80% maiúsculas. */
+export function pareceCaixaAlta(t) {
+  const letras = String(t ?? "").match(/\p{L}/gu) || [];
+  if (letras.length <= 20) return false;
+  const mai = letras.filter(c => c !== c.toLowerCase() && c === c.toUpperCase()).length;
+  return mai / letras.length > 0.8;
+}
+/** DC-211: CAIXA ALTA → frases com a 1ª letra maiúscula. */
+export function semCaixaAlta(t) {
+  const s = String(t ?? "").toLocaleLowerCase("pt-BR");
+  return s.replace(/(^|[.!?]\s+|\n\s*)(\p{L})/gu, (_, a, b) => a + b.toLocaleUpperCase("pt-BR"));
+}
+/** DC-257: aviso da janela de 24 h — «fecha às 09:12» com menos de 3 h (o forte, de menos de 30 min, continua no avisoJanelaFechando). */
+export function avisoJanelaSuave(janela, agora = Date.now()) {
+  if (!janela || !janela.aberta || !janela.ate) return "";
+  const resta = ms(janela.ate) - agora;
+  if (!(resta > 30 * 60000) || resta >= 3 * 3600000 - 60000) return "";   // «3 h» redondas (com segundos de folga) ainda não avisam
+  return `A janela de 24 h fecha às ${horaMsg(janela.ate)}.`;
+}
+/** DC-267: custo aproximado por mensagem de modelo (Brasil, tabela da Meta de 2025, em reais; a empresa ajusta em cfg.preco_modelos). */
+export const PRECO_MODELO_BR = Object.freeze({ MARKETING: 0.35, UTILITY: 0.05, AUTHENTICATION: 0.18 });
+export function precoModelo(categoria, tabela = null) {
+  const c = String(categoria || "").toUpperCase();
+  const v = tabela && Number.isFinite(Number(tabela[c])) ? Number(tabela[c]) : PRECO_MODELO_BR[c];
+  if (!(v > 0)) return "";
+  return `≈ ${v.toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 2 })} por mensagem`;
+}
+/** DC-258: link wa.me do número da empresa (para mandar por SMS/e-mail e o cliente escrever de novo). */
+export function linkWaMe(telefone, texto = "") {
+  const d = String(telefone || "").replace(/\D/g, "");
+  if (d.length < 10) return "";
+  return `https://wa.me/${d}${texto ? `?text=${encodeURIComponent(texto)}` : ""}`;
 }

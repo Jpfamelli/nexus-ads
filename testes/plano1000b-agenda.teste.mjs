@@ -353,7 +353,8 @@ test("CB-146 · bloqueio de 45 dias confere as consultas em blocos de 31 dias (a
   porTexto(C.alvo, "button", "Bloquear horário").click();
   await esperar(12);
   assert.match(erros[0] || "", /Há 1 consulta marcada/);
-  assert.equal(C.reg.chamadas.filter(c => c.nome === "nx_agenda_dia").length, 2);
+  // plano 1500c: a prévia do horário herdado lê hoje (CC-235, p_dias 1); a conta é a das leituras do bloqueio
+  assert.equal(C.reg.chamadas.filter(c => c.nome === "nx_agenda_dia" && c.p.p_data !== hojeSP()).length, 2);
 });
 
 test("CB-148 / CB-254 · dia que já passou: «Livre» sem «Marcar» no celular e sem «+» na semana", async () => {
@@ -408,8 +409,11 @@ test("CB-155 · os rótulos da linha de serviço acompanham o nome digitado", as
 
 test("CB-158 · «Copiar para os dias úteis» com Desfazer: as faixas de terça voltam", async () => {
   const desf = [];
-  const C = await montarConfig({ cfg: { ...cfgValidaB, horario_fonte: "agenda", horario: { 1: [["08:00", "12:00"]], 2: [["09:00", "11:00"]] } }, uiExtra: { acaoComDesfazer: o => { desf.push(o); } } });
+  // plano 1500c: «Copiar para…» abre a escolha dos dias (CC-231) com os úteis marcados — confirmar sem mexer = dias úteis
+  const C = await montarConfig({ cfg: { ...cfgValidaB, horario_fonte: "agenda", horario: { 1: [["08:00", "12:00"]], 2: [["09:00", "11:00"]] } }, uiExtra: { acaoComDesfazer: o => { desf.push(o); } },
+    modal: async o => primaria(o).valor });
   C.alvo.querySelector('.agc-dia[data-dia="1"] .agc-copiar').click();
+  await esperar(4);
   const faixas = id => C.alvo.querySelectorAll(`.agc-dia[data-dia="${id}"] .agc-faixa`).map(l => l.querySelectorAll("input").map(i => i.value));
   assert.deepEqual(faixas("2"), [["08:00", "12:00"]]);
   assert.equal(desf.length, 1);
@@ -704,7 +708,8 @@ test("CB-255 / CB-149 · remarcar pelo «Dia seguinte» do celular: horário ocu
     T.alvo.querySelector(".ag-bloco").click();
     T.reg.pops.at(-1).querySelector(".ag-det-amanha").click();
     await esperar(20);
-    assert.equal(erros[0], "Esse horário está ocupado. Escolha outro horário.");
+    // plano 2000d: DC-276 — a recusa relê a agenda e diz que outro atendimento entrou
+    assert.equal(erros[0], "Outro atendimento entrou neste horário (a agenda foi atualizada). Escolha outro horário.");
   } finally { T.sair(); }
 });
 
@@ -737,9 +742,11 @@ test("CB-263 · deslocamentoFuso: São Paulo −180; Nova York muda 60 min entre
 });
 
 test("CB-265 · normalizarExtrasAgenda: inválidos voltam ao padrão; id longo é recusado", () => {
-  assert.deepEqual(A.normalizarExtrasAgenda(null), { prof: "todos", fechados: "ocultar", atalhos: "ligados" });
-  assert.deepEqual(A.normalizarExtrasAgenda({ prof: "x".repeat(81), fechados: "talvez", atalhos: 1 }), { prof: "todos", fechados: "ocultar", atalhos: "ligados" });
-  assert.deepEqual(A.normalizarExtrasAgenda({ prof: "eu", fechados: "mostrar", atalhos: "desligados" }), { prof: "eu", fechados: "mostrar", atalhos: "desligados" });
+  // plano 2000d: DC-399/DC-405 — dois campos novos: «roteiro» (Já configurei) e «lista» (a Lista do dia do celular aberta ou fechada)
+  const novos = { roteiro: "mostrar", lista: null };
+  assert.deepEqual(A.normalizarExtrasAgenda(null), { prof: "todos", fechados: "ocultar", atalhos: "ligados", ...novos });
+  assert.deepEqual(A.normalizarExtrasAgenda({ prof: "x".repeat(81), fechados: "talvez", atalhos: 1 }), { prof: "todos", fechados: "ocultar", atalhos: "ligados", ...novos });
+  assert.deepEqual(A.normalizarExtrasAgenda({ prof: "eu", fechados: "mostrar", atalhos: "desligados" }), { prof: "eu", fechados: "mostrar", atalhos: "desligados", ...novos });
   assert.equal(A.normalizarExtrasAgenda({ prof: "" }).prof, "todos");
 });
 

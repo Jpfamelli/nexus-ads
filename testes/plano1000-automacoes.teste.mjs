@@ -433,6 +433,7 @@ test("AS-010 + AS-011 excluir: o cartão sai na hora sem redesenhar a tela; «De
     const excluidas = [];
     let listagens = 0;
     const t = ctxAuto(ui, { rpc: async (nome, p) => { if (nome === "nx_automacoes_listar") { listagens++; return dados; } if (nome === "nx_automacao_excluir") excluidas.push(p.p_id); return {}; } });
+    t.ctx.ui.modal = async () => true;   // plano 1500c: UCA-035 — com execuções, o diálogo oferece baixar o CSV antes; aqui a resposta é «Excluir»
     await A.montar(t.ctx); await tique();
     const raiz = t.ctx.alvo;
     const kpiLigadas = () => textoDe(raiz.querySelectorAll(".au-resumo > *")[0]);
@@ -655,7 +656,7 @@ test("AS-031 + AS-032 cabeçalho do editor com «⋯» no celular e aviso ao fec
     assert.ok(mais);
     mais.dispatchEvent(new d.Evento("click"));
     // plano 1000 · AS-051 (lote auto-2): o «⋯» ganhou «Salvar e continuar aqui»
-    assert.deepEqual(e.menus.at(-1).map(i => i.rotulo), ["Testar (sem enviar nada)", "Salvar e continuar aqui", "Duplicar", "Cancelar"]);
+    assert.deepEqual(e.menus.at(-1).map(i => i.rotulo), ["Testar (sem enviar nada)", "Salvar e continuar aqui", "Duplicar", "Copiar para outro cliente (texto)", "Cancelar"]);   // plano 1500c: UCA-103 — copiar a automação como texto para colar em outro cliente
     for (const rot of ["Testar", "Duplicar", "Cancelar", "Salvar"]) assert.ok(e.raiz.querySelectorAll(".au-ed-acoes .au-ed-largo").some(b => b.textContent.includes(rot)), rot);
     const bu = ouvintes.find(o => o[0] === "beforeunload")[1];
     const ev1 = { preventDefault() { this.p = true; } };
@@ -678,7 +679,7 @@ test("AS-035 + AS-036 + AS-037 passo «Enviar mensagem»: aviso de variável err
     const e = await abrirEditor(d, { partes: ["a1"] });
     const passo = e.raiz.querySelector(".au-passo-enviar_mensagem");
     const ta = passo.querySelector("textarea");
-    assert.equal(textoDe(passo.querySelector(".au-msg-previa .au-bolha")), "Olá, Maria!");
+    assert.equal(textoDe(passo.querySelector(".au-msg-previa .au-bolha")), "Olá, Alex!");   // plano 2000d · DU-038: nome de exemplo neutro
     assert.equal(textoDe(passo.querySelector(".au-cont")), "21 / 4.096");
     digitar(d, ta, "Oi {primeironome}, tudo bem?");
     assert.match(textoDe(passo.querySelector(".au-passo-aviso")), /variável desconhecida \{primeironome\} \(use \{primeiro_nome\}\)/);
@@ -703,7 +704,7 @@ test("AS-038 «parado na etapa»: escolher 7 dias grava 168 horas", async () => 
     assert.equal(campo.querySelectorAll("option").find(o => o.selected || o.hasAttribute("selected")).value, "dias", "48 h aparece como 2 dias");
     campo.querySelector("select").value = "dias";        // o DOM de mentira não deriva o value da <option selected>
     digitar(d, campo.querySelector("input"), "7");
-    assert.match(textoDe(campo.querySelector(".au-hr-resumo")), /= 168 horas/);
+    assert.match(textoDe(campo.querySelector(".au-hr-resumo")), /= 7 dias \(168 h\)/);   // plano 1500c: UCA-039 — resumo legível
     e.raiz.querySelectorAll(".au-ed-acoes button").find(b => b.textContent.trim() === "Salvar").dispatchEvent(new d.Evento("click"));
     await tique(10);
     assert.equal(e.chamadas.find(c => c[0] === "nx_automacao_salvar")[1].p_auto.config.horas, 168);
@@ -766,8 +767,9 @@ test("AS-278 editor: passo que dispara outra automação ligada (laço) é avisa
     dados.itens.push({ id: "b2", nome: "Vai", gatilho: "negocio_estagio", ativo: false, execucoes: 0, erros: 0, condicoes: [], config: { estagio_id: U(12) },
       acoes: [{ tipo: "mover_estagio", estagio_id: U(11) }] });
     const e = await abrirEditor(d, { partes: ["b2"], dados });
-    assert.match(textoDe(e.raiz.querySelector(".au-passo .au-passo-aviso")), /Laço com «Devolve»/);
-    assert.ok(e.raiz.querySelectorAll(".au-aviso-lat").some(p => /^Laço: o passo 1 usa a etapa «Nova conversa», que dispara «Devolve»/.test(textoDe(p))));
+    assert.match(textoDe(e.raiz.querySelector(".au-passo .au-passo-aviso")), /Laço: «Vai» → «Devolve» → volta para esta/);   // plano 1500c: UCA-015 — o aviso mostra o caminho do laço
+    // plano 1500c: UCA-015 — o aviso do lado mostra o passo e o caminho do laço
+    assert.ok(e.raiz.querySelectorAll(".au-aviso-lat").some(p => /^Passo 1 \(usa a etapa «Nova conversa»\): Laço: «Vai» → «Devolve» → volta para esta/.test(textoDe(p))));
     e.A.desmontar();
   } finally { d.fim(); }
 });
@@ -1089,10 +1091,11 @@ test("AS-029 / AS-030 / AS-014: frase sem passos, promessa de «Pronta» por gat
 });
 
 test("AS-018 / AS-071 / AS-072 / AS-017: por onde sai o WhatsApp, dado pessoal no pedido, pedidos recentes e ajuste das regras fixas", () => {
-  assert.match(L.viaWhatsApp([{ provedor: "meta" }]), /API oficial da Meta/);
+  // plano 2000d · DU-025: sem nome de fornecedor (o cliente da revenda lê esta frase)
+  assert.match(L.viaWhatsApp([{ provedor: "meta" }]), /pelo número oficial/);
   assert.doesNotMatch(L.viaWhatsApp([{ provedor: "meta" }]), /CodeWords/);
-  assert.match(L.viaWhatsApp([{ provedor: "codewords" }]), /\(pelo CodeWords\)$/);
-  assert.match(L.viaWhatsApp([{ provedor: "codewords" }, { provedor: "meta" }]), /CodeWords ou pela API oficial/);
+  assert.match(L.viaWhatsApp([{ provedor: "codewords" }]), /\(pelo número conectado por aparelho\)$/);
+  assert.match(L.viaWhatsApp([{ provedor: "codewords" }, { provedor: "meta" }]), /aparelho ou pelo número oficial/);
   assert.match(L.viaWhatsApp([]), /assim que houver um número conectado/);
   assert.equal(L.viaWhatsApp([{ id: 1 }]), "manda mensagem pelo WhatsApp");
   assert.deepEqual(L.dadosPessoaisNoPedido("Lembrar a Maria (12) 99830-3030 e maria@x.com.br").map(x => x.tipo), ["e-mail", "telefone"]);
@@ -1228,7 +1231,7 @@ test("AS-014 + AS-018 + AS-020: os números do topo dizem o período; o subtítu
     const ajudas = [textoDe(resumo), ...resumo.querySelectorAll("[data-dica], [aria-label], [title]").map(e => `${e.getAttribute("data-dica") || ""} ${e.getAttribute("aria-label") || ""} ${e.getAttribute("title") || ""}`)].join(" ");
     assert.match(ajudas, /rodaram desde a criação de cada uma/);
     const sub = textoDe(raiz.querySelector(".au-cab .sub"));
-    assert.match(sub, /pela API oficial da Meta/);
+    assert.match(sub, /pelo número oficial/);   // plano 2000d · DU-025
     assert.doesNotMatch(sub, /CodeWords/);
     const pil = cartao(raiz, "a3").querySelectorAll(".pilula").find(p => /WhatsApp/.test(p.textContent));
     assert.ok(pil);
@@ -1333,13 +1336,14 @@ test("AS-071 + AS-072 + AS-073 Criar com IA: dado pessoal pergunta antes; o pedi
     assert.ok(parar);
     parar.dispatchEvent(new d.Evento("click")); await tique(6);
     assert.equal(area.readOnly, false, "a caixa volta");
-    assert.match(textoDe(raiz.querySelector(".au-ia-desistiu")), /pode ter usado 1 montagem da cota/);
+    assert.match(textoDe(raiz.querySelector(".au-ia-desistiu")), /pode ter gastado 1 uso da IA/);
     assert.equal(raiz.querySelector(".au-ia-bt").disabled, false);
     pendentes[0]({ automacao: { nome: "Tarde demais" } }); await tique(4);
     assert.doesNotMatch(textoDe(raiz), /Tarde demais/, "a resposta que chega depois é ignorada");
-    // o pedido limpo ficou como «recente» (o com telefone, não)
-    const rec = JSON.parse(localStorage.getItem("nx-au-ia-recentes:cli-1|conta-1"));
-    assert.deepEqual(rec, ["Quando o orçamento ficar parado 3 dias, crie uma tarefa"]);
+    // plano 1500c: UCA-102 — «Parar de esperar» (a IA não montou) não vira «recente»: só o pedido que a IA montou fica guardado
+    assert.equal(localStorage.getItem("nx-au-ia-recentes:cli-1|conta-1"), null);
+    // UCA-101: o recente guarda {texto, em}; semeado aqui para o resto do teste (o chip na próxima abertura)
+    localStorage.setItem("nx-au-ia-recentes:cli-1|conta-1", JSON.stringify([{ texto: "Quando o orçamento ficar parado 3 dias, crie uma tarefa", em: Date.now() }]));
     A.desmontar();
     d.doc.body.removeChild(raiz);
     sessionStorage.removeItem(L.chaveRascunho("cli-1", "conta-1", "ia-texto"));
@@ -1455,7 +1459,7 @@ test("AS-039: «sem resposta há» aceita horas — 240 min aparece como 4 horas
     assert.equal(campo.querySelectorAll("option").find(o => o.selected || o.hasAttribute("selected")).value, "horas", "240 min aparece como 4 horas");
     campo.querySelector("select").value = "horas";        // o DOM de mentira não deriva o value da <option selected>
     digitar(d, campo.querySelector("input"), "2");
-    assert.match(textoDe(campo.querySelector(".au-hr-resumo")), /= 120 minutos/);
+    assert.match(textoDe(campo.querySelector(".au-hr-resumo")), /= 2 h/);   // plano 1500c: UCA-039 — resumo legível (antes «= 120 minutos»)
     clicar(d, e.raiz.querySelectorAll(".au-ed-acoes button").find(b => b.textContent.trim() === "Salvar")); await tique(10);
     assert.equal(salvos[0].config.minutos, 120);
     e.A.desmontar();
@@ -1898,9 +1902,10 @@ test("AS-141 / AS-142 / AS-143 / AS-240 Respostas: ordem por usos, atalho repeti
   assert.equal(arq.tipo, "orbita-respostas");
   assert.deepEqual(Object.keys(arq.respostas[0]).sort(), ["atalho", "ativo", "corpo", "titulo"], "sem id, usos nem departamento");
   const lido = CV.lerImportacaoRespostas(JSON.stringify({ respostas: [...arq.respostas, { atalho: "novo", titulo: "Novo", corpo: "Texto" }, { atalho: "Com espaço", titulo: "x", corpo: "y" }] }), [rs[0]]);
-  assert.deepEqual(lido.novas.map(r => r.atalho), ["end", "pix", "novo"]);
+  // plano 2000d: desde o 1500c (CX-044) o atalho «Com espaço» vira «com-espaco» em vez de ser descartado
+  assert.deepEqual(lido.novas.map(r => r.atalho), ["end", "pix", "novo", "com-espaco"]);
   assert.deepEqual(lido.repetidas, ["ola"]);
-  assert.equal(lido.invalidas, 1);
+  assert.equal(lido.invalidas, 0);
   assert.match(CV.lerImportacaoRespostas("não é json").erro, /JSON válido/);
 });
 
@@ -2166,7 +2171,7 @@ test("AS-145 + AS-148 + AS-149 + AS-150 + AS-235 + AS-237 + AS-238 Departamentos
     assert.equal(viva.vivo, false, "sair da seção para o relógio");
     clicar(d, t.alvo.querySelectorAll("button").find(b => /Editar/.test(b.textContent))); await tique(4);
     const f = modal.corpo;
-    assert.match(textoDe(f.querySelector("[data-campo=horario] legend")), /horário de Brasília \(São Paulo\)/);
+    assert.match(textoDe(f.querySelector("[data-campo=horario] legend")), /horário de Brasília/);   // plano 2000d: desde o 1500c (CC-049) um nome só para o fuso
     const seg = f.querySelector('[data-dia="1"]');
     assert.equal(seg.getAttribute("role"), "group");
     assert.ok(seg.getAttribute("aria-labelledby"));
@@ -2400,7 +2405,7 @@ test("AS-270 + AS-232 simulação conta o que sairia; aviso lateral sem a Meta q
     dados.base = { ...BASE, canais: [{ id: U(61), nome: "Recepção", provedor: "codewords" }] };
     const e = await abrirEditor(d, { partes: ["a3"], dados, rpcExtra: { nx_auto_simular: async () => ({ amostra: [{ titulo: "Maria", passos: [{ tipo: "enviar_mensagem", resultado: "faria" }] }] }) } });
     assert.doesNotMatch(textoDe(e.raiz.querySelector(".au-avisos")), /24 h/);
-    assert.match(textoDe(e.raiz.querySelector(".au-avisos")), /CodeWords \(texto livre a qualquer hora\)/);
+    assert.match(textoDe(e.raiz.querySelector(".au-avisos")), /conectado por aparelho \(texto livre a qualquer hora\)/);
     clicar(d, e.raiz.querySelectorAll("button").find(b => /Testar agora/.test(b.textContent))); await tique(10);
     assert.equal(textoDe(e.raiz.querySelector(".au-sim-saidas")), "Agora sairiam: 1 mensagem de WhatsApp.");
     e.A.desmontar();

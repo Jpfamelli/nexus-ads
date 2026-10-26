@@ -147,8 +147,9 @@ test("CRM liga visões salvas às duas telas e apresenta filtro rápido com esta
   assert.match(contatos, /k\.mod\("visoes"\)/);
   // plano 1000 (CR-136): na tela, «Filtros salvos» (visão era termo técnico)
   assert.match(vistas, /Fica salvo somente neste dispositivo, para esta empresa e sua conta/i);
-  assert.match(vistas, /12 filtros salvos/);
-  assert.match(vistas, /Isso remove apenas o atalho salvo neste dispositivo/);
+  // plano 1500c: RX-052 — o número do limite vem da constante da lógica (L.LIMITE_VISOES_CRM, que vale 12)
+  assert.match(vistas, /\$\{L\.LIMITE_VISOES_CRM \|\| 12\} filtros salvos/);
+  assert.match(vistas, /acaoComDesfazer\(\{ texto: `Filtro «\$\{item\.nome\}» excluído`/);   // plano 1500c: RC-138 — excluir o atalho local tem «Desfazer» em vez do diálogo de confirmação
   assert.match(board, /"Minhas" : "Meus"\} \$\{k\.v\.min\("negocios"\)\}/);   // plano 1000 (CR-006): o atalho usa o termo da vertical
   assert.match(board, /Parados há 7\+ dias/);   // plano 1000 (CR-205): o rótulo diz o que é («Parados · 7 dias+» era obscuro)
   assert.match(board, /aria-pressed/);
@@ -179,7 +180,8 @@ test("Agenda persiste preferências, oferece atualização manual honesta e pres
   assert.match(agenda, /a agenda exibida foi mantida/);
   assert.match(agenda, /document\.removeEventListener\("keydown", aoTeclaAgenda\)/);
   assert.match(agenda, /indiceAbaAgendaTecla\(ev\.key, i, abas\.length\)/);
-  assert.match(css, /\.agenda-faixa \[role="tab"\]:focus-visible/);
+  // plano 2000d · GY-104: a faixa dos dias é .ag-faixa (.agenda-faixa não existe na tela; o foco nunca aparecia)
+  assert.match(css, /\.ag-faixa \[role="tab"\]:focus-visible/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
 });
 

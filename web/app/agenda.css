@@ -11,7 +11,7 @@
 .agenda-cab-controles, .agenda-periodo, .agenda-acoes { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .agenda-acoes { justify-content: flex-end; }
 .agenda-data {
-  min-height: 42px; width: 145px; padding: .45rem .65rem; border: 1px solid var(--c-borda-2);
+  min-height: 44px; width: 145px;   /* plano 1500c · GX-037: alvo de 44 px (era 42) */ padding: .45rem .65rem; border: 1px solid var(--c-borda-2);
   border-radius: 999px; background: var(--c-sup); color: var(--c-texto); font: inherit;
 }
 .agenda-data:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; }
@@ -369,7 +369,7 @@ button.agenda-proxima:focus-visible { outline: 2px solid var(--c-foco); outline-
 }
 .ag-dia-chip:hover { color: var(--c-texto); border-color: var(--c-texto-3); }
 .ag-dia-chip[aria-checked="true"] { border-color: var(--c-prim); background: var(--c-prim-suave); color: var(--c-texto); }
-.ag-horas { display: flex; flex-wrap: wrap; gap: .4rem; max-height: 220px; overflow: auto; padding: .1rem; }
+.ag-horas { display: flex; flex-wrap: wrap; gap: .4rem; padding: .1rem; }   /* plano 1500c · CC-200: sem rolagem dentro da janela (os horários vêm por período) */
 .ag-hora-pill {
   flex: 0 0 4.6rem; min-height: 44px; padding: .3rem .4rem; border-radius: var(--r-p); border: 1px solid var(--c-borda-2); background: var(--c-sup); color: var(--c-texto); font-size: var(--fs-13);
 }
@@ -422,7 +422,8 @@ button.agenda-proxima:focus-visible { outline: 2px solid var(--c-foco); outline-
 .agenda-atualizacao { max-width: 15rem; overflow: hidden; color: var(--c-texto-3); font-size: var(--fs-12); text-overflow: ellipsis; white-space: nowrap; }
 .agenda-atualizacao:empty { display: none; }
 .agenda-atualizar[aria-busy="true"] { cursor: progress; }
-.agenda-faixa [role="tab"]:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+/* plano 2000d · GY-104: o seletor apontava para .agenda-faixa (não existe) — a faixa dos dias é .ag-faixa */
+.ag-faixa [role="tab"]:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
 
 /* ---------------- plano 1000 (agenda-1) ---------------- */
 .agenda-procurar .ic { width: 15px; height: 15px; }
@@ -521,7 +522,6 @@ button.agenda-proxima:focus-visible { outline: 2px solid var(--c-foco); outline-
   .ag-grade.ag-movel .ag-col { border-left: 1px solid var(--c-borda); }
   .ag-grade.ag-movel .ag-bloco-nome { font-size: var(--fs-14); }
   .agenda-form-grade { grid-template-columns: minmax(0, 1fr); }
-  .ag-horas { max-height: 40dvh; }
   .ag-hora-pill { flex-basis: calc(25% - .3rem); }
   .agenda-busca { grid-template-columns: minmax(0, 1fr); }
   .agenda-busca > .agenda-resultados { grid-column: auto; }
@@ -677,3 +677,317 @@ button.agenda-proxima:focus-visible { outline: 2px solid var(--c-foco); outline-
 .agc-barra-sujo[hidden] { display: none; }
 @media (prefers-reduced-motion: no-preference) { .agc-barra-sujo:not([hidden]) { animation: agc-barra-entra var(--t-ui) var(--e-out); } }
 @keyframes agc-barra-entra { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ---------------- plano 1500c (frente agenda) ---------------- */
+/* plano 1500c · CC-211/CC-212/CC-213/CC-214/CC-215/CC-216: alvos de toque com 44 px; campos de hora com 16 px (o iOS não dá zoom) */
+@media (max-width: 760px), (pointer: coarse) {
+  .ag-movel .ag-item { min-height: 44px; }
+  .ag-mais-bt { min-height: 44px; }
+  .ag-livre { min-height: 44px; }
+  .ag-dia-abrir { min-height: 44px; }
+  .agenda-atualizar { min-height: 44px; }
+  .ag-mes-nav { width: 44px; height: 44px; }
+  .agc-faixa input, .agc-duracao input { min-height: 44px; font-size: var(--fs-16); }
+  .ag-li-rapidas .bt, .ag-li-rapidas a, .ag-retorno-bt, .ag-serv-chip, .ag-serv-parecido, .agenda-ferramentas .bt, .agenda-filtro-nome, .ag-roteiro-ir,
+  .agenda-prox-livre, .agenda-encaixar-agora, .ag-faixa-caixa .bt-icone, .ag-mes-tentar, .ag-sem-rede-tentar, .ag-lote-item, .agc-copiar-dia, .agc-feriado-item,
+  .agc-add-duracao, .ag-det-confirmar, .ag-det-wa, .ag-prox-aberto, .ag-tv-fechar, .ag-desmarcadas summary { min-height: 44px; }
+}
+/* plano 1500c · CC-217: com o teclado aberto a lista de resultados não fica espremida numa caixinha com rolagem própria */
+@media (max-width: 760px) {
+  .agenda-resultados { max-height: none; overflow: visible; }
+}
+/* plano 1500c · CC-200: horários agrupados por Manhã / Tarde / Noite; o lotado aparece apagado (só o supervisor encaixa) */
+.ag-horas-per { display: flex; flex-wrap: wrap; gap: .4rem; width: 100%; min-width: 0; }
+.ag-horas-per-tit { flex: 1 1 100%; margin: .2rem 0 0; color: var(--c-texto-2); font-size: var(--fs-12); font-weight: 600; letter-spacing: .02em; text-transform: uppercase; }
+.ag-hora-lotada { opacity: .6; border-style: dashed; text-decoration: line-through; text-decoration-thickness: 1px; }
+button.ag-hora-lotada { opacity: .8; text-decoration: none; }
+button.ag-hora-lotada[aria-checked="true"] { opacity: 1; }
+/* plano 1500c · CC-204: os serviços cadastrados em chips no toque (a lista de sugestões do campo quase não aparece no celular) */
+.ag-serv-chips { display: none; flex-wrap: wrap; gap: .35rem; }
+@media (pointer: coarse) { .ag-serv-chips { display: flex; } }
+.ag-serv-chip { display: inline-flex; align-items: center; min-height: 36px; padding: .2rem .7rem; border: 1px solid var(--c-borda-2); border-radius: 999px; background: var(--c-sup); color: var(--c-texto); font-size: var(--fs-13); }
+.ag-serv-chip[aria-pressed="true"] { border-color: var(--c-prim); background: var(--c-prim-suave); }
+.ag-serv-chip:focus-visible, .ag-serv-parecido:focus-visible, .ag-retorno-bt:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 1px; }
+.ag-serv-parecido { justify-self: start; font-size: var(--fs-13); }
+.ag-retornos { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; color: var(--c-texto-2); font-size: var(--fs-13); }
+.ag-retorno-bt { min-height: 36px; }
+/* busca da janela: «Já atendidos» e a última consulta no «Procurar paciente» */
+.ag-ja-atendidos { display: grid; gap: .3rem; grid-column: 1 / -1; }
+.ag-ja-atendidos-tit { margin: .3rem 0 0; color: var(--c-texto-2); font-size: var(--fs-12); font-weight: 600; }
+.ag-procurar-ultima { color: var(--c-texto-3); font-size: var(--fs-12); }
+/* plano 1500c · CC-225: ligar / conversa / lembrar direto na linha da lista do dia */
+.ag-li-rapidas { display: flex; flex-wrap: wrap; gap: .3rem; }
+.ag-li-rapidas .bt, .ag-li-rapidas a { display: inline-flex; align-items: center; gap: .25rem; min-height: 32px; font-size: var(--fs-12); }
+.ag-li-rapidas a:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 1px; }
+.ag-li-lembrado { color: var(--c-ok); }
+/* lista: dia bloqueado ou fechado */
+.ag-lista-bloq, .ag-lista-fechado-txt { margin: 0; color: var(--c-texto-2); font-size: var(--fs-13); }
+.ag-lista-fechado { background: var(--c-poco); }
+.ag-dia-fechado { display: grid; gap: .5rem; justify-items: start; color: var(--c-texto-2); }
+/* plano 1500c · CC-263: a faixa de dias com as setas de semana */
+.ag-faixa-caixa { display: flex; align-items: center; gap: .2rem; min-width: 0; }
+.ag-faixa-caixa > .ag-faixa { flex: 1; min-width: 0; }
+.ag-faixa-caixa .bt-icone { flex: none; }
+.ag-faixa-d.bloqueado { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--c-aten) 16%, transparent) 0 6px, transparent 6px 12px); }
+/* mês: bloqueio de parte do dia; erro ao ler o mês */
+.ag-mes-dia.ag-mes-parcial { box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--c-aten) 60%, transparent); }
+.ag-mes-erro { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+/* plano 1500c · CC-280/CC-281: o bloqueio na grade — botão para o admin e o período escrito no bloco */
+.ag-bloq-edita { cursor: pointer; }
+.ag-bloq-bt { display: flex; flex-direction: column; align-items: flex-start; width: 100%; height: 100%; padding: 0; border: 0; background: none; color: inherit; text-align: left; pointer-events: auto; cursor: pointer; }
+.ag-bloq-bt:hover { background: color-mix(in srgb, var(--c-aten) 10%, transparent); }
+.ag-bloq-bt:focus-visible { outline: 2px solid var(--c-foco); outline-offset: -2px; }
+.ag-bloq-periodo { margin: 0 .2rem; padding: 0 .4rem; border-radius: 6px; background: color-mix(in srgb, var(--c-sup) 88%, transparent); font-size: var(--fs-12); }
+/* blocos: marcada pela IA, confirmada; filtro por nome */
+.ag-bloco-ia, .ag-bloco-conf { display: inline-flex; align-items: center; flex: none; color: var(--c-texto-2); font-size: var(--fs-11); }
+.ag-bloco-ia .ic, .ag-bloco-conf .ic { width: 11px; height: 11px; }
+.ag-bloco-conf { color: var(--c-ok); }
+.ag-filtrado { opacity: .18; }
+.ag-painel-li.ag-filtrado { display: none; }
+/* barra de ferramentas da semana (filtro por nome, exportar, imprimir, tela da recepção) */
+.agenda-ferramentas { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .2rem 0 .5rem; }
+.agenda-filtro-nome-rot { display: inline-flex; align-items: center; gap: .4rem; color: var(--c-texto-2); font-size: var(--fs-13); }
+.agenda-filtro-nome { min-height: 36px; width: 12rem; max-width: 100%; font-size: var(--fs-16); }
+.agenda-prox-livre-caixa:empty { display: none; }
+.agenda-prox-livre, .agenda-encaixar-agora { gap: .3rem; }
+.agenda-resumo-faltas, .agenda-resumo-ia { white-space: nowrap; }
+.agenda-fonte-link { color: var(--c-texto-2); font-size: var(--fs-12); }
+/* plano 1500c · CC-306: o roteiro «Deixe a agenda pronta em 3 passos» (empresa nova, só o admin) */
+.ag-roteiro { display: grid; gap: .4rem; padding: .7rem .8rem; }
+.ag-roteiro-tit { margin: 0; font-size: var(--fs-15); }
+.ag-roteiro-lista { display: grid; gap: .45rem; margin: 0; padding: 0; list-style: none; }
+.ag-roteiro-passo { display: flex; align-items: flex-start; gap: .6rem; min-width: 0; font-size: var(--fs-13); overflow-wrap: anywhere; }
+.ag-roteiro-passo small { display: block; color: var(--c-texto-2); font-size: var(--fs-12); }
+.ag-passo-n { display: grid; place-items: center; flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--c-prim-suave); color: var(--c-texto); font-weight: 700; }
+.ag-roteiro-ir { justify-self: start; }
+/* plano 1500c · CC-301: no detalhe, «Desmarcar» fica separado das outras ações */
+.ag-det-perigo { margin-top: .4rem; padding-top: .45rem; border-top: 1px solid var(--c-borda); }
+.ag-det-ia, .ag-det-confirmada { color: var(--c-texto-2); font-size: var(--fs-12); }
+.ag-det-confirmada { color: var(--c-ok); }
+.ag-desmarcadas { color: var(--c-texto-2); font-size: var(--fs-13); }
+.ag-desmarcadas summary { min-height: 32px; cursor: pointer; }
+.ag-desmarcadas summary:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+/* sem rede na primeira carga */
+.ag-sem-rede { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+/* presença em lote com caixas */
+.ag-lote-item { display: flex; align-items: center; gap: .5rem; min-height: 36px; }
+.ag-lote-chk { width: 20px; height: 20px; flex: none; }
+/* plano 1500c · CC-323: a tela da recepção (TV) — letra grande, alto contraste, sem animação */
+.ag-tv { position: fixed; inset: 0; z-index: 90; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 1.5rem; padding: clamp(1rem, 4vw, 3rem); overflow: auto; background: var(--c-fundo); color: var(--c-texto); }   /* plano 1500c · APP-1FR: fração com mínimo 0 */
+.ag-tv-cab { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
+.ag-tv-cab h2 { margin: 0; font-size: var(--fs-39); }
+.ag-tv-hora { margin: 0; font-size: var(--fs-39); font-weight: 600; }
+.ag-tv-lista { display: grid; gap: .8rem; margin: 0; padding: 0; list-style: none; align-content: start; }
+.ag-tv-lista li { display: flex; align-items: baseline; gap: 1.5rem; min-width: 0; padding: .8rem 1rem; border-radius: var(--r); background: var(--c-sup); font-size: var(--fs-39); }
+.ag-tv-lista li b { flex: none; color: var(--c-prim); }
+.ag-tv-lista li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-tv-vazio { color: var(--c-texto-2); }
+@media (max-width: 760px) { .ag-tv-cab h2, .ag-tv-hora, .ag-tv-lista li { font-size: var(--fs-25); } }
+/* configuração: copiar para…, contador de serviços, aviso de consultas fora do horário, feriados */
+.agc-copiar-dias { display: flex; flex-wrap: wrap; gap: .3rem; }   /* plano 1500c · APP-1FR: flex no lugar do auto-fill (nenhuma fração solta) */
+.agc-copiar-dias > * { flex: 1 1 9rem; min-width: 0; }
+.agc-copiar-dia, .agc-feriado-item { display: flex; align-items: center; gap: .5rem; min-height: 36px; }
+.agc-serv-rod { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
+.agc-serv-contador { color: var(--c-texto-2); font-size: var(--fs-12); }
+.agc-aviso-fora { font-size: var(--fs-13); }
+.agc-previa-herdada { margin: 0 0 .3rem; }
+/* plano 1500c · CC-260: imprimir a semana — só a folha */
+.ag-folha-semana { display: none; }
+@media print {
+  body.ag-imprimindo-semana * { visibility: hidden; }
+  body.ag-imprimindo-semana .ag-folha-semana, body.ag-imprimindo-semana .ag-folha-semana * { visibility: visible; }
+  body.ag-imprimindo-semana .ag-folha-semana { display: block; position: absolute; top: 0; left: 0; width: 100%; }
+  body.ag-imprimindo-semana .ag-folha-semana button { display: none; }
+  body.ag-imprimindo-semana .ag-lista-dia { break-inside: avoid; border: 0; border-bottom: 1px solid var(--c-borda); border-radius: 0; background: none; box-shadow: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ag-tv, .ag-bloq-bt, .ag-serv-chip, .ag-filtrado { transition: none; animation: none; }
+}
+/* plano 1500c · GX-010: a consulta acontecendo agora — borda forte na cor do acento */
+.ag-bloco.ag-em-curso { border-color: var(--c-prim); box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-prim) 45%, transparent); }
+.ag-det-agora { margin-left: .4rem; }
+/* plano 1500c · GX-013: copiar o telefone no detalhe */
+.ag-det-copiar-tel { width: fit-content; }
+/* plano 1500c · GX-016: a conta do filtro ao lado do campo */
+.agenda-filtro-conta { color: var(--c-texto-2); font-size: var(--fs-12); white-space: nowrap; }
+.agenda-filtro-conta:empty { display: none; }
+.agenda-filtro-nome-rot { display: inline-flex; align-items: center; gap: .5rem; min-width: 0; }
+/* plano 1500c · GX-025/GX-041: até quando vai */
+.ag-remarcar-ate { display: block; color: var(--c-texto-2); }
+.ag-painel-fim { color: var(--c-texto-2); font-size: var(--fs-12); }
+/* plano 1500c · GX-027/GX-028/GX-055: a Lista — marcar no dia com consultas, a linha de «Agora» e a ocupação no título */
+.ag-lista-marcar { margin-top: .4rem; }
+.ag-lista-agora { display: flex; align-items: center; gap: .5rem; list-style: none; color: var(--c-prim); font-size: var(--fs-12); font-weight: 600; }
+.ag-lista-agora::after { content: ""; flex: 1; border-top: 2px solid var(--c-prim); }
+.ag-lista-ocup { margin-left: .5rem; color: var(--c-texto-2); font-size: var(--fs-12); font-weight: 400; }
+/* plano 1500c · GX-050/GX-056: «Voltar a este mês» e os motivos comuns do bloqueio */
+.ag-mes-este { margin-top: .6rem; }
+.ag-bloq-motivos { display: flex; flex-wrap: wrap; gap: .35rem; }
+.agc-motivos { display: flex; flex-wrap: wrap; gap: .35rem; }
+.agc-dia-fechado { color: var(--c-texto-2); font-size: var(--fs-12); }
+.agc-cont-bloq { color: var(--c-texto-2); font-weight: 400; }
+.agc-feriados-todos { display: flex; flex-wrap: wrap; gap: .35rem; }
+.agc-meio-dia { display: flex; flex-wrap: wrap; gap: .35rem; }
+@media (max-width: 760px), (pointer: coarse) {
+  .ag-det-copiar-tel, .ag-lista-marcar, .ag-mes-este, .ag-bloq-motivo, .agc-motivo, .agc-feriados-todos .bt, .agc-meio-dia .bt { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ag-bloco.ag-em-curso { transition: none; }
+}
+
+/* ============================================================ plano 2000d (frente agenda) */
+[hidden] { display: none !important; }
+/* plano 2000d · DC-305/DC-450: falta riscada e encaixe tracejado também para quem enxerga (antes só no leitor de tela) */
+.ag-bloco.falta { opacity: .8; background-image: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--c-ruim) 14%, transparent) 6px 8px); }
+.ag-bloco.falta .ag-bloco-nome { text-decoration: line-through; text-decoration-thickness: 1px; }
+.ag-bloco.encaixe { border-style: dashed; border-color: var(--c-aten); }
+.ag-bloco-selo { display: inline-block; width: fit-content; padding: 0 .35rem; border-radius: 999px; font-size: var(--fs-11); font-weight: 600; line-height: 1.5; }
+.ag-selo-falta { background: var(--c-ruim-suave); color: var(--c-ruim-txt); }
+.ag-selo-encaixe { background: var(--c-aten-suave); color: var(--c-texto); }
+/* plano 2000d · DC-335/DC-412/DC-345: megafone do anúncio, «1ª» e o campo da 2ª linha */
+.ag-bloco-anuncio { display: inline-flex; align-items: center; flex: none; color: var(--c-meta); }
+.ag-bloco-anuncio .ic { width: 12px; height: 12px; }
+.ag-bloco-1a { flex: none; padding: 0 .25rem; border-radius: var(--r-p); background: var(--c-prim-suave); color: var(--c-prim-txt); font-size: var(--fs-11); font-weight: 700; }
+.ag-bloco-campo { display: block; overflow: hidden; color: var(--c-texto-2); font-size: var(--fs-11); text-overflow: ellipsis; white-space: nowrap; }
+.curto .ag-bloco-campo, .curto .ag-bloco-selo { display: none; }
+/* plano 2000d · DC-372: ícone da IA e o sinal de confirmada maiores e com cor (antes 11 px cinza) */
+.ag-bloco-ia { color: var(--c-info); }
+.ag-bloco-ia .ic, .ag-bloco-conf .ic { width: 13px; height: 13px; }
+.ag-bloco-conf { color: var(--c-info); font-size: var(--fs-12); font-weight: 700; }
+/* plano 2000d · DC-373: o bloco concluído ganha a borda verde, não só a transparência */
+.ag-bloco.feita { border-left: 3px solid var(--c-ok); }
+/* plano 2000d · DC-374: dias que já passaram, apagados na semana */
+.ag-col.passado { background: color-mix(in srgb, var(--c-poco) 60%, transparent); }
+.ag-col.passado .ag-bloco:not(:hover):not(:focus-visible) { opacity: .82; }
+/* plano 2000d · DC-371: a escala de ocupação não clareia no nível 3 */
+.ag-ocup-3 { --c-ocup: color-mix(in srgb, var(--c-prim) 80%, var(--c-texto)); }
+/* plano 2000d · DC-323: consulta nova (a IA marcou agora) acende por 3 s */
+.ag-item.ag-novo .ag-bloco { outline: 2px solid var(--c-info); outline-offset: 1px; }
+@media (prefers-reduced-motion: no-preference) {
+  .ag-item.ag-novo .ag-bloco { animation: ag-novo-brilho 3s var(--e-out, ease-out); }
+}
+@keyframes ag-novo-brilho { from { box-shadow: 0 0 0 6px color-mix(in srgb, var(--c-info) 45%, transparent); } to { box-shadow: 0 0 0 0 transparent; } }
+/* plano 2000d · DC-272/DC-322: «Lembrete pronto» (não enviado) neutro; «Lembrado» (enviado) verde */
+.ag-li-pronto { background: var(--c-sup-2); color: var(--c-texto-2); }
+/* plano 2000d · DC-334: o filtro «só anúncio» no resumo */
+.agenda-resumo-anuncio { display: inline-flex; align-items: center; gap: .3rem; min-height: 32px; padding: 0 .6rem; border: 1px solid var(--c-borda); border-radius: 999px; background: none; color: var(--c-texto); font: inherit; font-size: var(--fs-13); cursor: pointer; }
+.agenda-resumo-anuncio[aria-pressed="true"] { border-color: var(--c-meta); background: var(--c-meta-suave); }
+.agenda-resumo-anuncio:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+/* plano 2000d · DC-343: «Livres agora» ao lado do «Encaixar agora» */
+.agenda-encaixar-caixa { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.agenda-livres-agora { color: var(--c-texto-2); font-size: var(--fs-12); }
+/* plano 2000d · DC-381: o cabeçalho da impressão (empresa, dia e hora em que saiu) */
+.ag-impressao-cab { margin: 0 0 .4rem; color: var(--c-texto-2); font-size: var(--fs-12); }
+.ag-so-impressao.ag-impressao-cab { display: none; }
+/* plano 2000d · DC-270/DC-446: dia só de lotados nos chips e a hora lotada sem encaixe */
+.ag-dia-chip-lotado { color: var(--c-texto-2); }
+.ag-hora-pill[aria-disabled="true"] { opacity: .55; cursor: not-allowed; text-decoration: line-through; }
+/* plano 2000d · DC-326/DC-439: avisos da janela */
+.ag-outra-consulta, .ag-encaixe-depois { margin-top: .4rem; }
+/* plano 2000d · DC-330: o caminho do lead no topo do detalhe */
+.ag-det-passos { display: flex; flex-wrap: wrap; gap: .25rem; margin: 0 0 .4rem; padding: 0; list-style: none; }
+.ag-det-passo { display: inline-flex; align-items: center; gap: .2rem; padding: .1rem .45rem; border-radius: 999px; background: var(--c-sup-2); color: var(--c-texto-3); font-size: var(--fs-11); }
+.ag-det-passo .ic { width: 11px; height: 11px; }
+.ag-det-passo.feito { background: var(--c-ok-suave); color: var(--c-ok-txt); }
+.ag-det-passo.ruim { background: var(--c-ruim-suave); color: var(--c-ruim-txt); }
+/* plano 2000d · DC-378/DC-379: a tela da recepção com o nome da empresa, «Agora» em destaque e com quem */
+.ag-tv-id { display: grid; gap: .2rem; }
+.ag-tv-empresa { margin: 0; color: var(--c-prim); font-size: var(--fs-20); font-weight: 700; }
+.ag-tv-lista li.ag-tv-agora { background: var(--c-prim-suave); outline: 3px solid var(--c-prim); font-weight: 700; }
+.ag-tv-rot { flex: none; min-width: 6.5em; color: var(--c-texto-2); font-size: .45em; text-transform: uppercase; letter-spacing: .06em; }
+.ag-tv-com { margin-left: auto; color: var(--c-texto-2); font-size: .55em; white-space: nowrap; }
+.ag-tv-saiu { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+/* plano 2000d · DC-315/DC-316/DC-317: alvos de 44 px no toque — retornos, atalhos de horário, botões da configuração e as ações do detalhe */
+@media (max-width: 1024px), (pointer: coarse) {
+  .ag-retorno, .ag-retorno-bt, .ag-atalhos .bt, .ag-hora-pill, .ag-dia-chip, .agc-add-faixa, .agc-remover, .agc-faixa input, .agc .bt, .agc-motivo,
+  .ag-det-acoes .bt, .ag-det-atalhos .bt, .ag-det-perigo .bt, .ag-det-copiar-tel, .ag-det-tarefa, .ag-det-retorno, .agenda-resumo-anuncio, .ag-tv-saiu .bt { min-height: 44px; }
+  .agc-remover { min-width: 44px; }
+}
+/* plano 2000d · DC-283: «Adicionar horário» travado na 2ª faixa */
+.agc-add-faixa[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+/* plano 2000d · DC-311: alto contraste (forced-colors) — blocos, selos e estados não dependem só de cor */
+@media (forced-colors: active) {
+  .ag-bloco { border: 1px solid CanvasText; }
+  .ag-bloco.ag-em-curso, .ag-item.ag-novo .ag-bloco, .ag-tv-lista li.ag-tv-agora { outline: 3px solid Highlight; }
+  .ag-bloco.encaixe { border-style: dashed; }
+  .ag-bloco.falta { background-image: none; }
+  .ag-bloco-selo, .ag-det-passo, .ag-li-pronto, .agenda-resumo-anuncio { border: 1px solid CanvasText; }
+  .ag-hora-pill[aria-checked="true"], .agenda-resumo-anuncio[aria-pressed="true"], .ag-det-passo.feito { outline: 2px solid Highlight; }
+}
+/* plano 2000d · DC-380/DC-447: na impressão do dia saem os botões rápidos, a presença e a lista de desmarcadas; os selos levam borda (sem cor de fundo) */
+@media print {
+  body.ag-imprimindo .ag-so-impressao.ag-impressao-cab { display: block; }
+  body.ag-imprimindo .ag-li-rapidas, body.ag-imprimindo .ag-pres, body.ag-imprimindo .ag-desmarcadas, body.ag-imprimindo .ag-painel-acoes,
+  body.ag-imprimindo .ag-painel button:not(.ag-painel-item) { display: none !important; }
+  .ag-folha-semana .pilula, .ag-painel .pilula, .ag-bloco-selo { border: 1px solid currentColor; background: none !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ag-item.ag-novo .ag-bloco { animation: none; }
+}
+/* plano 2000d · DC-366: no celular, «Marcar» vira o botão flutuante de 56 px perto do polegar (acima da barra de baixo); some com o teclado aberto */
+@media (max-width: 760px) {
+  .agenda-cab .agenda-acoes .agenda-marcar, .agenda-acoes .agenda-marcar {
+    position: fixed; right: 16px; bottom: calc(72px + env(safe-area-inset-bottom)); z-index: 24; min-height: 56px; padding: 0 1.2rem; border-radius: 999px;
+    box-shadow: 0 6px 18px var(--c-sombra);
+  }
+  .vista:has(.agenda-marcar) { padding-bottom: 6.5rem; }
+}
+@media (max-width: 760px) and (max-height: 460px) {
+  .agenda-cab .agenda-acoes .agenda-marcar, .agenda-acoes .agenda-marcar { display: none; }
+}
+/* plano 2000d · DC-375: a meia hora com rótulo «:30» quando a hora tem altura para isso */
+.ag-hora-meia { position: absolute; top: calc((var(--i) + .5) * var(--h-hora)); right: .5rem; transform: translateY(.3rem); color: var(--c-texto-3); font-size: var(--fs-11); line-height: 1; }
+@media (max-width: 1023px) { .ag-hora-meia { display: none; } }
+/* plano 2000d · DC-403: no computador, a linha fantasma com a hora que o clique vai marcar */
+.ag-col-hover { position: absolute; left: 2px; right: 2px; height: 0; border-top: 2px dashed var(--c-prim); pointer-events: none; z-index: 2; }
+.ag-col-hover span { position: absolute; top: -.75rem; left: .25rem; padding: 0 .3rem; border-radius: var(--r-p); background: var(--c-prim); color: var(--c-prim-txt); font-size: var(--fs-11); font-weight: 600; }
+@media (hover: none) { .ag-col-hover { display: none; } }
+/* plano 2000d · DC-440/DC-443: o fantasma que passa do horário e o «De → Para» da janela */
+.ag-fantasma-passa .ag-bloco { border-style: dashed; border-color: var(--c-aten); }
+.ag-de-para { margin: .2rem 0 0; padding: .45rem .7rem; border-radius: var(--r-p); background: var(--c-prim-suave); color: var(--c-texto); font-size: var(--fs-13); font-weight: 600; }
+/* plano 2000d · DC-387: o mês na lista de bloqueios da configuração */
+.agc-bloq-mes { margin: .6rem 0 .1rem; color: var(--c-texto-2); font-size: var(--fs-12); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.agc-renovar-feriados { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+/* plano 2000d · DC-338/DC-398/DC-399: sem vaga nos 3 dias, o aviso da capacidade e o «Já configurei» */
+.agenda-sem-livre { color: var(--c-texto-2); font-size: var(--fs-13); }
+.agenda-aviso-capacidade { flex-basis: 100%; }
+.ag-roteiro-acoes { gap: .5rem; flex-wrap: wrap; }
+@media (max-width: 1024px), (pointer: coarse) {
+  .agenda-sem-livre-mais, .ag-roteiro-dispensar, .agc-renovar-feriados .bt { min-height: 44px; }
+}
+/* plano 2000d · DC-414: na tela da recepção, quanto tempo quem chegou está esperando */
+.ag-tv-espera { display: block; margin-top: .15rem; color: var(--c-aten); font-size: var(--fs-13); font-weight: 600; }
+/* plano 2000d · DC-410: o botão do aviso 10 min antes (ligado = marcado) */
+.agenda-aviso10.ativo { background: var(--c-prim-suave); color: var(--c-prim); }
+@media (max-width: 1024px), (pointer: coarse) { .agenda-aviso10 { min-height: 44px; } }
+/* plano 2000d · DC-318: a alça da folha do detalhe (só no celular, onde o detalhe é folha inferior); toque de 44 px */
+.ag-det-alca { display: none; }
+@media (max-width: 760px) {
+  .flut-ag .ag-det-alca { display: block; position: relative; width: 100%; min-height: 44px; margin: -.5rem 0 0; border: 0; background: none; cursor: grab; }
+  .flut-ag .ag-det-alca::before { content: ""; position: absolute; left: 50%; top: 50%; width: 40px; height: 4px; margin: -2px 0 0 -20px; border-radius: 999px; background: var(--c-texto-3); }
+  .flut-ag .ag-det-alca:focus-visible { outline: 2px solid var(--c-foco); outline-offset: -2px; }
+}
+/* plano 2000d · GY-105: o horário livre (botão tracejado) mostra o foco do teclado */
+.ag-livre:focus-visible, .ag-mais-item:focus-visible, .ag-exemplo-sair:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+/* plano 2000d · GY-106: alvos de 44 px no toque para os botões que ficaram de fora (mais do horário, procurar, encaixe depois, bloquear, exemplo) */
+@media (max-width: 1024px), (pointer: coarse) {
+  .ag-mais-item, .ag-procurar-item .bt, .ag-procurar-retorno, .ag-encaixe-depois, .ag-bloquear-horario,
+  .agenda-ver-exemplo, .ag-roteiro-exemplo, .ag-exemplo-sair, .agc-copiar-dia { min-height: 44px; }
+}
+/* plano 2000d · GY-107: no alto contraste, o que está escolhido (chip de serviço, atalho, retorno, dia) não depende só da cor */
+@media (forced-colors: active) {
+  .ag-serv-chip[aria-pressed="true"], .ag-atalhos .bt[aria-pressed="true"], .ag-retorno[aria-pressed="true"], .agc-motivo[aria-pressed="true"],
+  .ag-faixa-d.sel, .ag-mes-dia.sel { outline: 2px solid Highlight; outline-offset: 1px; }
+  .ag-det-selos .pilula, .ag-exemplo-aviso { border: 1px solid CanvasText; }
+}
+/* plano 2000d · GY-108: a faixa «Semana de exemplo» (texto + «Sair do exemplo») quebra linha no celular sem empurrar a tela */
+.ag-exemplo-aviso { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem .8rem; margin-bottom: .6rem; }
+.ag-exemplo-aviso > span { flex: 1 1 14rem; min-width: 0; }
+.agenda-ver-exemplo, .ag-roteiro-exemplo { white-space: normal; }
+/* plano 2000d · GY-109: «Adicionar serviço» no limite fica visível mas apagado (aria-disabled explica no toque) */
+.agc-add-duracao[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+/* plano 2000d · GY-110: os selos do detalhe (encaixe, 1ª vez, aniversário, lembrete) em linha que quebra */
+.ag-det-selos { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .4rem; margin: .1rem 0 .2rem; }
+.ag-det-selos:empty { display: none; }
+/* plano 2000d · GY-090: o aviso de copiar um dia fechado */
+.agc-copiar-fechado { margin: 0; font-size: var(--fs-13); }

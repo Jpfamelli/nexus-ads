@@ -364,7 +364,7 @@ await teste("tituloCard, formatarTel e textoErro (rótulo do campo, trava do Ads
   assert.equal(L.tituloCard({ telefone: "5512998303030" }), "(12) 99830-3030");
   assert.equal(L.tituloCard({}), "Sem nome");
   const campos = [{ chave: "procedimento", rotulo: "Procedimento realizado" }];
-  assert.equal(L.textoErro({ codigo: "campo_obrigatorio", hint: "procedimento" }, { campos }), 'Preencha o campo "Procedimento realizado" antes de continuar.');
+  assert.equal(L.textoErro({ codigo: "campo_obrigatorio", hint: "procedimento" }, { campos }), "Preencha o campo «Procedimento realizado» antes de continuar.");      // plano 1500c: RC-016 — aspas do app
   assert.match(L.textoErro({ codigo: "funil_invalido", hint: "fechado_no_ads" }), /Iniciar pós-venda/);
   assert.match(L.textoErro({ codigo: "funil_invalido", hint: "sai_do_ads" }), /outro funil de anúncios/);
   assert.equal(L.textoErro({ codigo: "motivo_obrigatorio", hint: "texto" }), "Escolha o motivo da perda e escreva a justificativa.");
@@ -445,7 +445,9 @@ await teste("validarFunil: mesmas regras do nx_funil_salvar", () => {
   assert.deepEqual(hints(ads), ["marcos"]);
   assert.deepEqual(hints({ ...ads, estagios: [{ ...ads.estagios[0], marco: "nova" }, ads.estagios[1], ads.estagios[2]] }), []);
   assert.deepEqual(hints({ ...ads, estagios: [{ ...ads.estagios[0], marco: "fechou" }, ads.estagios[1], ads.estagios[2]] }), ["marco_tipo"]);
-  assert.deepEqual(hints({ ...ok, estagios: [{ nome: "A", tipo: "aberto", probabilidade: 120, sla_horas: 0 }, ok.estagios[1], ok.estagios[2]] }), ["probabilidade", "sla"]);
+  // plano 1500c: RC-044 — prazo 0 tem dica própria («use 1 ou mais»)
+  assert.deepEqual(hints({ ...ok, estagios: [{ nome: "A", tipo: "aberto", probabilidade: 120, sla_horas: 0 }, ok.estagios[1], ok.estagios[2]] }), ["probabilidade", "sla_zero"]);
+  assert.deepEqual(hints({ ...ok, estagios: [{ nome: "A", tipo: "aberto", sla_horas: 3000 }, ok.estagios[1], ok.estagios[2]] }), ["sla"]);
   assert.equal(L.validarFunil({ nome: "x", estagios: [] })[0].hint, "etapas");
   assert.deepEqual(L.marcosDoTipo("perdido").map(m => m.id), ["nao_fechou", "perdida"]);
   assert.equal(L.probPadrao("ganho"), 100);

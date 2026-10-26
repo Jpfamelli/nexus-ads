@@ -519,6 +519,19 @@ async function processar(db, cfg, corpo, ctx) {
   return cont;
 }
 
+/** plano 1500c · SC-023: intervalo mínimo entre duas releituras do segredo do mesmo canal por assinatura que não conferiu. */
+export const RELER_SEGREDO_MS = 60_000;
+const RELIDO = new WeakMap();   // fetch → Map(canal → ms da última releitura) (o fetch separa os testes, como os caches)
+function podeReler(f, chave, agoraMs) {
+  let m = RELIDO.get(f);
+  if (!m) { m = new Map(); RELIDO.set(f, m); }
+  const ultima = m.get(chave);
+  if (ultima != null && agoraMs - ultima < RELER_SEGREDO_MS && agoraMs >= ultima) return false;
+  if (m.size > 1000) m.clear();
+  m.set(chave, agoraMs);
+  return true;
+}
+
 const texto = (t, status) => new Response(t, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
 // chave pública do canal (?c=): hex gerado pelo banco — nx_canais.chave_publica = encode(gen_random_bytes(12), 'hex'), 24 caracteres.
 // Plano 1000 (SV-015): só esse comprimento (antes 8 a 64): chave curta virava consulta ao banco e encurtava a adivinhação
@@ -594,7 +607,9 @@ async function tratarWebhook(req, env, deps) {
     let { cfg, doCache } = await configWebhook(db, f);
     let valida = await conferir(cfg);
     // com o valor do cache a assinatura não confere: o segredo pode ter acabado de mudar — relê UMA vez (config e canal)
-    if (!valida && (doCache || url.doCache) && assinatura) {
+    // plano 1500c · SC-023: no máximo uma releitura por canal a cada RELER_SEGREDO_MS — POSTs forjados em massa não viram
+    // leituras do banco (antes cada assinatura errada descartava o cache e relia config + canal)
+    if (!valida && (doCache || url.doCache) && assinatura && podeReler(f, url.canal?.canal_id ?? (url.tem ? "url" : "global"), agoraMs)) {
       if (url.doCache) url = await canalDaUrl(db, u, f, { forcar: true, agoraMs });
       if (url.tem && !url.canal) return texto("canal desconhecido", 401);
       if (doCache) cfg = (await configWebhook(db, f, { forcar: true })).cfg;

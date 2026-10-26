@@ -146,7 +146,7 @@ test("AD-006 · ritmo do orçamento: nada de projeção nos 4 primeiros dias (ra
   const M = montarDe({ hoje, metricas: [met("2026-10-01", { g: 200 }), met("2026-10-02", { g: 200 })] });
   const m = M.ritmoMes(M.R);
   assert.equal(m.cedo, true);
-  assert.ok(!M.avaliar(M.R, true).some(a => a.chave === "ritmo"), "antes: «outubro fecha em R$ 6.200»");
+  assert.ok(!M.avaliar(M.R, true).some(a => a.regra.id === "ritmo"), "antes: «outubro fecha em R$ 6.200»");   // plano 2000d: pela regra (DA-006)
   assert.match(M.relDiario(M.R), /cedo para projetar \(dia 2 do mês\)/);
   assert.match(A.descricaoOrcamentoMensal(m, null, N.brl0), /a projeção começa no 5º dia/);
   assert.equal(montarDe({ metricas: serie(1, 12, { g: 200 }) }).ritmoMes(M.R).cedo, false);
@@ -155,8 +155,11 @@ test("AD-006 · ritmo do orçamento: nada de projeção nos 4 primeiros dias (ra
 test("AD-009 · «Campanha sem conversa» exige gasto em 2 dias ou mais da janela", () => {
   const um = montarDe({ metricas: [met(dia(1), { g: 30, conv: 0 })] });
   assert.ok(!um.avaliar(um.R).some(a => a.regra.id === "r2"), "antes: campanha que estreou ontem virava alerta crítico");
+  // plano 2000d: agora são 3 dias com gasto (DA-059 — a Meta ainda aprende nos 2 primeiros); 2 dias só com gasto acima de 3× o piso
   const dois = montarDe({ metricas: [met(dia(1), { g: 15, conv: 0 }), met(dia(2), { g: 15, conv: 0 })] });
-  assert.ok(dois.avaliar(dois.R).some(a => a.regra.id === "r2"));
+  assert.ok(!dois.avaliar(dois.R).some(a => a.regra.id === "r2"));
+  const tres = montarDe({ metricas: [met(dia(1), { g: 10, conv: 0 }), met(dia(2), { g: 10, conv: 0 }), met(dia(3), { g: 10, conv: 0 })] });
+  assert.ok(tres.avaliar(tres.R).some(a => a.regra.id === "r2"));
 });
 
 test("AD-011/AD-012/AD-216/AD-217 · diário: dia da semana, variação sem base, custo por plataforma e o CRM do dia", () => {
@@ -189,7 +192,8 @@ test("AD-014/AD-243 · mensal: comparação com o rótulo de fechamento da verti
 });
 
 test("AD-019/AD-020 · aviso do radar com a ação de cada item (máx. 3 + «e mais N») e o link do painel quando configurado", () => {
-  const M = montarDe({ metricas: [met(dia(1), { g: 15, conv: 0 }), met(dia(2), { g: 15, conv: 0 })], cliente: { cfg: { painelUrl: "https://orbita-nexus-ads.netlify.app/app/#/anuncios/radar" } } });
+  // plano 2000d: 3 dias com gasto (DA-059)
+  const M = montarDe({ metricas: [met(dia(1), { g: 10, conv: 0 }), met(dia(2), { g: 10, conv: 0 }), met(dia(3), { g: 10, conv: 0 })], cliente: { cfg: { painelUrl: "https://orbita-nexus-ads.netlify.app/app/#/anuncios/radar" } } });
   const a = M.avaliar(M.R);
   assert.match(M.textoAlerta(a), /\n👉 Checar “Campanha Meta”/, "antes: só a.msg");
   assert.match(M.textoAlerta(a), /Histórico no painel:_ https:\/\/orbita-nexus-ads\.netlify\.app\/app\/#\/anuncios\/radar$/);
@@ -277,7 +281,7 @@ test("AD-080 · fuso da conta diferente aparece sempre na descrição do períod
   assert.deepEqual(f, [{ canal: "meta", fuso: "America/New_York" }]);
   const M = montarDe({ metricas: serie(1, 10) });
   const Pn = L.numerosPeriodo(M, { dias: 30 });
-  assert.match(A.descricaoPeriodoAds(Pn, M.dataBR, L.nomePlat, { fusos: f }), /Meta no fuso America\/New_York: dias deslocados/);
+  assert.match(A.descricaoPeriodoAds(Pn, M.dataBR, L.nomePlat, { fusos: f }), /Meta no fuso America\/New_York: os dias dessa conta fecham às/);   // plano 2000d: DA-166 — diz a que horas de Brasília o dia fecha
   assert.doesNotMatch(A.descricaoPeriodoAds({ ...Pn, plat: "google" }, M.dataBR, L.nomePlat, { fusos: f }), /fuso/, "com o filtro no Google, o fuso do Meta não aparece");
 });
 
@@ -695,7 +699,8 @@ test("AD-110/AD-116 · nivelCpa: neutro sem base (gasto < R$ 20) ou sem meta; KP
   assert.equal(k.extra, "sem meta definida"); assert.equal(k.medidor, false);
   assert.match(ADS2, /dif = Number\.isFinite\(t\.cpa\) && meta > 0 \?/);
   assert.match(PJS2, /const dif = fin\(t\.cpa\) && meta > 0 \?/); assert.match(PJS2, /medidor: !temG && meta > 0/);
-  assert.match(PJS2, /!\(M\.CFG\.cpaAlvo > 0\) \? "dot-neutro"/); assert.match(PCSS2, /\.dot-neutro \{/); assert.match(CSS2, /\.rel-ponto-neutro \{/);
+  // plano 1500c: AC-224 — o clássico pinta pela meta da campanha/plataforma (nivelCpa: sem meta → «dot-neutro»)
+  assert.match(PJS2, /if \(!\(meta > 0\)\) return "dot-neutro";/); assert.match(PCSS2, /\.dot-neutro \{/); assert.match(CSS2, /\.rel-ponto-neutro \{/);
 });
 
 test("AD-112 · ranking sem receita no período abre em «Menor custo por conversa» (sem escolha guardada) e avisa", () => {
@@ -756,9 +761,11 @@ test("AD-093 · centro da rosca mostra a plataforma com mais investimento", () =
 test("AD-103/AD-143 · arquivos exportados com o nome do cliente (Anúncios e Relatórios)", () => {
   assert.equal(L.nomeArquivoExport("funil", "2026-09-14", "2026-10-13", "csv", "Clínica Kamiguchi"), "orbita-clinica-kamiguchi-funil-2026-09-14-a-2026-10-13.csv");
   assert.equal(L.nomeArquivoExport("tendencia", "a", "b"), "orbita-tendencia-a-a-b.png", "sem cliente, o formato de antes");
-  assert.match(ADS2, /"csv", ctx\.cliente\.nome\)\)/);   // plano 1000b: AB-209 encadeia o aviso de download recusado depois do «))»
-  assert.match(REL2, /L\.nomeArquivoExport\(nome, de, ate, "csv", ctx\.cliente\.nome\)/, "antes: «funil-2026-09-14-a-2026-10-13.csv»");
-  assert.match(REL2, /L\.nomeArquivoExport\(png, de, ate, "png", ctx\.cliente\.nome\)/);
+  // plano 2000d: NX-028 — a paleta põe a plataforma filtrada no nome, como o botão da tela
+  assert.match(ADS2, /"csv", ctx\.cliente\.nome, S\.plat \/\* plano 2000d · NX-028[^*]*\*\/, marcaAgencia\(\)\)\)/);   // plano 1000b: AB-209 encadeia o aviso … · plano 2000d: DA-336 — com a agência
+  // plano 2000d: NX-330 — com o funil/departamento escolhido no fim do nome (sufixoFiltro)
+  assert.match(REL2, /L\.nomeArquivoExport\(nome, de, ate, "csv", ctx\.cliente\.nome, sufixoFiltro\(filtroExtra\)\)/, "antes: «funil-2026-09-14-a-2026-10-13.csv»");
+  assert.match(REL2, /L\.nomeArquivoExport\(png, de, ate, "png", ctx\.cliente\.nome, sufixoFiltro\(filtroExtra\)\)/);   // plano 2000d: NX-330
 });
 
 test("AD-104 · CSV de campanhas com a plataforma legível", () => {
@@ -807,7 +814,8 @@ test("AD-257 · rosca de motivos com 10+ motivos: os 5 maiores + «Outros (N)»"
 
 test("AD-261 · CSV protege fórmula com espaço antes (« =HIPERLINK(…)»)", () => {
   const out = L.csv(["n"], [[" =HIPERLINK(\"x\")"], ["  +1"], ["\t@a"], ["ok"]]).replace(/^﻿/, "").split("\r\n");
-  assert.equal(out[1], `"' =HIPERLINK(""x"")"`); assert.equal(out[2], "'  +1"); assert.equal(out[3], "'\t@a"); assert.equal(out[4], "ok");
+  // plano 1500c: «+» seguido só de número é número (telefone, AC-164) e fica sem apóstrofo
+  assert.equal(out[1], `"' =HIPERLINK(""x"")"`); assert.equal(out[2], "  +1"); assert.equal(out[3], "'\t@a"); assert.equal(out[4], "ok");
 });
 
 test("AD-151 · janelaComparacao em ano bissexto e na virada de ano", () => {
@@ -888,7 +896,8 @@ test("AD-141 · período guardado por cliente (o legado global vale só até o c
   assert.deepEqual(RL.periodoDoCliente(pref, "c2"), { preset: 7, de: null, ate: null }, "sem período próprio: o global de antes");
   assert.deepEqual(RL.periodoDoCliente({}, "c3"), { preset: 30, de: null, ate: null });
   assert.deepEqual(RL.limparFiltrosRelatorios(pref, "c1").periodo, { c1: { preset: 30, de: null, ate: null } });
-  assert.match(REL2, /periodo: \{ \.\.\.\(p\.periodo \|\| \{\}\), \[ctx\.cliente\.id\]: \{ preset: P\.preset, de: P\.de, ate: P\.ate \} \}/);
+  // plano 1500c: o período do cliente guarda também «incluir hoje» (AC-156)
+  assert.match(REL2, /periodo: \{ \.\.\.\(p\.periodo \|\| \{\}\), \[ctx\.cliente\.id\]: \{ preset: P\.preset, de: P\.de, ate: P\.ate, hoje: !!P\.hoje \} \}/);
 });
 
 test("AD-146 · «Limpe os filtros» só com filtro de verdade (7/90 dias não são filtro)", () => {
@@ -1016,7 +1025,7 @@ test("AD-001 · sem metas configuradas: nada de R$ 15 / R$ 1.500 — sem r1, sem
   assert.match(r1.descricao, /Sem meta de custo por conversa definida/);
   const al = M.avaliar(M.R, true);
   assert.ok(!al.some(a => a.regra.id === "r1"), "antes: r1 contra o alvo inventado de R$ 15");
-  assert.ok(!al.some(a => a.chave === "ritmo"), "antes: «acima do orçamento de R$ 1.500»");
+  assert.ok(!al.some(a => a.regra.id === "ritmo"), "antes: «acima do orçamento de R$ 1.500»");   // plano 2000d: pela regra (DA-006)
   const t = M.relDiario(M.R);
   assert.doesNotMatch(t, /de R\$\s1\.500/); assert.match(t, /• R\$\s720 investidos · projeção R\$\s1\.860 · orçamento não definido/);
   assert.doesNotMatch(t, /fora da meta/); assert.doesNotMatch(t, /· meta R\$/);
@@ -1024,7 +1033,8 @@ test("AD-001 · sem metas configuradas: nada de R$ 15 / R$ 1.500 — sem r1, sem
   // com a meta configurada, tudo volta
   const C = montarDe({ metricas: altoCpa(1, 12), cliente: { cfg: { cpaAlvo: 15, orcamento: 500 } } });
   const ac = C.avaliar(C.R, true);
-  assert.ok(ac.some(a => a.regra.id === "r1")); assert.ok(ac.some(a => a.chave === "ritmo"));
+  // plano 2000d: o «esgotado» tem chave própria (ritmo:esgotado, DA-006) — procura pela regra
+  assert.ok(ac.some(a => a.regra.id === "r1")); assert.ok(ac.some(a => a.regra.id === "ritmo"));
   assert.match(C.relDiario(C.R), /• R\$\s720 de R\$\s500 · projeção/);
   // a demo traz as metas dela (fictícia) e o clássico/Anúncios não desenham orçamento sem valor
   assert.match(ler("web/demo.js"), /cpaAlvo: 15, cpaAlvoGoogle: 18, orcamento: 1500/);
@@ -1036,17 +1046,18 @@ test("AD-007 · orçamento 0 é «sem orçamento»: sem alerta de ritmo eterno",
   const M = montarDe({ metricas: serie(1, 12), cliente: { cfg: { orcamento: 0 } } });
   assert.equal(N.temOrcamento({ orcamento: 0 }), false); assert.equal(N.temOrcamento({ orcamento: 300 }), true);
   assert.equal(M.RITMO.ativa, false);
-  assert.ok(!M.avaliar(M.R, true).some(a => a.chave === "ritmo"), "antes: «acima do orçamento de R$ 0» todo dia");
+  assert.ok(!M.avaliar(M.R, true).some(a => a.regra.id === "ritmo"), "antes: «acima do orçamento de R$ 0» todo dia");   // plano 2000d: pela regra (DA-006)
   assert.equal(M.situacaoOrc(999), "");
   assert.match(M.relDiario(M.R), /orçamento não definido/);
 });
 
 test("AD-008 · o informativo de ritmo se desliga (regrasOff «ritmo») e aparece em Ajustes", () => {
-  const cfg = { orcamento: 100 };
+  // plano 2000d: REV-05 — R$ 30/dia cruza R$ 350 ONTEM (330 → 360); com 100 cruzou no dia 4 e ontem cai no intervalo de 3 dias do «acabou»
+  const cfg = { orcamento: 350 };
   const liga = montarDe({ metricas: serie(1, 12), cliente: { cfg } });
-  assert.ok(liga.avaliar(liga.R, true).some(a => a.chave === "ritmo"));
+  assert.ok(liga.avaliar(liga.R, true).some(a => a.regra.id === "ritmo"));   // plano 2000d: pela regra (DA-006: «ritmo:esgotado»)
   const desl = montarDe({ metricas: serie(1, 12), cliente: { cfg: { ...cfg, regrasOff: ["ritmo"] } } });
-  assert.ok(!desl.avaliar(desl.R, true).some(a => a.chave === "ritmo"), "antes: ia ao WhatsApp sem opção de desligar");
+  assert.ok(!desl.avaliar(desl.R, true).some(a => a.regra.id === "ritmo"), "antes: ia ao WhatsApp sem opção de desligar");
   assert.ok(AC.REGRAS.some(([id]) => id === "ritmo"));
 });
 
@@ -1078,7 +1089,8 @@ test("AD-046 · «Silenciar 7 dias»: a chave some do radar (e do WhatsApp do ci
   const m = A.mapaSilenciados({ a: { ate: "2026-10-01" }, b: "2026-10-20", c: { desde: "2026-10-10", ate: "2026-10-30" } }, "d", { desde: "2026-10-12", ate: "2026-10-19" }, "2026-10-12");
   assert.deepEqual(m, { b: { ate: "2026-10-20" }, c: { desde: "2026-10-10", ate: "2026-10-30" }, d: { desde: "2026-10-12", ate: "2026-10-19" } });
   assert.deepEqual(A.mapaSilenciados(m, "c", null, "2026-10-12"), { b: { ate: "2026-10-20" }, d: { desde: "2026-10-12", ate: "2026-10-19" } });
-  assert.match(ADS3, /"Silenciar 7 dias"/); assert.match(ADS3, /"Reativar avisos"/); assert.match(ADS3, /cfg: \{ silenciados: mapa \}/);
+  // plano 1500c: «Silenciar…» virou menu (AC-091) — os 7 dias continuam como opção
+  assert.match(ADS3, /\[7, "Por 7 dias"\]/); assert.match(ADS3, /"Reativar avisos"/); assert.match(ADS3, /cfg: \{ silenciados: mapa \}/);
 });
 
 test("AD-054 · limites do radar por cliente (cfg.radar): frequência 4 não acusa 3,5; fora da faixa vale o padrão", () => {

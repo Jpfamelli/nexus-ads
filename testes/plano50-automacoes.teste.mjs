@@ -166,7 +166,8 @@ test("filtrarModelos: sem acento, por título/texto/tipo de passo; vazio devolve
 test("exemplosIA: 5 pedidos, no vocabulário da vertical", () => {
   const od = L.exemplosIA(VOCAB), of = L.exemplosIA({ vertical: "oficina" });
   assert.equal(od.length, 5);
-  assert.ok(od.some(t => /consulta/.test(t)) && of.some(t => /visita/.test(t)));
+  // plano 2000d · DU-022: a oficina tem exemplos próprios (carro pronto, revisão) — não «visita/consulta»
+  assert.ok(od.some(t => /consulta/.test(t)) && of.some(t => /carro/.test(t)) && !of.some(t => /consulta/.test(t)));
   assert.ok(od.every(t => t.length >= 12 && t.length <= L.LIMITES.descricao_ia));
 });
 
@@ -184,7 +185,8 @@ test("comandos: todo item do catálogo tem grupo conhecido; agruparAcoes segue a
   assert.deepEqual(g.map(x => x.grupo), ["Nesta tela", "Criar", "Ir e ver", "Aparência e app", "Ajuda", "Conta"]);
   assert.deepEqual(g[0].itens.map(x => x.id), ["tela.x"]);
   assert.ok(g[1].itens.some(x => x.id === "tela.y") && g[1].itens.some(x => x.id === "nova-conversa"));
-  assert.deepEqual(g[5].itens.map(x => x.id), ["sair"]);
+  // plano 2000d: DU-141 — «Bloquear a tela» também é da Conta
+  assert.deepEqual(g[5].itens.map(x => x.id), ["sair", "bloquear-tela"]);
 });
 
 test("comandos: últimos usados por conta — registra sem repetir, respeita o máximo, ordena e nunca lança erro", () => {
@@ -357,7 +359,9 @@ test("barraTaxa: role=meter com texto legível e nível pela faixa", async () =>
     assert.ok(b.classList.contains("au-taxa-aten"));
     const v = P.barraTaxa({ pct: null, total: 0 });
     assert.ok(v.classList.contains("au-taxa-vazia"));
-    assert.match(v.getAttribute("aria-valuetext"), /ainda sem execuções/);
+    // plano 1500c: UCA-080 — sem execuções não é medidor (alguns leitores liam «0 por cento»): o texto vai em sr-only
+    assert.equal(v.getAttribute("role"), null);
+    assert.match(v.textContent, /ainda sem execuções/);
   } finally { d.fim(); }
 });
 

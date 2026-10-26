@@ -136,6 +136,21 @@ export function pecas(ui, L) {
    * Tempo de espera em minutos: chips prontos + «Outro» (número + minutos/horas/dias).
    * valor = minutos | undefined; aoMudar(minutos | null) — null = valor fora de 1 min…30 dias ou vazio.
    */
+  /**
+   * plano 1500c · UCA-038: trocar a unidade mantém o TEMPO («48 horas» → «2 dias»); quando a conta não dá número inteiro, o número
+   * fica como está (vale o que a pessoa digitou na unidade nova). Chamar antes do ouvinte de leitura.
+   */
+  function manterTempoAoTrocar(numEl, selEl, inicial) {
+    const inp = numEl.querySelector("input"), sel = selEl.querySelector("select");
+    let antes = sel.value || inicial;
+    sel.addEventListener("change", () => {
+      const conv = L.converterUnidade(inp.value, antes, sel.value);
+      if (conv != null) inp.value = String(conv);
+      antes = sel.value;
+    });
+    return () => { antes = sel.value || antes; };   // quando o código troca a unidade (sem «change»)
+  }
+
   function campoDuracao({ rotulo, valor, aoMudar, desabilitado, min = 1, max = 43200, ajuda }) {
     let atual = Number.isFinite(Number(valor)) && Number(valor) > 0 ? Math.round(Number(valor)) : null;
     const id = novoId("dur");
@@ -159,7 +174,8 @@ export function pecas(ui, L) {
       const ok = atual != null && atual >= min && atual <= max;
       // plano 1000 · AS-223: «Esperar 2 dias. Exemplo: se começar agora, continua qui, 16/10 às 10:00.»
       const ex = ok && typeof L.exemploContinuacao === "function" ? L.exemploContinuacao(atual) : "";
-      resumo.textContent = atual == null ? (outro ? "Digite um tempo." : "") : ok ? `Esperar ${L.formatarDuracao(atual)}.${ex ? ` ${ex}` : ""}` : "Use de 1 minuto a 30 dias.";
+      // plano 1500c · UCA-039: o resumo diz o tempo legível; acima do máximo, o teto vem da faixa real (não um «30 dias» fixo)
+      resumo.textContent = atual == null ? (outro ? "Digite um tempo." : "") : ok ? `Esperar ${L.formatarDuracao(atual)}.${ex ? ` ${ex}` : ""}` : `Use de ${L.formatarDuracao(min)} a ${L.formatarDuracao(max)}.`;
       resumo.classList.toggle("campo-erro", atual != null && !ok || (atual == null && outro));
     };
     const define = m => { atual = m; aoMudar(atual != null && atual >= min && atual <= max ? atual : null); pintar(); };
@@ -172,12 +188,14 @@ export function pecas(ui, L) {
       const d = L.decomporDuracao(atual || 0);
       num.querySelector("input").value = d.n || "";
       un.querySelector("select").value = d.un;
+      sincUnidade();
       pintar();
       num.querySelector("input").focus();
     } });
     grupo.appendChild(btOutro);
     setas(grupo);
     const lerOutro = () => { const m = L.comporDuracao(num.querySelector("input").value, un.querySelector("select").value); define(m); };
+    const sincUnidade = manterTempoAoTrocar(num, un, dec.un);   // plano 1500c · UCA-038
     num.querySelector("input").addEventListener("input", lerOutro);
     un.querySelector("select").addEventListener("change", lerOutro);
     const el = h("div", { class: "campo au-campo-dur" }, h("span", { class: "campo-rot", id }, rotulo || "Esperar"), grupo, linhaOutro, resumo,
@@ -252,6 +270,11 @@ export function pecas(ui, L) {
   function barraTaxa({ pct, total = 0, rotulo = "Taxa de sucesso" }) {
     const nivel = L.nivelTaxa(pct);
     const texto = pct == null ? "ainda sem execuções" : `${pct}% deram certo (${total} ${total === 1 ? "execução" : "execuções"})`;
+    // plano 1500c · UCA-080: sem execuções não é um medidor (alguns leitores liam «0 por cento» antes do texto)
+    if (pct == null) return h("span", { class: ["au-taxa", `au-taxa-${nivel}`], title: `${rotulo}: ${texto}` },
+      h("span", { class: "au-taxa-trilho", "aria-hidden": "true" }, h("i", { style: { "--p": "0%" } })),
+      h("span", { class: "au-taxa-txt mono", "aria-hidden": "true" }, "—"),
+      h("span", { class: "sr-only" }, `${rotulo}: ${texto}`));
     return h("span", { class: ["au-taxa", `au-taxa-${nivel}`], role: "meter", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct ?? 0),
       "aria-label": rotulo, "aria-valuetext": texto, title: `${rotulo}: ${texto}` },
       h("span", { class: "au-taxa-trilho", "aria-hidden": "true" }, h("i", { style: { "--p": `${pct ?? 0}%` } })),
@@ -277,7 +300,7 @@ export function pecas(ui, L) {
    * Enter/Espaço) que chama aoFocar(no) — o editor leva o foco até o bloco certo. `nos` vem de L.nosDoDiagrama; o texto
    * alternativo (L.textoDiagrama) vai no <title> e no aria-label do grupo.
    */
-  function diagrama({ nos, aoFocar, largura = 300 }) {
+  function diagrama({ nos, aoFocar, largura = 300, tl = null }) {
     const lista = Array.isArray(nos) ? nos : [];
     const W = Math.max(220, Math.round(largura));
     const ALT = 44, GAP = 16, PX = 6, TRILHO = 22;     // altura do nó, vão entre nós, margem lateral, x da linha-tronco
@@ -293,7 +316,8 @@ export function pecas(ui, L) {
       const y = PX + i * (ALT + GAP);
       const g = s("g", { class: ["au-dg-no", `au-dg-${no.tipo}`, `au-dg-tom-${no.tom}`, no.inalcancavel && "au-dg-nunca"].filter(Boolean).join(" "),
         // plano 1000b · UB-042: roving tabindex — só o 1º nó entra no Tab; setas ↑↓ (Home/End) andam entre os nós; Enter leva ao bloco
-        role: "button", tabindex: i === 0 ? "0" : "-1", "aria-label": `${no.tipo === "mais" ? "" : no.tipo === "gatilho" ? "Gatilho: " : no.tipo === "condicao" ? `Condição ${no.n}: ` : `Passo ${no.n || ""}: `.replace(" :", ":")}${no.rotulo}${no.sub ? `. ${no.sub}` : ""}. Ir até este bloco.`,
+        // plano 2000d · DU-317: o nome acessível diz também quando o passo roda («Passo 3: Enviar mensagem, depois de 2 dias»)
+        role: "button", tabindex: i === 0 ? "0" : "-1", "aria-label": `${L.rotuloNoDiagrama(no, tl)}. Ir até este bloco.`,
         "data-id": no.id, "data-onde": no.onde, "data-indice": no.indice == null ? "" : String(no.indice) });
       g.append(s("rect", { class: "au-dg-ret", x: PX, y, width: W - 2 * PX, height: ALT, rx: no.tipo === "condicao" ? 8 : 12 }));
       g.append(s("rect", { class: "au-dg-faixa", x: PX, y, width: 4, height: ALT, rx: 2 }));
@@ -332,9 +356,13 @@ export function pecas(ui, L) {
   /** servidor: a série veio de nx_automacao_execucoes_dia (conta todas as execuções da janela, mas só separa «sem erro» × «com erro»). */
   // plano 1000b · UB-039: diaAtivo (AAAA-MM-DD) marca a barra escolhida (aria-pressed + classe); raiz.marcarDia(dia) troca depois
   function graficoDias({ serie, dias, n, titulo = "Execuções por dia", unidade = "execuções", carregadas = null, servidor = false, aoEscolherDia = null, diaAtivo = null }) {
-    const lista = Array.isArray(serie) ? serie : [];
-    const raiz = h("div", { class: ["au-gd", servidor && "au-gd-servidor"], dataset: { fonte: servidor ? "servidor" : "local" } });
-    const nd = dias || lista.length;
+    // plano 1500c · UCA-074: em tela estreita (< 480 px) mostra só os 7 últimos dias — 14 colunas em 360 px davam alvos de ~18 px
+    const estreita = (() => { try { return typeof matchMedia === "function" && matchMedia("(max-width: 479px)").matches; } catch { return false; } })();
+    const listaToda = Array.isArray(serie) ? serie : [];
+    const lista = estreita && listaToda.length > 7 ? listaToda.slice(-7) : listaToda;
+    if (lista !== listaToda) n = lista.reduce((a, p) => a + (Number(p.total) || 0), 0);
+    const raiz = h("div", { class: ["au-gd", servidor && "au-gd-servidor"], dataset: { fonte: servidor ? "servidor" : "local", dias: String(lista.length) } });
+    const nd = lista !== listaToda ? lista.length : dias || lista.length;
     const janela = nd === 1 ? "Hoje" : `Últimos ${nd} dias`;
     const sub = carregadas ? `${janela} · nas últimas ${carregadas} ${carregadas === 1 ? "execução carregada" : "execuções carregadas"}`
       : servidor ? `${janela} · ${n || 0} ${n === 1 ? "execução" : "execuções"}, contadas no servidor`
@@ -409,13 +437,15 @@ export function pecas(ui, L) {
       opcoes: [{ valor: "horas", rotulo: "horas" }, { valor: "dias", rotulo: "dias" }] });
     un.querySelector("label").classList.add("sr-only");
     const resumo = h("small", { class: "campo-ajuda au-hr-resumo" });
+    manterTempoAoTrocar(num, un, dec.un);   // plano 1500c · UCA-038
     const ler = () => {
       const bruto = String(num.querySelector("input").value).trim();
       const hh = min === 0 && bruto !== "" && Number(bruto) === 0 ? 0 : L.comporHoras(bruto, un.querySelector("select").value);
       const ok = hh != null && hh >= min && hh <= max;
       const faixa = min === 0 ? `Até ${max >= 48 ? `${max / 24} dias` : `${max} h`}` : `De ${min} h a ${max >= 48 ? `${max / 24} dias` : `${max} h`}`;
       const pre = ajuda ? `${ajuda} ` : "";
-      resumo.textContent = hh == null ? `${pre}${faixa}.` : ok ? (hh === 0 && ajuda ? ajuda : `= ${hh} ${hh === 1 ? "hora" : "horas"}`) : `Use ${faixa.charAt(0).toLowerCase()}${faixa.slice(1)}.`;
+      // plano 1500c · UCA-039: «= 7 dias (168 h)» em vez de «= 168 horas»
+      resumo.textContent = hh == null ? `${pre}${faixa}.` : ok ? (hh === 0 && ajuda ? ajuda : L.resumoTempo(hh * 60)) : `Use ${faixa.charAt(0).toLowerCase()}${faixa.slice(1)}.`;
       resumo.classList.toggle("campo-erro", hh != null && !ok);
       return ok ? hh : null;
     };
@@ -437,11 +467,13 @@ export function pecas(ui, L) {
       opcoes: [{ valor: "min", rotulo: "minutos" }, { valor: "horas", rotulo: "horas" }] });
     un.querySelector("label").classList.add("sr-only");
     const resumo = h("small", { class: "campo-ajuda au-hr-resumo" });
-    const faixa = `De ${L.formatarMinutos(min)} a ${L.formatarMinutos(max)}.`;
+    // plano 1500c · UCA-025/039: faixa e resumo no mesmo formato legível do resto («De 1 min a 24 h», «= 1 h 30 min»)
+    const faixa = `De ${L.formatarDuracao(min)} a ${L.formatarDuracao(max)}.`;
+    manterTempoAoTrocar(num, un, dec.un);   // plano 1500c · UCA-038
     const ler = () => {
       const mm = L.comporDuracao(num.querySelector("input").value, un.querySelector("select").value);
       const ok = mm != null && mm >= min && mm <= max;
-      resumo.textContent = mm == null ? faixa : ok ? `= ${mm} ${mm === 1 ? "minuto" : "minutos"}` : `Use ${faixa.charAt(0).toLowerCase()}${faixa.slice(1)}`;
+      resumo.textContent = mm == null ? faixa : ok ? L.resumoTempo(mm) : `Use ${faixa.charAt(0).toLowerCase()}${faixa.slice(1)}`;
       resumo.classList.toggle("campo-erro", mm != null && !ok);
       return ok ? mm : null;
     };
@@ -451,5 +483,16 @@ export function pecas(ui, L) {
     return h("div", { class: "campo au-campo-hr au-campo-min" }, h("div", { class: "au-dur-outro" }, num, un), resumo);
   }
 
-  return { interruptor, seletor, entrada, chip, setas, campoDias, campoDuracao, campoHoras, campoMinutos, escolhaCartoes, opcoesBase, novoId, barraTaxa, pontoEstado, kpi, diagrama, graficoDias };
+  /** plano 1500c · UCA-034/035: entrega um texto como arquivo para baixar (CSV das execuções). false quando o navegador não deixa. */
+  function baixarTexto(nome, conteudo, tipo = "text/csv") {
+    try {
+      const url = URL.createObjectURL(new Blob([conteudo], { type: `${tipo};charset=utf-8` }));
+      const a = h("a", { href: url, download: nome, hidden: true });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch { /* ok */ } }, 4000);
+      return true;
+    } catch { return false; }
+  }
+
+  return { baixarTexto, interruptor, seletor, entrada, chip, setas, campoDias, campoDuracao, campoHoras, campoMinutos, escolhaCartoes, opcoesBase, novoId, barraTaxa, pontoEstado, kpi, diagrama, graficoDias };
 }

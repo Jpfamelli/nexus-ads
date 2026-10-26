@@ -264,7 +264,8 @@ test("UB-279 · pulso: parado por sessao_invalida chama aoParar('sessao_invalida
   const p2 = P.criarPulso({ ler: async () => { throw new Error("rede"); }, aoParar: m => m2.push(m), agendar: fn => { f2.push(fn); return 1; }, cancelar: () => {}, doc: null, nav: { onLine: true }, janela: null, agora: () => 0, aleatorio: () => .5 });
   p2.iniciar(); await f2.shift()(); await tick();
   assert.deepEqual(m2, []); assert.equal(p2.estado.rodando, true); p2.parar();
-  assert.match(APP_JS, /aoParar: motivo => \{ if \(motivo === "sessao_invalida" && E\.sessao\) sessaoCaiu\(\); \}/, "o shell liga o aoParar à janela de login");
+  // plano 1500c: UCC-016 — os demais códigos de parada (conta pausada, teste vencido…) vão para o aoErroApi
+  assert.match(APP_JS, /aoParar: motivo => \{ if \(motivo === "sessao_invalida"\) \{ if \(E\.sessao\) sessaoCaiu\(\); \} else aoErroApi\(\{ codigo: motivo \}\); \}/, "o shell liga o aoParar à janela de login");
 });
 
 test("UB-010 · janela «Sua sessão expirou» com «ok»: o pulso reinicia e o sino é redesenhado", async () => {
@@ -342,19 +343,21 @@ test("UB-126 · aviso de área de trabalho com o ícone da marca (ou o do app)",
   assert.equal(mk({ iconeAviso: "data:image/png;base64,AA" })(), "data:image/png;base64,AA");
   assert.equal(mk({ marca: { favicon: "https://cdn.test/f.png" } })(), "https://cdn.test/f.png");
   assert.equal(mk({ marca: { favicon: "javascript:alert(1)" } })(), "https://app.test/app/icones/icon-192.png");
-  assert.match(APP_JS, /tag: "nx-cv-shell", silent: true, icon: iconeDoAviso\(\) \}\);/);
+  // plano 1500c: as opções do aviso saem de opcoesDoAvisoNaoLidas (UCC-120: tag por empresa + renotify); o ícone continua o da marca
+  assert.match(APP_JS, /opcoesDoAvisoNaoLidas\(\{ novas, total, cliId: E\.cliente && E\.cliente\.id, somProprio, icone: iconeDoAviso\(\) \}\)/);
 });
 
 test("UB-128 · «Fora do plano»: admin ganha «Ver Plano e uso»; com WhatsApp de suporte, «Falar com o suporte»", () => {
   const navs = [];
-  const mk = (papel, wa) => fnApp("function acoesForaDoPlano() {", { E: { M: { rotas: ROTAS }, marca: wa ? { suporte_wa: wa } : {}, cliente: { nome: "Clínica" }, ui: U },
+  // plano 1500c: acoesForaDoPlano(modulo) — sem módulo, as mesmas ações de antes (com módulo, o admin ganha «Pedir este módulo», UCC-095)
+  const mk = (papel, wa) => fnApp("function acoesForaDoPlano(modulo = null) {", { E: { M: { rotas: ROTAS }, marca: wa ? { suporte_wa: wa } : {}, cliente: { nome: "Clínica" }, ui: U },
     papelAtual: () => papel, navegar: x => navs.push(x), window: { open() {} } });
   const a = mk("admin", "5512999998888")();
   assert.deepEqual(a.map(x => x.rotulo), ["Ver Plano e uso", "Falar com o suporte"]);
   a[0].fn(); assert.deepEqual(navs, ["#/config/plano"]);
   assert.deepEqual(mk("atendente", null)().map(x => x.rotulo), []);
   assert.deepEqual(mk("atendente", "5512999998888")().map(x => x.rotulo), ["Falar com o suporte"]);
-  assert.match(APP_JS, /const acoes = tipo === "fora_do_plano" \? acoesForaDoPlano\(\) : \[\];/);
+  assert.match(APP_JS, /const acoes = tipo === "fora_do_plano" \? acoesForaDoPlano\(modulo\) : \[\];/);   // plano 1500c: passa o módulo
 });
 
 test("UB-130 · número caído: quem não é admin lê «Avise o administrador da empresa»", () => {
@@ -476,6 +479,8 @@ test("UB-139 · menu suspenso: a 1ª letra vai ao item (e repete para o próximo
   const pop = doc.querySelector(".menu-pop"); const itens = pop.querySelectorAll(".menu-item");
   itens[0].focus();
   ev(pop, "keydown", { key: "e" }); assert.equal(doc.activeElement, itens[2]);
+  // plano 2000d: SX-095 — letras em menos de 0,7 s formam um prefixo («ed» → Editar); separadas, cada uma é a 1ª letra
+  await new Promise(r => setTimeout(r, 750));
   ev(pop, "keydown", { key: "d" }); assert.equal(doc.activeElement, itens[1]);
   if (m && m.fechar) m.fechar();
 });
@@ -838,7 +843,8 @@ test("UB-163 + UB-165 · convite: mostra a validade quando o servidor manda; con
   assert.match(alvo.textContent, new RegExp(`Vale até ${U.dataCurtaBR(expira)} ${U.horaBR(expira)}`));
   aceitar = Object.assign(new Error("x"), { codigo: "convite_invalido" });
   const form = alvo.querySelector("form");
-  for (const [n, v] of [["nome", "Ana"], ["senha", "Senha#1234"], ["senha2", "Senha#1234"]]) form.querySelector(`input[name=${n}]`).value = v;
+  // plano 1500c: UCB-044 — «Senha#1234» passou a ser recusada como fácil de adivinhar (nem chega ao servidor); o teste usa uma senha forte
+  for (const [n, v] of [["nome", "Ana"], ["senha", "Cavalo-azul-77"], ["senha2", "Cavalo-azul-77"]]) form.querySelector(`input[name=${n}]`).value = v;
   ev(form, "submit"); await tick(6);
   assert.equal(alvo.querySelector("form"), null, "sem formulário morto");
   assert.match(alvo.textContent, /Este convite não vale mais/);
@@ -860,7 +866,8 @@ test("UB-170 · aba escondida: a verificação periódica do versao.json é pula
   let n = 0; const v = { verificar: () => { n++; return Promise.resolve(); } };
   assert.equal(PWA.verificarSeVisivel({ hidden: true }, v), null); assert.equal(n, 0);
   PWA.verificarSeVisivel({ hidden: false }, v); assert.equal(n, 1);
-  assert.match(ler("pwa.js"), /setInterval\(\(\) => \{ verificarSeVisivel\(doc, v\); \}/);
+  // plano 1500c: o mesmo relógio também chama o.aoVerificar (UCC-129) — só quando a verificação rodou (aba visível)
+  assert.match(ler("pwa.js"), /setInterval\(\(\) => \{ if \(verificarSeVisivel\(doc, v\) === null\) return;/);
 });
 
 test("UB-172 · «Atualizar» com falha recarrega, sem promessa rejeitada sem dono", async () => {
@@ -874,7 +881,8 @@ test("UB-172 · «Atualizar» com falha recarrega, sem promessa rejeitada sem do
     await tick(3);
     assert.deepEqual(soltas, []);
   } finally { process.off("unhandledRejection", ouvir); }
-  assert.match(ler("pwa.js"), /\(\) => \{ aplicarOuRecarregar\(v, recarregar\); \}/);
+  // plano 1500c: antes de aplicar, guarda as notas da versão (UC-037); o «Atualizar» continua indo por aplicarOuRecarregar
+  assert.match(ler("pwa.js"), /guardarNovidades\([^\n]*\n\s*aplicarOuRecarregar\(v, recarregar\);/);
 });
 
 test("UB-174 · página «Sem conexão» diz que o app volta e que nada se perdeu", async () => {
@@ -922,7 +930,7 @@ test("UB-278 · barra do celular: o item aberto 3× pelo «Mais» entra no 4º l
   const contar = fnApp("function contarUsoDaBarra(id) {", { LS, lerUsosDaBarra: ler_, CHAVE_USOS_BARRA: "u" });
   assert.deepEqual([contar("automacoes"), contar("automacoes"), contar("automacoes")], [1, 2, 3]);
   assert.deepEqual(ler_(), { automacoes: 3 });
-  assert.match(APP_JS, /const prefer = E\.M\.rotas\.itensDaBarra\(itens, lerUsosDaBarra\(\)\);/);
+  assert.match(APP_JS, /const prefer = E\.M\.rotas\.itensDaBarra\(itens, lerUsosDaBarra\(\)(?:, undefined, lerEscolhaDaBarra\(\))?\);/);   // plano 2000d: DU-277 — a escolha da pessoa vem por último
 });
 
 /* ---------- app.js ---------- */
@@ -956,7 +964,8 @@ test("UB-131 · versao.json da faixa de migração vale 10 min", async () => {
   assert.deepEqual(await vr(1000), { min_migracao: "m1" });
   assert.deepEqual(await vr(1000 + 599999), { min_migracao: "m1" }); assert.equal(buscas, 1, "dentro dos 10 min: a mesma leitura");
   assert.deepEqual(await vr(1000 + 600000), { min_migracao: "m2" }); assert.equal(buscas, 2, "passou: lê de novo");
-  assert.match(APP_JS, /setInterval\(\(\) => \{ if \(!document\.hidden\) conferirMigracao\(\); \}, VALIDADE_VERSAO_MS\);/);
+  // plano 1500c: a reconferência de 10 min agora vai pelo relógio único do pwa.js (UCC-129: aoVerificar), que já não roda com a aba escondida
+  assert.match(APP_JS, /aoVerificar: \(\) => conferirMigracao\(\)/);
 });
 
 test("UB-133 + UB-138 · seletor de empresa: Enter na busca troca para o 1º resultado; o painel tem nome", async () => {
@@ -1006,7 +1015,8 @@ test("UB-207 · faixas iguais são mantidas (o mesmo nó, nada reanunciado); a q
   const r4 = rec(alvo, [mk("faixa-bloqueio", "Suspenso.")]);
   assert.notEqual(r4[0], a1); assert.equal(alvo.children.length, 1); assert.equal(a1.parentNode, null);
   assert.deepEqual(rec(alvo, []), []); assert.equal(alvo.children.length, 0);
-  assert.match(APP_JS, /function desenharFaixas\(\) \{\s*const alvo = \$\("faixas"\);\s*if \(alvo\) reconciliarFaixas\(alvo, faixasDoMomento\(\)\);/);
+  // plano 1500c: entre o faixasDoMomento e a reconciliação, umaFaixaPorVez escolhe a faixa (UCC-117)
+  assert.match(APP_JS, /function desenharFaixas\(\) \{\s*const alvo = \$\("faixas"\);\s*if \(alvo\) reconciliarFaixas\(alvo, umaFaixaPorVez\(faixasDoMomento\(\)/);
 });
 
 test("UB-168 · aparelho compartilhado: 2 h sem uso avisa 1 min antes e sai; um toque adia", () => {
@@ -1032,7 +1042,7 @@ test("UB-168 · aparelho compartilhado: 2 h sem uso avisa 1 min antes e sai; um 
   andar(3600e3); assert.deepEqual(ev2, ["aviso", "saiu"]);
   v2.desligar();
   assert.match(APP_JS, /ligarOciosidade\(\);\s+\/\/ plano 1000b · UB-168/);
-  assert.match(APP_JS, /if \(!comp\) return;/);
+  assert.match(APP_JS, /if \(!limite\) return;/);   // plano 2000d: DU-140 — sem política da empresa, o limite só existe no aparelho compartilhado
 });
 
 test("UB-270 + UB-125 · sino: erro com «Tentar de novo»; «Marcar todas» com mais de 10 pede um 2º toque", async () => {

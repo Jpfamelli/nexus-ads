@@ -49,12 +49,15 @@ function excluirComDesfazer(k, tipo, item, { texto, rpc, sumir, voltar }) {
 function plataformaAparelho() {
   try { return (typeof navigator !== "undefined" && navigator && ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform)) || ""; } catch { return ""; }
 }
-function hojeISO(ui) { return ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10); }
+// plano 2000d · DR-340: o fallback quando ui.hojeSP falta é o dia de São Paulo (o UTC depois das 21h já é amanhã)
+const fmtDiaSPTf = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" });
+const diaSPFallback = (d = new Date()) => fmtDiaSPTf.format(d);
+function hojeISO(ui) { return ui.hojeSP ? ui.hojeSP() : diaSPFallback(); }
 /** Dia civil de São Paulo de um instante ("" se a data for inválida — o Intl lançaria erro). */
 function diaSP(ui, iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  return ui.hojeSP ? ui.hojeSP(d) : d.toISOString().slice(0, 10);
+  return ui.hojeSP ? ui.hojeSP(d) : diaSPFallback(d);      // plano 2000d · DR-340: sem ui.hojeSP, o dia de São Paulo (não o UTC)
 }
 
 /** Rótulo do vencimento: "Atrasada · ontem 14:00", "Hoje 15:30", "amanhã", "05/10 09:00". */
@@ -63,8 +66,8 @@ function prazoParaLeitor(v) {
   const txt = String((v && v.txt) || "");
   if (!txt || txt === "Sem prazo") return "sem prazo";
   if (v.cls === "atrasada") return txt.replace(/^Atrasada · /, "atrasada, ");
-  const m = /^(Hoje|Amanhã|Ontem|\d{2}\/\d{2}(?:\/\d{4})?) (\d{2}:\d{2})$/.exec(txt);
-  if (m) return /^(Hoje|Amanhã|Ontem)$/.test(m[1]) ? `${m[1] === "Ontem" ? "venceu" : "vence"} ${m[1].toLowerCase()} às ${m[2]}` : `vence em ${m[1]} às ${m[2]}`;
+  const m = /^(Hoje|Amanhã|Ontem|(?:[A-Z][a-zá]{2}, )?\d{2}\/\d{2}(?:\/\d{4})?) (\d{2}:\d{2})$/.exec(txt);      // plano 2000d · DR-124: com o dia da semana
+  if (m) return /^(Hoje|Amanhã|Ontem)$/.test(m[1]) ? `${m[1] === "Ontem" ? "venceu" : "vence"} ${m[1].toLowerCase()} às ${m[2]}` : `vence ${/^[A-Z]/.test(m[1]) ? m[1].replace(/^([A-Z][a-zá]{2}), /, (x, d) => `${d.toLowerCase()}, `) : `em ${m[1]}`} às ${m[2]}`;
   return txt.charAt(0).toLowerCase() + txt.slice(1);
 }
 function textoVence(k, t) {
@@ -72,11 +75,11 @@ function textoVence(k, t) {
   // plano 1000 (CR-247): concluída diz QUANDO foi feita («feita hoje às 14:10», «feita 09/10 às 14:10») — o prazo já não importa
   if (t.concluida_em && !Number.isNaN(Date.parse(t.concluida_em))) {
     const dC = diaSP(ui, t.concluida_em), hC = ui.horaBR(t.concluida_em);
-    return { txt: dC === hojeISO(ui) ? `feita hoje às ${hC}` : `feita ${ui.dataCurtaBR ? ui.dataCurtaBR(t.concluida_em) : ui.dataBR(t.concluida_em)} às ${hC}`, cls: "feita" };
+    return { txt: dC === hojeISO(ui) ? `feita hoje às ${hC}` : `feita ${k.L.dataCurtaComAno ? k.L.dataCurtaComAno(t.concluida_em, hojeISO(ui)) : ui.dataCurtaBR ? ui.dataCurtaBR(t.concluida_em) : ui.dataBR(t.concluida_em)} às ${hC}`, cls: "feita" };      // plano 2000d · DR-381: com o ano quando é de outro ano
   }
   if (!t.vence_em) return { txt: "Sem prazo", cls: "" };
   const d = new Date(t.vence_em);
-  const dia = ui.hojeSP ? ui.hojeSP(d) : d.toISOString().slice(0, 10);
+  const dia = ui.hojeSP ? ui.hojeSP(d) : diaSPFallback(d);      // plano 2000d · DR-340: sem ui.hojeSP, o dia de São Paulo (não o UTC)
   const hoje = hojeISO(ui);
   const hora = ui.horaBR(t.vence_em);
   // plano 1000b · RB-117: venceu com a tela aberta também é atrasada (antes dependia só do t.atrasada da última leitura do servidor)
@@ -85,7 +88,9 @@ function textoVence(k, t) {
   // plano 1000b · RB-116: «Amanhã 09:00» / «Ontem 14:00» (o comentário prometia; antes saía «15/10 09:00»)
   const rot = k.L && k.L.rotuloDia ? k.L.rotuloDia(dia, hoje) : "";
   if (rot === "Amanhã" || rot === "Ontem") return { txt: `${rot} ${hora}`, cls: "" };
-  return { txt: `${ui.dataCurtaBR ? ui.dataCurtaBR(t.vence_em) : ui.dataBR(t.vence_em)} ${hora}`, cls: "" };
+  // plano 2000d · DR-124: com o dia da semana («Qui, 30/10 09:00») — «30/10» sozinho obrigava a abrir o calendário
+  if (rot && rot !== "Sem data") return { txt: `${rot} ${hora}`, cls: "" };
+  return { txt: `${k.L.dataCurtaComAno ? k.L.dataCurtaComAno(t.vence_em, hoje) : ui.dataCurtaBR ? ui.dataCurtaBR(t.vence_em) : ui.dataBR(t.vence_em)} ${hora}`, cls: "" };      // plano 2000d · DR-381
 }
 
 /* ------------------------------------------------------------ formulário de tarefa */
@@ -93,27 +98,35 @@ function textoVence(k, t) {
  * formTarefa(k, tarefa|null, {contato_id, negocio_id}) → Promise<tarefa salva | null>
  * Título, tipo, vencimento (data + hora, SP), responsável, descrição.
  */
-export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = null, titulo: tituloSug } = {}) {
+export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = null, titulo: tituloSug, dono_id: donoSug = null } = {}) {
   const { ui, h, L } = k;
   const t = tarefa || {};
   const amanha = new Date(Date.now() + 24 * 3600000);
-  const venceLocal = t.vence_em ? L.paraDataHoraLocal(t.vence_em) : `${ui.hojeSP ? ui.hojeSP(amanha) : amanha.toISOString().slice(0, 10)}T09:00`;
+  // plano 1500c · RX-031: editar uma tarefa SEM prazo não inventa «amanhã 9h» (salvar sem mexer dava prazo a ela); só a tarefa nova nasce com amanhã 9h
+  const venceLocal = t.vence_em ? L.paraDataHoraLocal(t.vence_em) : tarefa ? "" : `${ui.hojeSP ? ui.hojeSP(amanha) : diaSPFallback(amanha)}T09:00`;      // plano 2000d · DR-340: sem ui.hojeSP, o dia de São Paulo (não o UTC)
   // plano 1000 (CR-144): atalhos de prazo (fuso de São Paulo) que preenchem o campo; (CR-052) prazo no passado avisa sem bloquear
   const avisoPrazo = h("small", { class: "ed-aviso", role: "status", hidden: true });
   const campoPrazo = () => form.querySelector("[name=vence_em]");
   const pintarPrazo = () => { const c = campoPrazo(); const passou = !!c && L.dataPassou(c.value); avisoPrazo.hidden = !passou; avisoPrazo.textContent = passou ? `${L.TEXTO_DATA_PASSOU} A tarefa já nasce atrasada.` : ""; };
-  const hojeSPIso = ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10);
-  const atalhosPrazo = h("div", { class: "tf-atalhos", role: "group", "aria-label": "Atalhos de prazo" }, L.atalhosPrazo(hojeSPIso).map(a =>
+  const hojeSPIso = ui.hojeSP ? ui.hojeSP() : diaSPFallback();      // plano 2000d · DR-340: sem ui.hojeSP, o dia de São Paulo (não o UTC)
+  const atalhosPrazo = h("div", { class: "tf-atalhos", role: "group", "aria-label": "Atalhos de prazo" }, (L.atalhosPrazoUnicos || L.atalhosPrazo)(hojeSPIso, { agora: Date.now() }).map(a =>      // plano 1500c · RC-025/026: sem «Hoje 18h» à noite; fim de semana pula para segunda      // plano 1500c · RX-021: sem dois botões no mesmo instante
     h("button", { type: "button", class: "bt bt-fant bt-p tf-atalho", dataset: { valor: a.valor }, on: { click: () => {
       const c = campoPrazo(); if (!c) return;
       c.value = a.valor; pintarPrazo();
       ui.anunciar(`Prazo: ${a.rotulo}.`);
     } } }, a.rotulo)));
+  // plano 1500c · RC-136: horas comuns trocam só a hora (o seletor nativo de hora é ruim no Android)
+  const horasComuns = h("div", { class: "tf-atalhos tf-horas", role: "group", "aria-label": "Hora do prazo" }, ["09:00", "11:00", "14:00", "16:00", "18:00"].map(hh =>
+    h("button", { type: "button", class: "bt bt-fant bt-p tf-hora", dataset: { hora: hh }, on: { click: () => {
+      const c = campoPrazo(); if (!c) return;
+      c.value = L.trocarHora(c.value, hh, hojeSPIso); pintarPrazo();
+      ui.anunciar(`Hora: ${hh.replace(":00", "h")}.`);
+    } } }, hh.replace(":00", "h"))));
   // plano 1000 (CR-245): tarefa nova sem vínculo (#/tarefas, paleta) pode ser ligada a um contato — busca pelo nome ou telefone
   let ligado = null;
   const vv = k.v || {};
   const blocoLigar = !tarefa && !contato_id && !negocio_id ? (() => {
-    const busca = h("input", { type: "search", class: "tf-ligar-busca", placeholder: "Nome ou telefone", "aria-label": `Ligar a tarefa a ${vv.art && vv.art("contato") === "a" ? "uma" : "um"} ${vv.min ? vv.min("contato") : "contato"}`, autocomplete: "off" });
+    const busca = h("input", { type: "search", class: "tf-ligar-busca", maxlength: "120" /* plano 2000d · PX-078: busca com limite (colar texto enorme travava a digitação) */, placeholder: "Nome ou telefone", enterkeyhint: "search", "aria-label": `Ligar a tarefa a ${vv.art && vv.art("contato") === "a" ? "uma" : "um"} ${vv.min ? vv.min("contato") : "contato"}`, autocomplete: "off" });
     const res = h("div", { class: "crm-busca-res", role: "group", "aria-label": "Resultados" });   // plano 1000b · RB-052: grupo de botões comuns (Tab entre eles) — era listbox sem setas nem aria-selected
     const escolhido = h("div", { class: "crm-escolhido", hidden: true });
     // plano 1000b · RB-237: escolhido o contato, os negócios ABERTOS dele (nx_contato_ver) aparecem para ligar a tarefa também ao negócio (opcional)
@@ -138,7 +151,7 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
     };
     const pintar = () => {
       ui.limpar(escolhido); escolhido.hidden = !ligado; busca.hidden = !!ligado;
-      if (ligado) escolhido.append(ui.icone("contato"), h("span", null, h("b", null, ligado.nome)),
+      if (ligado) escolhido.append(ui.icone("contato"), h("span", null, h("b", { class: "dado-pessoal" }, ligado.nome)),      // plano 1500c · UC-030
         h("button", { type: "button", class: "bt-icone", "aria-label": "Tirar o vínculo", on: { click: () => { ligado = null; pintar(); busca.focus(); } } }, ui.icone("fechar")));
       pintarNegocios();
     };
@@ -153,23 +166,27 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
         const itens = (r && r.itens) || [];
         if (!itens.length) { res.appendChild(h("p", { class: "fraco" }, "Nada encontrado.")); return; }
         for (const c of itens) res.appendChild(h("button", { type: "button", dataset: { id: c.id }, on: { click: () => { ligado = { id: c.id, nome: L.nomeContato(c) }; busca.value = ""; ui.limpar(res); pintar(); } } },
-          ui.icone("contato"), h("span", null, h("b", null, L.nomeContato(c)), c.telefone ? h("small", null, ui.telBR(c.telefone)) : null)));
+          ui.icone("contato"), h("span", null, h("b", { class: "dado-pessoal" }, L.nomeContato(c)), c.telefone ? h("small", { class: "dado-pessoal" }, ui.telBR(c.telefone)) : null)));      // plano 1500c · UC-030
       } catch (e) { if (minha === seqB) res.appendChild(h("p", { class: "fraco" }, k.erro(e))); }
     }, 250));
     pintar();
     return h("div", { class: "campo inteiro tf-ligar" }, h("span", { class: "campo-rot" }, "Ligada a (opcional)"), escolhido, busca, res, zonaNeg);
   })() : null;
-  const selDono = ui.seletorPessoa({ usuarios: k.base.usuarios, valor: t.dono ? t.dono.id : (tarefa ? null : k.eu()), rotulo: "Responsável", vazio: "Sem responsável" });
+  // plano 1500c · RC-240: tarefa nova do negócio/contato de outra pessoa nasce com o DONO dele (quem está na equipe); sem dono, «eu»
+  const donoNovo = L.donoSugeridoTarefa(donoSug, k.base.usuarios, k.eu());
+  const selDono = ui.seletorPessoa({ usuarios: k.base.usuarios, valor: t.dono ? t.dono.id : (tarefa ? (t.dono_id ?? null) : donoNovo),      // plano 1500c · RX-032: a tarefa que veio só com dono_id (sem o objeto dono) não perde o responsável ao editar
+    rotulo: "Responsável", vazio: "Sem responsável" });
   const idDonoTf = L.idUnico("tf-dono");      // plano 1000b · RB-207
   (selDono.tagName === "SELECT" ? selDono : selDono.querySelector("select") || selDono).id = idDonoTf;
   const form = h("form", { class: "crm-form", novalidate: true },
+    // plano 1500c · RC-127/237: o exemplo é da vertical (oficina: «orçamento») e acompanha o tipo escolhido (e-mail, visita…)
     ui.campo({ rotulo: "O que precisa ser feito", nome: "titulo", valor: t.titulo || tituloSug || "", obrigatorio: true, max: 160,
-      placeholder: "Ex.: Ligar para confirmar a avaliação" }),
+      placeholder: `Ex.: ${L.exemploTarefa ? L.exemploTarefa(vv.vertical, t.tipo || "tarefa") : "Ligar para confirmar a avaliação"}` }),
     blocoLigar,
     h("div", { class: "crm-form-2" },
       ui.campo({ rotulo: "Tipo", nome: "tipo", tipo: "select", valor: t.tipo || "tarefa",
         opcoes: TIPOS.map(x => ({ valor: x, rotulo: L.ROTULO_TAREFA[x] })) }),
-      h("div", { class: "pilha-p tf-prazo" }, ui.campo({ rotulo: "Vence em", nome: "vence_em", tipo: "datahora", valor: venceLocal }), atalhosPrazo, avisoPrazo),
+      h("div", { class: "pilha-p tf-prazo" }, ui.campo({ rotulo: "Vence em", nome: "vence_em", tipo: "datahora", valor: venceLocal }), atalhosPrazo, horasComuns, avisoPrazo),
       h("div", { class: "campo inteiro" },
         h("label", { for: idDonoTf }, "Responsável"),      // plano 1000b · RB-207: o rótulo aponta para o seletor
         selDono)),
@@ -178,10 +195,30 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
   // plano 1000b · RB-124: o name vai na referência guardada do seletor (antes: o 1º select de qualquer .campo.inteiro do formulário)
   const selDonoCampo = selDono.tagName === "SELECT" ? selDono : selDono.querySelector("select");
   if (selDonoCampo) selDonoCampo.name = "dono_id";
+  // plano 1500c · RC-237: trocar o tipo troca o exemplo do título
+  const selTipo = form.querySelector("[name=tipo]"), inTit = form.querySelector("[name=titulo]");
+  if (selTipo && inTit && L.exemploTarefa) selTipo.addEventListener("change", () => inTit.setAttribute("placeholder", `Ex.: ${L.exemploTarefa(vv.vertical, selTipo.value)}`));
+  // plano 2000d · PX-074: na tarefa NOVA, o título escolhe o tipo («Ligar para a Ana» → Ligação) enquanto a pessoa não mexeu no tipo
+  if (!tarefa && selTipo && inTit && L.tipoDoTitulo) {
+    let tipoTocado = false;
+    selTipo.addEventListener("change", ev => { if (ev && ev.isTrusted !== false) tipoTocado = true; });
+    inTit.addEventListener("input", () => {
+      if (tipoTocado) return;
+      const tp = L.tipoDoTitulo(inTit.value);
+      if (tp && TIPOS.includes(tp) && selTipo.value !== tp) { selTipo.value = tp; ui.anunciar(`Tipo: ${L.ROTULO_TAREFA[tp]}.`); }
+    });
+  }
   if (campoPrazo()) campoPrazo().addEventListener("change", pintarPrazo);
   const status = form.querySelector(".crm-status");
   // M30: tarefa NOVA guarda título e detalhes enquanto a pessoa digita (volta com «Rascunho restaurado · descartar» se a tela recarregar)
   const rascunhos = tarefa ? [] : ["titulo", "descricao"].map(n => k.rascunho(form.querySelector(`[name=${n}]`), `tarefa:nova:${negocio_id ? `negocio:${negocio_id}` : contato_id ? `contato:${contato_id}` : "avulsa"}:${n}`));
+  // plano 2000d · PX-038: Ctrl/⌘+Enter em qualquer campo cria/salva a tarefa (como já faz a nota) — sem levar a mão ao botão
+  form.addEventListener("keydown", ev => {
+    if (ev.key !== "Enter" || !(ev.ctrlKey || ev.metaKey) || ev.isComposing) return;
+    const dlg = form.closest ? form.closest("dialog") : null;
+    const bt = dlg ? dlg.querySelector(".bt-prim:not([disabled])") : null;
+    if (bt) { ev.preventDefault(); bt.click(); }
+  });
   let reqAtual = null, reqConteudo = "";   // M25: uma chave por intenção; erro ambíguo repete com a MESMA chave
   return ui.modal({
     titulo: tarefa ? "Editar tarefa" : "Nova tarefa", corpo: form,
@@ -222,6 +259,30 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
  * M28: no celular lápis + lixeira viram o ⋮ (Editar, Adiar para amanhã, Excluir) e a linha desliza — direita = concluir (ou reabrir), esquerda = adiar.
  * Gesto, botão e ⋮ chamam as MESMAS funções (`executar`); L.acoesDaTarefa diz o que existe e que lado leva a quê. Tudo com Desfazer.
  */
+/** plano 2000d · DR-159: o atalho da tarefa de WhatsApp — #/conversas?contato= com o módulo; senão wa.me pelo telefone que veio; sem nada, null. */
+function linkWhats(k, t) {
+  const { h, ui, L } = k;
+  const idC = t.contato_id ?? (t.contato && t.contato.id != null ? t.contato.id : null);
+  const tel = t.contato && t.contato.telefone;
+  const comConv = !!(k.ctx && typeof k.ctx.temModulo === "function" && k.ctx.temModulo("conversas"));
+  const href = comConv && idC != null ? `#/conversas?contato=${idC}` : tel && L.hrefWhatsApp ? L.hrefWhatsApp(tel) : null;
+  if (!href) return null;
+  return h("a", { class: "bt-icone tf-wa", href, ...(href.startsWith("http") ? { target: "_blank", rel: "noopener noreferrer" } : {}), "aria-label": `Abrir o WhatsApp da tarefa ${t.titulo}`, title: "Abrir conversa" }, ui.icone("whatsapp"));
+}
+/** plano 2000d · PX-039: a tarefa de ligação ganha o «Ligar» (tel:) com o telefone do contato — no celular, um toque disca. */
+function linkLigar(k, t) {
+  const { h, ui, L } = k;
+  const tel = t.contato && t.contato.telefone;
+  const href = tel && L.hrefTel ? L.hrefTel(tel) : null;
+  return href ? h("a", { class: "bt-icone tf-ligar", href, "aria-label": `Ligar para ${L.nomeContato ? L.nomeContato(t.contato) : "o contato"} (tarefa ${t.titulo})`, title: "Ligar" }, ui.icone("telefone")) : null;
+}
+/** plano 2000d · PX-040: a tarefa de e-mail ganha o «Escrever» (mailto:) quando o contato tem e-mail válido. */
+function linkEmail(k, t) {
+  const { h, ui } = k;
+  const em = String((t.contato && t.contato.email) || "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(em)) return null;
+  return h("a", { class: "bt-icone tf-email", href: `mailto:${em}?subject=${encodeURIComponent(t.titulo || "")}`, "aria-label": `Escrever para ${em} (tarefa ${t.titulo})`, title: "Escrever e-mail" }, ui.icone("enviar"));
+}
 export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
   const { ui, h, L } = k;
   const pode = k.pode("atendente");
@@ -237,24 +298,44 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
   const check = h("input", { type: "checkbox", checked: !!t.concluida_em, disabled: !pode || offline, title: offline ? "Sem internet: conclua quando a conexão voltar" : null,
     dataset: offline && pode ? { semRede: "1" } : null,
     // plano 1000b · RB-238: o leitor ouve o prazo junto («…, sem prazo», «…, atrasada, há 2 dias») sem precisar navegar até o texto
-    "aria-label": t.concluida_em ? `Reabrir a tarefa ${t.titulo}` : `Concluir a tarefa ${t.titulo}, ${prazoParaLeitor(v)}` });
-  const mais = pode ? h("button", { type: "button", class: "bt-icone tf-mais", "aria-label": `Mais ações da tarefa ${t.titulo}`, title: "Mais ações" }, ui.icone("opcoes")) : null;
+    "aria-label": t.concluida_em ? `Reabrir a tarefa ${L.resumoTexto ? L.resumoTexto(t.titulo, 60) : t.titulo}` : `Concluir a tarefa ${L.resumoTexto ? L.resumoTexto(t.titulo, 60) : t.titulo}, ${prazoParaLeitor(v)}` });      // plano 1500c · RX-063
+  // plano 1500c · RX-063: o leitor de tela ouve o começo do título (até 60 letras), não um parágrafo inteiro em cada botão
+  const tituloLeitor = L.resumoTexto ? L.resumoTexto(t.titulo, 60) : t.titulo;
+  // plano 1500c · RX-065/066: responsável também quando só veio o dono_id; e «Você» quando é a própria pessoa
+  const donoT = t.dono || (t.dono_id != null && typeof k.usuario === "function" ? k.usuario(t.dono_id) : null);
+  const souEu = !!donoT && typeof k.eu === "function" && donoT.id != null && String(donoT.id) === String(k.eu());
+  const mais = pode ? h("button", { type: "button", class: "bt-icone tf-mais", "aria-label": `Mais ações da tarefa ${tituloLeitor}`, title: "Mais ações" }, ui.icone("opcoes")) : null;
   const el = h("div", { class: ["tf", t.concluida_em && "feita"], dataset: { id: t.id } },
     h("label", { class: "tf-check" }, check, h("span", { "aria-hidden": "true" })),
     h("div", { class: "tf-corpo" },
       h("span", { class: "tf-t" }, t.titulo),
       h("div", { class: "tf-meta" },
         h("span", null, ui.icone(L.ICONE_TAREFA[t.tipo] || "tarefa"), L.ROTULO_TAREFA[t.tipo] || "Tarefa"),
-        h("span", { class: v.cls }, ui.icone("relogio"), v.txt),
-        t.dono ? h("span", null, ui.icone("usuario"), t.dono.nome) : null,
-        mostrarVinculo && t.contato ? h("a", { href: `#/contatos/${t.contato.id}`, "aria-label": `${k.v.contato}: ${t.contato.nome || ""}` }, ui.icone("contato"), t.contato.nome || k.v.contato) : null,
+        // plano 1500c · RC-137: sem prazo vira selo neutro («nunca atrasa»), não some no meio das datas
+        !t.concluida_em && !t.vence_em ? h("span", { class: "tf-sem-prazo", title: "Sem prazo: nunca fica atrasada" }, ui.icone("relogio"), "sem prazo") : h("span", { class: v.cls }, ui.icone("relogio"), v.txt),
+        donoT && donoT.nome ? h("span", { class: "tf-dono", title: `Responsável: ${donoT.nome}` }, ui.icone("usuario"), souEu ? "Você" : donoT.nome) : null,
+        mostrarVinculo && t.contato ? h("a", { href: `#/contatos/${t.contato.id}`, "aria-label": `${k.v.contato}: ${t.contato.nome || ""}` }, ui.icone("contato"), h("span", { class: "dado-pessoal" }, t.contato.nome || k.v.contato)) : null,      // plano 1500c · UC-030
+        // plano 2000d · DR-130: tarefa sem negócio que veio só com o contato_id (sem o objeto) também leva à ficha
+        mostrarVinculo && !t.contato && t.contato_id != null ? h("a", { class: "tf-contato-id", href: `#/contatos/${t.contato_id}` }, ui.icone("contato"), `Ver ${k.v.min ? k.v.min("contato") : "contato"}`) : null,
         mostrarVinculo && t.negocio ? h("a", { href: `#/crm/negocio/${t.negocio.id}`, "aria-label": `${k.v.negocio}: ${t.negocio.titulo || ""}` }, ui.icone("funil"),
           t.negocio.titulo && !(t.contato && t.negocio.titulo === t.contato.nome) ? t.negocio.titulo : k.v.negocio) : null,
-        t.automacao ? h("span", null, ui.icone("raio"), "Automação") : null),
-      t.descricao ? h("span", { class: "fraco tf-desc" }, t.descricao) : null),     // plano 1000 (CR-149): as quebras de linha da descrição continuam (CSS)
+        // plano 1500c · RC-238: qual automação criou a tarefa (o nome, quando o servidor manda)
+        t.automacao ? h("span", { class: "tf-auto", title: t.automacao && t.automacao.nome ? `Criada pela automação «${t.automacao.nome}»` : "Criada por uma automação" },
+          ui.icone("raio"), t.automacao && t.automacao.nome ? `Automação: ${t.automacao.nome}` : "Automação") : null),
+      // plano 2000d · PX-014: e-mail nos detalhes vira mailto:
+      // plano 1500c · RX-075: link e telefone escritos nos detalhes da tarefa viram <a> (como nas notas — sem innerHTML)
+      t.descricao ? h("span", { class: "fraco tf-desc" }, ...(L.partesNota ? L.partesNota(t.descricao) : [{ tipo: "texto", texto: t.descricao }]).map(p => (p.tipo === "url"
+        ? h("a", { href: p.href, target: "_blank", rel: "noopener noreferrer" }, p.texto)
+        : p.tipo === "tel" ? h("a", { href: p.href, "aria-label": `Ligar para ${p.texto}` }, p.texto)
+    : p.tipo === "email" ? h("a", { href: p.href, "aria-label": `Escrever para ${p.texto}` }, p.texto) : p.texto))) : null),     // plano 1000 (CR-149): as quebras de linha da descrição continuam (CSS)
     pode ? h("div", { class: "tf-acoes" },
-      h("button", { type: "button", class: "bt-icone", "aria-label": `Editar a tarefa ${t.titulo}`, on: { click: () => executar("editar") } }, ui.icone("editar")),
-      h("button", { type: "button", class: "bt-icone", "aria-label": `Excluir a tarefa ${t.titulo}`, on: { click: () => executar("excluir") } }, ui.icone("lixeira")),
+      // plano 2000d · DR-159: tarefa de WhatsApp com contato — um toque abre a conversa (com o módulo) ou o WhatsApp
+      t.tipo === "whatsapp" && !t.concluida_em ? linkWhats(k, t) : null,
+      t.tipo === "ligacao" && !t.concluida_em ? linkLigar(k, t) : null,      // plano 2000d · PX-039
+      t.tipo === "email" && !t.concluida_em ? linkEmail(k, t) : null,      // plano 2000d · PX-040
+      // plano 1500c · RC-239: dica visual no lápis e na lixeira (no desktop o ícone sozinho não explica)
+      h("button", { type: "button", class: "bt-icone", "aria-label": `Editar a tarefa ${tituloLeitor}`, title: "Editar", on: { click: () => executar("editar") } }, ui.icone("editar")),
+      h("button", { type: "button", class: "bt-icone", "aria-label": `Excluir a tarefa ${tituloLeitor}`, title: "Excluir", on: { click: () => executar("excluir") } }, ui.icone("lixeira")),
       mais) : h("span"));
 
   let ocupada = false;         // um toque por vez (o ✓ de sucesso segura a linha por ~1 s antes de ela mudar de lugar)
@@ -270,12 +351,31 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
     check.checked = quer;
     el.classList.toggle("feita", quer);
     try {
-      const nova = await k.api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: quer });
+      // plano 1500c · RC-128: concluir é idempotente — erro ambíguo (rede caiu no meio) repete 1× a MESMA chamada antes de desmarcar
+      let nova;
+      try { nova = await k.api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: quer }); }
+      catch (e1) {
+        if (!L.erroAmbiguo(e1)) throw e1;
+        ui.anunciar("Não deu para confirmar — tentando de novo.");
+        nova = await k.api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: quer });
+      }
       // C5: concluiu → o ✓ de sucesso (ui.checkSucesso) cobre a linha e só então ela desce para as concluídas; reabrir não comemora
       if (quer && typeof ui.checkSucesso === "function") await ui.checkSucesso(el, { texto: "Tarefa concluída." });
       else ui.anunciar(quer ? "Tarefa concluída." : "Tarefa reaberta.");
       aoMudar && aoMudar({ tipo: "salva", tarefa: nova });
-      if (quer) ui.acaoComDesfazer({ texto: "Tarefa concluída", reverter: async () => {
+      // plano 1500c · RC-344: «+ Próxima tarefa» no mesmo aviso — abre o formulário já ligado ao mesmo contato/negócio (o passo seguinte quase sempre é outra tarefa)
+      const vinc = {
+        contato_id: t.contato_id ?? (t.contato && t.contato.id != null ? t.contato.id : null),
+        negocio_id: t.negocio_id ?? (t.negocio && t.negocio.id != null ? t.negocio.id : null),
+      };
+      const proxima = vinc.contato_id != null || vinc.negocio_id != null ? { rotulo: "+ Próxima tarefa", fn: async () => {
+        const nt = await formTarefa(k, null, { contato_id: vinc.contato_id, negocio_id: vinc.negocio_id, ...(t.dono_id != null ? { dono_id: t.dono_id } : {}) });
+        if (nt) aoMudar && aoMudar({ tipo: "salva", tarefa: nt });
+      } } : null;
+      // plano 2000d · DR-118: ligação concluída pergunta «Como foi?» (atendeu, não atendeu, caixa postal, pediu retorno) e vira nota no histórico
+      const comoFoi = quer && t.tipo === "ligacao" && (vinc.contato_id != null || vinc.negocio_id != null)
+        ? { rotulo: "Como foi?", fn: () => anotarLigacao(k, t, vinc, { aoProxima: proxima && proxima.fn }) } : null;
+      if (quer) ui.acaoComDesfazer({ texto: "Tarefa concluída", acao: comoFoi || proxima, reverter: async () => {
         const r = await k.api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: false });
         aoMudar && aoMudar({ tipo: "salva", tarefa: r });
       } });
@@ -355,11 +455,53 @@ function ligarRedeGlobal() {
   addEventListener("online", f); addEventListener("offline", f);
 }
 
+/** plano 2000d · DR-118: «Como foi?» da ligação — o resultado (e um detalhe opcional) vira nota no negócio/contato; «Pediu retorno» já oferece a próxima tarefa. */
+export async function anotarLigacao(k, t, vinc, { aoProxima = null } = {}) {
+  const { ui, h, L } = k;
+  const nomeR = L.idUnico ? L.idUnico("lig") : `lig-${Date.now()}`;
+  const form = h("form", { class: "crm-form", novalidate: true },
+    h("div", { class: "crm-motivos", role: "radiogroup", "aria-label": "Resultado da ligação" }, L.RESULTADOS_LIGACAO.map(([v, r]) =>
+      h("label", { class: "crm-motivo" }, h("input", { type: "radio", name: nomeR, value: v }), h("span", null, r)))),
+    ui.campo({ rotulo: "Detalhe (opcional)", nome: "detalhe", tipo: "textarea", max: 500, linhas: 2 }));
+  const r = await ui.modal({ titulo: "Como foi a ligação?", descricao: t.titulo, corpo: form, largura: "p", acoes: [
+    { rotulo: "Pular", tipo: "neutro", valor: null },
+    { rotulo: "Salvar", tipo: "primario", fn: api => {
+      const sel = form.querySelector(`input[name="${nomeR}"]:checked`);
+      if (!sel) { api.erro("Escolha o resultado."); return false; }
+      return { resultado: sel.value, detalhe: (form.querySelector("textarea") || {}).value || "" };
+    } }] });
+  if (!r) return null;
+  try {
+    const nota = await k.api.rpcC("nx_nota_salvar", { p_nota: { texto: L.textoResultadoLigacao(r.resultado, r.detalhe),
+      ...(vinc.negocio_id != null ? { negocio_id: vinc.negocio_id } : {}), ...(vinc.contato_id != null ? { contato_id: vinc.contato_id } : {}) } });
+    if (r.resultado === "retorno" && aoProxima) ui.toast("Resultado anotado.", { tipo: "ok", acao: { rotulo: "+ Próxima tarefa", fn: aoProxima } });
+    else ui.anunciar("Resultado da ligação anotado.");
+    return nota;
+  } catch (e) { k.toastErro(e); return null; }
+}
+
+/** plano 2000d · DR-121: cadência pronta de follow-up — 3 tarefas (amanhã, em 3 e em 7 dias, às 9h) ligadas ao negócio, com o dono dele. */
+export async function criarCadencia(k, { negocio_id = null, contato_id = null, dono_id = null, nome = "" } = {}) {
+  const { ui, L } = k;
+  const passos = L.passosCadencia(nome);
+  const criadas = [], falhas = [];
+  for (const p of passos) {
+    const vence = L.retomarEm(p.dias);
+    try {
+      criadas.push(await k.api.rpcC("nx_tarefa_salvar", { p_tarefa: { titulo: p.titulo, tipo: p.tipo, vence_em: vence,
+        ...(negocio_id != null ? { negocio_id } : {}), ...(contato_id != null ? { contato_id } : {}), ...(dono_id != null ? { dono_id } : {}) } }));
+    } catch (e) { falhas.push(e); }
+  }
+  if (falhas.length) ui.toast(`${criadas.length} de ${passos.length} tarefas da cadência criadas. ${k.erro ? k.erro(falhas[0]) : ""}`.trim(), { tipo: "aten" });
+  else ui.toast(`Cadência criada: ${passos.length} tarefas (amanhã, em 3 e em 7 dias).`, { tipo: "ok" });
+  return criadas;
+}
+
 /**
  * blocoTarefas(k, {tarefas, contato_id, negocio_id, aoMudar, titulo, vazio}) → Node
  * Abertas primeiro (por vencimento), concluídas depois; "+ Tarefa".
  */
-export function blocoTarefas(k, { tarefas = [], contato_id = null, negocio_id = null, aoMudar, titulo = "Tarefas", vazio = "Nenhuma tarefa por aqui." } = {}) {
+export function blocoTarefas(k, { tarefas = [], contato_id = null, negocio_id = null, aoMudar, titulo = "Tarefas", vazio = "Nenhuma tarefa por aqui.", dono_id = null, nome = "" } = {}) {
   const { ui, h } = k;
   // tarefa em exclusão pendente não reaparece quando a ficha recarrega; o «Desfazer» a devolve por `voltou`
   const voltou = t => mudou({ tipo: "salva", tarefa: t });
@@ -369,7 +511,7 @@ export function blocoTarefas(k, { tarefas = [], contato_id = null, negocio_id = 
   function desenhar() {
     ui.limpar(corpo);
     const abertas = lista.filter(t => !t.concluida_em).sort((a, b) => (a.vence_em ? Date.parse(a.vence_em) : Infinity) - (b.vence_em ? Date.parse(b.vence_em) : Infinity));
-    const feitas = lista.filter(t => t.concluida_em);
+    const feitas = k.L.ordenarConcluidas(lista.filter(t => t.concluida_em));      // plano 1500c · RC-129: a concluída por último vem primeiro
     cont.textContent = abertas.length ? String(abertas.length) : "";
     if (!lista.length) corpo.appendChild(h("p", { class: "fraco crm-vazio-txt" }, vazio));
     for (const t of [...abertas, ...feitas]) corpo.appendChild(itemTarefa(k, t, { aoMudar: mudou }));
@@ -384,9 +526,16 @@ export function blocoTarefas(k, { tarefas = [], contato_id = null, negocio_id = 
     const t = await formTarefa(k, null, { contato_id, negocio_id });
     if (t) { ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); mudou({ tipo: "salva", tarefa: t }); }
   } } }, ui.icone("mais"), "Nova tarefa") : null;      // plano 1000b · RB-123: com verbo, como o FAB
+  // plano 2000d · DR-121: «Cadência» — 3 follow-ups de uma vez (só no negócio)
+  const cad = k.pode("atendente") && negocio_id != null ? h("button", { type: "button", class: "bt bt-fant bt-p tf-cadencia", title: "Cria 3 tarefas de acompanhamento: amanhã, em 3 e em 7 dias", on: { click: async ev => {
+    const bt = ev.currentTarget;
+    bt.disabled = true;
+    try { const novas = await criarCadencia(k, { negocio_id, contato_id, dono_id, nome }); for (const t of novas) if (t) lista.unshift(t); if (novas.length) { desenhar(); aoMudar && aoMudar(lista); } }
+    finally { bt.disabled = false; }
+  } } }, ui.icone("relogio"), "Cadência") : null;
   desenhar();
   const el = h("section", { class: "ng-bloco", "aria-label": titulo },
-    h("div", { class: "ng-bloco-cab" }, h("h3", null, titulo, " ", cont), novo), corpo);
+    h("div", { class: "ng-bloco-cab" }, h("h3", null, titulo, " ", cont), cad, novo), corpo);
   el.atualizar = novas => { lista = semPendentes("tarefa", novas, voltou); desenhar(); };
   el.lista = () => lista.slice();
   return el;
@@ -396,9 +545,23 @@ export function blocoTarefas(k, { tarefas = [], contato_id = null, negocio_id = 
 function itemNota(k, n, { aoMudar }) {
   const { ui, h } = k;
   const pode = n.pode_editar && k.pode("atendente");
-  const texto = h("p", null, n.texto);
+  // plano 1500c · RC-130: nota longa nasce recolhida (6 linhas) com «Ver mais/Ver menos» (aria-expanded)
+  const longa = k.L.notaLonga(n.texto);
+  // plano 2000d · PX-014: e-mail da nota vira mailto:
+  // plano 1500c · RC-131: links e telefones da nota viram <a> (sem innerHTML — cada pedaço com textContent)
+  const pedacos = (k.L.partesNota ? k.L.partesNota(n.texto) : [{ tipo: "texto", texto: n.texto }]).map(p => (p.tipo === "url"
+    ? h("a", { href: p.href, target: "_blank", rel: "noopener noreferrer" }, p.texto)
+    : p.tipo === "tel" ? h("a", { href: p.href, "aria-label": `Ligar para ${p.texto}` }, p.texto)
+    : p.tipo === "email" ? h("a", { href: p.href, "aria-label": `Escrever para ${p.texto}` }, p.texto) : p.texto));
+  const texto = h("p", { class: longa ? "nota-txt nota-recolhida" : "nota-txt", id: longa ? k.L.idUnico("nota-txt") : null }, ...pedacos);
+  const verMais = longa ? h("button", { type: "button", class: "link nota-ver-mais", "aria-expanded": "false", "aria-controls": texto.id, on: { click: () => {
+    const abrir = verMais.getAttribute("aria-expanded") !== "true";
+    verMais.setAttribute("aria-expanded", abrir ? "true" : "false");
+    texto.classList.toggle("nota-recolhida", !abrir);
+    verMais.textContent = abrir ? "Ver menos" : "Ver mais";
+  } } }, "Ver mais") : null;
   const el = h("article", { class: ["nota", n.fixada && "fixada"], dataset: { id: n.id } },
-    texto,
+    texto, verMais,
     h("div", { class: "nota-meta" },
       n.fixada ? h("span", { class: "pilula pilula-aten" }, "Fixada") : null,
       // plano 1000b · RB-120: «Automático» aqui e na linha do tempo (antes «Sistema» numa e «sistema» na outra)
@@ -470,6 +633,7 @@ export function blocoNotas(k, { notas = [], contato_id = null, negocio_id = null
       try {
         const n = await ui.carregando(bt, k.api.rpcC("nx_nota_salvar", { p_nota: { texto: t, ...(negocio_id ? { negocio_id } : {}), ...(contato_id ? { contato_id } : {}) } }));
         ta.value = "";
+        pintarConta();      // plano 2000d · PX-073
         if (rascunhoNota) rascunhoNota.apagar();      // o servidor confirmou
         mudou({ tipo: "salva", nota: n });
         ui.anunciar("Nota salva.");
@@ -478,7 +642,12 @@ export function blocoNotas(k, { notas = [], contato_id = null, negocio_id = null
     };
     bt.addEventListener("click", salvar);
     ta.addEventListener("keydown", ev => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); salvar(); } });
-    nova = h("div", { class: "nota-nova" }, ta, h("div", { class: "linha linha-fim" }, bt));
+    // plano 2000d · PX-073: perto do limite (4.500+ de 5.000) a contagem aparece — antes o texto parava de entrar sem aviso
+    const contaNota = h("small", { class: "nota-conta fraco", "aria-live": "polite" });
+    contaNota.hidden = true;
+    const pintarConta = () => { const n = [...ta.value].length; contaNota.hidden = n < 4500; contaNota.textContent = n >= 4500 ? `${n.toLocaleString("pt-BR")} de 5.000 caracteres` : ""; contaNota.classList.toggle("aten", n >= 5000); };
+    ta.addEventListener("input", pintarConta);
+    nova = h("div", { class: "nota-nova" }, ta, h("div", { class: "linha linha-fim" }, contaNota, bt));
     rascunhoNota = k.rascunho(ta, negocio_id ? `negocio:${negocio_id}:nota` : contato_id ? `contato:${contato_id}:nota` : "nota");   // M30: a nota digitada sobrevive a recarga/queda de sessão
   }
   desenhar();
@@ -516,7 +685,7 @@ export function blocoTempo(k, itens = [], { titulo = "Linha do tempo", pagina = 
   const chave = it => `${it.fonte || it.tipo || ""}:${it.id ?? ""}:${it.em || ""}`;
   // plano 1000 (CR-063): chips «Tudo · Notas · Etapas · Conversas · Automações» — a nota importante não se perde entre dezenas de eventos
   let filtro = "tudo";
-  const FILTROS = [["tudo", "Tudo"], ["nota", "Notas"], ["etapas", "Etapas"], ["conversa", "Conversas"], ["automacao", "Automações"]];
+  const FILTROS = [["tudo", "Tudo"], ["nota", "Notas"], ["tarefa", "Tarefas"] /* plano 2000d · DR-116 */, ["etapas", "Etapas"], ["conversa", "Conversas"], ["automacao", "Automações"]];
   const daFamilia = (it, v) => { const f = familiaTempo(it); return v === "etapas" ? ["estagio", "ganho", "perdido"].includes(f) : f === v; };
   const passa = it => filtro === "tudo" || daFamilia(it, filtro);
   const contar = v => (v === "tudo" ? todos.length : todos.filter(it => daFamilia(it, v)).length);
@@ -541,6 +710,7 @@ export function blocoTempo(k, itens = [], { titulo = "Linha do tempo", pagina = 
     const vis = todos.filter(passa);
     if (!vis.length) corpo.appendChild(h("p", { class: "fraco crm-vazio-txt" }, todos.length ? "Nada desse tipo ainda." : "Ainda não há registros."));
     const grupos = L.agruparPorDia(vis, { instanteDe: it => it.em, diaDe: iso => diaSP(ui, iso), hoje: hojeISO(ui), ordem: "desc" });
+    const ficou = L.permanenciaEtapas ? L.permanenciaEtapas(todos) : new Map();      // plano 2000d · DR-091
     for (const g of grupos) {
       const ol = h("ol", { class: "tempo" });
       for (const it of g.itens) {
@@ -550,8 +720,10 @@ export function blocoTempo(k, itens = [], { titulo = "Linha do tempo", pagina = 
         const link = it.conversa_id && temConversas ? h("a", { href: `#/conversas/${it.conversa_id}` }, " Abrir conversa") : null;
         ol.appendChild(h("li", { class: ["tempo-it", cls] },
           h("span", { class: "tempo-ic", "aria-hidden": "true" }, ui.icone(L.iconeTempo(it))),
-          h("div", { class: "tempo-txt" }, txt, link,
-            h("small", null, h("time", { datetime: it.em || null, title: ui.dataHoraBR(it.em) }, g.dia ? ui.horaBR(it.em) : ui.dataHoraBR(it.em)), `${it.autor ? ` · ${it.autor.nome}` : ` · ${L.AUTOR_AUTOMATICO}`}`))));
+          h("div", { class: "tempo-txt" }, txt, ficou.has(it) ? h("span", { class: "tempo-ficou" }, ` · ${ficou.get(it)}`) : null, link,
+            h("small", null, h("time", { datetime: it.em || null, title: ui.dataHoraBR(it.em) }, g.dia ? ui.horaBR(it.em) : ui.dataHoraBR(it.em)), it.autor ? ` · ${it.autor.nome}` : " · ",
+              // plano 2000d · DR-151: sem autor é o sistema (automação, servidor) — com o ícone, para não parecer uma pessoa
+              it.autor ? null : h("span", { class: "tempo-sistema", title: "Feito pelo sistema" }, ui.icone("raio"), L.AUTOR_AUTOMATICO)))));
       }
       corpo.appendChild(h("section", { class: "tempo-dia", "aria-label": g.rotulo },
         h("h4", { class: "tempo-dia-t" }, h("span", null, g.rotulo), h("span", { class: "tempo-dia-n dado" }, String(g.itens.length))), ol));
@@ -635,6 +807,18 @@ export async function montarTarefas(k, el, rota) {
   let vista = lerLocal("vista", "lista") === "semana" ? "semana" : "lista";
   const segVista = ui.segmentado({ opcoes: [{ valor: "lista", rotulo: "Lista" }, { valor: "semana", rotulo: "Semana" }], valor: vista, tipo: "filtro", rotulo: "Como ver as tarefas", classe: "tfp-vista",
     aoMudar: x => { vista = x === "semana" ? "semana" : "lista"; gravar("vista", vista); if (vista === "semana" && !["hoje", "proximas"].includes(aba)) { aba = "hoje"; gravar("aba", aba); marcarAbas(); } carregar(); } });
+  // plano 1500c · RC-307: «Baixar CSV» — as tarefas da aba/visão de agora (com «Minhas/Todas») numa planilha que o Excel abre com acentos
+  let ultimos = [];
+  // plano 2000d · DR-117: LGPD — a planilha (nomes, telefones, vínculos) só sai para quem pode exportar (supervisor+), como a de contatos
+  const podeCsv = k.pode("supervisor");
+  const btCsv = !podeCsv ? null : h("button", { type: "button", class: "bt bt-fant bt-p tfp-csv", disabled: true, title: "Baixar as tarefas desta lista em planilha (CSV)", on: { click: () => {
+    const { cabecalho, linhas } = L.csvTarefas(ultimos, { nomeDono: id => (k.usuario && k.usuario(id) || {}).nome || "", agora: Date.now(), rotNegocio: k.v.negocio || "Negócio",
+      prazo: iso => `${ui.dataBR ? ui.dataBR(iso) : String(iso).slice(0, 10)}${ui.horaBR ? ` ${ui.horaBR(iso)}` : ""}` });
+    try {
+      L.baixarArquivo(L.gerarCSV(cabecalho, linhas), `tarefas-${aba}-${ui.hojeSP ? ui.hojeSP() : diaSPFallback()}.csv`, { h });      // plano 2000d · DR-339: um helper só; o link vive 60 s (antes 2 s: o iPhone baixava vazio)
+      ui.anunciar(`${linhas.length} ${linhas.length === 1 ? "tarefa baixada" : "tarefas baixadas"} em planilha.`);
+    } catch (e) { k.toastErro ? k.toastErro(e) : ui.toast("Não deu para gerar a planilha.", { tipo: "erro" }); }
+  } } }, ui.icone("baixar"), h("span", null, "Baixar CSV"));
   const corpo = h("div", { class: "pilha" });
   const novaTarefa = async () => {
     const t = await formTarefa(k, null, {});
@@ -654,7 +838,7 @@ export async function montarTarefas(k, el, rota) {
   function desenharPainel(c) {
     for (const id of ["hoje", "atrasadas", "proximas"]) {
       const n = Number(c[id]) || 0;
-      painelNums[id].textContent = String(n);
+      painelNums[id].textContent = ui.num ? ui.num(n) : String(n);      // plano 1500c · RX-072: 1.234, como o resto do app
       const bt = painelNums[id].parentElement;
       if (bt) { bt.setAttribute("aria-pressed", String(aba === id)); bt.classList.toggle("zero", n === 0); bt.classList.toggle("alerta", id === "atrasadas" && n > 0); }
     }
@@ -662,7 +846,7 @@ export async function montarTarefas(k, el, rota) {
   el.append(
     ui.cabecalho({ titulo: "Tarefas", acoes: k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: novaTarefa } }, ui.icone("mais"), "Nova tarefa") : null }),     // plano 1000b · RB-123
     painel,
-    h("div", { class: "tfp-fita" }, seg, segVista),
+    h("div", { class: "tfp-fita" }, seg, segVista, btCsv),
     corpo);
   // M28: no celular «+ Tarefa» sai do cabeçalho e vira o botão flutuante
   if (k.pode("atendente")) el.appendChild(h("button", { type: "button", class: "crm-fab", "aria-label": "Nova tarefa", title: "Nova tarefa", on: { click: novaTarefa } },
@@ -687,6 +871,8 @@ export async function montarTarefas(k, el, rota) {
       const [r, r2] = await Promise.all([k.api.rpcC("nx_tarefas_listar", { p_filtro: { dono, situacao: semana ? "hoje" : aba } }),
         semana ? k.api.rpcC("nx_tarefas_listar", { p_filtro: { dono, situacao: "proximas" } }) : null]);
       if (minha !== seq) return;
+      ultimos = [...((r && r.itens) || []), ...((r2 && r2.itens) || [])].filter(x => !ocultas.has(x.id));      // plano 1500c · RC-307: o que está na tela vai para o CSV
+      if (btCsv) btCsv.disabled = !ultimos.length;
       if (semana) { desenharSemana(r, r2); return; }
       // as contagens vêm em r.contagens (banco) ou soltas no topo da resposta (servidor fictício): o painel e as abas leem as duas formas
       const c = r.contagens || r || {};
@@ -720,9 +906,20 @@ export async function montarTarefas(k, el, rota) {
       // o servidor devolve no máximo 200: sem isso a lista parecia completa
       // plano 1000b · RB-233: o conselho depende da aba («conclua algumas» não faz sentido em Próximas/Concluídas)
       if (r.tem_mais) corpo.appendChild(h("p", { class: "sub" }, textoTarefasDeMais(aba, r.itens.length, podeTodas && dono === "todos")));
+      // plano 2000d · DR-126: o gerente em «Todas» vê de quem são as atrasadas (das que vieram), no topo da lista
+      if (podeTodas && dono === "todos" && aba === "atrasadas") {
+        const pp = L.contarPorDono(itens);
+        if (pp.length > 1 || (pp.length === 1 && pp[0].dono_id != null)) corpo.insertBefore(h("p", { class: "tfp-por-pessoa sub" }, h("b", null, "Por pessoa: "),
+          pp.map(x => `${x.dono_id == null ? "Sem responsável" : ((k.usuario && k.usuario(x.dono_id)) || {}).nome || "Pessoa removida"} ${x.n}`).join(" · ")), corpo.firstChild);
+      }
     } catch (e) {
       if (minha !== seq) return;
       corpo.removeAttribute("aria-busy");
+      // plano 2000d · DR-115: a recarga silenciosa (depois de concluir/adiar) que falha mantém a lista na tela e só avisa
+      if (quieto && corpo.querySelector(".tf-li, .tfp-lista, .tfp-semana")) {
+        ui.toast("Não consegui atualizar a lista. O que está na tela pode estar desatualizado.", { tipo: "aten", acao: { rotulo: "Tentar", fn: () => carregar(true) } });
+        return;
+      }
       ui.limpar(corpo);
       corpo.appendChild(ui.erroCartao(e, () => carregar()));
     }
@@ -776,9 +973,19 @@ export async function montarTarefas(k, el, rota) {
   const cancelar = ctx.pulso && typeof ctx.pulso.assinar === "function" ? ctx.pulso.assinar(recarregarQuieto) : null;
   const aoVoltar = () => { if (!document.hidden) recarregarQuieto(); };
   document.addEventListener("visibilitychange", aoVoltar);
+  // plano 2000d · PX-041: N (fora de campos e diálogos) abre «Nova tarefa» — o mesmo atalho do quadro; aparece na paleta/folha «?» pelo comando
+  const aoTeclaN = ev => {
+    if ((ev.key !== "n" && ev.key !== "N") || ev.altKey || ev.ctrlKey || ev.metaKey || !k.pode("atendente")) return;
+    const a = ev.target;
+    const editando = a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || "") || (a.closest && a.closest("[role=dialog],dialog")));
+    if (editando || (document.querySelector && document.querySelector("dialog[open]"))) return;
+    ev.preventDefault(); novaTarefa();
+  };
+  document.addEventListener("keydown", aoTeclaN);
   // plano 1000 (CR-156): caiu a internet → os círculos desligam com a dica; voltou → religam (sem recarregar a lista)
   const aoRede = () => varrerChecksRede(corpo);      // plano 1000b · RB-115: a mesma varredura do ouvinte global
   if (typeof addEventListener === "function") { addEventListener("offline", aoRede); addEventListener("online", aoRede); }
   return { desmontar() { seq++; if (cancelar) cancelar(); document.removeEventListener("visibilitychange", aoVoltar);
+    document.removeEventListener("keydown", aoTeclaN);      // plano 2000d · PX-041
     if (typeof removeEventListener === "function") { removeEventListener("offline", aoRede); removeEventListener("online", aoRede); } } };
 }

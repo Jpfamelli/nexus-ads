@@ -225,7 +225,9 @@ test("aplicarModelo: resolve etapa pelo marco, etiqueta e modelo da WABA pelo no
   assert.equal(l.acoes[0].template_id, U(71));
   assert.deepEqual(l.acoes[0].parametros, ["{primeiro_nome}", "{data_consulta}", "{hora_consulta}"]);
   assert.equal(L.validar(Object.assign({}, l, { ativo: true }), { base: BASE }).ok, true, "lembrete pronto para ligar");
-  for (const m of L.MODELOS) assert.equal(L.validar(L.aplicarModelo(m.id, BASE), { base: BASE }).ok, true, m.id);
+  // plano 2000d: receitas que pedem a etapa pelo nome (Pronto, Enviado…), uma etiqueta ou um recurso novo do servidor ficam pendentes
+  // nesta base de teste de propósito (DU-008: «aplicarModelo sem marco deixa estagio_id vazio e validar aponta «quando»»)
+  for (const m of L.MODELOS.filter(x => !x.pedeEtapa && !x.pedeEscolha && !x.requer)) assert.equal(L.validar(L.aplicarModelo(m.id, BASE), { base: BASE }).ok, true, m.id);
   // o original não é alterado
   assert.equal(L.MODELOS.find(m => m.id === "orcamento").auto.config.estagio_marco, "orcamento");
 });
@@ -234,14 +236,19 @@ test("modelosDaVertical: lembrete em destaque para odonto/oficina, acompanhament
   assert.equal(L.modelosDaVertical("odonto")[0].id, "lembrete_consulta_texto");
   assert.equal(L.modelosDaVertical("oficina")[0].id, "lembrete_consulta_texto");
   assert.deepEqual(L.modelosDaVertical("loja").slice(0, 3).map(m => m.id), ["followup_orcamento", "lead_anuncio", "pos_venda"]);
-  assert.equal(L.modelosDaVertical("generico").length, L.MODELOS.length);
-  assert.equal(L.modelosDaVertical("loja").length, L.MODELOS.length - 1, "«faltou» não existe na loja");
+  // plano 2000d: as receitas por vertical (DU-001..DU-020) escondem-se nas outras verticais e as que dependem do servidor só aparecem com o recurso
+  const vis = v => L.MODELOS.filter(m => !(m.ocultar || []).includes(v) && !m.requer).length;
+  assert.equal(L.modelosDaVertical("generico").length, vis("generico"));
+  // plano 1500c: «Pediu para desmarcar» (UCA-063) também não existe na loja (loja não tem horário marcado)
+  assert.equal(L.modelosDaVertical("loja").length, vis("loja"), "«faltou» e «pediu para desmarcar» não existem na loja");
+  assert.ok(!L.modelosDaVertical("loja").some(m => m.id === "pediu_desmarcar"));
   assert.ok(!L.modelosDaVertical("loja").some(m => m.id === "faltou_remarcar"));
 });
 
 test("modelos de texto do CodeWords: lembrete 24 h e confirmação ao agendar — desligados, texto livre, sem modelo da Meta nem janela", () => {
   const v = L.modelosDaVertical("odonto").map(m => m.id);
-  assert.deepEqual(v.slice(0, 3), ["lembrete_consulta_texto", "confirmacao_agendamento", "followup_orcamento"]);
+  // plano 2000d · DU-001: na clínica, «Respondeu SIM» entra no lugar do acompanhamento de orçamento entre os destaques
+  assert.deepEqual(v.slice(0, 3), ["lembrete_consulta_texto", "confirmacao_agendamento", "confirmou_sim"]);
   const lem = L.aplicarModelo("lembrete_consulta_texto", BASE);
   assert.equal(lem.ativo, false, "nasce desligado");
   assert.equal(lem.gatilho, "antes_da_data");
@@ -264,7 +271,7 @@ test("modelos de texto do CodeWords: lembrete 24 h e confirmação ao agendar �
   assert.equal(L.validar(Object.assign({}, conf, { ativo: true }), { base: BASE }).ok, true, "pronta para ligar");
   // vocabulário da vertical: oficina fala em visita
   const of = L.aplicarModelo("lembrete_consulta_texto", BASE, VOCAB_OFICINA);
-  assert.match(of.acoes[0].texto, /sua visita amanhã/);
+  assert.match(of.acoes[0].texto, /sua visita no dia/);   // plano 2000d · DU-005: «no dia 29/09» em vez de «amanhã»
   assert.equal(of.nome, "Lembrete 24 h antes da visita (texto)");
   const confOf = L.aplicarModelo("confirmacao_agendamento", BASE, VOCAB_OFICINA).acoes[0].texto;
   assert.doesNotMatch(confOf.replace(/{[a-z_]+}/g, ""), /consulta/, "a palavra muda por vertical");
@@ -632,9 +639,10 @@ test("sequência: linhaDoTempo soma as esperas, marca o que vem depois de «para
   assert.equal(L.temSequencia({ acoes: [tarefa()] }), false);
   const av = L.avisosEstrutura({ gatilho: "tarefa_vencida", acoes });
   assert.ok(av.some(t => /depois de «Parar por aqui» nunca rodam/.test(t)), av.join("|"));
-  assert.ok(L.avisosEstrutura({ acoes: [tarefa(), { tipo: "esperar", minutos: 60 }, { tipo: "esperar", minutos: 60 }, tarefa()] }).some(t => /duas esperas/.test(t)));
+  // plano 1500c: UCA-111 — o aviso diz QUAIS passos e quanto somam («Os passos 2 e 3 são esperas seguidas (somam 2 h)»)
+  assert.ok(L.avisosEstrutura({ acoes: [tarefa(), { tipo: "esperar", minutos: 60 }, { tipo: "esperar", minutos: 60 }, tarefa()] }).some(t => /passos 2 e 3 são esperas seguidas \(somam 2 h\)/.test(t)));
   assert.ok(L.avisosEstrutura({ gatilho: "tarefa_vencida", acoes: [{ tipo: "esperar", minutos: 60, cancelar_se_cliente_responder: true }, tarefa()] }).some(t => /existe uma conversa/.test(t)));
-  assert.ok(L.avisosEstrutura({ acoes: [{ tipo: "ia_decidir", tarefa: "pontuar_lead" }] }).some(t => /cota de IA/.test(t)));
+  assert.ok(L.avisosEstrutura({ acoes: [{ tipo: "ia_decidir", tarefa: "pontuar_lead" }] }).some(t => /uso da IA/.test(t)));   // plano 2000d · DU-069: «uso da IA» em todo lugar
   assert.deepEqual(L.avisosEstrutura({ gatilho: "negocio_criado", acoes: [tarefa(), { tipo: "esperar", minutos: 60 }, tarefa()] }), []);
   // reordenar mantém a conta
   assert.deepEqual(L.linhaDoTempo(L.mover(acoes, 1, 0)).slice(0, 2).map(x => x.quando), ["Na hora", "Depois de 1 dia"]);
@@ -668,7 +676,7 @@ test("frasePeriodo: dias da semana em português", () => {
   assert.equal(L.frasePeriodo([1]), "toda segunda");
   assert.equal(L.frasePeriodo([6]), "todo sábado");
   assert.equal(L.frasePeriodo([1, 3, 5]), "às segundas, quartas e sextas");
-  assert.equal(L.frasePeriodo([0, 6]), "aos domingos e sábados");
+  assert.equal(L.frasePeriodo([0, 6]), "aos sábados e domingos");   // plano 1500c: UCA-024 — fim de semana na ordem natural
   assert.equal(L.frasePeriodo([2, 6]), "às terças e aos sábados");
   assert.equal(L.frasePeriodo([]), "(escolha os dias)");
   assert.deepEqual(L.normalizarDias(["3", 1, 3, 8, "x", -1]), [1, 3]);
@@ -677,7 +685,8 @@ test("frasePeriodo: dias da semana em português", () => {
 test("descrever: gatilhos novos, passos novos e sequência com «e depois»", () => {
   const f = (a, v = VOCAB_ODONTO) => L.descrever(a, BASE, v);
   assert.equal(f({ gatilho: "agendado", config: { horario: "09:00", dias_semana: [1, 2, 3, 4, 5], estagio_id: U(13) }, acoes: [{ tipo: "criar_tarefa", titulo: "Retomar", dono: "responsavel", vence_em_horas: 4 }] }),
-    "De segunda a sexta, às 09:00, para cada oportunidade aberta na etapa «Avaliou / orçamento», criar tarefa «Retomar» para o responsável com prazo de 4 h.");
+    // plano 1500c: UCA-121 — com mais de um funil e sem funil escolhido, a frase diz de qual funil é a etapa
+    "De segunda a sexta, às 09:00, para cada oportunidade aberta na etapa «Avaliou / orçamento» (funil «Pacientes»), criar tarefa «Retomar» para o responsável com prazo de 4 h.");
   assert.equal(f({ gatilho: "apos_data", config: { campo: "consulta", horas: 2 }, acoes: [{ tipo: "resolver_conversa" }] }), "2 h depois da consulta, resolver a conversa.");
   assert.equal(f({ gatilho: "apos_data", config: { campo: "consulta", horas: 48 }, acoes: [{ tipo: "resolver_conversa" }] }, VOCAB_OFICINA), "2 dias depois da visita, resolver a conversa.");
   assert.equal(f({ gatilho: "conversa_resolvida", config: { departamento_id: U(51) }, acoes: [{ tipo: "ia_decidir", tarefa: "resumir_nota" }] }),
@@ -741,7 +750,8 @@ test("receitas: as 9 do PLANO existem, são válidas no catálogo e nascem desli
   assert.equal(new Set(L.MODELOS.map(m => m.id)).size, L.MODELOS.length, "ids únicos");
   for (const vertical of ["odonto", "oficina", "loja", "generico"]) {
     const voc = { ...VOCAB_ODONTO, vertical };
-    for (const m of L.modelosDaVertical(vertical)) {
+    // plano 2000d: as que pedem etapa/etiqueta por nome são conferidas com a base de cada vertical em plano2000d-auto (DU-052)
+    for (const m of L.modelosDaVertical(vertical).filter(x => !x.pedeEtapa && !x.pedeEscolha)) {
       const a = L.aplicarModelo(m.id, BASE, voc);
       assert.equal(a.ativo, false, `${vertical}/${m.id} nasce desligada`);
       const r = L.validar(a, { base: BASE, ligar: false });
@@ -784,7 +794,8 @@ test("receitas: sequência do follow-up (24 h e 72 h, para se responder), faltou
   assert.equal(pos.gatilho, "apos_data");
   assert.equal(pos.config.horas, 24);
   assert.deepEqual(pos.condicoes, [{ campo: "estagio_id", op: "diferente", valor: U(15) }]);
-  assert.deepEqual(L.aplicarModelo("pos_atendimento", { funis: [{ id: U(1), padrao: true, estagios: [] }] }).condicoes, [], "condição opcional some se a etapa não existe");
+  // plano 2000d · DU-007: sem a etapa «Faltou», a condição fica pendente (escolher ou tirar) — antes sumia e todos recebiam
+  assert.deepEqual(L.aplicarModelo("pos_atendimento", { funis: [{ id: U(1), padrao: true, estagios: [] }] }).condicoes, [{ campo: "estagio_id", op: "diferente", valor: "" }]);
   const lead = L.aplicarModelo("lead_anuncio", BASE, VOCAB_ODONTO);
   assert.deepEqual(lead.condicoes, [{ campo: "origem", op: "igual", valor: "anuncio" }]);
   assert.deepEqual(lead.acoes.map(a => a.tipo), ["notificar", "esperar", "criar_tarefa"]);
@@ -930,11 +941,13 @@ test("IA desligada (sem chave): iaDesligada lê as duas formas do servidor e os 
 test("erroAutomacao: o timeout do banco (57014) em Testar/salvar não fala de «período» nem «itens»", () => {
   assert.equal(L.erroAutomacao({ codigo: "tempo_esgotado" }, "Operação grande demais; tente um período menor ou menos itens de uma vez."),
     "O servidor demorou a responder. Tente de novo em instantes.");
-  assert.equal(L.erroAutomacao({ codigo: "sem_permissao" }, "padrão"), "padrão");
+  // plano 1500c: UCA-071 — sem permissão agora diz o que fazer (pedir a um administrador) em vez do texto genérico
+  assert.match(L.erroAutomacao({ codigo: "sem_permissao" }, "padrão"), /Peça a um administrador/);
   assert.equal(L.erroAutomacao(null, "padrão"), "padrão");
-  assert.match(lerApp("auto-editor.js"), /L\.erroAutomacao\(erro, ctx\.api\.mensagemErro\(erro\)\)/, "Testar");
+  // plano 1500c: UCA-071 — o editor passa também os usuários (para «Peça a <administrador>»)
+  assert.match(lerApp("auto-editor.js"), /L\.erroAutomacao\(erro, ctx\.api\.mensagemErro\(erro\), base\.usuarios\)/, "Testar");
   // (revisão 1000b · UB-211: o salvar trata antes o edicao_desatualizada; o resto continua no erroAutomacao)
-  assert.match(lerApp("auto-editor.js"), /: L\.erroAutomacao\(e, ctx\.api\.mensagemErro\(e\)\);/, "salvar");
+  assert.match(lerApp("auto-editor.js"), /: L\.erroAutomacao\(e, ctx\.api\.mensagemErro\(e\), base\.usuarios\);/, "salvar");   // plano 1500c: UCA-071
   assert.match(lerApp("auto-editor.js"), /p_atualizado_em: versao/, "UB-211: manda a versão que estava na tela");
 });
 
@@ -1107,7 +1120,8 @@ test("editor: edição pendente segura a atualização automática, o link do to
   assert.doesNotMatch(ed, /h\("a", \{ class: "au-voltar", href: "#\/automacoes" \}, ui\.icone\("seta-esq"\), "Automações"\),\s*h\("div", \{ class: "au-ed-linha" \}/, "o link puro, sem guarda, saiu");
   // rascunho: grava em toda mudança, some ao salvar e ao descartar, e é oferecido ao abrir
   // plano 1000b: UB-021 — mudou() analisa uma vez e repassa (pintarValidacao(an.ps)); o rascunho continua no fim
-  assert.match(ed, /pintarValidacao\(an\.ps\);\s*pintarTesteCom\(\);\s*guardarRascunho\(\);\s*\}/, "mudou() guarda o rascunho");
+  // plano 1500c: UCA-086 — o rascunho é guardado com espera curta (agendarRascunho) e sai na hora ao fechar/ocultar a aba
+  assert.match(ed, /pintarValidacao\(an\.ps\);\s*pintarTesteCom\(\);\s*agendarRascunho\(\);/, "mudou() guarda o rascunho");
   assert.match(ed, /if \(temPendencia\(\)\) \{ rasc\.guardar\(idRasc, auto\); gravouRascunho = true; \}/);
   assert.match(ed, /salvoJson = JSON\.stringify\(L\.limpar\(salvo\)\);\s*if \(rasc\) rasc\.apagar\(idRasc\);/, "salvou: o rascunho some");
   // plano 1000 · AS-267: a chave do rascunho novo depende da origem (branco/receita/IA) — L.idRascunho, testado em plano1000-automacoes
@@ -1142,7 +1156,8 @@ test("editor: trocar o funil no gatilho refaz a lista de etapas; «criar etiquet
 
 test("execuções: «Cancelar» na linha em espera e «Cancelar todas as esperas» chamam nx_automacao_cancelar_espera depois de confirmar", () => {
   const ed = lerApp("auto-editor.js");
-  assert.match(ed, /podeEditar && contagem\.espera > 0 \? h\("button", \{ type: "button", class: "bt bt-sec bt-p" \}, ui\.icone\("parar"\), "Cancelar todas as esperas"\)/, "só quem edita e só com espera");
+  // plano 1500c: UCA-056 — conta também as esperas que o servidor sabe (item.em_espera), não só as carregadas na tela
+  assert.match(ed, /podeEditar && Math\.max\(Number\(item\.em_espera\) \|\| 0, contagem\.espera\) > 0 \? h\("button", \{ type: "button", class: "bt bt-sec bt-p" \}, ui\.icone\("parar"\), "Cancelar todas as esperas"\)/, "só quem edita e só com espera");
   assert.match(ed, /podeEditar && sit === "espera" && x\.chave \? h\("button"/, "o botão da linha só nas que estão em espera");
   assert.match(ed, /async function cancelarEspera\(x, botao\) \{\s*const ok = await ui\.confirmar\([\s\S]*?if \(!ok\) return;[\s\S]*?ctx\.api\.rpcC\("nx_automacao_cancelar_espera", \{ p_id: item\.id, p_chave: x \? x\.chave : null \}\)/, "confirma antes; p_chave nulo = todas");
   // a RPC existe no banco com esses parâmetros e devolve quantas cancelou

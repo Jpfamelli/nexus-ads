@@ -149,7 +149,9 @@ async function kitDe(ctx) {
     /** cria etiqueta (atendente+) e já põe no catálogo em memória */
     async criarEtiqueta(nome) {
       const paleta = ctx.paleta || [];
-      const cor = paleta.length ? paleta[k.base.etiquetas.length % paleta.length] : null;
+      // plano 1500c · RC-068: a cor da paleta MENOS usada no catálogo (depois de excluir uma, a próxima não repete a última)
+      const cor = k.L && typeof k.L.corMenosUsada === "function" ? k.L.corMenosUsada(paleta, (k.base.etiquetas || []).map(e => e.cor))
+        : paleta.length ? paleta[k.base.etiquetas.length % paleta.length] : null;
       const e = await ctx.api.rpcC("nx_etiqueta_salvar", { p_etiqueta: { nome, ...(ui.corOk(cor) ? { cor } : {}) } });
       if (e && e.id && !k.base.etiquetas.some(x => x.id === e.id)) k.base.etiquetas = [...k.base.etiquetas, e].sort((a, b) => String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR"));   // plano 1000b · RB-192: etiqueta sem nome não quebra
       return e;
@@ -270,11 +272,23 @@ function registrarComandos(ctx, k) {
   const ativos = ((baseAgora && baseAgora.funis) || []).filter(f => f.ativo !== false);
   if (ativos.length > 1) ativos.forEach((f, i) => reg({ id: `crm.funil-${f.id}`, rotulo: `Ir para o funil «${f.nome}»`, palavras: `funil quadro kanban ${f.nome}${i < 5 ? ` alt+${i + 1}` : ""}`,
     fazer: () => ctx.navegar(`#/crm?funil=${encodeURIComponent(f.id)}`) }));
-  if (!k.pode("atendente")) return;
   const tipoTela = telaAtual && telaAtual.tipo;
+  // plano 2000d · DR-069: os atalhos do quadro aparecem na folha «?» (antes só o N) — o quadro atende as teclas; aqui só a lista e o caminho pela paleta
+  if (tipoTela === "kanban") {
+    const focarBusca = () => { const b = typeof document !== "undefined" && document.querySelector ? document.querySelector('.crm-kb-ferramentas input[type="search"]') : null; if (b) b.focus(); };
+    reg({ id: "crm.kb-buscar", rotulo: "Buscar no quadro", palavras: "buscar procurar quadro cartão", atalho: "/", grupo: "Quadro", fazer: focarBusca });
+    if (k.pode("atendente")) {
+      const dica = t => () => ctx.ui.toast(t, { tipo: "info", ms: 6000 });
+      reg({ id: "crm.kb-mover", rotulo: "Mover o cartão para… (com o cartão em foco)", palavras: "mover etapa cartão teclado", atalho: "M", grupo: "Quadro", fazer: dica("Com um cartão em foco (Tab ou setas), aperte M para escolher a etapa.") });
+      reg({ id: "crm.kb-pegar", rotulo: "Pegar o cartão e mover com as setas", palavras: "mover arrastar teclado setas", atalho: "Espaço", grupo: "Quadro", fazer: dica("Com um cartão em foco, Espaço pega o cartão; as setas movem; Enter solta; Esc cancela.") });
+      reg({ id: "crm.kb-selecionar", rotulo: "Selecionar o cartão (vários de uma vez)", palavras: "selecionar vários lote cartão", atalho: "X", grupo: "Quadro", fazer: dica("Com um cartão em foco, X (ou Shift+Espaço) marca o cartão; depois «Mover para…», «Etiquetar…» na barra da seleção.") });
+    }
+  }
+  if (!k.pode("atendente")) return;
   // plano 1000 (CR-267): no quadro a tecla N cria um cartão (o quadro atende a tecla; aqui ela aparece na folha «?»)
   reg({ id: "crm.novo-negocio", rotulo: k.v.novo("negocio"), palavras: "oportunidade negócio lead cartão criar novo", ...(tipoTela === "kanban" ? { atalho: "N" } : {}), fazer: () => novoNegocio(ctx, {}) });
-  reg({ id: "crm.nova-tarefa", rotulo: "Nova tarefa", palavras: "tarefa lembrete ligar retorno criar", fazer: async () => {
+  // plano 2000d · PX-041: em Tarefas a tecla N abre «Nova tarefa» (a tela atende a tecla; aqui ela aparece na folha «?»)
+  reg({ id: "crm.nova-tarefa", rotulo: "Nova tarefa", palavras: "tarefa lembrete ligar retorno criar", ...(tipoTela === "tarefas" ? { atalho: "N" } : {}), fazer: async () => {
     try { const kk = await kitDe(ctx); const T = await kk.mod("tarefas"); const t = await T.formTarefa(kk, null, {}); if (t) ctx.ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); }
     catch (e) { console.error(e); ctx.ui.toast("Não foi possível abrir a tarefa.", { tipo: "erro" }); }
   } });
@@ -365,7 +379,9 @@ export async function montar(ctx) {
 
   // decide a tela
   let tipo, chave;
-  if (modulo === "crm") { tipo = "kanban"; chave = `kanban|${r.query && r.query.funil || ""}|${r.query && r.query.busca || ""}`; }   // plano 1000 (CR-185): ?busca nova remonta o quadro
+  // plano 1500c · UC-028: o atalho «Importar planilha» do Início/ajuda aponta para #/crm?importar=1 — abre a importação (não o quadro)
+  if (modulo === "crm" && r.query && String(r.query.importar) === "1" && !partes[0]) { tipo = "importar"; chave = "importar"; }
+  else if (modulo === "crm") { tipo = "kanban"; chave = `kanban|${r.query && r.query.funil || ""}|${r.query && r.query.busca || ""}`; }   // plano 1000 (CR-185): ?busca nova remonta o quadro
   else if (modulo === "contatos" && partes[0] === "importar") { tipo = "importar"; chave = "importar"; }
   else if (modulo === "contatos" && partes[0]) { tipo = "ficha"; chave = `ficha|${partes[0]}`; }
   else if (modulo === "contatos") { tipo = "contatos"; chave = `contatos|${JSON.stringify(r.query || {})}`; }   // plano 1000: filtro de link novo (?busca, ?empresa, ?origem) remonta a lista
@@ -373,6 +389,8 @@ export async function montar(ctx) {
   else if (modulo === "empresas") { tipo = "empresas"; chave = "empresas"; }
   else if (modulo === "tarefas") { tipo = "tarefas"; chave = "tarefas"; }
   else { tipo = "kanban"; chave = "kanban|"; }
+  // plano 1500c · RC-067: #/crm/negocio/ID sem ?funil/?busca abre a gaveta SOBRE o quadro que já está aberto (herda funil e busca) — não refaz o quadro
+  if (tipo === "kanban" && partes[0] === "negocio" && !(r.query && (r.query.funil || r.query.busca)) && telaAtual && telaAtual.tipo === "kanban") chave = telaAtual.chave;
 
   // plano 1000 (CR-040): #/contatos/abc e #/empresas/xyz não viram erro técnico (Number("abc") = null no servidor) — «não encontrado», nenhuma RPC
   if ((tipo === "ficha" || tipo === "empresa") && !/^\d+$/.test(String(partes[0]))) {
@@ -437,6 +455,8 @@ export async function montar(ctx) {
       fecharGavetaAtual();
       const idNegocio = Number(partes[1]);
       const gaveta = await N.abrirNegocio(k, idNegocio, {
+        // plano 2000d · PX-024: #/crm/negocio/<id>?aba=tarefas|notas|tempo|presenca abre a gaveta já na seção (link de aviso, do Início)
+        aba: r.query && typeof r.query.aba === "string" ? r.query.aba : null,
         aoMudar: c => telaAtual && telaAtual.aoMudarNegocio && telaAtual.aoMudarNegocio(c),
         // plano 1000 (CR-039): o negócio é de outro funil → o quadro por baixo troca para ele (ao fechar a gaveta, o cartão está à vista)
         aoCarregar: d => { const f = d && d.negocio && d.negocio.funil_id; if (f && telaAtual && typeof telaAtual.mostrarFunil === "function") telaAtual.mostrarFunil(f); },
@@ -444,14 +464,26 @@ export async function montar(ctx) {
           // volta o endereço para o quadro sem remontar a tela (no funil que o quadro mostra agora)
           const fAtual = telaAtual && typeof telaAtual.funilAtual === "function" ? telaAtual.funilAtual() : null;
           const fq = fAtual || (r.query && r.query.funil);
-          const q = fq ? `?funil=${encodeURIComponent(fq)}` : "";
+          // plano 2000d · DR-048: a busca que veio no link (?busca=) continua no endereço ao fechar a gaveta
+          const bq = r.query && typeof r.query.busca === "string" && r.query.busca.trim() ? r.query.busca.trim() : "";
+          const partesQ = [fq ? `funil=${encodeURIComponent(fq)}` : "", bq ? `busca=${encodeURIComponent(bq)}` : ""].filter(Boolean);
+          const q = partesQ.length ? `?${partesQ.join("&")}` : "";
           const prefixo = `#/crm/negocio/${idNegocio}`;
           if (location.hash === prefixo || location.hash.startsWith(prefixo + "?")) history.replaceState(history.state, "", `${location.pathname}${location.search}#/crm${q}`);
         },
       });
       if (minha !== montagem) { gaveta && gaveta.fechar(); return; }
       if (telaAtual) telaAtual.gaveta = gaveta;
-    } else fecharGavetaAtual();
+    } else {
+      fecharGavetaAtual();
+      // plano 1500c · RX-064: #/crm/negocio/abc (link cortado/digitado errado) avisa em vez de só mostrar o quadro calado
+      if (tipo === "kanban" && partes[0] === "negocio" && partes[1] !== undefined && !/^\d+$/.test(partes[1] || "")) {
+        const art = ctx.vocab && typeof ctx.vocab.art === "function" ? ctx.vocab.art("negocio") : "o";
+        ui.toast(`Esse link não aponta para ${art === "a" ? "uma" : "um"} ${(ctx.vocab && typeof ctx.vocab.min === "function" && ctx.vocab.min("negocio")) || "negócio"} válid${art}.`, { tipo: "erro" });
+        // plano 2000d · DR-047: o endereço quebrado sai da barra (recarregar não repete o aviso)
+        try { if (typeof location !== "undefined" && /^#\/crm\/negocio\//.test(location.hash || "")) history.replaceState(history.state, "", `${location.pathname}${location.search}#/crm`); } catch { /* ok */ }
+      }
+    }
   } catch (e) {
     console.error("crm: montar falhou", e);
     if (minha !== montagem) return;

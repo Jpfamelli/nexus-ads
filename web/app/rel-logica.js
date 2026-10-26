@@ -63,6 +63,8 @@ export const variacao = (a, b) => (!fin(a) || !fin(b)) ? null : b === 0 ? (a ===
 /** Chip de variação: sentido 'cima' (mais é melhor), 'baixo' (menos é melhor) ou 'neutro'. */
 export function chipVar(atual, anterior, sentido = "cima") {
   const v = variacao(atual, anterior);
+  // plano 1000b → plano 1500c · AC-179: antes 0 e agora algo é «novo» (antes «sem base», que parecia dado faltando)
+  if (v == null && fin(atual) && atual > 0 && anterior === 0) return { v: null, txt: "novo", cls: "neutro", seta: "", novo: true };
   if (v == null) return { v: null, txt: "sem base", cls: "neutro", seta: "" };
   const bom = sentido === "cima" ? v >= 0 : sentido === "baixo" ? v <= 0 : null;
   const cls = bom == null || Math.abs(v) < 1 ? "neutro" : bom ? "bom" : "ruim";
@@ -133,9 +135,18 @@ export function numerosPeriodo(M, { dias = 30, plat = "" } = {}) {
   // plano 1000b · AB-194: os mesmos custos no período anterior (o chip de variação da linha «R$ X por agendamento»)
   const custoAgendamentoAnt = ca.agendadas > 0 && ta.gasto > 0 ? ta.gasto / ca.agendadas : null;
   const custoFechamentoAnt = ca.fecharam > 0 && ta.gasto > 0 ? ta.gasto / ca.fecharam : null;
+  // plano 2000d · DA-199/DA-200/DA-255: «Este mês»/«Mês passado» com mês anterior de outro tamanho (31 × 30, 31 × 28) — os somatórios
+  // do anterior são comparados pela MÉDIA POR DIA (× n/nA); antes um +10% podia vir só do tamanho do mês
+  const nA = Math.max(0, ateA - deA + 1);
+  const normalizado = (dias === "mes" || dias === "mes_ant") && nA > 0 && nA !== n;
+  const escalaA = normalizado ? n / nA : 1;
   return { de, ate, deA, ateA, f, t, ta, c, ca, roas, fee, custoTotal, retorno, dias: n, periodo: dias, rotulo: rotuloPeriodo(dias, M), plat, gestao, estimada, custoAgendamento, custoFechamento,
-    custoAgendamentoAnt, custoFechamentoAnt };
+    custoAgendamentoAnt, custoFechamentoAnt, nA, normalizado, escalaA };
 }
+/** Plano 2000d · DA-199/DA-200: um somatório do período anterior na régua do atual (média por dia × dias de agora). */
+export const anteriorNaRegua = (P, v) => (v === null || v === undefined || !Number.isFinite(+v) ? v : +v * ((P && P.escalaA) || 1));
+/** Plano 2000d · DA-199/DA-200: a nota que explica a comparação normalizada («31 dias agora × 30 antes»). */
+export const textoNormalizado = P => (P && P.normalizado ? `Comparação pela média por dia: ${P.dias} ${P.dias === 1 ? "dia" : "dias"} agora × ${P.nA} ${P.nA === 1 ? "dia" : "dias"} antes.` : "");
 
 /** Rótulos do herói (F1): com fee configurado, «Retorno total» = receita ÷ (anúncios + gestão) e a nota «inclui R$ X de gestão»
     (para todos: o cliente vê de onde vem a diferença); sem fee, «Retorno sobre anúncios» = receita ÷ investimento em anúncios. */
@@ -153,20 +164,33 @@ export function ultimoGastoPorCampanha(M) {
   for (const l of (M && M.LINHAS) || []) if ((+l.gasto || 0) > 0 && l.i <= M.R && (!ult.has(l.camp) || l.i > ult.get(l.camp))) ult.set(l.camp, l.i);
   return ult;
 }
+/** Plano 2000d · DA-143/DA-204: {pausada, semEntrega} de uma campanha — o status da plataforma (ACTIVE/ENABLED × PAUSED…) vence a
+    heurística dos 3 dias sem gasto. */
+export function situacaoCampanha(c, ultimo, R) {
+  const parada = ultimo != null && R - ultimo >= DIAS_PAUSADA;
+  const st = String((c && (c.status || c.st)) || "").trim().toUpperCase();
+  if (/^(ACTIVE|ENABLED|ATIVA|ATIVO)$/.test(st)) return { pausada: false, semEntrega: parada };
+  if (/PAUS|REMOV|DELET|ARCHIV|DISABLED|INATIV/.test(st)) return { pausada: true, semEntrega: false };
+  return { pausada: parada, semEntrega: false };
+}
 export function linhasCampanhas(M, { dias = 30, plat = "" } = {}) {
-  const { de, ate } = janela(M, dias);
+  const { de, ate, deA, ateA } = janela(M, dias);
   const ult = ultimoGastoPorCampanha(M);
   const linhas = Object.values(M.CAMP).filter(c => c.plat && !c.semCampanha && (!plat || c.plat === plat)).map(c => {
     const t = M.consolidar(M.linhasDe(de, ate, { camp: c.id }));
     if (!t.gasto) return null;
     const k = M.crmTot(de, ate, { camp: c.id });
     const ultimo = ult.has(c.id) ? ult.get(c.id) : null;
+    // plano 1500c · AC-135: o custo por conversão do período anterior (a coluna «Δ CPA»; cair é bom)
+    const ta = deA <= ateA && ateA >= 0 ? M.consolidar(M.linhasDe(Math.max(0, deA), ateA, { camp: c.id })) : null;
     return {
-      c, t, k,
+      c, t, k, ta, dcpa: ta ? variacao(t.cpa, ta.cpa) : null,
       cpp: k.fecharam ? t.gasto / k.fecharam : null,
       cpag: k.agendadas ? t.gasto / k.agendadas : null,
       roas: t.gasto ? k.receita / t.gasto : null,
-      ultimoGasto: ultimo, pausada: ultimo != null && M.R - ultimo >= DIAS_PAUSADA,
+      // plano 2000d · DA-143/DA-204: com o status REAL da plataforma (quando a sincronização mandar c.status), campanha ATIVA que não gastou
+      // há 3 dias é «sem entrega» (verba baixa, público pequeno), não «pausada»; sem status, a heurística de antes
+      ultimoGasto: ultimo, ...situacaoCampanha(c, ultimo, M.R),
     };
   }).filter(Boolean);
   const T = M.consolidar(linhas.flatMap(r => M.linhasDe(de, ate, { camp: r.c.id })));
@@ -197,7 +221,10 @@ export function textoConvPlat(plat, t, { int = v => String(Math.round(v)), dec =
  * `f` é o formato do ui.kpi ("moeda" | "moeda2" | "conv" = inteiro ou 1 casa); `serie` é o campo de serieTendencia que vira a sparkline.
  */
 export function kpisAnuncios(P, { meta = 0, dif = null, temGoogle = false, gestor = false, brl0 = v => String(v), brl = v => String(v), dec = (v, c) => v.toFixed(c), pc = v => `${v}%`, int = v => String(v) } = {}) {
-  const { t, ta, c, ca } = P;
+  const { t, c } = P;
+  // plano 2000d · DA-199/DA-200: somatórios do anterior na régua do atual (média por dia) quando os meses têm tamanhos diferentes
+  const ta = { ...P.ta, gasto: anteriorNaRegua(P, P.ta && P.ta.gasto), conversoes: anteriorNaRegua(P, P.ta && P.ta.conversoes) };
+  const ca = { ...P.ca, receita: anteriorNaRegua(P, P.ca && P.ca.receita) };
   const est = (+c.receitaEstimada || 0) > 0;
   const semValor = +c.semValor || 0;
   return [
@@ -235,6 +262,8 @@ export function semCampanhaTot(M, de, ate, { plat = "" } = {}) {
 export const VAL_CAMP = {
   nome: r => r.c.nome, plat: r => r.c.plat, gasto: r => r.t.gasto, conv: r => r.t.conversoes, cpa: r => r.t.cpa, ctr: r => r.t.ctr,
   ag: r => r.k.agendadas, fe: r => r.k.fecharam, rec: r => r.k.receita, roas: r => r.roas,
+  // plano 1500c · AC-082/AC-083/AC-135: as colunas extras também ordenam
+  cpag: r => r.cpag, cpp: r => r.cpp, imp: r => r.t.impressoes, cpm: r => r.t.cpm, dcpa: r => r.dcpa,
 };
 /** Ordena como o painel: texto por localeCompare; número com vazio sempre no fim. */
 export function ordenarCampanhas(linhas, chave = "gasto", dir = -1) {
@@ -249,13 +278,24 @@ export function ordenarCampanhas(linhas, chave = "gasto", dir = -1) {
 /** Plano 1000 (AD-110/AD-116): sem base não há cor — gasto abaixo de R$ 20 (campanha de R$ 2 não é «ruim») ou meta não definida (0, salva
     pelo clássico) é «neutro». Sem conversão com gasto de verdade (≥ R$ 20) continua «ruim»; sem saber o gasto, sem conversão é neutro. */
 export const GASTO_MIN_COR = 20;
-export const nivelCpa = (cpa, meta, gasto = null) => {
+// plano 2000d · DA-205: o piso do gasto acompanha o tamanho da conta (`minimo` = gastoMinCor da média diária); sem ele, R$ 20
+// plano 2000d · NX-070: o «perto do limite» usa a tolerância do cliente (cfg.radar.toleranciaR1, DA-025) — a mesma régua do aviso de custo
+export const tolCpa = cfg => { const n = Number(cfg && cfg.radar && cfg.radar.toleranciaR1); return Number.isFinite(n) && n >= 10 && n <= 100 ? n : 35; };
+export const nivelCpa = (cpa, meta, gasto = null, minimo = GASTO_MIN_COR, tolPc = 35) => {
   if (!(+meta > 0)) return "neutro";
-  if (gasto != null && (+gasto || 0) < GASTO_MIN_COR) return "neutro";
+  if (gasto != null && (+gasto || 0) < (Number.isFinite(+minimo) && +minimo >= 0 ? +minimo : GASTO_MIN_COR)) return "neutro";
   if (!fin(cpa)) return gasto != null ? "ruim" : "neutro";
-  return cpa <= meta ? "bom" : cpa <= meta * 1.35 ? "aten" : "ruim";
+  const tol = Number.isFinite(+tolPc) && +tolPc > 0 ? +tolPc : 35;
+  return cpa <= meta ? "bom" : cpa <= meta * (1 + tol / 100) ? "aten" : "ruim";
 };
 
+/** Plano 2000d · DA-205: o gasto mínimo para colorir o custo = um dia médio de investimento da conta, entre R$ 5 e R$ 500
+    (quem investe R$ 10/dia passa a ver cor; quem investe R$ 5 mil/dia não vê campanha de R$ 30 como «ruim»). */
+export function gastoMinCor(gastoMedioDia) {
+  const v = +gastoMedioDia;
+  if (!Number.isFinite(v) || v <= 0) return GASTO_MIN_COR;
+  return Math.min(500, Math.max(5, Math.round(v)));
+}
 /** Criativos de uma campanha no período, com a situação que o radar vê AGORA (r3/r4). */
 export function criativosDaCampanha(M, campId, { dias = 30 } = {}) {
   const { de } = janela(M, dias);
@@ -288,13 +328,33 @@ export function crmPorCriativo(M, de, ate, { plat = "" } = {}) {
   }
   return out;
 }
-export const RANK_CRI = [["receita", "Mais receita"], ["fechados", "Mais fechados"], ["cpa", "Menor custo por conversa"]];
+// plano 1500c · AC-114: «Menor custo por agendamento» (investimento do criativo ÷ agendamentos do CRM) — o dono quer quem traz agenda
+export const RANK_CRI = [["receita", "Mais receita"], ["fechados", "Mais fechados"], ["cpa", "Menor custo por conversa"], ["cpag", "Menor custo por agendamento"]];
 /** Plano 1000b · AB-044: com o filtro Google o ranking fala de «conversão» (o Google conta conversões, não conversas no WhatsApp). */
 export const unidadeConv = plat => (plat === "google" ? { um: "conversão", varios: "conversões" } : { um: "conversa", varios: "conversas" });
 export const rankCriPorPlat = plat => RANK_CRI.map(([k, rot]) => [k, k === "cpa" ? `Menor custo por ${unidadeConv(plat).um}` : rot]);
 export const MIN_CONV_CPA = 3;   // custo por conversa só entra no ranking com pelo menos 3 conversas (senão R$ 4 de teste "ganha")
+/** Plano 1500c · AC-113: abaixo disto o custo por conversa ainda oscila muito — o criativo leva o selo «amostra pequena». */
+export const AMOSTRA_PEQUENA = 10;
+/** Plano 1500c · AC-115: a régua de cada plataforma para comparar custo de conversa (Meta) com custo de conversão (Google) — a meta da
+    plataforma quando existe; senão a mediana do custo dos criativos dela. → {meta: n|null, google: n|null}. */
+export function reguaCustoPlat(itens = [], cfg = {}) {
+  const med = l => { const v = l.filter(fin).sort((a, b) => a - b); return v.length ? (v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2) : null; };
+  const out = {};
+  for (const p of ["meta", "google"]) {
+    const meta = p === "google" ? +(cfg && cfg.cpaAlvoGoogle) : +(cfg && cfg.cpaAlvo);
+    out[p] = meta > 0 ? meta : med((itens || []).filter(x => x && x.k && x.k.plat === p).map(x => x.t && x.t.cpa));
+  }
+  return out;
+}
 /** Ranking de criativos do período (P1): investimento do Ads + resultado do CRM por criativo.
     por = 'receita' | 'fechados' | 'cpa'. Criativo sem investimento no período fica de fora. */
+/** Plano 2000d · DA-174: quantas conversões um criativo precisa para o custo dele não ser «amostra pequena» — 30% da média por criativo
+    da conta, entre AMOSTRA_PEQUENA (10) e 50. */
+export function amostraMinima(totalConversoes, nCriativos) {
+  const media = +nCriativos > 0 ? (+totalConversoes || 0) / +nCriativos : 0;
+  return Math.max(AMOSTRA_PEQUENA, Math.min(50, Math.round(media * 0.3)));
+}
 export function rankingCriativos(M, { dias = 30, plat = "", por = "receita", n = 8, reserva = false } = {}) {
   // plano 1000 (AD-112): quem não registra valor abria o ranking em «Mais receita» e via «Nenhum criativo trouxe receita». Com `reserva`
   // (a pessoa não escolheu a ordem), sem receita no período o ranking abre em «Menor custo por conversa» — `automatico: true` avisa a tela
@@ -307,22 +367,35 @@ export function rankingCriativos(M, { dias = 30, plat = "", por = "receita", n =
     const c = crm.get(k.id) || ZERO;
     return { k, camp: M.CAMP[k.camp] || null, t, c, roas: t.gasto ? c.receita / t.gasto : null };
   }).filter(x => x.t.gasto > 0);
-  const cpa = x => (fin(x.t.cpa) ? x.t.cpa : Infinity);
+  // plano 1500c · AC-114: custo por agendamento do CRM; AC-113: selo de amostra pequena
+  // plano 2000d · DA-174: o limite da «amostra pequena» acompanha o volume do cliente (mínimo 10; conta com muitas conversões pede mais)
+  const amostraMin = amostraMinima(todos.reduce((s, x) => s + (+x.t.conversoes || 0), 0), todos.length);
+  for (const x of todos) { x.cpag = x.c.agendadas > 0 ? x.t.gasto / x.c.agendadas : null; x.amostraPequena = x.t.conversoes < amostraMin; x.amostraMin = amostraMin; }
+  // plano 1500c · AC-115: sem filtro de plataforma, o custo do Meta (conversa) e o do Google (conversão) não estão na mesma régua — cada
+  // um é dividido pela régua da sua plataforma (a meta dela, ou a mediana dos criativos dela) antes de ordenar
+  const plats = new Set(todos.map(x => x.k.plat));
+  const misto = !plat && plats.has("meta") && plats.has("google");
+  const regua = misto ? reguaCustoPlat(todos.filter(x => x.t.conversoes >= MIN_CONV_CPA), M.CFG) : null;
+  const cpaRel = x => { const r = regua && regua[x.k.plat]; return fin(x.t.cpa) ? (r > 0 ? x.t.cpa / r : x.t.cpa) : Infinity; };
+  const cpa = x => (misto ? cpaRel(x) : fin(x.t.cpa) ? x.t.cpa : Infinity);
+  const cpag = x => (fin(x.cpag) ? x.cpag : Infinity);
   const ORD = {
     receita: (a, b) => b.c.receita - a.c.receita || b.c.fecharam - a.c.fecharam || cpa(a) - cpa(b),
     fechados: (a, b) => b.c.fecharam - a.c.fecharam || b.c.receita - a.c.receita || cpa(a) - cpa(b),
     cpa: (a, b) => cpa(a) - cpa(b) || b.t.conversoes - a.t.conversoes,
+    cpag: (a, b) => cpag(a) - cpag(b) || b.c.agendadas - a.c.agendadas,
   };
   const ordenar = chave => {
     // receita/fechados: só quem trouxe resultado (zero não é ranking); custo por conversa: com volume mínimo
     const base = chave === "cpa" ? todos.filter(x => x.t.conversoes >= MIN_CONV_CPA)
+      : chave === "cpag" ? todos.filter(x => x.c.agendadas > 0)
       : chave === "fechados" ? todos.filter(x => x.c.fecharam > 0) : todos.filter(x => x.c.receita > 0);
     const lista = base.slice().sort(ORD[chave]).slice(0, n);
-    const valor = x => (chave === "receita" ? x.c.receita : chave === "fechados" ? x.c.fecharam : x.t.cpa);
+    const valor = x => (chave === "receita" ? x.c.receita : chave === "fechados" ? x.c.fecharam : chave === "cpag" ? x.cpag : chave === "cpa" && misto ? cpaRel(x) : x.t.cpa);
     const topo = lista.length ? Math.max(...lista.map(valor).filter(fin)) : 0;
-    // barra: receita/fechados proporcionais ao 1º; custo por conversa: o MENOR enche a barra
-    const barra = x => { const v = valor(x); if (!fin(v) || !(topo > 0)) return 0; return chave === "cpa" ? Math.min(1, lista[0].t.cpa / v) : v / topo; };
-    return { por: chave, de, ate, total: todos.length, lista: lista.map((x, i) => ({ ...x, pos: i + 1, barra: barra(x) })) };
+    // barra: receita/fechados proporcionais ao 1º; custo (por conversa ou por agendamento): o MENOR enche a barra
+    const barra = x => { const v = valor(x); if (!fin(v) || !(topo > 0)) return 0; return chave === "cpa" || chave === "cpag" ? Math.min(1, valor(lista[0]) / v) : v / topo; };
+    return { por: chave, de, ate, total: todos.length, normalizado: chave === "cpa" && misto, lista: lista.map((x, i) => ({ ...x, pos: i + 1, barra: barra(x), cpaRel: misto && fin(cpaRel(x)) ? cpaRel(x) : null })) };   // plano 1500c · AC-115
   };
   const chave = ORD[por] ? por : "receita";
   const r = ordenar(chave);
@@ -364,6 +437,13 @@ const ERROS_ENVIO_PT = [
   [/131031|account.*(locked|restricted)/i, "a conta do WhatsApp está bloqueada ou restrita pela Meta"],
   [/timed? ?out|ETIMEDOUT/i, "o WhatsApp demorou demais para responder"],
 ];
+/** Plano 2000d · DA-259: corta em `max` caracteres sem partir palavra, terminando em «…» (antes slice(0,160) no meio da palavra). */
+export function cortarEmPalavra(s, max = 160) {
+  const t = String(s ?? "");
+  if (t.length <= max) return t;
+  const corte = t.slice(0, max - 1), esp = corte.lastIndexOf(" ");
+  return `${(esp > max * 0.5 ? corte.slice(0, esp) : corte).replace(/[\s,;:.\-–—]+$/, "")}…`;
+}
 export function erroEnvioPt(erro) {
   const s = String(erro || "");
   if (!s) return "";
@@ -382,14 +462,16 @@ export function statusEnvio(x, agora = null) {
     const total = Array.isArray(x.destinos) ? x.destinos.length : 0, falhas = erro.split("; ").filter(s => /^[^:\s]+: /.test(s)).length;
     const ok = total && falhas && falhas < total ? total - falhas : 0;
     const quando = x.entregue_em || x.enviado_em;
-    return { k: "parcial", tique: "✓!", rotulo: ok ? `enviado a ${ok} de ${total} às ${horaSP(quando)}` : `enviado em parte às ${horaSP(quando)}`, hora: horaSP(quando), erro: erroEnvioPt(erro).slice(0, 160), erroOriginal: erro.slice(0, 300) };   // plano 1000b · AB-080
+    return { k: "parcial", tique: "✓!", rotulo: ok ? `enviado a ${ok} de ${total} às ${horaSP(quando)}` : `enviado em parte às ${horaSP(quando)}`, hora: horaSP(quando), erro: cortarEmPalavra(erroEnvioPt(erro), 160), erroOriginal: erro.slice(0, 300) };   // plano 1000b · AB-080 · plano 2000d · DA-259
   }
   if (x.entregue_em) return { k: "entregue", tique: "✓✓", rotulo: `entregue às ${horaSP(x.entregue_em)}`, hora: horaSP(x.entregue_em) };
   if (x.enviado_em && !naoChegou) {
     const velho = agora != null && Number.isFinite(+agora) && +agora - Date.parse(x.enviado_em) > SEM_CONFIRMACAO_MS;   // AB-199
-    return { k: "enviado", tique: "✓", rotulo: velho ? "enviado · sem confirmação de entrega" : `enviado às ${horaSP(x.enviado_em)} · entrega ainda não confirmada`, hora: horaSP(x.enviado_em) };
+    // plano 2000d · DA-258: o «sem confirmação» diz QUANDO saiu (o mensal da madrugada virava «sem confirmação» sem data) — em
+    // `rotuloData` (o `rotulo` fica igual ao do painel clássico, que tem a mesma régua)
+    return { k: "enviado", tique: "✓", ...(velho ? { rotuloData: `enviado em ${ddmmSP(x.enviado_em)} · sem confirmação de entrega` } : {}), rotulo: velho ? "enviado · sem confirmação de entrega" : `enviado às ${horaSP(x.enviado_em)} · entrega ainda não confirmada`, hora: horaSP(x.enviado_em) };
   }
-  if (erro) return { k: "erro", tique: "!", rotulo: naoChegou ? "não entregue" : "não enviado", hora: x.enviado_em ? horaSP(x.enviado_em) : null, erro: erroEnvioPt(erro).slice(0, 160), erroOriginal: erro.slice(0, 300) };   // plano 1000b · AB-080
+  if (erro) return { k: "erro", tique: "!", rotulo: naoChegou ? "não entregue" : "não enviado", hora: x.enviado_em ? horaSP(x.enviado_em) : null, erro: cortarEmPalavra(erroEnvioPt(erro), 160), erroOriginal: erro.slice(0, 300) };   // plano 1000b · AB-080 · plano 2000d · DA-259
   return { k: "pendente", tique: "◷", rotulo: "gerado, ainda não enviado", hora: null };
 }
 
@@ -415,7 +497,7 @@ export function estadoIntegracao(integs = [], alertas = [], agora = Date.now()) 
   const canais = (integs || []).filter(i => i && i.ativo).map(i => {
     const sync = i.ultimo_sync ? Date.parse(i.ultimo_sync) : NaN;
     const al = (alertas || []).filter(a => a && a.regra === "integracao" && canalDe(a) === i.canal && agora - Date.parse(a.criado_em) <= 24 * H)
-      .sort((x, y) => String(y.criado_em).localeCompare(String(x.criado_em)))[0] || null;
+      .sort((x, y) => instante(y.criado_em) - instante(x.criado_em))[0] || null;
     const statusErro = /^erro/i.test(i.status || "");
     const alAtivo = !!al && (statusErro || !(Number.isFinite(sync) && sync > Date.parse(al.criado_em)));
     // F5: «parcial» = a leitura rodou mas pode estar incompleta (teto de páginas do Meta, 0 linhas há dias) — não é «Atualizado»
@@ -439,25 +521,35 @@ export function textoPilula(e, agora = Date.now()) {
   if (e.nivel === "erro") { const n = e.erros.map(x => nomePlat(x.canal)); return `${n.join(" e ")} ${n.length > 1 ? "desconectados" : "desconectado"}`; }
   if (e.nivel === "atrasado") return "Leitura atrasada";
   if (e.nivel === "parcial") { const n = e.canais.filter(c => c.estado === "parcial").map(c => nomePlat(c.canal)); return `Leitura parcial · ${n.join(" e ")}`; }
-  if (e.nivel === "aguardando") return "Aguardando a 1ª leitura";
+  if (e.nivel === "aguardando") return "Aguardando a 1ª leitura (costuma levar até 1 hora)";   // plano 2000d · DA-365: quanto esperar
   if (e.nivel === "ok") return `Atualizado ${minutosAtras(e.ultimo, agora)}`;
   return "";
 }
-export const textoQueda = erros => erros.map(x => `${nomePlat(x.canal)} desconectado · dados até ${x.sync ? `${ddmmSP(x.sync)} ${horaSP(x.sync)}` : "aguardando primeira leitura"}.`).join(" ");
+// plano 2000d · NX-077: «dados até 24/10 às 14:02» (antes «24/10 14:02», lido como um número só) e «hoje às…» quando é de hoje
+export const textoQueda = (erros, agora = Date.now()) => erros.map(x => `${nomePlat(x.canal)} desconectado · dados até ${x.sync ? (hojeSP(new Date(x.sync)) === hojeSP(new Date(agora)) ? `hoje às ${horaSP(x.sync)}` : `${ddmmSP(x.sync)} às ${horaSP(x.sync)}`) : "aguardando primeira leitura"}.`).join(" ");
 
 /* ---------- radar: episódios (núcleo) + registro do servidor ---------- */
 export const SEV_NOME = { critico: "crítico", alerta: "alerta", info: "informativo" };
+/** Plano 2000d · DA-201/DA-202: o instante (ms) de um carimbo ISO com qualquer fuso; sem data válida → -Infinity (vai para o fim). */
+export const instante = iso => { const t = Date.parse(iso); return Number.isFinite(t) ? t : -Infinity; };
 /** Último alerta do servidor por chave. */
 export function alertasPorChave(alertas = []) {
   const m = new Map();
-  for (const a of alertas || []) { const e = m.get(a.chave); if (!e || String(a.criado_em) > String(e.criado_em)) m.set(a.chave, a); }
+  // plano 2000d · DA-201: pelo INSTANTE (Date.parse) — «…-03:00» × «…Z» comparados como texto elegiam o alerta antigo
+  for (const a of alertas || []) { const e = m.get(a.chave); if (!e || instante(a.criado_em) > instante(e.criado_em)) m.set(a.chave, a); }
   return m;
 }
 /** Tudo que a aba Radar mostra, já decidido: conexões no topo, episódios dos últimos 14 dias, registro de avisos. */
 /** F4: a conta Google gastou na janela inteira e não registrou NENHUMA conversão — o acompanhamento de conversões não está
     ligado; «Campanha sem conversa» (r2) ali é ruído diário, não diagnóstico. */
-export function googleSemConversao(M) {
+// plano 2000d · DA-203: quando a integração do Google diz que há ações de conversão ativas (`acoes_conversao` > 0 ou
+// `conversoes_ativas`, quando o servidor mandar), zero conversão é campanha ruim, não acompanhamento desligado — o r2 continua
+export function googleTemAcaoConversao(integracoes = []) {
+  return (Array.isArray(integracoes) ? integracoes : []).some(i => i && i.canal === "google" && (i.conversoes_ativas === true || (+i.acoes_conversao || 0) > 0));
+}
+export function googleSemConversao(M, { integracoes = null } = {}) {
   if (!M || !M.LINHAS) return false;
+  if (integracoes && googleTemAcaoConversao(integracoes)) return false;
   // plano 1000 (AD-005): a MESMA janela fixa do núcleo (últimos 30 dias) — o painel (130 dias) e o WhatsApp (45) concordam
   if (typeof M.GOOGLE_SEM_CONVERSAO === "boolean") return M.GOOGLE_SEM_CONVERSAO;
   let gasto = 0, conv = 0;
@@ -467,13 +559,13 @@ export function googleSemConversao(M) {
 const r2Google = (M, a) => !!a && !!a.regra && a.regra.id === "r2" && !!M.CAMP[String(a.chave).slice(3)] && M.CAMP[String(a.chave).slice(3)].plat === "google";
 export function montarRadar(M, dados = {}, agora = Date.now()) {
   const vazio = semAnuncios(M);
-  const semConvG = !vazio && googleSemConversao(M);
+  const semConvG = !vazio && googleSemConversao(M, { integracoes: dados && dados.integracoes });   // plano 2000d · DA-203
   const atuais = vazio ? [] : M.avaliar(M.R, true).filter(a => !(semConvG && r2Google(M, a)));
   const hist = vazio ? [] : M.historico().filter(e => !(semConvG && r2Google(M, e.a)));
   const srv = alertasPorChave(dados.alertas);
   const est = estadoIntegracao(dados.integracoes || [], dados.alertas || [], agora);
   const conexoes = [...srv.values()].filter(a => a.regra === "integracao")
-    .sort((x, y) => String(y.criado_em).localeCompare(String(x.criado_em)))
+    .sort((x, y) => instante(y.criado_em) - instante(x.criado_em))   // plano 2000d · DA-202
     .map(a => { const c = canalDe(a); return { a, canal: c, nome: nomeRegraSrv(a), ativo: est.erros.some(x => x.canal === c), envio: a.enviado_em || a.entregue_em ? statusEnvio(a) : null }; });
   const episodios = hist.slice(0, 12).map(e => {
     const ativo = e.ate === M.R, a = e.a, s = srv.get(a.chave);
@@ -490,7 +582,7 @@ export function montarRadar(M, dados = {}, agora = Date.now()) {
     acao: "Ligue o acompanhamento de conversões (clique no WhatsApp ou formulário) na conta do Google Ads.", ativo: true, desde: "nos últimos 30 dias", envio: null });   // plano 1000b · AB-208: a janela da regra (antes «desde agora»)
   const SEV_OK = new Set(["critico", "alerta", "info"]);
   const registroTotal = (dados.alertas || []).length;   // plano 1000b · AB-077: a tela diz «os 10 mais recentes de N»
-  const registro = (dados.alertas || []).slice().sort((a, b) => String(b.criado_em).localeCompare(String(a.criado_em))).slice(0, 10)
+  const registro = (dados.alertas || []).slice().sort((a, b) => instante(b.criado_em) - instante(a.criado_em)).slice(0, 10)   // plano 2000d · DA-202
     .map(a => ({ a, sev: SEV_OK.has(a.severidade) ? a.severidade : "alerta", nome: nomeRegraSrv(a, M ? M.REGRAS : []), quando: quandoSP(a.criado_em, new Date(agora)), envio: statusEnvio(a, agora) }));   // AB-199
   // plano 1000 (AD-057): a lista mostra 12 episódios — os que ficaram de fora são contados («e mais N nos últimos 14 dias»)
   const ocultos = Math.max(0, hist.length - 12);
@@ -557,7 +649,9 @@ export function detalhePilula(e, agora = Date.now()) {
 /** Plano 1000 (AD-127): o Órbita lê o Meta/Google de hora em hora — quanto falta para a próxima leitura (o botão só recarrega do banco). */
 export const CICLO_LEITURA_MIN = 60;
 export const ATRASO_LEITURA_MS = 2 * 36e5;   // plano 1000b · AB-155: a mesma régua do «atrasado» do estadoIntegracao
-export function proximaLeitura(ultimo, agora = Date.now()) {
+// plano 2000d · DA-226: depois de uma leitura que FALHOU (`erro`) não promete «em ~N min» — diz que tenta de novo na próxima hora
+export function proximaLeitura(ultimo, agora = Date.now(), { erro = false } = {}) {
+  if (erro) return "a última leitura falhou — o Órbita tenta de novo na próxima hora";
   if (!Number.isFinite(ultimo)) return "";
   // plano 1000b · AB-155: passou de 2 h sem leitura não é «a qualquer momento» — diz desde quando está atrasada
   if (agora - ultimo > ATRASO_LEITURA_MS) {
@@ -572,7 +666,9 @@ export function centroRosca(fatias = []) {
   const tot = fatias.reduce((s, f) => s + (+f.valor || 0), 0);
   if (!(tot > 0)) return { valor: "—", rotulo: "sem investimento" };
   const maior = fatias.reduce((a, b) => ((+b.valor || 0) > (+a.valor || 0) ? b : a));
-  return { valor: `${Math.round((+maior.valor || 0) / tot * 100)}%`, rotulo: `no ${maior.rotulo}` };
+  // plano 2000d · NX-076: a fatia «Outras (TikTok…)» pede «em outras plataformas» (antes «no Outras (TikTok)»)
+  const rot = /^outras?\b/i.test(String(maior.rotulo || "")) ? "em outras plataformas" : `no ${maior.rotulo}`;
+  return { valor: `${Math.round((+maior.valor || 0) / tot * 100)}%`, rotulo: rot };
 }
 
 /** Plano 1000 (AD-080): fuso da conta de anúncios diferente de São Paulo, lido do sufixo «· fuso X» do status da integração. */
@@ -597,6 +693,45 @@ export function desvioRelogio(dados, recebidoEm = Date.now()) {
 }
 
 /** Plano 1000 (AD-022/AD-024): orgânicos do período (fora do funil dos anúncios por desenho) — a tela diz quantos houve. */
+/** Plano 2000d · DA-356: quanto tempo o funil leva — mediana em dias da conversa ao agendamento (só agendamento com data de verdade) e
+    do agendamento/conversa ao fechamento (só fechamento com data, não aproximada). Leads de anúncio com conversa no período. */
+export function temposFunil(M, { dias = 30, plat = "" } = {}) {
+  const { de, ate } = janela(M, dias);
+  const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y), k = Math.floor(s.length / 2); return s.length % 2 ? s[k] : (s[k - 1] + s[k]) / 2; };
+  const ag = [], fe = [];
+  for (const Ld of (M && M.LEADS) || []) {
+    if (!Ld.plat || (plat && Ld.plat !== plat) || Ld.i < de || Ld.i > ate) continue;
+    if (Ld.iAgenda != null && !Ld.agendaEstimada && Ld.iAgenda >= Ld.i) ag.push(Ld.iAgenda - Ld.i);
+    if (Ld.fechou && Ld.iConsulta != null && !Ld.dataAproximada && Ld.iConsulta >= Ld.i) fe.push(Ld.iConsulta - Ld.i);
+  }
+  return { conversaAgenda: med(ag), conversaFechamento: med(fe), nAgenda: ag.length, nFechamento: fe.length };
+}
+/** Plano 2000d · DA-356: a frase do tempo do funil («da conversa ao agendamento: ~2 dias · até fechar: ~9 dias»); "" com menos de 3 casos. */
+export function textoTemposFunil(t, { ag = "agendamento", fe = "fechamento" } = {}) {
+  if (!t) return "";
+  const d = v => (v < 1 ? "no mesmo dia" : `~${Math.round(v)} ${Math.round(v) === 1 ? "dia" : "dias"}`);
+  const partes = [];
+  if (t.nAgenda >= 3 && t.conversaAgenda != null) partes.push(`da conversa ao ${ag}: ${d(t.conversaAgenda)}`);
+  if (t.nFechamento >= 3 && t.conversaFechamento != null) partes.push(`da conversa ao ${fe}: ${d(t.conversaFechamento)}`);
+  return partes.length ? `Tempo típico (mediana) — ${partes.join(" · ")}.` : "";
+}
+/** Plano 2000d · DA-357: por que se perde — leads de anúncio perdidos no período por motivo (bruto.motivo_perda/motivo, quando o
+    servidor manda); [] sem nenhum motivo informado (a tela não mostra nada inventado). */
+export function perdasPorMotivo(M, { dias = 30, plat = "" } = {}) {
+  const { de, ate } = janela(M, dias);
+  const m = new Map(); let comMotivo = 0;
+  for (const Ld of (M && M.LEADS) || []) {
+    if (!Ld.plat || (plat && Ld.plat !== plat) || Ld.i < de || Ld.i > ate || Ld.etapaReal !== "perdida") continue;
+    const b = Ld.bruto || {}, mot = String(b.motivo_perda || b.motivo_perda_nome || b.motivo || "").trim();
+    if (mot) comMotivo++;
+    // plano 2000d · NX-072: «Preço», «preço» e «Preco » são o mesmo motivo (sem caixa, acento e espaço sobrando); vale a 1ª grafia vista
+    const texto = mot ? mot.replace(/\s+/g, " ") : "sem motivo informado";
+    const k = texto.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+    const e = m.get(k) || { motivo: texto, n: 0 };
+    e.n++; m.set(k, e);
+  }
+  return comMotivo ? [...m.values()].map(({ motivo, n }) => ({ motivo, n })).sort((a, b) => b.n - a.n || a.motivo.localeCompare(b.motivo, "pt-BR")) : [];
+}
 export function organicosPeriodo(M, { dias = 30 } = {}) {
   const { de, ate } = janela(M, dias);
   let n = 0;
@@ -605,10 +740,20 @@ export function organicosPeriodo(M, { dias = 30 } = {}) {
 }
 
 /* ---------- relatórios enviados ---------- */
+// plano 2000d · DA-198: no mesmo dia de referência, o mensal antes do semanal e este antes do diário
+const ORDEM_TIPO_REL = Object.freeze({ mensal: 2, semanal: 1, diario: 0 });
+/** Plano 2000d · DA-198: «Semana de 13/10 a 19/10» (a referência é a segunda-feira; a semana fecha no domingo). */
+export function tituloSemana(ref) {
+  const t = Date.parse(`${String(ref || "").slice(0, 10)}T12:00:00Z`);
+  if (!Number.isFinite(t)) return "Resumo da semana";
+  const dm = ms => { const d = new Date(ms).toISOString().slice(0, 10); return `${d.slice(8, 10)}/${d.slice(5, 7)}`; };
+  return `Semana de ${dm(t)} a ${dm(t + 6 * 864e5)}`;
+}
 // plano 1000b · AB-199: `agora` envelhece o «enviado» sem confirmação (24 h)
 export function listaRelatorios(relatorios = [], n = 12, agora = Date.now()) {
   const validos = Array.isArray(relatorios) ? relatorios.filter(r => {
-    if (!r || typeof r !== "object" || !["diario", "mensal"].includes(r.tipo)) return false;
+    // plano 2000d · DA-198: o resumo semanal (segunda a domingo, referência = a segunda) também entra no histórico
+    if (!r || typeof r !== "object" || !["diario", "semanal", "mensal"].includes(r.tipo)) return false;
     const ref = typeof r.referencia === "string" ? r.referencia.slice(0, 10) : "";
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ref) || !Number.isFinite(Date.parse(`${ref}T12:00:00Z`)) || new Date(`${ref}T12:00:00Z`).toISOString().slice(0, 10) !== ref) return false;
     const mes = Number(ref.slice(5, 7));
@@ -616,11 +761,11 @@ export function listaRelatorios(relatorios = [], n = 12, agora = Date.now()) {
   }) : [];
   // plano 1000b · AB-053: a lista diz quantos válidos havia (`total`, não enumerável) — a tela avisa «os 12 mais recentes de N»
   const lista = validos.slice()
-    .sort((a, b) => String(b.referencia).localeCompare(String(a.referencia)) || Number(b.tipo === "mensal") - Number(a.tipo === "mensal"))
+    .sort((a, b) => String(b.referencia).localeCompare(String(a.referencia)) || ORDEM_TIPO_REL[b.tipo] - ORDEM_TIPO_REL[a.tipo])   // plano 2000d · DA-198
     .slice(0, n)
     .map(r => {
       const ref = String(r.referencia).slice(0, 10);
-      const titulo = r.tipo === "mensal" ? `Resumo de ${MESES[+ref.slice(5, 7) - 1]} de ${ref.slice(0, 4)}` : `Diário de ${dataIsoBR(ref)}`;
+      const titulo = r.tipo === "mensal" ? `Resumo de ${MESES[+ref.slice(5, 7) - 1]} de ${ref.slice(0, 4)}` : r.tipo === "semanal" ? tituloSemana(ref) : `Diário de ${dataIsoBR(ref)}`;
       return { chave: `${r.tipo}|${ref}`, tipo: r.tipo, ref, titulo, ia: !!r.leitura_ia, envio: statusEnvio(r, agora), r };
     });
   Object.defineProperty(lista, "total", { value: validos.length, enumerable: false });
@@ -657,7 +802,22 @@ export function tokensWa(txt) {
     }
     if (pos < ln.length) out.push({ t: "txt", v: ln.slice(pos) });
   });
-  return out;
+  // plano 2000d · DA-207: endereços https no texto viram token de link (t "a") — como o WhatsApp mostra; só https, sem pontuação final
+  const comLinks = [];
+  for (const tk of out) {
+    if (tk.t !== "txt") { comLinks.push(tk); continue; }
+    const re = /https:\/\/[^\s<>"']+/g;
+    let p = 0, m;
+    while ((m = re.exec(tk.v))) {
+      const url = m[0].replace(/[.,;:!?)\]]+$/, "");
+      if (m.index > p) comLinks.push({ t: "txt", v: tk.v.slice(p, m.index) });
+      comLinks.push({ t: "a", v: url });
+      p = m.index + url.length;
+      re.lastIndex = p;
+    }
+    if (p < tk.v.length) comLinks.push({ t: "txt", v: tk.v.slice(p) });
+  }
+  return comLinks;
 }
 
 /* ============================================================
@@ -666,7 +826,12 @@ export function tokensWa(txt) {
 export const MAX_DIAS = 366;                         // p_ate − p_de ≤ 366 (periodo_grande no servidor)
 export const PRESETS = [7, 30, 90];
 /** Período dos últimos `dias` terminando HOJE (SP): 30 dias = hoje e os 29 anteriores. */
-export function periodoPreset(dias, hoje = hojeSP()) { return { de: somarDias(hoje, -(dias - 1)), ate: hoje }; }
+/** Plano 1500c · AC-156/AC-117: por padrão os atalhos terminam ONTEM (dias inteiros contra dias inteiros — com hoje pela metade a
+    comparação «caía» de manhã); `incluirHoje` volta ao período que termina hoje (dia parcial, com o aviso na legenda). */
+export function periodoPreset(dias, hoje = hojeSP(), { incluirHoje = false } = {}) {
+  const ate = incluirHoje ? hoje : somarDias(hoje, -1);
+  return { de: somarDias(ate, -(dias - 1)), ate };
+}
 /** Confere um período personalizado antes de chamar o servidor. */
 export function validarPeriodo(de, ate, hoje = hojeSP()) {
   const re = /^\d{4}-\d{2}-\d{2}$/;
@@ -704,7 +869,10 @@ export function nomeOrigem(origem, plataforma) {
   // plano 1000b · AB-175: origem fora da tabela («tiktok_ads») sem o código cru — «Tiktok ads»
   const legivel = o => { const t = String(o).replace(/_+/g, " ").replace(/\s+/g, " ").trim(); return t ? t.charAt(0).toUpperCase() + t.slice(1) : "Sem origem"; };
   const base = O[origem] || (origem ? legivel(origem) : "Sem origem");
-  return plataforma ? `${base} · ${nomePlat(plataforma)}` : base;
+  // plano 2000d · NX-078: plataforma fora de Meta/Google («tiktok») sai com o nome dela — antes «Anúncio · Anúncio»
+  const PL = { tiktok: "TikTok", microsoft: "Microsoft Ads", bing: "Microsoft Ads", linkedin: "LinkedIn", pinterest: "Pinterest", kwai: "Kwai", youtube: "YouTube" };
+  const plat = plataforma && nomePlat(plataforma) === "Anúncio" ? PL[String(plataforma).toLowerCase()] || legivel(plataforma) : plataforma ? nomePlat(plataforma) : "";
+  return plat ? `${base} · ${plat}` : base;
 }
 /** Os KPIs da aba Vendas: [{id, rotulo, v, a, fmt, sentido}] (fmt = 'int'|'brl0'|'pct'|'dias'). */
 export function kpisVendas(r, { negocios = "negócios" } = {}) {   // negocios: a palavra do vocabulário ("oportunidades", "orçamentos"…)
@@ -720,6 +888,23 @@ export function kpisVendas(r, { negocios = "negócios" } = {}) {   // negocios: 
 }
 const milhar = v => Math.round(+v || 0).toLocaleString("pt-BR");
 const qtdTxt = (v, um, varios) => { const n = fin(+v) ? +v : 0; return `${milhar(n)} ${n === 1 ? um : varios}`; };
+/** Plano 2000d · DA-263: a referência da 1ª resposta (mediana em minutos) — «bom», «dá para melhorar» ou «lento» com a régua. */
+export const REF_RESPOSTA_MIN = Object.freeze({ boa: 15, lenta: 60 });
+export function referenciaResposta(min) {
+  if (!fin(min)) return "";
+  return +min <= REF_RESPOSTA_MIN.boa ? "bom: até 15 min" : +min <= REF_RESPOSTA_MIN.lenta ? "dá para melhorar: o ideal é até 15 min" : "lento: acima de 1 h o cliente costuma procurar outro";
+}
+/** Plano 2000d · DA-262: o resumo do atendimento em texto (para colar no WhatsApp), como o de vendas. */
+export function textoResumoAtendimento(r, { de, ate, cliente = "", int = v => String(v), dataBR = v => v } = {}) {
+  const k = (r && r.kpis) || {}, n = v => (v === null || v === undefined || v === "" || !Number.isFinite(+v) ? null : +v);
+  const linhas = [`*Atendimento${cliente ? ` · ${cliente}` : ""}* — ${dataBR(de)} a ${dataBR(ate)}`];
+  if (n(k.novas) != null) linhas.push(`• ${int(k.novas)} ${+k.novas === 1 ? "conversa nova" : "conversas novas"}`);
+  if (n(k.resolvidas) != null) linhas.push(`• ${int(k.resolvidas)} ${+k.resolvidas === 1 ? "resolvida" : "resolvidas"}`);
+  if (n(k.tpr_mediana_min) != null) linhas.push(`• 1ª resposta (mediana): ${duracaoMin(k.tpr_mediana_min)} (${referenciaResposta(k.tpr_mediana_min)})`);
+  if (n(k.sem_resposta) != null) linhas.push(`• Sem resposta: ${int(k.sem_resposta)}`);
+  if (n(k.abertas_agora) != null) linhas.push(`• Abertas agora: ${int(k.abertas_agora)}`);
+  return linhas.join("\n");
+}
 /** Os KPIs da aba Atendimento. */
 export function kpisAtendimento(r) {
   const k = (r && r.kpis) || {}, a = (r && r.kpis_anterior) || {};
@@ -728,7 +913,8 @@ export function kpisAtendimento(r) {
     { id: "novas", rotulo: "Conversas novas", v: k.novas, a: a.novas, fmt: "int", sentido: "neutro", extra: qtdTxt(k.msgs_in, "mensagem recebida", "mensagens recebidas") },
     { id: "resolvidas", rotulo: "Resolvidas", v: k.resolvidas, a: a.resolvidas, fmt: "int", sentido: "cima", extra: qtdTxt(k.msgs_out, "mensagem enviada", "mensagens enviadas") },
     { id: "tpr_mediana_min", rotulo: "1ª resposta (mediana)", v: k.tpr_mediana_min, a: a.tpr_mediana_min, fmt: "min", sentido: "baixo",
-      extra: fin(k.tpr_media_min) ? `média ${duracaoMin(k.tpr_media_min)}` : "" },
+      // plano 2000d · DA-263: a régua ao lado do número (até 15 min é bom; mais de 1 h, o cliente costuma procurar outro)
+      extra: [fin(k.tpr_media_min) ? `média ${duracaoMin(k.tpr_media_min)}` : "", referenciaResposta(k.tpr_mediana_min)].filter(Boolean).join(" · ") },
     { id: "resolucao_mediana_h", rotulo: "Até resolver (mediana)", v: k.resolucao_mediana_h, a: a.resolucao_mediana_h, fmt: "h", sentido: "baixo" },
     { id: "abertas_agora", rotulo: "Abertas agora", v: k.abertas_agora, a: null, agora: true, fmt: "int", sentido: "neutro",
       extra: fin(k.aguardando_agora) ? `${milhar(k.aguardando_agora)} aguardando resposta` : "" },
@@ -742,10 +928,14 @@ export function matrizCalor(lista = []) {
   return m;
 }
 /** Horário de pico: {dow, hora, qtd} de maior volume (null sem dados). */
+// plano 2000d · DA-223: no empate o pico diz quantos outros horários têm o mesmo número (`empates`) — a tela não elege um sozinho
 export function picoCalor(m) {
-  let melhor = null;
-  m.forEach((lin, d) => lin.forEach((q, hh) => { if (q > 0 && (!melhor || q > melhor.qtd)) melhor = { dow: d, hora: hh, qtd: q }; }));
-  return melhor;
+  let melhor = null, empates = 0;
+  m.forEach((lin, d) => lin.forEach((q, hh) => {
+    if (!(q > 0)) return;
+    if (!melhor || q > melhor.qtd) { melhor = { dow: d, hora: hh, qtd: q }; empates = 0; } else if (q === melhor.qtd) empates++;
+  }));
+  return melhor ? { ...melhor, empates } : null;
 }
 /** Relatório sem nada no período (mostra "Sem dados no período."). */
 export const vendasVazio = r => !r || (!(+(r.kpis || {}).criados) && !(+(r.kpis || {}).ganhos) && !(+(r.kpis || {}).perdidos) && !(+(r.kpis || {}).abertos));
@@ -756,6 +946,8 @@ export function textoConversao(e) {
   if (!(+e.passaram)) return "ninguém entrou no período";
   // plano 1000b · AB-013: 1 casa no máximo («33,3%», não «33,3333%») e milhar nas entradas («1.500 entraram»)
   const pct = fin(e.conversao_proxima_pct) ? `${Number(e.conversao_proxima_pct).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%` : "—";
+  // plano 2000d · DA-264: acima de 100% (seguiram também os que tinham entrado ANTES do período) — diz isso em vez de «120% seguiram»
+  if (fin(e.conversao_proxima_pct) && +e.conversao_proxima_pct > 100) return `${Number(e.passaram).toLocaleString("pt-BR")} ${+e.passaram === 1 ? "entrou" : "entraram"} · seguiram mais do que entraram (inclui quem entrou antes do período)`;
   return `${Number(e.passaram).toLocaleString("pt-BR")} ${+e.passaram === 1 ? "entrou" : "entraram"} · ${pct} seguiram`;
 }
 /** CSV (separador ;, com BOM para o Excel abrir os acentos) — P1 "CSV por bloco".
@@ -763,13 +955,26 @@ export function textoConversao(e) {
     · texto que começa com = + - @ tab ou CR ganha um apóstrofo na frente: nome de atendente,
       etapa ou motivo é digitado por usuário e não pode virar FÓRMULA no Excel de quem baixa
       (injeção de CSV — "=HIPERLINK(...)" no nome da conta). */
+/** Plano 1500c · AC-163: número no CSV com no máximo 2 casas e nunca em notação científica (0,1 + 0,2 saía «0,30000000000000004»,
+    1e-7 saía «1e-7»); a vírgula é o separador decimal. */
+export function numeroCsv(v) {
+  if (!fin(v)) return "";
+  const r = Math.round(v * 100) / 100;
+  const t = Number.isInteger(r) ? r.toFixed(0) : r.toFixed(2).replace(/0+$/, "");
+  return (t === "-0" ? "0" : t).replace(".", ",");
+}
+/** Plano 1500c · AC-164: texto que o Excel leria como fórmula — começa com = ou @, tab/CR, ou + / - (também depois de espaços), A NÃO SER
+    que o texto inteiro seja só telefone/número («+55 (11) 99999-0000», «-5»): esses não ganham mais o apóstrofo. «-2+3+cmd|…» continua
+    protegido (tem letra/símbolo de fórmula). */
+const SO_NUMERO_CSV = /^\s*[+-]?[\d\s().,/-]+$/;
+export const pareceFormula = s => /^[=@\t\r]/.test(s) || (/^\s*[=+\-@]/.test(s) && !(/^\s*[+-]/.test(s) && SO_NUMERO_CSV.test(s)));
 export function csv(colunas, linhas) {
   const q = v => {
     let s;
     if (v == null) s = "";
-    else if (typeof v === "number") s = Number.isFinite(v) ? String(v).replace(".", ",") : "";
+    else if (typeof v === "number") s = numeroCsv(v);   // plano 1500c · AC-163
     // plano 1000 (AD-261): o teste vale depois dos espaços do começo — « =HIPERLINK(…)» passava e o Excel apara o espaço
-    else { s = String(v); if (/^[=+\-@\t\r]/.test(s) || /^[=+\-@]/.test(s.replace(/^\s+/, ""))) s = `'${s}`; }
+    else { s = String(v); if (pareceFormula(s)) s = `'${s}`; }   // plano 1500c · AC-164
     return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return "﻿" + [colunas, ...linhas].map(l => l.map(q).join(";")).join("\r\n");
@@ -804,10 +1009,17 @@ export function estadoCanal(k, agora = Date.now()) {
   return { nivel: "bom", texto: "Conectado" };
 }
 /** Receita do mês vs o MESMO pedaço do mês anterior (comparação justa: mesmos dias). */
-export function mesVsAnterior(n) {
+// plano 2000d · DA-215: `comparavel` = false quando o mês anterior não tem base (zero) ou o cliente começou a usar o sistema depois do
+// dia 1º dele (`desde`/`cliente_desde`, quando vier) — a variação não deve aparecer
+export function mesVsAnterior(n, { hoje = hojeSP() } = {}) {
   if (!n) return null;
-  return { atual: +n.receita_mes || 0, anterior: +(n.receita_mes_anterior_parcial ?? n.receita_mes_anterior) || 0,
-           anteriorInteiro: +n.receita_mes_anterior || 0, dia: +n.dia_do_mes || null };
+  const anterior = +(n.receita_mes_anterior_parcial ?? n.receita_mes_anterior) || 0;
+  const desde = String(n.desde || n.cliente_desde || "").slice(0, 10);
+  const m = /^(\d{4})-(\d{2})/.exec(String(hoje || ""));
+  const ini = m ? new Date(Date.UTC(+m[1], +m[2] - 2, 1)).toISOString().slice(0, 10) : "";
+  const comecouDepois = /^\d{4}-\d{2}-\d{2}$/.test(desde) && !!ini && desde > ini;
+  return { atual: +n.receita_mes || 0, anterior,
+           anteriorInteiro: +n.receita_mes_anterior || 0, dia: +n.dia_do_mes || null, comparavel: anterior > 0 && !comecouDepois };
 }
 
 /* ============================================================
@@ -870,7 +1082,16 @@ const plural = (n, um, varios) => (Number(n) === 1 ? um : varios);
  * O nome do compromisso da agenda na vertical: oficina marca «visita», loja marca «entrega», os demais «consulta»
  * (a mesma palavra das Automações — auto-catalogo.palavraConsulta; o teste trava as duas iguais). Devolve {um, varios}.
  */
-export function palavraAgenda(vertical) {
+export function palavraAgenda(vertical, voc = null) {
+  // plano 2000d · DR-259: o vocabulário da EMPRESA vence («sessão», «revisão») — o fixo da vertical só quando ele não diz
+  const v = voc && typeof voc === "object" ? voc : null;
+  const proprio = v && typeof v.compromisso === "string" && v.compromisso.trim() ? v.compromisso.trim() : "";
+  if (proprio) {
+    const min = s => s.charAt(0).toLocaleLowerCase("pt-BR") + s.slice(1);
+    const pl = typeof v.compromissos === "string" && v.compromissos.trim() ? v.compromissos.trim()
+      : proprio.replace(/ão$/i, "õe").replace(/([aeiou])l$/i, "$1i").replace(/([rzs])$/i, "$1e") + "s";
+    return { um: min(proprio), varios: min(pl) };
+  }
   const um = vertical === "oficina" ? "visita" : vertical === "loja" ? "entrega" : "consulta";
   return { um, varios: `${um}s` };
 }
@@ -1093,8 +1314,9 @@ export function ordenarRadar(R) {
 }
 
 /** O chip-resumo de Anúncios: "Últimos 30 dias · Tudo" (ou Meta / Google). */
-export function textoChipAnuncios(dias, plat) {
-  return `${rotuloPeriodo(dias).titulo} · ${plat ? nomePlat(plat) : "Tudo"}`;   // plano 1000 (AD-097): «Este mês» / «Mês passado»
+// plano 2000d · NX-075: com `M`, o chip usa o mesmo rótulo dos cartões — no dia 1º «Setembro (até ontem)», não «Este mês» (AB-082)
+export function textoChipAnuncios(dias, plat, M = null) {
+  return `${rotuloPeriodo(dias, M).titulo} · ${plat ? nomePlat(plat) : "Tudo"}`;   // plano 1000 (AD-097): «Este mês» / «Mês passado»
 }
 
 /**
@@ -1112,8 +1334,9 @@ export function textoChipRelatorios({ preset = 30, de = null, ate = null, aba = 
 
 /** Série do gráfico de tendência: por dia da janela, investimento (Ads), conversões da plataforma e o que o CRM registrou
     (conversas, agendamentos, fechamentos, receita) — conversas pela data da conversa, as outras pela data do próprio evento. */
-export function serieTendencia(M, { dias = 30, plat = "" } = {}) {
-  const { de, ate } = janela(M, dias);
+export function serieTendencia(M, { dias = 30, plat = "", anterior = false } = {}) {
+  // plano 1500c · AC-088: `anterior` = a mesma série na janela de comparação (a curva tracejada do período anterior)
+  const j = janela(M, dias), de = anterior ? j.deA : j.de, ate = anterior ? j.ateA : j.ate;
   const sd = M.porDia(plat);
   const conv = new Array(M.DIAS).fill(0);
   for (const Ld of M.LEADS) { if (!Ld.plat || (plat && Ld.plat !== plat)) continue; if (Ld.i >= 0 && Ld.i < conv.length) conv[Ld.i]++; }
@@ -1126,15 +1349,21 @@ export function serieTendencia(M, { dias = 30, plat = "" } = {}) {
 }
 
 /** Funil anúncio → conversa → agenda → venda por plataforma: 4 etapas com a taxa entre cada par (null sem base). Só plataformas com movimento. */
-export function funilPorPlataforma(M, { dias = 30 } = {}) {
+// plano 2000d · NX-073: os rótulos das etapas na língua da vertical (oficina: «Pediram orçamento», loja: «Fizeram pedido») — os mesmos do
+// funil da gaveta e da trilha (anuncios.palavrasFunil)
+const ETAPAS_VERTICAL = Object.freeze({ oficina: ["Pediram orçamento", "Trouxeram o carro"], loja: ["Fizeram pedido", "Retiraram ou receberam"] });
+export function funilPorPlataforma(M, { dias = 30, vertical = "" } = {}) {
   const { de, ate } = janela(M, dias);
+  const [rotAg, rotVieram] = ETAPAS_VERTICAL[vertical] || ["Agendaram", "Compareceram"];
   const taxa = (n, d) => (d > 0 ? Math.round(n / d * 1000) / 10 : null);
   return ["meta", "google", "anuncio"].map(p => {
     const t = M.consolidar(M.linhasDe(de, ate, { plat: p })), c = M.crmTot(de, ate, { plat: p });
     const etapas = [
       { id: "convAds", rotulo: "Conversões do anúncio", v: Number(t.conversoes) || 0 },
       { id: "conversas", rotulo: "Conversas no CRM", v: Number(c.conversas) || 0 },
-      { id: "agendadas", rotulo: "Agendaram", v: Number(c.agendadas) || 0 },
+      { id: "agendadas", rotulo: rotAg, v: Number(c.agendadas) || 0 },
+      // plano 1500c · AC-097: a etapa «compareceram» (antes pulava de agendou para fechou, sem ver quem faltou)
+      { id: "compareceram", rotulo: rotVieram, v: Number(c.compareceram) || 0 },
       { id: "fecharam", rotulo: "Fecharam", v: Number(c.fecharam) || 0 },
     ];
     const taxas = etapas.slice(1).map((e, k) => ({ de: etapas[k].id, para: e.id, pct: taxa(e.v, etapas[k].v) }));
@@ -1181,8 +1410,10 @@ export function calorSemanal(M, { dias = 30, plat = "", campo = "conversas" } = 
   }
   // dia da semana mais forte somando todas as semanas (a frase do cartão)
   const porDow = matriz.map(l => l.reduce((s, x) => s + x, 0)), topo = Math.max(...porDow);
-  const melhorDow = topo > 0 ? porDow.indexOf(topo) : null;
-  return { matriz, semanas, max, pico, campo, porDow, melhorDow };
+  // plano 1500c · AC-143: empate no topo não elege o domingo (o 1º índice) — melhorDow null e `empate` com os dias empatados
+  const empatados = topo > 0 ? porDow.map((v, d) => (v === topo ? d : -1)).filter(d => d >= 0) : [];
+  const melhorDow = empatados.length === 1 ? empatados[0] : null;
+  return { matriz, semanas, max, pico, campo, porDow, melhorDow, empate: empatados.length > 1 ? empatados : null };
 }
 const ddmmDe = (M, i) => (typeof M.ddmm === "function" ? M.ddmm(i) : String(i));
 
@@ -1219,13 +1450,21 @@ export function faixasCalor(m) {
 /** Nome do arquivo exportado: orbita-[<cliente>-]<base>-<de>-a-<ate>.<ext>, só letras/números/traço.
     Plano 1000 (AD-103/AD-143): com o nome do cliente (a agência baixa de vários clientes e misturava os arquivos). */
 const slugArquivo = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-export function nomeArquivoExport(base, de, ate, ext = "png", cliente = "") {
-  const limpo = slugArquivo, cli = limpo(cliente).slice(0, 40).replace(/-$/, "");
-  return `orbita-${cli ? `${cli}-` : ""}${limpo(base) || "grafico"}${de ? `-${limpo(de)}` : ""}${ate ? `-a-${limpo(ate)}` : ""}.${limpo(ext) || "png"}`;
+/** Plano 1500c · AC-077: `sufixo` (a plataforma filtrada: «meta», «google») vai DEPOIS das datas — antes o Anúncios passava «30dias» e
+    «tudo» no lugar das datas («…-30dias-a-tudo.csv»). */
+export function nomeArquivoExport(base, de, ate, ext = "png", cliente = "", sufixo = "", marca = "") {
+  const limpo = slugArquivo, cli = limpo(cliente).slice(0, 40).replace(/-$/, ""), suf = limpo(sufixo);
+  // plano 2000d · DA-336: com a agência configurada, o arquivo começa pelo nome dela (o cliente da agência não recebe «orbita-…»)
+  const pre = limpo(marca).slice(0, 30).replace(/-$/, "") || "orbita";
+  // plano 2000d · DA-218: período de um dia só tem UMA data (antes «…-2026-10-24-a-2026-10-24»)
+  const umDia = de && ate && limpo(de) === limpo(ate);
+  return `${pre}-${cli ? `${cli}-` : ""}${limpo(base) || "grafico"}${de ? `-${limpo(de)}` : ""}${ate && !umDia ? `-a-${limpo(ate)}` : ""}${suf ? `-${suf}` : ""}.${limpo(ext) || "png"}`;
 }
-/** Plano 1000 (AD-120): as linhas do cabeçalho do PNG exportado (o SVG sozinho saía sem título, período nem cliente). */
-export function cabecalhoPng({ titulo = "", periodo = "", cliente = "" } = {}) {
-  return [String(titulo || "").trim(), [cliente, periodo].map(x => String(x || "").trim()).filter(Boolean).join(" · ")].filter(Boolean);
+/** Plano 1000 (AD-120): as linhas do cabeçalho do PNG exportado (o SVG sozinho saía sem título, período nem cliente).
+    Plano 2000d · DA-139: com `agencia`, a agência assina a imagem («… · por Agência Alfa»). */
+export function cabecalhoPng({ titulo = "", periodo = "", cliente = "", agencia = "" } = {}) {
+  const ag = String(agencia || "").trim().slice(0, 60);
+  return [String(titulo || "").trim(), [cliente, periodo, ag ? `por ${ag}` : ""].map(x => String(x || "").trim()).filter(Boolean).join(" · ")].filter(Boolean);
 }
 /** Plano 1000 (AD-147): série diária agrupada por semana (segunda a domingo) — acima de 60 dias os rótulos diários ficavam ilegíveis.
     Soma os `campos`; `d` = o 1º dia da semana na janela, `ate` = o último. */
@@ -1255,7 +1494,13 @@ export function agruparOutros(lista = [], { max = 6, valor = x => +x.qtd || 0, n
 export const ESTILOS_SVG_EXPORT = Object.freeze(["fill", "stroke", "stroke-width", "stroke-dasharray", "stroke-linecap", "stroke-linejoin", "opacity", "font-family", "font-size", "font-weight", "text-anchor", "visibility"]);
 
 /** Explicação em linguagem simples de cada regra do radar: o que é, por que importa e o que fazer. */
-export function explicarRegra(id) {
+/** Plano 1500c · AC-145: com `ativa: false` a explicação diz que a regra está desligada (o radar não avisa) — antes o texto genérico
+    falava como se ela estivesse valendo. */
+export function explicarRegra(id, { ativa = true } = {}) {
+  const ex = explicarRegraBase(id);
+  return ativa === false ? { ...ex, oQue: `${ex.oQue} (desligada: o radar não avisa disso agora)`, desligada: true } : ex;
+}
+function explicarRegraBase(id) {
   const E = {
     r1: { oQue: "Cada conversa vinda desta campanha está custando mais do que a meta.", porque: "O dinheiro rende menos: mais investimento para o mesmo número de pessoas.", acao: "Revise o público e o anúncio; se não melhorar em alguns dias, pause e redistribua a verba." },
     r2: { oQue: "A campanha gastou e ninguém chamou.", porque: "Pode ser anúncio sem botão de WhatsApp, público errado ou link quebrado.", acao: "Abra o anúncio como cliente e teste o caminho até a conversa." },
@@ -1275,25 +1520,28 @@ export function explicarRegra(id) {
  * (nada ativo e ainda sem número de anúncio: não há o que avaliar, então não acende verde); com contagens por gravidade e a frase para leigo.
  * semaforoRadar(R, {semDados}) — `semDados` = L.semAnuncios(M).
  */
-export function semaforoRadar(R, { semDados = false } = {}) {
+// plano 2000d · DA-225: `atrasado` (leitura atrasada ou caída) não acende verde — «tudo certo» só vale com números de agora
+export function semaforoRadar(R, { semDados = false, atrasado = false } = {}) {
   const ativos = ordenarRadar(R).filter(x => x.ativo);
   const cont = { critico: 0, alerta: 0, info: 0 };
   for (const x of ativos) cont[nivelSev(x.sev)]++;
-  const nivel = cont.critico ? "vermelho" : cont.alerta ? "amarelo" : semDados ? "neutro" : "verde";
+  const nivel = cont.critico ? "vermelho" : cont.alerta ? "amarelo" : semDados ? "neutro" : atrasado ? "cinza" : "verde";
   const n = (q, um, varios) => `${q} ${q === 1 ? um : varios}`;
   const partes = [];
   if (cont.critico) partes.push(n(cont.critico, "problema crítico", "problemas críticos"));
   if (cont.alerta) partes.push(n(cont.alerta, "ponto de atenção", "pontos de atenção"));
   if (cont.info) partes.push(n(cont.info, "aviso informativo", "avisos informativos"));
   const frase = nivel === "neutro" ? "Ainda sem números de anúncio para avaliar."
+    : nivel === "cinza" ? "Sem leitura recente dos anúncios: nada fora do combinado nos últimos números, mas eles não são de agora."   // DA-225
     // plano 1000b · AB-173: o verde cita os informativos ativos listados logo abaixo
     : nivel === "verde" ? `Tudo dentro do combinado: nenhuma campanha precisa de ajuste agora${cont.info ? ` (${n(cont.info, "aviso informativo abaixo", "avisos informativos abaixo")})` : ""}.`
     : nivel === "vermelho" ? `Precisa de ação hoje: ${partes.join(" e ")}.` : `Vale olhar esta semana: ${partes.join(" e ")}.`;
   const primeiro = ativos[0] || null;
   const acao = nivel === "neutro" ? "O radar começa a vigiar assim que as contas de anúncio estiverem conectadas e a primeira leitura chegar."
+    : nivel === "cinza" ? explicarRegra("integracao").acao   // plano 2000d · DA-225
     : !primeiro ? "Continue acompanhando; o radar avisa no WhatsApp quando algo mudar."
     : primeiro.tipo === "conexao" ? explicarRegra("integracao").acao : explicarRegra(primeiro.ref.regra).acao;
-  return { nivel, cor: nivel === "vermelho" ? "ruim" : nivel === "amarelo" ? "aten" : nivel === "neutro" ? "neutro" : "ok", contagens: cont, ativos: ativos.length, frase, acao,
+  return { nivel, cor: nivel === "vermelho" ? "ruim" : nivel === "amarelo" ? "aten" : nivel === "neutro" || nivel === "cinza" ? "neutro" : "ok", contagens: cont, ativos: ativos.length, frase, acao,
     primeiro: primeiro ? { tipo: primeiro.tipo, nome: primeiro.ref.nome, regra: primeiro.tipo === "conexao" ? "integracao" : primeiro.ref.regra } : null };
 }
 
@@ -1338,6 +1586,13 @@ export function totalAnuncioVendas(origens = []) {
  * F3: calor dia da semana × HORA das conversas de anúncio (nx_dados.leads[].hora_conversa, contrato 5) na janela do período.
  * → {matriz[7][24], total, semHora, disponivel}. `disponivel` = o servidor manda o campo (RPC nova); sem ele a tela volta ao calor por semana.
  */
+/** Plano 2000d · DA-222: o lead traz só a data, ou a hora exata 00:00:00 (importação/planilha) — a hora dele é desconhecida. */
+export function semHoraReal(b = {}) {
+  const s = String((b && (b.criado_em_conversa || b.data_conversa || b.criado_em)) || "");
+  if (!s) return false;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return true;
+  return /[T ]00:00(?::00(?:\.0+)?)?(?:Z|[+-]00(?::?00)?|-03(?::?00)?)?$/.test(s);
+}
 export function calorHora(M, { dias = 30, plat = "" } = {}) {
   const matriz = Array.from({ length: 7 }, () => new Array(24).fill(0));
   const { de, ate } = janela(M, dias);
@@ -1348,6 +1603,8 @@ export function calorHora(M, { dias = 30, plat = "" } = {}) {
     if (!Ld.plat || (plat && Ld.plat !== plat) || Ld.i < de || Ld.i > ate) continue;
     const hh = b.hora_conversa;
     if (hh === null || hh === undefined || hh === "" || !Number.isInteger(+hh) || +hh < 0 || +hh > 23) { semHora++; continue; }
+    // plano 2000d · DA-222: meia-noite EXATA (00:00:00) é lead importado sem hora — conta como «sem hora», não vira pico falso às 0h
+    if (+hh === 0 && semHoraReal(b)) { semHora++; continue; }
     matriz[M.dataDe(Ld.i).getDay()][+hh]++;
     total++;
   }
@@ -1377,7 +1634,8 @@ export function aparelhoRadar(caidos, agora = Date.now()) {
 export function resultadoTesteConexao(resp) {
   const r = resp && typeof resp === "object" ? resp : {};
   const cli = r.cliente && typeof r.cliente === "object" ? r.cliente : Array.isArray(r.clientes) ? r.clientes[0] || {} : {};
-  const linhasDe = st => { const m = /(\d+)\s+linhas?/.exec(String(st || "")); return m ? +m[1] : null; };
+  // plano 2000d · NX-074: «1.234 linhas» (ou «1,234») é mil duzentas e trinta e quatro — antes lia só «234»
+  const linhasDe = st => { const m = /(\d{1,3}(?:[.,]\d{3})+|\d+)\s+linhas?/.exec(String(st || "")); return m ? +m[1].replace(/[.,]/g, "") : null; };
   const um = (canal, ok, status, ex = {}) => ({ canal, ok: !!ok, parcial: /^parcial/i.test(String(status || "")), status: String(status || ""),
     curto: ex.curto || null, acao: ex.acao || null, passageiro: !!ex.passageiro, linhas: linhasDe(status) });
   if (Array.isArray(cli.integracoes)) return cli.integracoes.filter(Boolean).map(i => um(i.canal, i.ok, i.status, i.explicacao || {}));

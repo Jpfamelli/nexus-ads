@@ -297,7 +297,8 @@ test("43: o mini-calendário na tela — 42 botões, hoje, selecionado, densidad
   porIso("2026-10-05").click();
   assert.deepEqual(escolhidos, ["2026-10-05"]);
   const navs = el.querySelectorAll(".ag-mes-nav");
-  assert.deepEqual(navs.map(b => b.getAttribute("aria-label")), ["Mês anterior", "Próximo mês"]);
+  // plano 2000d · GY-065: as setas dizem para qual mês vão
+  assert.deepEqual(navs.map(b => b.getAttribute("aria-label").split(":")[0]), ["Mês anterior", "Próximo mês"]);
   navs[1].click(); navs[0].click();
   assert.deepEqual(meses, [1, -1]);
   // teclado: a seta move o foco e o tabindex; PageDown troca o mês
@@ -362,7 +363,8 @@ test("44: o painel na tela — quatro números, lista em ordem com selos, toque 
   const abertos = [], marcados = [];
   const el = A.montarPainelDia({ h, iso: seg, consultas, config: cfg, hoje: "2026-10-04", pode: true, horaBR: iso => iso.slice(11, 16), num: String, aoAbrir: (k, bt) => abertos.push([k, bt]), aoMarcar: iso => marcados.push(iso) });
   assert.equal(el.tagName, "ASIDE"); assert.equal(el.getAttribute("aria-label"), "Resumo do dia");
-  assert.equal(el.querySelector(".ag-painel-sub").textContent, "Dia por vir");
+  // plano 1500c: o dia seguinte a hoje diz «Amanhã» (CC-302), não «Dia por vir»
+  assert.equal(el.querySelector(".ag-painel-sub").textContent, "Amanhã");
   const kpis = el.querySelectorAll(".ag-kpi");
   assert.deepEqual(kpis.map(k => k.textContent), ["3consultas", "1concluída", "1falta", "1encaixe"]);
   assert.deepEqual(kpis.map(k => k.querySelector("b").dataset.valor), ["3", "1", "1", "1"]);
@@ -377,7 +379,8 @@ test("44: o painel na tela — quatro números, lista em ordem com selos, toque 
   assert.equal(el.querySelector(".ag-painel-vazio"), null);
   const vazio = A.montarPainelDia({ h, iso: "2026-10-06", consultas, config: cfg, hoje: "2026-10-06", pode: true, aoMarcar: iso => marcados.push(iso) });
   assert.equal(vazio.querySelector(".ag-painel-titulo").textContent, "Hoje");
-  assert.deepEqual(vazio.querySelectorAll(".ag-kpi b").map(b => b.textContent), ["0", "0", "0", "0"]);
+  // plano 2000d: DC-303 — sem «0 encaixes»: o número de encaixes só aparece quando há
+  assert.deepEqual(vazio.querySelectorAll(".ag-kpi b").map(b => b.textContent), ["0", "0", "0"]);
   assert.equal(vazio.querySelector(".ag-painel-vazio .narr").textContent, "Nenhuma consulta neste dia.");
   vazio.querySelector(".ag-painel-vazio button").click();
   assert.deepEqual(marcados, ["2026-10-06"]);
@@ -397,7 +400,9 @@ test("extra: prévia da semana na configuração — horas úteis por dia e por 
   assert.deepEqual(p.dias[2].pausas, [], "dia fechado não desenha pausa");
   assert.equal(p.dias[2].fechado, true); assert.equal(p.dias[0].nome, "seg"); assert.equal(p.dias[6].nome, "dom");
   assert.deepEqual(C.previaSemana(null, null).dias.map(d => d.horas), [0, 0, 0, 0, 0, 0, 0]);
-  assert.equal(C.previaSemana({ 1: [["18:00", "08:00"], ["x", "y"]] }).dias[0].fechado, true, "faixa invertida ou inválida não conta");
+  // plano 2000d: DC-281 — «18:00 até 08:00» é a faixa da madrugada (vai até as 24 h e continua no dia seguinte); a inválida segue sem contar
+  assert.equal(C.previaSemana({ 1: [["x", "y"]] }).dias[0].fechado, true, "faixa inválida não conta");
+  assert.equal(C.previaSemana({ 1: [["18:00", "08:00"]] }).dias[1].horas, 8, "a madrugada entra no dia seguinte");
   assert.equal(C.horasTxt(8.5), "8h30"); assert.equal(C.horasTxt(42), "42h"); assert.equal(C.horasTxt(0), "0h"); assert.equal(C.horasTxt(1.25), "1h15");
   const { h } = criarDom();
   const el = C.montarPreviaSemana(h, p);

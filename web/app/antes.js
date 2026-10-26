@@ -40,6 +40,8 @@
     var produtoAberto = new URLSearchParams(location.search).get("produto");
     if (produtoAberto === "crm" || produtoAberto === "ads" || produtoAberto === "atendimento") raiz.setAttribute("data-produto", produtoAberto);
   } catch (e) { /* sem query: o app.js põe depois */ }
+  // plano 2000d · DU-229: o «A+» da entrada (texto 12 % maior) vale desde a primeira pintura
+  try { if (window.localStorage.getItem("nx-texto-grande") === "1") raiz.setAttribute("data-texto", "grande"); } catch (e) { /* sem storage */ }
   var preferido = esquema();
   if (preferido === "claro" || preferido === "escuro") {
     raiz.setAttribute("data-esquema", preferido);
@@ -74,7 +76,7 @@
     }
     // tema da empresa ativa (só depois do login; a tela de entrar usa a marca da org)
     var h = location.hash || "";
-    if (!/^#\/?(login|convite|senha)(\/|$|\?)/.test(h)) {
+    if (!/^#\/?(login|convite|senha|testar)(\/|$|\?)/.test(h)) {
       var cli = null;
       try { cli = window.localStorage.getItem("nx-app-cliente"); } catch (e) { cli = null; }
       if (cli && /^[0-9a-f-]{36}$/.test(cli)) {
@@ -100,12 +102,18 @@
         automacoes: { js: ["auto-logica.js", "auto-pecas.js"], css: "automacoes.css" },
         config: { js: ["crm-config.js", "cv-config.js", "ads-config.js", "agenda-config.js", "rastreio-config.js"], css: "config.css" },
         admin: { js: [], css: "config.css" },
+        // plano 1500c · UCC-065: Agenda, Anúncios e Relatórios também (o CSS e a lógica que a tela pede logo ao abrir)
+        agenda: { js: ["crm-logica.js", "graficos.js"], css: "agenda.css" },
+        anuncios: { js: ["rel-logica.js", "graficos.js", "../nucleo.js"], css: "relatorios.css" },
+        relatorios: { js: ["rel-logica.js", "graficos.js", "anuncios.js"], css: "relatorios.css" },
       };
-      var seg = (location.hash || "").replace(/^#\/?/, "").split(/[\/?]/)[0];
+      var seg = (location.hash || "").replace(/^#\/?/, "").split(/[\/?]/)[0].trim().toLowerCase();   // plano 2000d · SX-060: «#/CRM» pré-carrega o mesmo que «#/crm» (o roteador já aceita)
       var logado = false;
       try { logado = !!window.localStorage.getItem("nx-token"); } catch (e) { logado = false; }
+      // plano 1500c · UCC-030: token com validade conhecida e já vencida não conta como logado (pré-carrega a entrada, não o app que vai cair)
+      try { var exp = Number(window.localStorage.getItem("nx-token-expira")); if (logado && exp > 0 && exp <= Date.now()) logado = false; } catch (e) { /* sem validade: segue */ }
       var alvo = null;
-      if (/^(login|convite|senha)$/.test(seg) || !logado) alvo = "login";
+      if (/^(login|convite|senha|testar)$/.test(seg) || !logado) alvo = "login";
       else if (Object.prototype.hasOwnProperty.call(tela, seg)) alvo = tela[seg];
       else if (!seg) {
         var prod = new URLSearchParams(location.search).get("produto");
@@ -117,8 +125,10 @@
         lk.href = alvo + ".js?v=" + ver;
         document.head.appendChild(lk);
         var extras = aquecer[alvo];
+        // plano 2000d · SX-061: economia de dados ligada ou rede 2G — só o módulo da tela; o resto baixa quando a tela pedir
+        try { var cx = navigator.connection; if (cx && (cx.saveData === true || /(^|-)2g$/.test(String(cx.effectiveType || "")))) extras = null; } catch (e) { /* sem a API: segue */ }
         // o editor de automação (nova/editar) é o maior pedaço da tela: só quando o endereço já vai direto para ele
-        if (alvo === "automacoes" && /^#\/?automacoes\/[^?]/.test(location.hash || "")) extras = { js: extras.js.concat(["auto-editor.js"]), css: extras.css };
+        if (extras && alvo === "automacoes" && /^#\/?automacoes\/[^?]/.test(location.hash || "")) extras = { js: extras.js.concat(["auto-editor.js"]), css: extras.css };
         if (extras) {
           for (var i = 0; i < extras.js.length; i++) {
             var modulo = document.createElement("link");
@@ -139,4 +149,22 @@
     }
   } catch (e) { /* ver acima */ }
   raiz.classList.add("js");
+  // plano 1500c · UCC-137: navegador antigo demais (sem módulos, sem Object.hasOwn ou sem color-mix no CSS) ficava parado em «Abrindo…» ou
+  // abria quebrado. Agora a tela de abertura diz o que fazer. Só lê recursos; nada é enviado.
+  try {
+    var antigo = false;
+    // só conclui com prova: sem o construtor (ambiente estranho) não chama de antigo
+    try { antigo = typeof HTMLScriptElement === "function" && !("noModule" in HTMLScriptElement.prototype); } catch (e) { antigo = false; }
+    if (typeof Object.hasOwn !== "function") antigo = true;
+    try { if (window.CSS && typeof window.CSS.supports === "function" && !window.CSS.supports("color", "color-mix(in srgb, red 50%, blue)")) antigo = true; } catch (e) { /* sem CSS.supports: não conclui nada */ }
+    if (antigo) {
+      raiz.classList.add("navegador-antigo");
+      window.__nxNavegadorAntigo = true;
+      var avisar = function () {
+        var msg = document.getElementById("boot-msg");
+        if (msg) msg.textContent = "Este navegador é antigo demais para abrir o app. Atualize o navegador (ou use o Chrome, o Edge, o Firefox ou o Safari atualizados) e abra de novo.";
+      };
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", avisar); else avisar();
+    }
+  } catch (e) { /* o aviso nunca impede a abertura */ }
 })();

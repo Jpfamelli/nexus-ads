@@ -122,7 +122,8 @@ test("B5: números caídos — servidor e shell somados sem repetir; estado ok s
   const l = I.numerosCaidos(d, [{ id: "cw1", nome: "Recepção", desde: null }, { id: "x9", nome: "Filial" }]);
   assert.deepEqual(l.map(x => [x.id, x.fonte]), [["cw1", "inicio"], ["x9", "shell"]]);
   assert.equal(I.textoNumeroCaido(l.slice(0, 1), agora), "Número de WhatsApp desconectado há 12 min: Recepção.");
-  assert.equal(I.textoNumeroCaido(l, agora), "2 números de WhatsApp desconectados: Recepção, Filial.");
+  // plano 1500c: RC-231 — com vários, o «há X» do mais antigo também aparece
+  assert.equal(I.textoNumeroCaido(l, agora), "2 números de WhatsApp desconectados (o primeiro há 12 min): Recepção e Filial.");     // plano 2000d: IY-026 — a lista em português («A e B»)
   assert.equal(I.textoNumeroCaido([{ nome: "Sem data" }], agora), "Número de WhatsApp desconectado: Sem data.");
   assert.equal(I.textoNumeroCaido([], agora), "");
   assert.equal(I.estadoNumeros(d), "caido");
@@ -375,7 +376,8 @@ test("tela (RPC NOVA): «Respondidas no prazo» no topo e «Leads» no bloco; li
     assert.match(texto(raiz.querySelector("section[data-bloco=leads]")), /23\s*nos últimos 7 dias/);
     const ag = raiz.querySelector(".ini-kpi[data-kpi=aguardando]");
     assert.ok(ag.querySelector(".ini-kpi-sp svg"), "linha do servidor sem esperar o 3º dia neste aparelho");
-    assert.match(ag.querySelector(".sr-only").textContent, /conversas novas por dia nos últimos 14 dias \(contagem do servidor\)/);
+    // plano 2000d: DR-280 — o 1º .sr-only do cartão agora é a tendência em palavras; a descrição é a do aria-describedby
+    assert.match(ag.querySelector("[id^=ini-kpi-aj]").textContent, /conversas novas por dia nos últimos 14 dias \(contagem do servidor\)/);
     assert.equal(ag.querySelector(".rel-var"), null, "revisão: «esperando agora» × «conversas abertas ontem» não são comparáveis — sem seta");
   } finally { dom.fim(); }
 });

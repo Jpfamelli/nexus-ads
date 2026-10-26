@@ -202,7 +202,8 @@ test("E1 · «Compareceu / Faltou» na tela: grupo com aria-pressed, toque chama
   assert.equal(g.getAttribute("role"), "group"); assert.equal(g.getAttribute("aria-label"), "Presença de Bianca"); assert.equal(g.dataset.negocio, "7");
   const bts = g.querySelectorAll(".ag-pres-bt");
   assert.deepEqual(bts.map(b => [b.dataset.estado, b.textContent, b.getAttribute("aria-pressed")]), [["compareceu", "Compareceu", "false"], ["faltou", "Faltou", "true"]]);
-  assert.equal(bts[1].getAttribute("title"), "Tocar de novo limpa a marcação");
+  // plano 1500c: tocar de novo pergunta antes de limpar (CC-221)
+  assert.equal(bts[1].getAttribute("title"), "Tocar de novo pergunta se quer limpar a marcação");
   bts[0].click();
   assert.deepEqual(vistos, [[c, "compareceu", bts[0]]]);
   assert.equal(A.montarPresenca({ h, c, desabilitado: true }).querySelector("button").disabled, true, "quem só lê vê, mas não marca");
@@ -349,7 +350,9 @@ test("E2 · `dono_nome` do servidor: nomes, legenda e colunas sem ler a base do 
   const consultas = [consultaEm(fut, "09:00", { dono_id: "u1", dono_nome: "Dra. Helena" }), consultaEm(fut, "10:00", { negocio_id: 802, dono_id: "u2", dono_nome: "Ana Paula" })];
   const T = await montarAgenda({ data: fut, modo: "dia", consultas });
   try {
-    assert.equal(T.reg.carregarCrm, 0, "nenhuma leitura da base do CRM");
+    // plano 1500c: a equipe (quem está livre no dia, filtro com quem não tem consulta — CC-191/CC-192) é lida UMA vez em segundo plano;
+    // os nomes continuam vindo da linha (dono_nome), sem esperar a base
+    assert.ok(T.reg.carregarCrm <= 1, "no máximo uma leitura da base do CRM (a equipe)");
     assert.deepEqual(T.alvo.querySelectorAll(".ag-dono-nome").map(e => e.textContent), ["Dra. Helena", "Ana Paula"], "colunas por responsável já com o nome");
   } finally { T.sair(); }
   const T2 = await montarAgenda({ data: fut, modo: "dia", consultas: consultas.map(({ dono_nome, ...c }) => c) });
@@ -521,7 +524,8 @@ test("E6 · tela: «Lembrar» na consulta futura abre a conversa com o lembrete 
   const T = await montarAgenda({ data: fut, consultas: [consultaEm(fut, "10:00")], rpc: contato([{ id: 901, status: "aberta" }]), rascunhoStorage: st });
   try {
     await abrirLembrar(T);
-    assert.deepEqual(T.reg.chamadas.map(c => c.nome), ["nx_contato_ver"], "só lê a ficha do contato: nenhuma chamada de envio");
+    // plano 1500c: também lê (uma vez) o nome/endereço da empresa para o texto (nx_cv_base, CC-206) — continua sem nenhuma chamada de envio
+    assert.deepEqual(T.reg.chamadas.map(c => c.nome).filter(n => n !== "nx_cv_base"), ["nx_contato_ver"], "só lê a ficha do contato: nenhuma chamada de envio");
     assert.deepEqual(T.reg.navegou, ["#/conversas/901"]);
     assert.equal(T.rascunho.texto("conversa:901"), A.textoLembrete(T.dados.consultas[0], T.hoje), "o composer abre com o lembrete");
     assert.equal(T.reg.toasts.at(-1), "Lembrete pronto no campo da conversa — confira e envie.");

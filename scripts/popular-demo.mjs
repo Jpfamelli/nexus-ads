@@ -117,9 +117,13 @@ export function conferir(seed) {
   for (const k of new Set([...Object.keys(ea), ...Object.keys(eb)])) igual(`etapa ${k}`, ea[k] || 0, eb[k] || 0);
 
   // chave da demo ("r1|g3") → chave do banco ("r1|google:demo-g3")
+  // plano 2000d · DA-006: o «orçamento acabou» tem chave própria («ritmo:esgotado») — vale a regra, não o texto da chave
+  // plano 2000d · KX-017: regras da conta inteira (r5 «r5|conta», r6 «r6|meta») não têm campanha/criativo — a chave é a mesma no banco
+  // (antes ent era undefined e a conferência caía com TypeError)
   const chaveBanco = a => {
-    if (a.chave === "ritmo") return a.chave;
+    if ((a.regra && a.regra.id === "ritmo") || (a.regra && a.regra.nivel === "conta")) return a.chave;
     const id = a.chave.split("|")[1], ent = a.regra.nivel === "campanha" ? ds.CAMP[id] : ds.CRI[id];
+    if (!ent) return a.chave;
     return `${a.regra.id}|${ent.plat}:${PREFIXO}${id}`;
   };
   const radarA = Md.avaliar(R, true).map(chaveBanco).sort().join(", ");
@@ -232,11 +236,18 @@ export function contagens(seed) {
   return c;
 }
 
+/** Plano 2000d · KX-018: AAAA-MM-DD que existe no calendário — «2026-02-31» passava no formato e virava 03/03 em silêncio. */
+export function dataValida(s) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s || ""))) return false;
+  const [a, m, d] = s.split("-").map(Number), dt = new Date(Date.UTC(a, m - 1, d));
+  return dt.getUTCFullYear() === a && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
 /* ---------- linha de comando ---------- */
 function principal() {
   const arg = process.argv.slice(2).find(a => a.startsWith("--hoje="));
   const hoje = arg ? arg.slice(7) : hojeSP();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(hoje)) { console.error(`Data inválida em --hoje: "${hoje}" (use AAAA-MM-DD).`); process.exitCode = 1; return; }
+  if (!dataValida(hoje)) { console.error(`Data inválida em --hoje: "${hoje}" (use AAAA-MM-DD).`); process.exitCode = 1; return; }
 
   const seed = montarSeed({ hoje });
   const difs = conferir(seed);

@@ -183,7 +183,7 @@ begin
 
   -- ---------------------------------------------------------- M32 · tenant NOVO: 0 de 11
   j := public.nx_onboarding_estado(tAd, cA);
-  perform pg_temp.ok((j ->> 'total')::int = 11, 'são 11 itens');
+  perform pg_temp.ok((j ->> 'total')::int = 12, 'são 12 itens (plano 2000d · DR-263: + contatos importados, opcional)');
   perform pg_temp.ok((j ->> 'obrigatorios')::int = 9, '9 obrigatórios (script do site e anúncios são opcionais)');
   -- A já tem 1 mensagem enviada (fixtures do M36): o item 5 já vale; o resto está zerado
   perform pg_temp.ok((j ->> 'feitos')::int = 1 and (j ->> 'completo')::boolean = false, 'tenant novo + 1 mensagem enviada = 1 de 11 ' || j::text);
@@ -195,10 +195,10 @@ begin
   delete from public.nx_mensagens where cliente_id = cA and direcao = 'out';
   j := public.nx_onboarding_estado(tAd, cA);
   perform pg_temp.ok((j ->> 'feitos')::int = 0 and (j ->> 'pct')::int = 0 and (j ->> 'completo')::boolean = false, 'tenant NOVO: 0 de 11, 0 %');
-  perform pg_temp.ok(jsonb_array_length((j::jsonb) -> 'itens') = 11
+  perform pg_temp.ok(jsonb_array_length((j::jsonb) -> 'itens') = 12
     and (select array_agg(x ->> 'id') from jsonb_array_elements((j::jsonb) -> 'itens') x)
-      = array['chave_codewords','aparelho_pareado','recebimento','ia_ou_direto','mensagem_teste','departamento_horario','agenda_faixas','script_site','colega_convidado','funil_ajustado','anuncios_ligados'],
-    'a ordem dos 11 itens é a recomendada');
+      = array['chave_codewords','aparelho_pareado','recebimento','ia_ou_direto','mensagem_teste','departamento_horario','agenda_faixas','script_site','colega_convidado','funil_ajustado','anuncios_ligados','contatos_importados'],
+    'a ordem dos 12 itens é a recomendada');
   perform pg_temp.ok((select (x ->> 'opcional')::boolean from jsonb_array_elements((j::jsonb) -> 'itens') x where x ->> 'id' = 'anuncios_ligados'), 'anúncios é opcional');
   perform pg_temp.ok((select (x ->> 'opcional')::boolean from jsonb_array_elements((j::jsonb) -> 'itens') x where x ->> 'id' = 'script_site'), 'script do site é opcional (nem toda empresa tem site)');
   perform pg_temp.ok((select count(*) from jsonb_array_elements((j::jsonb) -> 'itens') x where not (x ->> 'opcional')::boolean) = (j ->> 'obrigatorios')::int,
@@ -288,7 +288,7 @@ begin
     'tenant pronto SEM anúncios: 9 de 9 obrigatórios = 100 % (completo), 10 de 11 no total');
   insert into public.nx_integracoes (cliente_id, canal, ativo, cred) values (cA, 'meta', true, '{"token":"segredo-que-nunca-deve-aparecer"}'::jsonb);
   j := public.nx_onboarding_estado(tAd, cA);
-  perform pg_temp.ok((j ->> 'feitos')::int = 11 and (j ->> 'total')::int = 11 and (j ->> 'pct')::int = 100, 'tenant PRONTO: 11 de 11, 100 %');
+  perform pg_temp.ok((j ->> 'feitos')::int = 11 and (j ->> 'total')::int = 12 and (j ->> 'pct')::int = 100, 'tenant PRONTO: 11 de 12 (sem importação, opcional), 100 %');
   perform pg_temp.ok(position('segredo-que-nunca' in j::text) = 0, 'nunca devolve segredo (só existe/não existe)');
   perform pg_temp.ok(position(cw::text || '-' in j::text) = 0 and position('cwk-' in j::text) = 0, 'sem chave nem token na resposta');
   -- empresa sem site: sem o contato do script o checklist continua completo (o item é opcional)

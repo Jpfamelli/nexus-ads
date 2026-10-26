@@ -8,6 +8,88 @@
   "scope": "/app/",
   "display": "standalone",
   "background_color": "#07090C",
-  "theme_color": "#07090C",
-  "icons": [{ "src": "orbita-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+  "theme_color": "#FAFAF8",
+  "icons": [
+    {
+      "src": "orbita-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icones/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icones/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icones/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": [
+    "business",
+    "productivity"
+  ],
+  "shortcuts": [
+    {
+      "name": "Conversas",
+      "short_name": "Conversas",
+      "url": "/app/?produto=crm#/conversas",
+      "icons": [
+        {
+          "src": "icones/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "CRM",
+      "short_name": "CRM",
+      "url": "/app/?produto=crm#/crm",
+      "icons": [
+        {
+          "src": "icones/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Agenda",
+      "short_name": "Agenda",
+      "url": "/app/?produto=crm#/agenda",
+      "icons": [
+        {
+          "src": "icones/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ],
+  "share_target": {
+    "action": "/app/?produto=crm&compartilhar=1",
+    "method": "GET",
+    "params": {
+      "title": "titulo",
+      "text": "texto",
+      "url": "link"
+    }
+  },
+  "launch_handler": {
+    "client_mode": [
+      "navigate-existing",
+      "auto"
+    ]
+  }
 }

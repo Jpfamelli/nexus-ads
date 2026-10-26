@@ -127,6 +127,22 @@ jobs:
           if [ ! -s "${lista}" ]; then echo "::error::supabase/deploy-lista.txt não tem nenhuma função"; exit 1; fi
           echo "vai publicar:"; cat "${lista}"
 
+      # plano 1500c · SC-157: código novo não sobe antes da migração que ele chama (só LEITURA de nx_versao_banco pela Management API)
+      - name: Portão — migrações do repositório aplicadas no banco
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          resp="${RUNNER_TEMP}/versoes.json"
+          codigo="$(curl -s -o "${resp}" -w '%{http_code}' --max-time 60 -X POST \
+            -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" -H "Content-Type: application/json" \
+            --data '{"query":"select nome from public.nx_versao_banco order by nome"}' \
+            "https://api.supabase.com/v1/projects/${PROJETO}/database/query" || true)"
+          if [ "${codigo}" != "200" ] && [ "${codigo}" != "201" ]; then
+            echo "::error::não deu para ler nx_versao_banco (HTTP ${codigo:-sem resposta}); nada foi publicado"; exit 1
+          fi
+          node scripts/conferir-migracoes.mjs < "${resp}"
+
       - name: Publicar (verify_jwt=false, bundle no servidor)
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}

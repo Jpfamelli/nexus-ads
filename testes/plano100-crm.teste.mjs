@@ -694,7 +694,8 @@ test("C8 Funis (DOM): funil dos anúncios sem etapa «Faltou» ganha o aviso inl
     for (let i = 0; i < 4; i++) await tique();
     const aviso = alvo.querySelector(".fe-marcos");
     assert.ok(aviso && !aviso.hidden, "falta a etapa de marco «Faltou»");
-    assert.match(aviso.textContent, /^Faltou sem etapa: a presença «Faltou» da consulta não vai mover o negócio/);
+    // plano 1500c: RC-017 — o aviso fala o termo da vertical («a oportunidade»), não «o negócio» fixo
+    assert.match(aviso.textContent, /^Faltou sem etapa: a presença «Faltou» da consulta não vai mover a oportunidade/);
     const marcoAvaliou = alvo.querySelectorAll(".fe-marco")[2];
     marcoAvaliou.value = "faltou"; marcoAvaliou.dispara("change");
     assert.ok(alvo.querySelector(".fe-marcos").hidden, "com o marco escolhido o aviso some");
@@ -732,9 +733,11 @@ test("C7 Importação (DOM): telefone de outro país com «+» aparece como «+1
     assert.match(aviso.textContent, /1 telefone de outro país \(com \+\) entra como está, sem o 55/);
     const linhas = reg.linhas;
     const tel = reg.colunas.find(c => c.chave === "telefone");
-    assert.equal(tel.render(linhas[1]), "+1 2125551234", "exterior não vira «(12) …»");
-    assert.equal(tel.render(linhas[2]), "1 212 555 1234", "sem país: como foi digitado");
-    assert.match(String(tel.render(linhas[0])), /^\(12\)/, "brasileiro no formato de sempre");
+    // plano 2000d: PX-066 — o telefone da prévia vem num <span class="dado-pessoal"> (o modo apresentação borra); o texto é o mesmo
+    const txt = v => (v && typeof v === "object" ? v.textContent : v);
+    assert.equal(txt(tel.render(linhas[1])), "+1 2125551234", "exterior não vira «(12) …»");
+    assert.equal(txt(tel.render(linhas[2])), "1 212 555 1234", "sem país: como foi digitado");
+    assert.match(String(txt(tel.render(linhas[0]))), /^\(12\)/, "brasileiro no formato de sempre");
     assert.match(linhas[2]._erros[0], /sem DDD brasileiro/);
     api.desmontar();
   } finally { D.desfazer(); }

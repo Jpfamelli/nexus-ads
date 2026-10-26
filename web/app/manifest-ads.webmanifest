@@ -1,13 +1,95 @@
 {
   "id": "/app/?produto=ads",
-  "name": "Nexus Ads · Órbita",
-  "short_name": "Nexus Ads",
+  "name": "Órbita Anúncios",
+  "short_name": "Anúncios",
   "description": "Campanhas, origem de leads e receita confirmada no CRM.",
   "lang": "pt-BR",
   "start_url": "/app/?produto=ads#/anuncios",
   "scope": "/app/",
   "display": "standalone",
   "background_color": "#07090C",
-  "theme_color": "#07090C",
-  "icons": [{ "src": "orbita-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+  "theme_color": "#FAFAF8",
+  "icons": [
+    {
+      "src": "orbita-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icones/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icones/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icones/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": [
+    "business",
+    "productivity"
+  ],
+  "shortcuts": [
+    {
+      "name": "Anúncios",
+      "short_name": "Anúncios",
+      "url": "/app/?produto=ads#/anuncios",
+      "icons": [
+        {
+          "src": "icones/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Relatórios",
+      "short_name": "Relatórios",
+      "url": "/app/?produto=ads#/relatorios",
+      "icons": [
+        {
+          "src": "icones/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "CRM",
+      "short_name": "CRM",
+      "url": "/app/?produto=ads#/crm",
+      "icons": [
+        {
+          "src": "icones/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ],
+  "share_target": {
+    "action": "/app/?produto=ads&compartilhar=1",
+    "method": "GET",
+    "params": {
+      "title": "titulo",
+      "text": "texto",
+      "url": "link"
+    }
+  },
+  "launch_handler": {
+    "client_mode": [
+      "navigate-existing",
+      "auto"
+    ]
+  }
 }

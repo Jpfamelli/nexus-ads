@@ -22,7 +22,7 @@
 import { criarDb } from "./db.js";
 import {
   lerConfig, limparErro, ErroApi, ErroHttp, respostaPainel, respostaErro, autenticarPainel, autenticarCron,
-  interna, novoDelimitador, emLotes, traduzirErroIA, MODELO_PADRAO, registrarUsoIA, logIA, registrarExecucao, modeloIA,
+  interna, novoDelimitador, emLotes, traduzirErroIA, MODELO_PADRAO, registrarUsoIA, logIA, registrarExecucao, modeloIA, modeloPara,
 } from "./comum.js";
 import {
   GATILHOS, GATILHO, ACOES, ACAO, LIMITES, TAREFAS_IA, ORIGENS, CAMPOS_CONDICAO, OPERADORES, VARIAVEIS,
@@ -37,7 +37,11 @@ export const TIMEOUT_MONTAR_MS = 110_000;
 const MAX_DECISOES = 10;               // pedidos por chamada da nx-ia
 const SIMULTANEAS = 3;                 // chamadas à Anthropic ao mesmo tempo
 const PRAZO_LOTE_MS = 40_000;          // depois disso, o que não começou volta para a fila (a Edge Function tem teto de ~150 s)
-export const PRAZO_DECISAO_MS = 35_000;   // uma decisão, SEM retentativa do SDK (a fila reprocessa): 3 em paralelo cabem no teto da função
+export const PRAZO_DECISAO_MS = 35_000;
+// plano 1500c · SC-090/SC-091: tetos de tokens (antes 12000 com effort medium no montar e 6000 na decisão, que devolve um JSON pequeno)
+export const TOKENS_MONTAR = 6000, TOKENS_MONTAR_MAX = 12000, TOKENS_DECIDIR = 1000;
+/** Tempo mínimo que ainda precisa sobrar do TIMEOUT_MONTAR_MS para a 2ª tentativa (a resposta veio cortada) caber no teto. */
+export const MIN_REPETIR_MONTAR_MS = 30_000;   // uma decisão, SEM retentativa do SDK (a fila reprocessa): 3 em paralelo cabem no teto da função
 export const ADIAR_PLATAFORMA_MIN = 30;   // chave recusada / cota do mês: o pedido volta daqui a 30 min sem gastar tentativa
 /** Quantos itens de cada lista entram no prompt E no schema do montar (o que a IA não vê no prompt não entra no enum). */
 export const LIMITES_OPCOES = Object.freeze({ funis: 20, etapas: 25, etiquetas: 80, usuarios: 60, departamentos: 30, canais: 20, templates: 40, campos: 40, campos_negocio: 40 });
@@ -639,7 +643,7 @@ export async function montarAutomacao(corpo, env, deps = {}) {
     const cod = reserva?.erro || "ia_indisponivel";
     return respostaIA(cod, MENSAGEM_RESERVA[cod] || "A IA não está disponível agora.", 200);
   }
-  const modelo = modeloIA(cfg.modelo_ia);   // plano 1000 (SV-073)
+  const modelo = modeloPara("montar", cfg.modelo_ia);   // plano 1000 (SV-073) · plano 1500c · SC-086: sem config, o Sonnet (não o Opus)
   const t0 = Date.now();
   // fecha a reserva (custo, stop_reason e latência — contrato 7) e deixa uma linha de log por chamada
   const registrar = async (ok, r, detalhe) => {
@@ -654,7 +658,17 @@ export async function montarAutomacao(corpo, env, deps = {}) {
   const delim = novoDelimitador(), delimOpcoes = novoDelimitador();
   const { sistema, usuario, blocos } = montarPromptAutomacao({ descricao, empresa: info?.empresa, vertical: info?.vertical, base: baseIA }, delim, delimOpcoes);
   let r, planoB = false;
-  const perguntar = schema => mod.estruturarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, blocos, usuario, schema, maxTokens: 12000, esforco: "medium", timeoutMs: TIMEOUT_MONTAR_MS, retentativas: 0 });
+  // plano 1500c · SC-090: 6000 tokens com effort low; só se vier CORTADA (max_tokens) repete com 12000, no tempo que sobrou
+  const perguntar = async schema => {
+    const t0p = Date.now();
+    try {
+      return await mod.estruturarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, blocos, usuario, schema, maxTokens: TOKENS_MONTAR, esforco: "low", timeoutMs: TIMEOUT_MONTAR_MS, retentativas: 0 });
+    } catch (e) {
+      const resta = TIMEOUT_MONTAR_MS - (Date.now() - t0p);
+      if (!e?.incompleta || resta < MIN_REPETIR_MONTAR_MS) throw e;
+      return mod.estruturarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, blocos, usuario, schema, maxTokens: TOKENS_MONTAR_MAX, esforco: "low", timeoutMs: resta, retentativas: 0 });
+    }
+  };
   try {
     try {
       r = await perguntar(montarSchema(baseIA));
@@ -876,7 +890,8 @@ export async function decidirAutomacoes(req, corpo, env, deps = {}) {
   const lista = Array.isArray(itens) ? itens : [];
   // plano 1000 (SV-274): nx_config.modelo_ia_automacao (20261013c) escolhe o modelo das DECISÕES do motor (etapa, pontuação, nota);
   // vazio = o padrão único de sempre (decisão do plano 100). O «montar automação» continua no modelo_ia.
-  const modelo = modeloIA(cfg.modelo_ia_automacao, cfg.modelo_ia);
+  // plano 1500c · SC-086: sem modelo configurado, as decisões vão no Haiku (antes caíam no Opus)
+  const modelo = modeloPara("decidir", cfg.modelo_ia_automacao, cfg.modelo_ia);
   const t0Lote = Date.now();
   const agora = deps.agoraMs || (() => Date.now());
   const inicio = agora();
@@ -926,7 +941,7 @@ export async function decidirAutomacoes(req, corpo, env, deps = {}) {
       let r;
       try {
         r = await mod.estruturarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, usuario, schema: schemaDecisao(p.tarefa, p.contexto),
-          maxTokens: 6000, esforco: "low", timeoutMs: PRAZO_DECISAO_MS, retentativas: 0 });
+          maxTokens: TOKENS_DECIDIR, esforco: "low", timeoutMs: PRAZO_DECISAO_MS, retentativas: 0 });   // plano 1500c · SC-091
       } catch (e) {
         const t = traduzirErroIA(e);
         console.error("automacao_decidir:", limparErro(e?.message || e));

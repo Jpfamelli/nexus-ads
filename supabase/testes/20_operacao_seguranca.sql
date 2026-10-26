@@ -61,6 +61,7 @@ declare
   t_gr text := 'tok-20-gr-' || sfx; t_ren text := 'tok-20-ren-' || sfx;
   email_l text := 'teste-20-login-' || sfx || '@teste.local';
   ip text := '203.0.113.' || (floor(random() * 200) + 1)::int;
+  hip text := 'h' || left(public.nx_hash(ip), 32);   -- plano 1500c: SC-108 as chaves de limite levam o RESUMO do IP (nx_login_ip devolve h + 32 hex), não o IP
   kC uuid; kM uuid; ct bigint; ct2 bigint; cv bigint; cv2 bigint; cv3 bigint; f bigint; v_lote uuid := gen_random_uuid();
   j json; jb jsonb; e text; n int; n0 int; v_ts timestamptz; v_v bigint; v_id bigint; v_id2 bigint;
   tel text := '5512998' || lpad((floor(random() * 900000) + 100000)::text, 6, '0');
@@ -124,14 +125,14 @@ begin
   perform pg_temp.ok(public.nx_login_ip() is null, 'sem cabeçalho não há IP');
   -- pelo PostgREST (request.headers com x-forwarded-for): a falha é gravada e a resposta é o JSON de erro com status 400
   perform set_config('request.headers', json_build_object('x-forwarded-for', ip || ', 10.0.0.1')::text, true);
-  perform pg_temp.ok(public.nx_login_ip() = ip, 'o IP é o 1º do x-forwarded-for');
+  perform pg_temp.ok(public.nx_login_ip() = hip, 'o IP é o 1º do x-forwarded-for');
   for i in 1..10 loop
     j := public.nx_entrar(email_l, 'errada');
-    perform pg_temp.ok((j ->> 'message') = 'credenciais_invalidas' and (j ->> 'code') = 'P0001' and (j ->> 'hint') is null, 'falha ' || i || ' devolve o JSON de erro padrão');
+    perform pg_temp.ok((j ->> 'message') = 'credenciais_invalidas' and (j ->> 'code') = 'P0001' and (j ->> 'hint') = 'restam:' || greatest(0, 10 - i), 'falha ' || i || ' devolve o JSON de erro padrão');   -- plano 1500c: UCB-047 o hint diz quantas tentativas restam
     perform pg_temp.ok(current_setting('response.status', true) = '400', 'falha ' || i || ' com response.status 400');
   end loop;
   perform pg_temp.ok((select count(*) from public.nx_login_falhas where chave = 'conta:' || email_l) = 10, '10 falhas gravadas por conta');
-  perform pg_temp.ok((select count(*) from public.nx_login_falhas where chave = 'ip:' || ip) = 10, '10 falhas gravadas por IP');
+  perform pg_temp.ok((select count(*) from public.nx_login_falhas where chave = 'ip:' || hip) = 10, '10 falhas gravadas por IP');
   e := pg_temp.erro(format('select public.nx_entrar(%L,%L)', email_l, 'errada'));
   perform pg_temp.ok(e like 'muitas_tentativas|%' and split_part(e, '|', 2)::int between 1 and 15, '11ª tentativa → muitas_tentativas com hint em minutos (1–15): ' || e);
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_entrar(%L,%L)', email_l, 'senha-20-ok')) like 'muitas_tentativas|%', 'a senha certa também fica bloqueada');
@@ -149,7 +150,7 @@ begin
   perform pg_temp.ok(public.nx_login_bloqueio('conta:ninguem-20-' || sfx, 10, interval '15 minutes') = 0, 'chave sem falhas: livre');
   -- vencido o bloqueio (16 min) a senha certa entra; gestor segue a mesma regra (bloqueio ≤ 15 min)
   -- plano 1000 (SV-238, 20261013e): a chave (conta, IP) também vence (antes dela a lista só tinha conta e IP)
-  update public.nx_login_falhas set em = em - interval '16 minutes' where chave in ('conta:' || email_l, 'ip:' || ip, 'contaip:' || email_l || '|' || ip);
+  update public.nx_login_falhas set em = em - interval '16 minutes' where chave in ('conta:' || email_l, 'ip:' || hip, 'contaip:' || email_l || '|' || hip);
   perform set_config('request.headers', json_build_object('x-forwarded-for', ip)::text, true);
   j := public.nx_entrar(email_l, 'senha-20-ok');
   perform pg_temp.ok(length(j ->> 'token') = 64 and (j ->> 'nome') = 'Login 20', 'vencido o bloqueio a senha certa entra');
@@ -163,7 +164,10 @@ begin
   perform pg_temp.ok(e like 'muitas_tentativas|%' and split_part(e, '|', 2)::int between 1 and 60, '6º cadastro na hora → muitas_tentativas com minutos: ' || e);
   perform set_config('request.headers', '', true);
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_criar_conta(%L,%L,%L)', 'cad-20-7-' || sfx || '@teste.local', 'senha-longa-20', 'Cadastro 20')) = 'ok', 'sem IP (SQL/MCP) o cadastro não tem limite por IP');
-  perform pg_temp.ok(pg_temp.erro(format('select public.nx_criar_conta(%L,%L,%L)', 'cad-20-1-' || sfx || '@teste.local', 'senha-longa-20', 'Cadastro 20')) = 'email_em_uso', 'e-mail repetido continua email_em_uso');
+  -- plano 2000d · DS-128: e-mail repetido não é mais revelado — a resposta é a de um cadastro pendente e nada é criado
+  j := public.nx_criar_conta('cad-20-1-' || sfx || '@teste.local', 'senha-longa-20', 'Cadastro 20');
+  perform pg_temp.ok((j ->> 'ok')::boolean and not (j ->> 'aprovado')::boolean
+                     and (select count(*) from public.nx_contas where email = 'cad-20-1-' || sfx || '@teste.local') = 1, 'e-mail repetido: mesma resposta de cadastro novo, sem conta nova');
 
   -- ---------------------------------------------------------- S-B9 [H7] + S-B10: sessão, super, migracao, ativo, cliente_pausado
   j := public.nx_sessao(t_ren);
@@ -375,7 +379,7 @@ begin
   insert into public.nx_notificacoes (cliente_id, conta_id, tipo, titulo, lida_em, criado_em) values
     (cA, k_adm, 'sistema', 'velha lida 20', now() - interval '91 days', now() - interval '91 days'),
     (cA, k_adm, 'sistema', 'recente lida 20', now(), now() - interval '10 days'),
-    (cA, k_adm, 'sistema', 'velha NAO lida 20', null, now() - interval '200 days');
+    (cA, k_adm, 'sistema', 'velha NAO lida 20', null, now() - interval '100 days');   -- plano 1500c: SC-116 as NÃO lidas saem só depois de 180 d
   insert into public.nx_codewords_status_pendentes (canal_id, provider_id, status, expira_em) values (kC, 'p20-' || sfx, 'sent', now() - interval '1 hour');
   insert into public.nx_login_falhas (chave, em) values ('conta:velha-20-' || sfx, now() - interval '2 days');
   j := public.nx_saas_faxina();
@@ -391,7 +395,7 @@ begin
   perform pg_temp.ok((j ->> 'codewords_status_pendentes')::int >= 1 and not exists (select 1 from public.nx_codewords_status_pendentes where provider_id = 'p20-' || sfx), 'recibo pendente vencido some');
   perform pg_temp.ok((j ->> 'login_falhas')::int >= 1 and not exists (select 1 from public.nx_login_falhas where chave = 'conta:velha-20-' || sfx)
                  -- plano 1000 (SV-239, 20261013e): o login certo zera as falhas da CONTA; as do IP (de hoje) ficam
-                 and exists (select 1 from public.nx_login_falhas where chave = 'ip:' || ip), 'falha de login > 1 d some; de hoje fica');
+                 and exists (select 1 from public.nx_login_falhas where chave = 'ip:' || hip), 'falha de login > 1 d some; de hoje fica');
   perform pg_temp.ok((select count(*) from public.nx_mensagens m where m.conversa_id = cv) >= 3 and exists (select 1 from public.nx_auditoria a where a.acao = 'conta_definida'), 'mensagens e auditoria não são tocadas');
 
   -- ---------------------------------------------------------- pedidos da S-F: meta_api_versao, 'sem_confirmacao', origem com plataforma

@@ -108,7 +108,8 @@ export function h(tag, attrs, ...filhos) {
     else if (/^on/i.test(k)) continue;                     // CSP: nunca handler em atributo
     else if (k === "style") {
       if (typeof v === "string") el.setAttribute("style", v);
-      else for (const [p, val] of Object.entries(v)) if (val !== null && val !== undefined) el.style.setProperty(p, String(val));
+      // plano 2000d · SX-007: { minHeight: "…" } (camelCase) vira min-height — setProperty só entende o nome com hífen
+      else for (const [p, val] of Object.entries(v)) if (val !== null && val !== undefined) el.style.setProperty(p.startsWith("--") ? p : p.replace(/[A-Z]/g, c => "-" + c.toLowerCase()), String(val));
     }
     else if (k === "text") el.textContent = String(v);
     else if ((k === "href" || k === "src" || k === "action" || k === "formaction") && !RE_URL_OK.test(String(v)) && !String(v).startsWith("data:image/") && !String(v).startsWith("blob:")) continue;
@@ -146,7 +147,8 @@ export function carregarCss(nome) {
     l.href = new URL(`./${arq}?v=${encodeURIComponent(VERSAO)}`, import.meta.url).href;
     l.dataset.css = arq;
     l.addEventListener("load", () => ok(true));
-    l.addEventListener("error", () => ok(false));
+    // plano 2000d · SX-008: a falha (offline) não fica guardada — a próxima tela que pedir o CSS tenta de novo
+    l.addEventListener("error", () => { if (_css.get(arq) === p) _css.delete(arq); l.remove(); ok(false); });
     document.head.appendChild(l);
   });
   _css.set(arq, p);
@@ -158,6 +160,9 @@ export function corOk(c) { return typeof c === "string" && RE_HEX.test(c) ? c : 
 /** Plano 1000b · UB-147: o que a pessoa digita no campo de cor → #RRGGBB maiúsculo («fa0», «#fa0», «ffaa00»); null se não for cor. */
 export function hexDigitado(v) {
   let s = String(v ?? "").trim();
+  // plano 2000d · SX-027: «rgb(176, 118, 31)» colado de uma ferramenta de design também vale
+  const rgb = /^rgba?\(\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*(?:[,/]\s*[\d.]+%?\s*)?\)$/i.exec(s);
+  if (rgb) { const c = rgb.slice(1, 4).map(Number); if (c.some(x => x > 255)) return null; return "#" + c.map(x => x.toString(16).padStart(2, "0")).join("").toUpperCase(); }
   if (s && !s.startsWith("#")) s = "#" + s;
   if (/^#[0-9a-f]{3}$/i.test(s)) s = "#" + s.slice(1).split("").map(x => x + x).join("");
   return corOk(s) ? s.toUpperCase() : null;
@@ -224,7 +229,21 @@ function caixaToasts() {
     motivo de aoFechar: "tempo" | "fechado" | "desfazer" | "acao" | "fila" | o que fechar(motivo) receber. Todo toast é anunciado ao leitor de tela
     (erro, de forma urgente). Plano 100 · A10: `ms: 0` não fecha sozinho; `fixo: true` também não sai da fila quando chegam outros (avisos de
     estado que duram enquanto o problema durar: número de WhatsApp caído); `acao` é um botão próprio («Ver número»). */
+/** plano 1500c · UCC-080: quantos avisos comuns ficam à vista ao mesmo tempo. */
+export const MAX_TOASTS = 3;
+/** plano 1500c · UCC-141: aviso comprido fica mais tempo — piso de 4,5 s (7 s com botão) + ~60 ms por letra além das 60 primeiras (leitura
+    lenta de ~200 palavras por minuto), no máximo 10 s. O erro continua com 12 s fixos (AS-211). */
+/** plano 2000d · DU-319: tempo para LER — no mínimo 6 s (8 s com botão: o «Desfazer» precisa de tempo para ser achado) + 1 s a cada 20 caracteres,
+    até 15 s. O hover e o foco continuam pausando. */
+export function duracaoToast(texto, { comBotao = false } = {}) {
+  const base = comBotao ? 8000 : 6000;
+  const extra = Math.ceil(String(texto ?? "").length / 20) * 1000;
+  return Math.min(15000, base + extra);
+}
 export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, fixo = false, aoFechar = null } = {}) {
+  // plano 2000d · SX-025: um Error vira a frase dele (nunca «Error: tempo_rede» nem «[object Object]»); nulo vira texto vazio, não «undefined»
+  if (texto instanceof Error || (texto && typeof texto === "object" && (texto.codigo || texto.message))) texto = mensagemErro(texto);
+  else if (texto === null || texto === undefined) texto = "";
   // plano 1000 (AS-296): com a faixa de conexão à vista, o erro «sem internet»/«servidor demorou» de cada tela não vira um toast a mais (o shell decide)
   if (_suprimirToast && !desfazer && !fixo) {
     let suprimir = false;
@@ -235,7 +254,13 @@ export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, 
   // plano 1000 (AS-211): erro fica 12 s (WCAG 2.2.1: tempo para ler e alcançar o botão); os demais como antes
   // plano 1000b · UB-274: no toque (sem mouse para pausar nem foco de teclado) o erro COM ação fica até a pessoa fechar no X
   const comAcao = !!(acao && typeof acao.fn === "function" && String(acao.rotulo || "").trim());
-  const dur = ms ?? (tipo === "erro" ? (comAcao && toqueGrosso() ? 0 : 12000) : desfazer || acao ? 7000 : 4500);
+  const dur = ms ?? (tipo === "erro" ? (comAcao && toqueGrosso() ? 0 : 12000) : duracaoToast(texto, { comBotao: !!(desfazer || acao) }));   // plano 1500c · UCC-141
+  // plano 1500c · UCC-080: o MESMO aviso repetido (mesmo texto e tipo, sem botão) não empilha: o que está à vista ganha «2×» e o relógio recomeça
+  const chave = !desfazer && !comAcao && !fixo ? `${tipo}|${String(texto)}` : null;
+  if (chave) {
+    const igual = [...caixa.children].find(c => c.__chave === chave && !c.classList.contains("saindo"));
+    if (igual && typeof igual.__repetir === "function") { igual.__repetir(dur); return { fechar: m => igual.__fechar(typeof m === "string" && m ? m : "fechado"), el: igual, agrupado: true }; }
+  }
   let timer = null, fechado = false;
   const fechar = (motivo = "fechado") => {
     if (fechado) return; fechado = true;
@@ -252,10 +277,22 @@ export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, 
     temAcao ? h("button", { type: "button", class: "toast-acao", on: { click: () => { fechar("acao"); try { acao.fn(); } catch (e) { console.error(e); } } } }, String(acao.rotulo).trim()) : null,
     h("button", { type: "button", class: "toast-x", "aria-label": "Fechar aviso", on: { click: () => fechar("fechado") } }, icone("fechar")));
   el.__fechar = fechar;
+  // plano 2000d · SX-010: com o foco dentro do aviso, Esc fecha só ele (não o modal de baixo)
+  el.addEventListener("keydown", ev => { if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); fechar("fechado"); } });
+  if (chave) {
+    let vezes = 1;
+    const cont = h("span", { class: "toast-vezes", hidden: true });
+    el.querySelector("p").appendChild(cont);
+    el.__chave = chave;
+    el.__repetir = d => {
+      vezes += 1; cont.textContent = ` (${vezes}×)`; cont.hidden = false;
+      if (d > 0 && !fechado) { clearTimeout(timer); timer = setTimeout(() => fechar("tempo"), d); }
+    };
+  }
   caixa.appendChild(el);
-  // fila de 4: os mais antigos saem; um toast fixo não conta nem sai (ele dura enquanto o estado durar)
+  // plano 1500c · UCC-080: no máximo 3 à vista (antes 4); os mais antigos saem; um toast fixo não conta nem sai (ele dura enquanto o estado durar)
   const vivos = [...caixa.children].filter(c => !c.classList.contains("saindo") && !c.classList.contains("toast-fixo"));
-  for (const c of vivos.slice(0, Math.max(0, vivos.length - 4))) { if (c.__fechar) c.__fechar("fila"); else c.remove(); }
+  for (const c of vivos.slice(0, Math.max(0, vivos.length - MAX_TOASTS))) { if (c.__fechar) c.__fechar("fila"); else c.remove(); }
   mostrarNoTopo(caixa);
   if (dur > 0) {
     timer = setTimeout(() => fechar("tempo"), dur);
@@ -268,8 +305,25 @@ export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, 
     el.addEventListener("focusin", () => { foco = true; pausar(); });
     el.addEventListener("focusout", ev => { if (ev && ev.relatedTarget && el.contains(ev.relatedTarget)) return; foco = false; retomar(); });
   }
-  anunciar(String(texto), { urgente: tipo === "erro" });
-  return { fechar: (motivo = "fechado") => fechar(typeof motivo === "string" && motivo ? motivo : "fechado"), el };
+  // plano 2000d · DU-434: sucesso não é só a cor verde — o leitor de tela ouve «Pronto:» antes (o ícone de check já está à vista)
+  anunciar(tipo === "ok" && !/^pronto\b/i.test(String(texto).trim()) ? `Pronto: ${String(texto)}` : String(texto), { urgente: tipo === "erro" });
+  // RC-054 (plano 1500c) · plano 2000d: o texto do aviso à vista pode mudar («já foi gravado» quando a aba volta) sem abrir outro
+  const atualizarTexto = t => {
+    if (fechado) return false;
+    const p = el.querySelector("p");
+    if (p) { const cont = p.querySelector(".toast-vezes"); p.textContent = String(t); if (cont) p.appendChild(cont); }
+    anunciar(String(t));
+    return true;
+  };
+  return { fechar: (motivo = "fechado") => fechar(typeof motivo === "string" && motivo ? motivo : "fechado"), el, atualizarTexto };
+}
+
+/** plano 1500c · UCC-007: o aviso de um erro da API com o caminho dele — erro de plano (teste vencido, módulo desligado, limite) traz e.acao
+    {rotulo, hash} do api.js e o aviso ganha o botão («Ver planos»). `navegar(hash)` do ctx; sem ele, troca o location.hash. */
+export function toastDeErro(e, { navegar } = {}) {
+  const a = e && e.acao && typeof e.acao.hash === "string" && /^#\//.test(e.acao.hash) ? e.acao : null;
+  const acao = a ? { rotulo: String(a.rotulo || "Ver"), fn: () => { if (typeof navegar === "function") navegar(a.hash); else if (typeof location !== "undefined") location.hash = a.hash; } } : null;
+  return toast(mensagemErro(e), { tipo: "erro", acao });
 }
 
 /** Anúncio só para leitor de tela (aria-live). `urgente` usa a região assertiva (erros). */
@@ -358,6 +412,11 @@ export function criarCamadas(amb = {}) {
 }
 export const camadas = criarCamadas();
 
+/** plano 1500c · UCC-069: o que recebe o Tab dentro de um painel (na ordem do documento). */
+function focaveisDe(raiz) {
+  return [...raiz.querySelectorAll("a[href], button:not(:disabled), input:not(:disabled):not([type=hidden]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])")]
+    .filter(el => !el.hidden && !(el.closest && el.closest("[hidden]")));
+}
 function focarPrimeiro(raiz) {
   const alvo = raiz.querySelector("[autofocus], input:not([type=hidden]):not(:disabled), select:not(:disabled), textarea:not(:disabled)")
     || raiz.querySelector("button:not(:disabled), [href], [tabindex]:not([tabindex='-1'])");
@@ -442,7 +501,7 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
         if (feito) return; feito = true;
         if (camada) camada.liberar();
         dlg.classList.add("saindo");
-        setTimeout(() => { try { dlg.close(); } catch { /* ok */ } dlg.remove(); if (anterior && anterior.focus && anterior.isConnected) try { anterior.focus({ preventScroll: true }); } catch { /* ok */ } }, 160);
+        setTimeout(() => { try { dlg.close(); } catch { /* ok */ } dlg.remove(); devolverFoco(anterior); }, 160);   // plano 1500c · UCC-143
         resolve(v);
       },
       erro(texto) {
@@ -479,7 +538,7 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
       b.addEventListener("click", async () => {
         api.erro("");
         if (!a.fn) { api.fechar(a.valor !== undefined ? a.valor : a.tipo === "neutro" ? null : true); return; }
-        b.setAttribute("aria-busy", "true"); botoes.forEach(x => { x.disabled = true; });
+        const soltar = marcarOcupado(b); botoes.forEach(x => { x.disabled = true; });   // plano 2000d · DU-330
         ocupado = true;
         try {
           const r = await a.fn(api);
@@ -488,7 +547,7 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
           api.erro(mensagemErro(e));
         } finally {
           ocupado = false;
-          b.removeAttribute("aria-busy"); botoes.forEach(x => { x.disabled = false; });
+          soltar(); botoes.forEach(x => { x.disabled = false; });
         }
       });
       return b;
@@ -503,6 +562,8 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
       corpoEl,
       h("footer", { class: "modal-rod" }, botoes));
     dlg.addEventListener("cancel", ev => { ev.preventDefault(); tentarFechar(); });
+    // plano 1500c · UCC-144: o Esc é do modal do topo — não sobe para a tela (nem para outro modal/gaveta embaixo); o cancel nativo continua
+    dlg.addEventListener("keydown", ev => { if (ev.key === "Escape") ev.stopPropagation(); });
     dlg.addEventListener("mousedown", ev => { if (fecharFora && ev.target === dlg) dlg.dataset.fora = "1"; });
     dlg.addEventListener("click", ev => { if (fecharFora && ev.target === dlg && dlg.dataset.fora === "1") tentarFechar(); delete dlg.dataset.fora; });
     dlg.addEventListener("submit", ev => { ev.preventDefault(); if (primario && !primario.disabled) primario.click(); });
@@ -513,6 +574,20 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
     focoInicial(dlg, corpoEl.querySelector("input,select,textarea") ? corpoEl : dlg.querySelector(".modal-rod"));
     if (aoAbrir) try { aoAbrir(api); } catch (e) { console.error(e); }
   });
+}
+
+/** plano 1500c · UCC-143: ao fechar um modal o foco volta ao botão que o abriu; se ele sumiu (a lista foi redesenhada, o item foi excluído),
+    cai no título da tela (h1 do conteúdo, que ganha tabindex=-1) em vez de ir parar no <body>. → o elemento focado ou null. */
+export function devolverFoco(anterior, doc = globalThis.document) {
+  const focar = el => { try { el.focus({ preventScroll: true }); return true; } catch { return false; } };
+  if (anterior && typeof anterior.focus === "function" && anterior.isConnected && anterior !== (doc && doc.body) && focar(anterior)) return anterior;
+  if (!doc || typeof doc.querySelector !== "function") return null;
+  // outro modal ainda aberto embaixo: o foco fica nele (não pula para a tela por trás)
+  const aberto = [...doc.querySelectorAll("dialog[open]")].pop();
+  const alvo = aberto || doc.querySelector("#conteudo h1, main h1, h1");
+  if (!alvo) return null;
+  if (!aberto && !alvo.hasAttribute("tabindex")) alvo.setAttribute("tabindex", "-1");
+  return focar(alvo) ? alvo : null;
 }
 
 /** Ícone do botão de perigo do confirmar() (plano 1000 · AS-212): a lixeira só quando o rótulo é de exclusão («Excluir», «Apagar», «Remover»);
@@ -534,8 +609,10 @@ export async function confirmar({ titulo = "Confirmar", texto = "", perigo = fal
       { rotulo: rotulo || (perigo ? "Excluir" : "Confirmar"), tipo: perigo ? "perigo" : "primario", icone: perigo ? iconeDoPerigo(rotulo, iconeDado) : (iconeDado || undefined),
         fn: api => {
           if (!digitar) return true;
-          const v = campoDig.querySelector("input").value.trim().toLowerCase();
-          if (v !== String(digitar).toLowerCase()) { api.erro(`Digite «${digitar}» para confirmar.`); return false; }
+          // plano 2000d · SX-024: «Clínica  Sorriso» = «clinica sorriso» — acento, caixa e espaço duplo não reprovam quem digitou certo
+          const norm = s => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+          const v = norm(campoDig.querySelector("input").value);
+          if (v !== norm(digitar)) { api.erro(`Digite «${digitar}» para confirmar.`); return false; }
           return true;
         } },
     ],
@@ -545,6 +622,13 @@ export async function confirmar({ titulo = "Confirmar", texto = "", perigo = fal
 
 /** gaveta({titulo, corpo, largura:'m'|'g', aoFechar, acoes:Node, protegerTexto = true}) → {el, corpo, fechar, trocarTitulo, estaSujo, zerar}
     Esc e clique fora com texto digitado pedem confirmação; fechar() (botões, código) fecha direto. */
+/** RC-266 (plano 1500c) · plano 2000d: o gesto que fecha a gaveta no celular — arrastar ≥ 80 px para a direita (gaveta lateral) ou para baixo
+    (folha de baixo), mais no eixo do gesto que no outro. */
+export const GESTO_FECHAR_PX = 80;
+export function gestoFechaGaveta(dx, dy, { folha = false } = {}) {
+  const x = Number(dx) || 0, y = Number(dy) || 0;
+  return folha ? y >= GESTO_FECHAR_PX && y > Math.abs(x) * 1.5 : x >= GESTO_FECHAR_PX && x > Math.abs(y) * 1.5;
+}
 export function gaveta({ titulo = "", corpo, largura = "m", aoFechar, acoes, protegerTexto = true } = {}) {
   const anterior = document.activeElement;
   const idT = novoId("gav-t");
@@ -560,6 +644,7 @@ export function gaveta({ titulo = "", corpo, largura = "m", aoFechar, acoes, pro
     zerar() { prot.zerar(); faixa.el.hidden = true; },
     fechar() {
       if (fechada) return; fechada = true;
+      if (camada) { camada.liberar(); camada = null; }   // RC-266: a entrada do histórico da gaveta sai junto
       dlg.classList.add("saindo");
       setTimeout(() => {
         try { dlg.close(); } catch { /* ok */ }
@@ -591,9 +676,29 @@ export function gaveta({ titulo = "", corpo, largura = "m", aoFechar, acoes, pro
   dlg.addEventListener("cancel", ev => { ev.preventDefault(); tentarFechar(); });
   dlg.addEventListener("mousedown", ev => { if (ev.target === dlg) dlg.dataset.fora = "1"; });
   dlg.addEventListener("click", ev => { if (ev.target === dlg && dlg.dataset.fora === "1") tentarFechar(); delete dlg.dataset.fora; });
+  // RC-266 (plano 1500c) · plano 2000d: no celular, arrastar o cabeçalho para a direita (ou para baixo, na folha) fecha — pela mesma proteção do X
+  let toque0 = null;
+  const cab = dlg.querySelector(".gaveta-cab");
+  cab.addEventListener("touchstart", ev => { const t = ev.touches && ev.touches[0]; toque0 = t ? { x: t.clientX, y: t.clientY } : null; }, { passive: true });
+  cab.addEventListener("touchend", ev => {
+    const t = ev.changedTouches && ev.changedTouches[0];
+    if (!toque0 || !t) return;
+    const folha = typeof matchMedia === "function" && matchMedia("(max-width: 640px)").matches;
+    if (gestoFechaGaveta(t.clientX - toque0.x, t.clientY - toque0.y, { folha })) tentarFechar();
+    toque0 = null;
+  }, { passive: true });
+  // RC-266: o Voltar do Android/navegador fecha a gaveta (com texto digitado, pergunta e recoloca a entrada), não a tela de baixo
+  let camada = null;
+  const abrirCamada = () => camadas.abrir(() => {
+    if (fechada) return;
+    camada = null;
+    if (prot.sujo()) { tentarFechar(); setTimeout(() => { if (!fechada) camada = abrirCamada(); }, 0); }
+    else g.fechar();
+  });
   if (toqueGrosso()) dlg.setAttribute("autofocus", "");
   document.body.appendChild(dlg);
   dlg.showModal();
+  camada = abrirCamada();
   if (toqueGrosso()) focoInicial(dlg, null); else setTimeout(() => focarPrimeiro(corpoEl), 30);
   return g;
 }
@@ -618,12 +723,19 @@ export function menu(ancora, itens) {
   const pop = h("div", { class: "menu-pop", role: "menu", popover: "manual" });
   for (const it of itens.filter(Boolean)) {
     if (it === "-") { pop.appendChild(h("hr", { class: "menu-sep" })); continue; }
+    // CC-139 (plano 1500c) · plano 2000d: { titulo } separa grupos com nome («Atendimento», «Conversa») — não é item: as setas pulam
+    if (typeof it === "object" && it.titulo && !it.rotulo) { pop.appendChild(h("p", { class: "menu-titulo", role: "presentation" }, String(it.titulo))); continue; }
     // plano 1000 · AS-288: item desligado com `motivo` mostra o porquê (linha pequena + nome acessível), em vez de só ficar cinza
     const motivo = it.desabilitado && it.motivo ? String(it.motivo) : "";
     const b = h("button", { type: "button", role: "menuitem", class: ["menu-item", it.perigo && "perigo"], disabled: !!it.desabilitado, tabindex: "-1",
       title: motivo || null, "aria-description": motivo || null },
       it.icone ? icone(it.icone) : null, h("span", null, it.rotulo, motivo ? h("small", { class: "menu-motivo" }, motivo) : null));
-    b.addEventListener("click", () => { fechar(); if (it.fn) it.fn(); });
+    // plano 2000d · SX-026: o item escolhido some com o menu; se a ação não levou o foco para outro lugar, ele volta ao botão que abriu o menu
+    b.addEventListener("click", () => {
+      fechar(); if (it.fn) it.fn();
+      const a = document.activeElement;
+      if ((!a || a === document.body || !a.isConnected) && ancora.isConnected && typeof ancora.focus === "function") ancora.focus();
+    });
     botoes.push(b); pop.appendChild(b);
   }
   function posicionar() {
@@ -634,17 +746,23 @@ export function menu(ancora, itens) {
     pop.style.left = `${x}px`; pop.style.top = `${y}px`;
   }
   const ativos = () => botoes.filter(b => !b.disabled);
+  let busca = "", buscaEm = -Infinity;   // plano 2000d · SX-095
   function aoTecla(ev) {
     const lista = ativos(); const i = lista.indexOf(document.activeElement);
     if (ev.key === "ArrowDown") { ev.preventDefault(); (lista[(i + 1) % lista.length] || lista[0])?.focus(); }
     else if (ev.key === "ArrowUp") { ev.preventDefault(); (lista[(i - 1 + lista.length) % lista.length] || lista[0])?.focus(); }
     else if (ev.key === "Home") { ev.preventDefault(); lista[0]?.focus(); }
     else if (ev.key === "End") { ev.preventDefault(); lista[lista.length - 1]?.focus(); }
-    else if (ev.key === "Escape") { ev.preventDefault(); fechar(); ancora.focus(); }
+    else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); fechar(); ancora.focus(); }   // plano 1500c · UCC-144: o Esc fecha só o menu (não o modal/tela de baixo)
     else if (ev.key === "Tab") fechar();
     // plano 1000b · UB-139: busca pela 1ª letra do rótulo (a partir do item seguinte ao focado; «E» de novo passa ao próximo com E)
     else if (typeof ev.key === "string" && ev.key.length === 1 && /\S/.test(ev.key) && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-      const alvo = proximoPorLetra(lista.map(b => b.textContent), i, ev.key);
+      // plano 2000d · SX-095: letras digitadas em sequência (até 0,7 s entre elas) procuram o começo do nome inteiro («co» → «Copiar»,
+      // não o próximo item com «o»); a primeira letra continua passando ao próximo item com ela
+      const agoraT = Date.now();
+      busca = agoraT - buscaEm <= 700 ? busca + ev.key : ev.key; buscaEm = agoraT;
+      let alvo = busca.length > 1 ? proximoPorLetra(lista.map(b => b.textContent), i - 1, busca) : -1;
+      if (alvo < 0) alvo = proximoPorLetra(lista.map(b => b.textContent), i, ev.key);
       if (alvo >= 0) { ev.preventDefault(); lista[alvo].focus(); }
     }
   }
@@ -692,12 +810,38 @@ export function flutuante(ancora, conteudo, { classe = "", aoFechar, largura, ro
     pop.style.left = `${x}px`; pop.style.top = `${y}px`;
   }
   function fora(ev) { if (!pop.contains(ev.target) && !ancora.contains(ev.target)) fechar(); }
-  function tecla(ev) { if (ev.key === "Escape") { ev.preventDefault(); fechar(); ancora.focus(); } }
+  function tecla(ev) {
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); fechar(); ancora.focus(); return; }   // plano 1500c · UCC-144
+    // plano 1500c · UCC-069: é um diálogo — o Tab circula dentro dele (sair por Tab deixava o painel aberto sem foco)
+    if (ev.key === "Tab") {
+      const f = focaveisDe(pop);
+      if (!f.length) { ev.preventDefault(); return; }
+      const i = f.indexOf(document.activeElement);
+      if (ev.shiftKey && (i <= 0)) { ev.preventDefault(); f[f.length - 1].focus(); }
+      else if (!ev.shiftKey && (i === f.length - 1 || i < 0)) { ev.preventDefault(); f[0].focus(); }
+    }
+  }
+  // plano 1500c · UCC-079: tela que muda de tamanho ou rola reposiciona o painel (num quadro); a âncora fora da tela (ou removida) fecha
+  let quadro = 0;
+  function seguir() {
+    if (quadro) return;
+    const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : fn => setTimeout(fn, 16);
+    quadro = raf(() => {
+      quadro = 0;
+      if (!pop.isConnected) return;
+      if (!ancora.isConnected) { fechar(); return; }
+      const r = ancora.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > innerHeight) { fechar(); return; }
+      posicionar();
+    });
+  }
+  function rolou(ev) { if (ev && ev.target && pop.contains && pop.contains(ev.target)) return; seguir(); }
   function fechar() {
     if (!pop.isConnected) return;
     document.removeEventListener("pointerdown", fora, true);
     pop.removeEventListener("keydown", tecla);
-    removeEventListener("resize", fechar);
+    removeEventListener("resize", seguir);
+    document.removeEventListener("scroll", rolou, true);
     ancora.setAttribute("aria-expanded", "false");
     try { pop.hidePopover(); } catch { /* ok */ }
     pop.remove();
@@ -708,7 +852,7 @@ export function flutuante(ancora, conteudo, { classe = "", aoFechar, largura, ro
   mostrarNoTopo(pop);
   posicionar();
   ancora.setAttribute("aria-expanded", "true");
-  setTimeout(() => { document.addEventListener("pointerdown", fora, true); addEventListener("resize", fechar); focarPrimeiro(pop); }, 0);
+  setTimeout(() => { if (!pop.isConnected) return; document.addEventListener("pointerdown", fora, true); addEventListener("resize", seguir); document.addEventListener("scroll", rolou, true); focarPrimeiro(pop); }, 0);
   _menuAberto = { pop, fechar };
   return { el: pop, fechar, posicionar };
 }
@@ -885,8 +1029,18 @@ export function esqueleto(tipo = "lista", opcoes = {}) {
   else corpo = h("div", { class: "sk-lista" }, itensLista(n));   // "lista" (e qualquer tipo desconhecido)
   // plano 1000b · UB-209: `anunciar: false` nos esqueletos secundários — só o principal da tela fala «Carregando…» (role=status)
   const fala = o.anunciar === false ? null : h("span", { class: "sr-only", role: "status" }, "Carregando…");
+  // plano 2000d · DU-360: depois de `demorouMs` (5 s) com o esqueleto ainda na tela, uma linha visível diz O QUE está carregando e que pode ser a conexão
+  const demora = typeof o.demorou === "string" && o.demorou.trim() ? h("p", { class: "sk-demora", hidden: true }, o.demorou.trim()) : null;
   const raiz = h("div", { class: ["esqueleto", `esqueleto-${tipo}`], dataset: { tipo }, "aria-busy": "true" },
-    fala, comCab ? cab() : null, corpo);
+    fala, demora, comCab ? cab() : null, corpo);
+  if (demora) {
+    const ms = Number.isFinite(o.demorouMs) ? o.demorouMs : 5000;
+    setTimeout(() => {
+      if (!raiz.isConnected) return;
+      demora.hidden = false;
+      if (fala) fala.textContent = demora.textContent;
+    }, ms);
+  }
   return raiz;
 }
 export const TIPOS_ESQUELETO = Object.freeze(["inicio", "chat", "lista", "kanban", "ads", "tabela", "agenda", "cartoes", "cartao", "grafico", "kpi"]);
@@ -927,16 +1081,20 @@ function aoVoltarOnline() {
     if (typeof f === "function") { try { f(); } catch (e) { console.error(e); } }
   }
 }
-const RE_CODIGO_REDE = /^(sem_conexao|tempo_esgotado|servico_indisponivel|http_(408|429|5\d\d))$/;
-/** erroCartao(erro, tentarDeNovo) → Node (texto de api.mensagemErro, sem URL nem jargão). Com `tentarDeNovo`, refaz sozinho em "orbita:online". */
-export function erroCartao(erro, tentarDeNovo) {
+// plano 1500c · UCC-009: tempo_esgotado (consulta pesada no servidor) NÃO é falta de internet — fica fora daqui e ganha a frase própria
+const RE_CODIGO_REDE = /^(sem_conexao|servico_indisponivel|http_(408|429|5\d\d))$/;
+/** erroCartao(erro, tentarDeNovo, {nivel = 2}) → Node (texto de api.mensagemErro, sem URL nem jargão). Com `tentarDeNovo`, refaz sozinho em
+    "orbita:online". plano 1500c · UCC-010: `nivel` (2–6) dá o h2…h6 do título, para o cartão dentro de uma seção não quebrar a hierarquia. */
+export function erroCartao(erro, tentarDeNovo, { nivel = 2 } = {}) {
   const frase = mensagemErro(erro);
-  const semRede = RE_ERRO_REDE.test(String((erro && (erro.message || erro.codigo)) || "")) || RE_ERRO_IMPORT.test(String((erro && erro.message) || ""))
-    || RE_CODIGO_REDE.test(String((erro && erro.codigo) || "")) || (typeof navigator !== "undefined" && navigator.onLine === false);
+  const pesada = String((erro && erro.codigo) || "") === "tempo_esgotado";
+  const semRede = !pesada && (RE_ERRO_REDE.test(String((erro && (erro.message || erro.codigo)) || "")) || RE_ERRO_IMPORT.test(String((erro && erro.message) || ""))
+    || RE_CODIGO_REDE.test(String((erro && erro.codigo) || "")) || (typeof navigator !== "undefined" && navigator.onLine === false));
+  const n = Math.min(6, Math.max(2, Math.round(Number(nivel)) || 2));
   const el = h("div", { class: "vazio vazio-erro", role: "alert" },
     h("div", { class: "vazio-ic", "aria-hidden": "true" }, icone("alerta")),
     h("div", { class: "vazio-txt" },
-      h("h2", null, "Não foi possível carregar"),
+      h(`h${n}`, null, "Não foi possível carregar"),
       h("p", null, frase),
       tentarDeNovo && semRede ? h("p", { class: "vazio-auto" }, "Quando a internet voltar, tentamos de novo sozinhos.") : null,
       tentarDeNovo ? h("div", { class: "linha vazio-acoes" },
@@ -968,8 +1126,12 @@ export function formatarTelefone(bruto) {
   let d = t.replace(/\D/g, "");
   if (t.startsWith("+") && !/^\+\s*55/.test(t)) return d ? `+${d.slice(0, 15)}` : "+";
   if (/^\+\s*55/.test(t) || (d.length > 11 && d.startsWith("55"))) d = d.slice(2);
+  // plano 2000d · SX-086: digitou o «0» de interurbano antes do DDD («012…»): ele sai (menos nos 0800/0300, que começam assim)
+  if (/^0[1-9]{2}/.test(d)) d = d.slice(1);
   d = d.slice(0, 11);
   if (!d) return "";
+  // plano 2000d · SX-003: número 0800/0300/0500/0900 enquanto digita — «0800 123 4567» (sem os parênteses do DDD)
+  if (/^0[3589]00/.test(d)) return [d.slice(0, 4), d.slice(4, 7), d.slice(7)].filter(Boolean).join(" ");
   if (d.length <= 2) return `(${d}`;
   if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
   if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
@@ -979,6 +1141,8 @@ export function formatarTelefone(bruto) {
 /** Moeda BR enquanto digita: "1234,5" → "1.234,5"; só uma vírgula, até 2 casas, sem zeros à esquerda; "1234.56" colado vira "1.234,56". */
 export function formatarMoeda(bruto) {
   let t = String(bruto ?? "").replace(/[^\d,.]/g, "");
+  // plano 2000d · SX-005: valor colado no formato americano («1,234.56»): vírgula de milhar e ponto decimal viram «1.234,56»
+  if (/^\d{1,3}(,\d{3})+\.\d{1,2}$/.test(t)) t = t.replace(/,/g, "").replace(".", ",");
   if (!t.includes(",") && /^\d+\.\d{1,2}$/.test(t)) t = t.replace(".", ",");
   t = t.replace(/\./g, "");
   const i = t.indexOf(",");
@@ -1020,6 +1184,7 @@ export function forcaSenha(s) {
   const t = String(s ?? "");
   if (!t) return 0;
   if (t.length < 8) return 1;
+  if (new Set(t).size <= 2) return 1;   // plano 2000d · SX-022: «aaaaaaaaaaaa» ou «abababababab» não é «Razoável» por ser comprida
   const classes = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter(r => r.test(t)).length;
   return t.length >= 12 && classes >= 3 ? 4 : t.length >= 10 && classes >= 2 ? 3 : 2;
 }
@@ -1231,8 +1396,11 @@ export function campo(o = {}) {
 /** "1.234,56" → 1234.56 ; "2.000" → 2000 (ponto de milhar do jeito brasileiro) ; "297.5" → 297.5 ; "" → null */
 export function lerMoeda(s) {
   if (s === null || s === undefined) return null;
-  const t = String(s).replace(/[R$\s ]/g, "");
+  // plano 2000d · SX-021: o «−» tipográfico (o que numCompacto/numMoeda escrevem) também é sinal de menos
+  let t = String(s).replace(/[R$\s ]/g, "").replace(/^[−–]/, "-");
   if (!t) return null;
+  // plano 2000d · SX-004: formato americano colado («1,234.56») — vírgula de milhar e ponto decimal
+  if (/^-?\d{1,3}(,\d{3})+\.\d+$/.test(t)) t = t.replace(/,/g, "");
   const n = Number(t.includes(",") ? t.replace(/\./g, "").replace(",", ".")
     : /^-?\d{1,3}(\.\d{3})+$/.test(t) ? t.replace(/\./g, "") : t);
   return Number.isFinite(n) ? n : null;
@@ -1249,7 +1417,8 @@ export function lerForm(form) {
       if (multis.has(n)) { if (el.checked) r[n].push(el.value); }
       else r[n] = el.checked;
     } else if (el.type === "radio") { if (el.checked) r[n] = el.value; else if (!(n in r)) r[n] = null; }
-    else if (el.type === "number") r[n] = el.value === "" ? null : Number(el.value);
+    // plano 2000d · SX-006: número ilegível vira null (nunca NaN, que o JSON manda como null sem avisar) e «1,5» é 1.5
+    else if (el.type === "number") { const x = el.value === "" ? NaN : Number(String(el.value).replace(",", ".")); r[n] = Number.isFinite(x) ? x : null; }
     else if (el.dataset.moeda) r[n] = lerMoeda(el.value);
     // o «+» inicial (número de outro país) fica: sem ele o servidor trataria 10–11 dígitos como brasileiros e poria 55 na frente
     else if (el.dataset.mascara === "telefone") { const t = String(el.value ?? "").trim(); r[n] = (t.startsWith("+") ? "+" : "") + t.replace(/\D/g, ""); }
@@ -1457,10 +1626,19 @@ export function etiqueta({ nome, cor } = {}, { remover } = {}) {
     remover ? h("button", { type: "button", class: "etiq-x", "aria-label": `Tirar a etiqueta ${nome}`, on: { click: remover } }, icone("fechar")) : null);
 }
 
-function iniciais(nome) {
-  const p = String(nome || "").trim().split(/\s+/).filter(Boolean);
+/** plano 1500c · UCC-077: por caractere (grafema), não por unidade UTF-16 — «😀 Ana» vira «😀A», nunca meio emoji (U+FFFD). Exportada para teste. */
+const _grafemas = (() => { try { return typeof Intl !== "undefined" && Intl.Segmenter ? new Intl.Segmenter("pt-BR", { granularity: "grapheme" }) : null; } catch { return null; } })();
+function letras(palavra) { return _grafemas ? [..._grafemas.segment(palavra)].map(x => x.segment) : Array.from(palavra); }
+// plano 2000d · SX-015/SX-016: «Ana (cliente)» → «AN» (o que está entre parênteses e a pontuação não viram letra) e «Dra. Ana Lima» → «AL»
+const TRATAMENTOS = new Set(["dr", "dra", "sr", "sra", "srta", "prof", "profa", "pe", "me"]);
+export function iniciais(nome) {
+  const limpo = String(nome || "").replace(/\([^)]*\)|\[[^\]]*\]/g, " ");
+  let p = limpo.trim().split(/\s+/).map(w => w.replace(/^[^\p{L}\p{N}\p{Extended_Pictographic}]+/u, "")).filter(Boolean);
+  if (p.length > 1 && TRATAMENTOS.has(p[0].replace(/\.$/, "").toLowerCase())) p = p.slice(1);
+  p = p.map(w => w.replace(/[.,;:!?]+$/, "")).filter(Boolean);
   if (!p.length) return "?";
-  return ((p[0][0] || "") + (p.length > 1 ? p[p.length - 1][0] : (p[0][1] || ""))).toUpperCase();
+  const a = letras(p[0]);
+  return ((a[0] || "") + (p.length > 1 ? (letras(p[p.length - 1])[0] || "") : (a[1] || ""))).toUpperCase();
 }
 function hashNum(s) { let x = 0; for (const ch of String(s || "")) x = (x * 31 + ch.codePointAt(0)) >>> 0; return x; }
 
@@ -1475,9 +1653,16 @@ export function tomAvatar(nome, id) {
 /** avatar(nome, id, img?, {tamanho: "p"|"g", estado: "online"|"ausente"|"ocupado"}) — iniciais sobre uma cor estável por nome; `estado` põe o ponto no canto. */
 export function avatar(nome, id, img, { tamanho, estado } = {}) {
   const i = tomAvatar(nome, id);
-  const el = h("span", { class: ["avatar", tamanho === "g" && "avatar-g", tamanho === "p" && "avatar-p"], style: { "--cor": `var(--pal-${i})` }, "aria-hidden": "true", title: nome || null, dataset: { tom: i } });
+  // plano 1500c · UC-030: «dado-pessoal» — o modo apresentação (html.apresentacao) borra fotos e iniciais de clientes
+  const el = h("span", { class: ["avatar", "dado-pessoal", tamanho === "g" && "avatar-g", tamanho === "p" && "avatar-p"], style: { "--cor": `var(--pal-${i})` }, "aria-hidden": "true", title: nome || null, dataset: { tom: i } });
   const src = typeof img === "string" && (/^data:image\/(png|jpeg|webp);base64,/.test(img) || /^https:\/\//.test(img)) ? img : null;
-  if (src) el.appendChild(h("img", { src, alt: "" }));
+  // plano 2000d · SX-017 (DR-063 da frente crm): a foto só baixa quando chega perto da tela e decodifica fora do caminho da rolagem
+  // plano 2000d · SX-018: foto quebrada (link vencido do WhatsApp) volta às iniciais em vez do ícone de imagem partida
+  if (src) {
+    const foto = h("img", { src, alt: "", loading: "lazy", decoding: "async" });
+    foto.addEventListener("error", () => { foto.remove(); if (!el.querySelector("img")) el.prepend(iniciais(nome)); }, { once: true });
+    el.appendChild(foto);
+  }
   else el.textContent = iniciais(nome);
   if (estado && /^(online|ausente|ocupado)$/.test(estado)) el.appendChild(h("i", { class: ["avatar-estado", `avatar-${estado}`] }));
   return el;
@@ -1660,8 +1845,10 @@ const _fmt = {
 };
 const vazioFmt = "—";
 function dataDe(iso) {
-  if (iso instanceof Date) return iso;
+  if (iso instanceof Date) return Number.isNaN(iso.getTime()) ? null : iso;   // plano 2000d · SX-019: Date inválido não derruba o Intl (RangeError)
   if (iso === null || iso === undefined || iso === "") return null;
+  // plano 2000d · SX-020: «2026-10-05 14:00» (espaço, como o Postgres escreve) é inválido no Safari — vira «2026-10-05T14:00»
+  if (typeof iso === "string" && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(iso)) iso = iso.replace(" ", "T").replace(/([+-]\d{2})$/, "$1:00");   // e «+00» → «+00:00»
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? null : d;
 }
@@ -1669,13 +1856,18 @@ function dataDe(iso) {
 export function brl(v, { centavos = true } = {}) { const n = Number(v); return v === null || v === undefined || v === "" || !Number.isFinite(n) ? vazioFmt : (centavos ? _fmt.brl : _fmt.brl0).format(n); }
 export function num(v) { const n = Number(v); return v === null || v === undefined || v === "" || !Number.isFinite(n) ? vazioFmt : _fmt.num.format(n); }
 /** pct(0.234) → "23%"; pct(0.234, 1) → "23,4%" (recebe fração) */
+/** plano 1500c · UCC-078: um formatador por número de casas (criar Intl.NumberFormat a cada chamada pesava em listas grandes). */
+const _fmtPct = new Map();
 export function pct(v, casas = 0) {
   const n = Number(v);
-  if (v === null || v === undefined || !Number.isFinite(n)) return vazioFmt;
-  return new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: casas, maximumFractionDigits: casas }).format(n);
+  if (v === null || v === undefined || v === "" || !Number.isFinite(n)) return vazioFmt;   // plano 2000d · SX-001: "" é vazio (como em num/brl), não 0 %
+  const c = Math.max(0, Math.min(20, Math.round(Number(casas)) || 0));
+  let f = _fmtPct.get(c);
+  if (!f) { f = new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: c, maximumFractionDigits: c }); _fmtPct.set(c, f); }
+  return f.format(n);
 }
 /** "AAAA-MM-DD" do dia no fuso de SP */
-export function hojeSP(d = new Date()) { return _fmt.dia.format(d); }
+export function hojeSP(d = new Date()) { return _fmt.dia.format(dataDe(d) || new Date()); }   // plano 2000d · SX-019: data inválida = hoje
 export function dataBR(iso) {
   if (typeof iso === "string" && /^\d{4}-\d{2}-\d{2}$/.test(iso)) { const [a, m, d] = iso.split("-"); return `${d}/${m}/${a}`; }
   const d = dataDe(iso); return d ? _fmt.data.format(d) : vazioFmt;
@@ -1697,6 +1889,8 @@ export function periodoBR(inicio, fim, sep = " — ") {
     const d1 = _fmt.data.format(a), d2 = _fmt.data.format(new Date(b.getTime() - 60_000));   // 23:59 do último dia
     return d1 === d2 ? `Dia inteiro · ${d1}` : `Dias inteiros · ${d1} a ${d2}`;
   }
+  // plano 2000d · SX-084: começo e fim no mesmo dia — a data uma vez só («06/10/2026 14:00 — 15:30»)
+  if (_fmt.data.format(a) === _fmt.data.format(b)) return `${dataHoraBR(a)}${sep}${_fmt.hora.format(b)}`;
   return `${dataHoraBR(a)}${sep}${dataHoraBR(b)}`;
 }
 /** "agora", "há 5 min", "há 2 h", "ontem", "há 3 dias", "em 2 h", "amanhã"… depois de 7 dias, a data. */
@@ -1719,6 +1913,10 @@ export function telBR(digitos) {
   let d = String(digitos ?? "").replace(/\D/g, "");
   if (!d) return vazioFmt;
   if (d.length >= 12 && d.length <= 13 && d.startsWith("55")) d = d.slice(2);
+  // plano 2000d · SX-085: o «0» de interurbano antes do DDD («012 99830-3030») não vira número estrangeiro
+  else if (/^0[1-9]{2}\d{8,9}$/.test(d)) d = d.slice(1);
+  // plano 2000d · SX-002: 0800/0300/0500/0900 não têm DDD — «0800 123 4567», não «(08) 00123-4567»
+  if (/^0[3589]00\d{6,7}$/.test(d)) return `${d.slice(0, 4)} ${d.slice(4, 7)} ${d.slice(7)}`;
   if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
   if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
   // plano 1000b · UB-241: número sem DDD (8 ou 9 dígitos) é local, não internacional — «99830-3030», não «+998303030»
@@ -1747,6 +1945,7 @@ export function atalho(combinacao, fn) {
   const mod = partes.includes("mod"), ctrl = partes.includes("ctrl"), alt = partes.includes("alt"), shift = partes.includes("shift");
   const nomeTecla = { esc: "escape", espaco: " ", space: " " }[tecla] || tecla;
   const ouvir = ev => {
+    if (ev.isComposing || ev.keyCode === 229) return;   // plano 2000d · SX-009: tecla no meio da composição (acento, teclado asiático) não é atalho
     const k = String(ev.key || "").toLowerCase();
     if (k !== nomeTecla) return;
     if (mod && !(ev.ctrlKey || ev.metaKey)) return;
@@ -1775,15 +1974,30 @@ export function manterFoco(el) {
   };
 }
 
+/** plano 2000d · DU-330: enquanto ocupado, o nome acessível do botão diz que está trabalhando («Salvar, aguarde…») — o leitor de tela não ouve só
+    «ocupado». Devolve a função que desfaz (volta o nome que o botão tinha). */
+export function marcarOcupado(botao) {
+  if (!botao || typeof botao.setAttribute !== "function") return () => {};
+  if (typeof botao.getAttribute !== "function") { botao.setAttribute("aria-busy", "true"); return () => { if (typeof botao.removeAttribute === "function") botao.removeAttribute("aria-busy"); }; }
+  const tinha = botao.getAttribute("aria-label");
+  const nome = String(tinha || botao.textContent || "").replace(/\s+/g, " ").trim();
+  botao.setAttribute("aria-busy", "true");
+  if (nome) botao.setAttribute("aria-label", `${nome}, aguarde…`);
+  return () => {
+    botao.removeAttribute("aria-busy");
+    if (tinha === null) botao.removeAttribute("aria-label"); else botao.setAttribute("aria-label", tinha);
+  };
+}
 /** carregando(botao, promessa|função) — trava o botão (aria-busy) até terminar; devolve o resultado e o foco do teclado. */
 export async function carregando(botao, promessa) {
   const estavaDesab = botao ? botao.disabled : false;
   const devolverFoco = botao ? manterFoco(botao) : null;
-  if (botao) { botao.disabled = true; botao.setAttribute("aria-busy", "true"); }
+  let soltar = () => {};
+  if (botao) { botao.disabled = true; soltar = marcarOcupado(botao); }   // plano 2000d · DU-330
   try {
     return await (typeof promessa === "function" ? promessa() : promessa);
   } finally {
-    if (botao) { botao.disabled = estavaDesab; botao.removeAttribute("aria-busy"); devolverFoco(); }
+    if (botao) { botao.disabled = estavaDesab; soltar(); devolverFoco(); }
   }
 }
 
@@ -1814,6 +2028,8 @@ function copiarPorSelecao(texto) {
 
 /** copiar(texto) → Promise<boolean> (+ aviso "Copiado."). */
 export async function copiar(texto, { aviso = "Copiado." } = {}) {
+  // plano 2000d · SX-023: nada para copiar não diz «Copiado.» (copiava "null"/"" e a pessoa colava vazio)
+  if (texto === null || texto === undefined || String(texto) === "") return false;
   let ok = false;
   try { await navigator.clipboard.writeText(String(texto)); ok = true; } catch { ok = copiarPorSelecao(texto); }
   if (aviso) toast(ok ? aviso : "Não foi possível copiar. Selecione e copie manualmente.", { tipo: ok ? "ok" : "erro" });
@@ -1845,8 +2061,13 @@ export async function copiarDepois(promessaDeTexto, { aviso } = {}) {
 
 /** Link "Enviar pelo WhatsApp" (wa.me com o texto). */
 export function linkWhatsApp(texto, numero) {
-  const n = String(numero || "").replace(/\D/g, "");
-  return `https://wa.me/${n}?text=${encodeURIComponent(String(texto))}`;
+  let n = String(numero || "").replace(/\D/g, "");
+  // plano 2000d · SX-013: número brasileiro sem DDI (10–11 dígitos com DDD) ganha o 55 — sem ele o wa.me abre outro país
+  if (/^[1-9]\d{9,10}$/.test(n) && !String(numero).trim().startsWith("+")) n = "55" + n;
+  // plano 2000d · SX-104: texto enorme (diagnóstico, lista) passava do tamanho de endereço que o WhatsApp abre e o link não abria nada
+  let t = String(texto ?? "");
+  if (t.length > 1500) t = `${t.slice(0, 1499)}…`;
+  return `https://wa.me/${n}?text=${encodeURIComponent(t)}`;
 }
 
 /** Bloco de link gerado (convite / nova senha): campo só leitura + Copiar + WhatsApp.
@@ -1868,7 +2089,7 @@ export function blocoLink(link, { rotulo = "Link", textoWhats, central } = {}) {
   // «Mostrar link» revela o completo e só então o foco seleciona. Copiar e WhatsApp usam sempre o link inteiro.
   const curto = linkTruncado(link);
   let visivel = curto === String(link);
-  const inp = h("input", { id, type: "text", class: "mono", readonly: true, value: visivel ? link : curto });
+  const inp = h("input", { id, type: "text", class: "mono", readonly: true, value: visivel ? link : curto, "aria-label": "Link" });   // plano 2000d · DU-326
   inp.addEventListener("focus", () => { if (visivel) inp.select(); });
   const mostrar = visivel ? null : h("button", { type: "button", class: "bt bt-sec bloco-link-mostrar", "aria-pressed": "false", "aria-controls": id, on: { click: () => {
     visivel = !visivel; inp.value = visivel ? link : curto;
@@ -1895,7 +2116,8 @@ export function barraUso(rotulo, uso, limite, { detalhe } = {}) {
     h("div", { class: "uso-l" }, h("span", null, rotulo), h("span", { class: foraDoPlano ? "fraco" : null }, txt)),
     // fora do plano: sem barra (como o «Plano e uso» das Configurações) — não há medida a mostrar
     foraDoPlano ? null : h("div", { class: ["uso-barra", p >= 100 ? "cheia" : p >= 80 ? "alta" : null], role: "meter", "aria-valuemin": "0",
-      "aria-valuemax": String(semLimite ? Math.max(u, 1) : limite), "aria-valuenow": String(u), "aria-label": rotulo, "aria-valuetext": txt },
+      // plano 2000d · SX-014: uso acima do limite não deixa o medidor inválido (valuenow > valuemax): o teto vira o próprio uso
+      "aria-valuemax": String(semLimite ? Math.max(u, 1) : Math.max(Number(limite), u)), "aria-valuenow": String(u), "aria-label": rotulo, "aria-valuetext": txt },
       h("i", { style: { "--p": `${semLimite ? 0 : p}%` } })),
     detalhe ? h("small", { class: "uso-det" }, detalhe) : null);
 }
@@ -2171,6 +2393,8 @@ let _ouvindoZ = null;             // o document em que já ouvimos o teclado
 function aoTeclaZ(ev) {
   if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey || String(ev.key || "").toLowerCase() !== "z") return;
   if (dentroDeCampo(ev.target)) return;                    // dentro de texto o Ctrl+Z é do navegador
+  // plano 1500c · UCC-074: com um diálogo aberto o Ctrl+Z não desfaz o que aconteceu na tela de trás
+  try { if (typeof document !== "undefined" && document.querySelector("dialog[open]")) return; } catch { /* ok */ }
   const item = _desfazer[_desfazer.length - 1];
   if (!item) return;
   ev.preventDefault();
@@ -2251,7 +2475,11 @@ export async function acaoComDesfazer({ texto, aplicar, reverter, firmar, ms = 7
   // aoCriar({firmarAgora}): quem chama pode encerrar o prazo antes (ex.: a gaveta que mostrava o movimento fechou) — firma na hora e o
   // aviso «Desfazer» sai, como quando a página sai (nunca fica um «Desfazer» à vista de algo que já valeu)
   if (typeof aoCriar === "function") {
-    try { aoCriar({ firmarAgora: () => { if (item.fim) return; manterItem(item); if (item.t) try { item.t.fechar(); } catch { /* ok */ } } }); } catch { /* ok */ }
+    try {
+      aoCriar({ firmarAgora: () => { if (item.fim) return; manterItem(item); if (item.t) try { item.t.fechar(); } catch { /* ok */ } },
+        // RC-054 (plano 1500c) · plano 2000d: troca o texto do aviso «Desfazer» à vista
+        atualizarTexto: t => !item.fim && !!(item.t && typeof item.t.atualizarTexto === "function" && item.t.atualizarTexto(t)) });
+    } catch { /* ok */ }
   }
   return fim;
 }
@@ -2265,8 +2493,10 @@ export function numCompacto(v) {
   if (v === null || v === undefined || v === "" || !Number.isFinite(n)) return vazioFmt;
   const a = Math.abs(n), s = n < 0 ? "−" : "";
   const um = x => (Math.round(x * 10) / 10).toLocaleString("pt-BR", { maximumFractionDigits: 1 });
-  if (a >= 1e9) return `${s}${um(a / 1e9)} bi`;
-  if (a >= 1e6) return `${s}${um(a / 1e6)} mi`;
+  // plano 2000d · SX-011: o arredondamento sobe de faixa — 999.950 é «1 mi», não «1.000 mil»
+  const r = x => Math.round(x * 10) / 10;
+  if (a >= 1e9 || r(a / 1e6) >= 1000) return `${s}${um(a / 1e9)} bi`;
+  if (a >= 1e6 || r(a / 1e3) >= 1000) return `${s}${um(a / 1e6)} mi`;
   if (a >= 1e3) return `${s}${um(a / 1e3)} mil`;
   return _fmt.num.format(n);
 }
@@ -2495,7 +2725,8 @@ export function numMoeda(valor, { centavos = true } = {}) {
   const n = Number(valor);
   if (valor === null || valor === undefined || valor === "" || !Number.isFinite(n)) return h("span", { class: "num-moeda" }, "—");
   const neg = n < 0 ? "−" : "";
-  const [inteiro, cent] = Math.abs(n).toFixed(2).split(".");
+  // plano 2000d · SX-012: sem centavos o inteiro é ARREDONDADO (R$ 1.234,60 → R$ 1.235, como o brl), não cortado
+  const [inteiro, cent] = (centavos ? Math.abs(n).toFixed(2) : `${Math.round(Math.abs(n))}.00`).split(".");
   return h("span", { class: "num-moeda" },
     h("span", { class: "nm-rs" }, "R$"), neg + _fmt.num.format(Number(inteiro)),
     centavos ? h("span", { class: "nm-cent" }, `,${cent}`) : null);

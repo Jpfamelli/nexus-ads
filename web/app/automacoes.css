@@ -140,9 +140,10 @@
 
 .au-ed-grade { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 21rem); gap: 1.4rem; align-items: start; }
 .au-lado {
-  position: sticky; top: calc(var(--topo) + 8.5rem); display: flex; flex-direction: column; gap: .9rem;
+  /* plano 1500c · UCA-078: a lateral desce a altura MEDIDA do cabeçalho fixo (--au-cab-h, do auto-editor.js); 8.5rem fica só de reserva */
+  position: sticky; top: calc(var(--topo) + var(--au-cab-h, 8.5rem) + .75rem); display: flex; flex-direction: column; gap: .9rem;
   /* em telas baixas o resumo + teste + variáveis rolam dentro da coluna em vez de ficarem cortados */
-  max-height: calc(100vh - var(--topo) - 9.5rem); overflow-y: auto; overscroll-behavior: contain; padding-bottom: .2rem;
+  max-height: calc(100vh - var(--topo) - var(--au-cab-h, 8.5rem) - 1.75rem); overflow-y: auto; overscroll-behavior: contain; padding-bottom: .2rem;
 }
 
 /* ---------------------------------------------------------------- fluxo (espinha Quando → Se → Então) */
@@ -812,7 +813,7 @@ html:has(.au-pag-editor) { scroll-padding-top: calc(var(--topo) + var(--au-cab-h
   .au-item.au-saindo { transition: none; }
   .au-item, .au-ex, .au-dg-anim .au-dg-no, .au-gd-anim .au-gd-pilha, .au-foco-brilho { animation: none !important; }
   .au-ponto-on::after { animation: none; display: none; }
-  .au-taxa-trilho i, .au-gd-barra, .au-dg-toggle .ic, .au-ex-det-bt .ic { transition: none; }
+  .au-taxa-trilho i, .au-gd-seg, .au-dg-toggle .ic, .au-ex-det-bt .ic { transition: none; }   /* plano 1500c · UCA-077: .au-gd-barra não existia */
 }
 
 @media (forced-colors: active) {
@@ -830,13 +831,12 @@ html:has(.au-pag-editor) { scroll-padding-top: calc(var(--topo) + var(--au-cab-h
 
 /* ================================================================ plano 1000 · lote auto-2 */
 /* AS-022: a pílula do uso do plano tem dica (desligadas também contam) */
-.au-uso[tabindex] { cursor: help; }
+/* plano 1500c · UCA-077: «.au-uso[tabindex]» saiu (o tabindex saiu no UB-184) */
 .au-uso:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; }
 /* AS-020: etiqueta de tipo (WhatsApp, CodeWords) não usa o verde de estado */
 .au-pil-tipo .ic { color: var(--c-texto-2); }
 /* AS-007 / AS-071 / AS-072 / AS-073: Criar com IA */
-.au-ia-limite { display: flex; align-items: flex-start; gap: .4rem; margin-top: var(--esp-2); color: var(--c-aten); font-weight: 600; }
-.au-ia-limite .ic { flex: none; width: 16px; height: 16px; margin-top: .15rem; }
+/* plano 1500c · UCA-077: «.au-ia-limite» saiu (o aviso do limite é o único do topo, UB-047) */
 .au-ia-recentes { margin-bottom: var(--esp-2); }
 .au-chip-rec .ic { flex: none; width: 14px; height: 14px; }
 .au-ia-carregando { flex-wrap: wrap; }
@@ -858,7 +858,7 @@ html:has(.au-pag-editor) { scroll-padding-top: calc(var(--topo) + var(--au-cab-h
 .au-sis-link { display: inline-flex; align-items: center; gap: .3rem; min-height: 44px; margin-top: .2rem; font-size: var(--fs-13); font-weight: 600; }
 .au-sis-link .ic { width: 14px; height: 14px; }
 /* AS-013 / AS-075 / AS-076: receitas */
-.au-mod-limite { margin: 0 0 .9rem; }
+/* plano 1500c · UCA-077: «.au-mod-limite» saiu (sem elemento) */
 .au-modelo-rod { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
 .au-modelo-ver .ic { width: 15px; height: 15px; }
 .au-modelo-custo { color: var(--c-texto-2); }
@@ -901,7 +901,7 @@ html:has(.au-pag-editor) { scroll-padding-top: calc(var(--topo) + var(--au-cab-h
 .au-ver-ia { align-self: flex-start; margin-top: var(--esp-1); }
 /* AS-284: testar uma frase nas palavras-chave */
 .au-frase-teste { display: flex; flex-direction: column; gap: .3rem; margin-top: var(--esp-2); padding-top: var(--esp-2); border-top: 1px dashed var(--c-borda); }
-.au-frase-inp { width: 100%; min-height: 40px; font-size: var(--fs-16); }
+.au-frase-inp { width: 100%; min-height: 44px; font-size: var(--fs-16); }   /* plano 1500c · UCA-075: régua de 44 px */
 .au-frase-res { font-size: var(--fs-13); }
 .au-frase-res[data-tom="ok"] { color: var(--c-ok); }
 .au-frase-res[data-tom="ruim"] { color: var(--c-aten); }
@@ -954,3 +954,136 @@ h3.au-ia-res-nome:focus:not(:focus-visible) { outline: none; }
 /* UB-210: mostrar receitas de outros segmentos */
 .au-modelos-outros { display: inline-flex; align-items: center; gap: .45rem; min-height: 44px; font-size: var(--fs-13); cursor: pointer; }
 .au-modelos-outros input { width: 18px; height: 18px; accent-color: var(--c-prim); }
+
+/* ================================================================== plano 1500c · frente auto */
+/* plano 1500c · UCA-076: o resto do movimento também respeita «reduzir movimento» */
+@media (prefers-reduced-motion: reduce) {
+  .au-modelo:hover { transform: none; }
+  .au-tile:active { transform: none; }
+  .au-sw-bola { transition: none; }
+  .au-giro { animation: none; border-top-color: var(--c-prim); border-right-color: var(--c-prim); }
+}
+/* plano 1500c · UCA-079: alto contraste — o foco do diagrama e as barras do gráfico com cores do sistema */
+@media (forced-colors: active) {
+  .au-dg-no:focus-visible .au-dg-ret { stroke: Highlight; stroke-width: 3; }
+  .au-gd-seg { forced-color-adjust: none; background: CanvasText; }
+  .au-gd-erro { background: Mark; }
+  .au-sel-chk { forced-color-adjust: auto; }
+}
+/* plano 1500c · UCA-074: no celular cada dia do gráfico tem ao menos 32 px e a coluna toda é a área de toque */
+@media (max-width: 479px) {
+  .au-gd-barras { grid-template-columns: repeat(var(--n, 7), minmax(32px, 1fr)); }
+  .au-gd-clicavel button.au-gd-col { min-height: 44px; height: 100%; }
+}
+/* plano 1500c · UCA-099: a prévia da mensagem mostra *negrito*, _itálico_, ~riscado~ e ```mono``` como no WhatsApp */
+.au-wa-negrito { font-weight: 700; }
+.au-wa-italico { font-style: italic; }
+.au-wa-riscado { text-decoration: line-through; }
+.au-wa-mono { font-family: var(--f-mono, ui-monospace, monospace); font-size: .95em; }
+/* plano 1500c · UCA-041: duplicar o passo */
+.au-dup .ic { width: 16px; height: 16px; }
+/* plano 1500c · UCA-004/005/034/054: ferramentas da aba Execuções (busca, filtradas, passo, CSV) */
+.au-ex-ferr { display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-2); margin: var(--esp-2) 0; }
+.au-ex-busca { flex: 1 1 14rem; min-width: 0; }
+.au-ex-busca-inp { width: 100%; min-height: 44px; font-size: var(--fs-16); }
+.au-ex-filtradas { min-width: 0; }
+.au-ex-filtrada { opacity: .85; }
+.au-ex-filtrada .au-ex-ic { color: var(--c-texto-3); }
+.au-ex-conds { margin: .2rem 0 0; font-size: var(--fs-13); color: var(--c-texto-2); overflow-wrap: anywhere; }
+.au-ex-corrigir { min-height: 44px; }
+/* plano 1500c · UCA-057/081: título do resultado do teste (recebe o foco) e o selo «Exemplo fictício» */
+.au-sim-titulo { margin: 0; font-size: var(--fs-16); }
+.au-sim-titulo:focus:not(:focus-visible) { outline: none; }
+/* plano 1500c · UCA-106: «Copiar» ao lado de «Em uma frase» */
+.au-previa-cab { display: flex; align-items: center; justify-content: space-between; gap: var(--esp-2); flex-wrap: wrap; }
+/* plano 1500c · UCA-101: recentes da caixa de IA com «Limpar» */
+.au-ia-rec-cab { display: flex; align-items: center; justify-content: space-between; gap: var(--esp-2); flex-wrap: wrap; }
+.au-ia-rec-limpar { min-height: 44px; }
+/* plano 1500c · UCA-058: primeira automação (3 perguntas) */
+.au-prim { display: flex; flex-direction: column; gap: var(--esp-3); padding: var(--esp-4); border: 1px solid var(--c-borda); border-radius: var(--r-p); background: var(--c-sup, transparent); }
+.au-prim fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.au-prim legend { font-weight: 600; margin-bottom: var(--esp-2); }
+/* plano 1500c · UCA-103: colar automação de outro cliente */
+.au-colar { margin-top: var(--esp-3); }
+.au-colar > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 600; }
+.au-colar > summary:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.au-colar textarea { width: 100%; min-height: 8rem; font-family: var(--f-mono, ui-monospace, monospace); font-size: var(--fs-14); }
+/* plano 1500c · UCA-070: títulos dos grupos «Por gatilho» */
+.au-lista-grupo { list-style: none; margin: var(--esp-3) 0 var(--esp-1); }
+.au-lista-grupo:first-child { margin-top: 0; }
+.au-lista-grupo-tit { margin: 0; }
+/* plano 1500c · UCA-069: modo «Selecionar» */
+.au-sel { display: flex; flex-direction: column; gap: var(--esp-2); margin: var(--esp-2) 0; }
+.au-sel-modo { align-self: flex-start; min-height: 44px; }
+.au-sel-barra { display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-2); padding: var(--esp-2); border: 1px solid var(--c-borda); border-radius: var(--r-p); }
+.au-sel-barra .bt { min-height: 44px; }
+.au-sel-status { margin: 0 auto 0 0; font-weight: 600; font-size: var(--fs-14); }
+.au-sel-caixa { position: relative; z-index: 2; display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; cursor: pointer; }
+.au-sel-chk { width: 20px; height: 20px; accent-color: var(--c-prim); }
+.au-sel-chk:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+/* plano 1500c · UCA-032: progresso da pausa só para o leitor de tela (o botão já gira) */
+.au-pausa-prog:empty { display: none; }
+
+/* ================================================================ plano 2000d · frente auto */
+/* plano 2000d · DU-054: a observação interna abaixo da frase do cartão */
+.au-item-obs { display: block; color: var(--c-texto-3); font-size: var(--fs-13, .8125rem); line-height: 1.4; overflow-wrap: anywhere; }
+/* plano 2000d · DU-037: o chip da variável com o valor de exemplo na segunda linha */
+.au-var { display: inline-flex; flex-direction: column; align-items: flex-start; gap: .05rem; }
+.au-var-ex { font-size: .72rem; color: var(--c-texto-3); font-family: inherit; max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* plano 2000d · DU-053: a nota da janela de 24 h (só número oficial) */
+.au-modelo-janela .ic { color: var(--c-aten, currentColor); }
+/* plano 2000d · DU-313: o foco fica no próprio link (vale sem :has); o :has só reforça o contorno do cartão */
+.au-item-link:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; }
+@supports selector(:has(a)) {
+  .au-item-link:focus-visible { outline: none; }
+}
+/* plano 2000d · DU-412: os números do cartão em texto secundário (a situação e a frase mandam) */
+.au-item-meta .au-item-num, .au-item-meta .au-item-ult { color: var(--c-texto-3); font-size: var(--fs-13, .8125rem); }
+/* plano 2000d · DU-343: com muitas automações, o navegador só desenha o cartão quando ele chega perto da tela */
+.au-lista-longa .au-item { content-visibility: auto; contain-intrinsic-size: auto 132px; }
+/* plano 2000d · DU-307: alto contraste — foco do diagrama, chips e cartões com bordas e cores do sistema */
+@media (forced-colors: active) {
+  .au-dg-no:focus-visible .au-dg-ret, .au-dg-no:hover .au-dg-ret { stroke: Highlight; stroke-width: 3; }
+  .au-dg-no .au-dg-ret { stroke: CanvasText; }
+  .au-dg-no svg, .au-dg-no .ic, .au-item .ic, .au-modelo .ic { color: currentColor; fill: currentColor; }
+  .au-chip, .au-var, .au-item, .au-modelo, .pilula { border: 1px solid CanvasText; }
+  .au-item:has(.au-item-link:focus-visible), .au-item-link:focus-visible, .au-chip:focus-visible, .au-var:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+  .au-sim-pil, .au-pil-estado { border: 1px solid CanvasText; }
+}
+
+/* plano 2000d · DU-432: o «Pular o fluxo» aparece dentro do cartão do diagrama quando recebe o foco */
+.au-dg { position: relative; }
+.au-dg .au-dg-pular:focus { left: .5rem; top: .5rem; }
+.au-previa:focus-visible { outline: var(--foco-largura) solid var(--c-foco); outline-offset: 2px; }
+/* plano 2000d · DU-061: as outras automações no mesmo gatilho */
+.au-outras { display: flex; flex-direction: column; gap: .4rem; border-top: 1px solid var(--c-borda); padding-top: .6rem; }
+.au-outras-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
+.au-outras-lista li { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .5rem; min-width: 0; }
+.au-outras-lista a { min-height: var(--alvo-toque); display: inline-flex; align-items: center; overflow-wrap: anywhere; }
+.au-outras-lista small { flex-basis: 100%; }
+/* plano 2000d · DU-086 / DU-077 / DU-419 / DU-068 / DU-063 */
+.au-kit { display: flex; flex-direction: column; align-items: center; gap: .5rem; margin-top: .8rem; text-align: center; }
+.au-ver-quem-caixa { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; min-width: 0; }
+.au-quem-pegaria:empty { display: none; }
+.au-modelos-tom { flex-wrap: wrap; }
+.au-ex-tendencia { display: flex; align-items: center; gap: .4rem; margin: .2rem 0 .6rem; }
+.au-sim-copiar { margin-left: auto; }
+.au-pil-em-uso { text-decoration: none; min-height: 28px; }
+.au-pil-em-uso:focus-visible { outline: var(--foco-largura) solid var(--c-foco); outline-offset: 2px; }
+.au-pedir-mais, .au-quero-ia { margin-left: .4rem; }
+@media (pointer: coarse) { .au-ver-quem, .au-quero-ia, .au-pedir-mais, .au-pil-em-uso { min-height: var(--alvo-toque); } }
+
+/* ================================================================ plano 2000d · frente auto (complemento AX) */
+/* plano 2000d · AX-088: no celular a barra da seleção gruda no rodapé — com 200 automações, «Ligar/Desligar/Excluir» ficam à mão ao rolar */
+@media (max-width: 760px) {
+  .au-sel-barra:not([hidden]) { position: sticky; bottom: calc(var(--esp-2) + env(safe-area-inset-bottom, 0px)); z-index: 5; background: var(--c-sup); box-shadow: var(--sombra-2); }
+  /* plano 2000d · AX-089: a frase do cartão em até 3 linhas no celular (a lista longa fica escaneável; a frase inteira está no editor) */
+  .au-item-frase { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+}
+/* plano 2000d · AX-096: «Mostrar todas» no vazio do filtro, com alvo de toque */
+.au-lista-vazio { display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-2); }
+.au-lista-limpar { min-height: var(--alvo-toque); }
+/* plano 2000d · AX-102: passo da paleta no limite (Esperar) — apagado e sem efeito de toque, o motivo escrito embaixo */
+.au-tile:disabled { opacity: .55; cursor: not-allowed; }
+.au-tile:disabled:active { transform: none; }
+@media (forced-colors: active) { .au-tile:disabled { color: GrayText; border-color: GrayText; opacity: 1; } }

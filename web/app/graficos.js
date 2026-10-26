@@ -29,9 +29,11 @@ export function escala([d0, d1], [r0, r1]) {
 
 /** Topo "bonito" do eixo: ~8% acima do máximo, em `n` degraus de valor inteiro (R$ 15/30/45/60). */
 export function topoBonito(v, n = 4) {
-  if (!(v > 0)) return n;
+  if (!(v > 0) || !Number.isFinite(v)) return n;     // plano 2000d · IY-017: Infinity (divisão por zero na origem) não vira eixo NaN
   const bruto = v * 1.08 / n, p = Math.pow(10, Math.floor(Math.log10(bruto))), r = bruto / p;
-  const degraus = p >= 10 ? [1, 1.2, 1.5, 1.6, 1.8, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 10] : [1, 2, 3, 4, 5, 6, 7, 8, 10];
+  // plano 1500c · RC-247: abaixo de 1 (taxas em fração) entra o degrau 2,5 — 0,9 vira eixo 0 · 0,25 · 0,5 · 0,75 · 1 (antes 0,3 · 0,6 · 0,9 · 1,2);
+  // contagens (p ≥ 1) seguem só com degraus inteiros
+  const degraus = p >= 10 ? [1, 1.2, 1.5, 1.6, 1.8, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 10] : p < 1 ? [1, 2, 2.5, 3, 4, 5, 6, 7, 8, 10] : [1, 2, 3, 4, 5, 6, 7, 8, 10];
   const d = degraus.find(x => x >= r - 1e-9) * p;
   return Math.round(d * n * 1e6) / 1e6;
 }
@@ -163,6 +165,26 @@ function h(tag, attrs = {}, ...filhos) {
   return el;
 }
 const titulo = t => s("title", {}, t);
+/** plano 1500c · RC-241/RC-242: número com milhar e até 2 casas no padrão brasileiro («15.200», «2,5»). */
+const FMT_NUM = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 });
+// plano 2000d · IY-007: −0,3 arredonda para «0», não «-0» (o + 0 tira o zero negativo); IY-008: null/vazio em fmtNumero é «—», não «0»
+export const fmtInteiro = v => (fin(Number(v)) ? FMT_NUM.format(Math.round(Number(v)) + 0) : "0");
+export const fmtNumero = v => (v !== null && v !== undefined && v !== "" && fin(Number(v)) ? FMT_NUM.format(Number(v) + 0).replace(/^-0$/, "0") : "—");
+/**
+ * plano 2000d · DR-308: o rótulo curto de um tick do eixo — de 10 mil em diante «120 mil» / «1,2 mi» (com «R$ » quando o formato da série é
+ * dinheiro); abaixo disso, o próprio formato. textoEixoCurto(120000, v => `R$ ${v}`) → «R$ 120 mil».
+ */
+export function textoEixoCurto(v, fmt = fmtNumero) {
+  const n = Number(v);
+  const cheio = typeof fmt === "function" ? String(fmt(n)) : String(n);
+  if (!fin(n) || Math.abs(n) < 1e4) return cheio;
+  const um = x => FMT_NUM.format(Math.round(x * 10) / 10);
+  const a = Math.abs(n), sinal = n < 0 ? "−" : "";
+  // plano 2000d · IY-006: 999.950 arredonda para «1 mi» (antes «1.000 mil») — a unidade sobe quando o arredondamento chega a 1.000
+  const sobe = (x, lim) => x >= lim || Math.round(x / (lim / 1e3) * 10) / 10 >= 1000;
+  const curto = sobe(a, 1e9) ? `${um(a / 1e9)} bi` : sobe(a, 1e6) ? `${um(a / 1e6)} mi` : `${um(a / 1e3)} mil`;
+  return `${/^\s*R\$/.test(cheio) ? "R$ " : ""}${sinal}${curto}`;
+}
 const limpar = el => { while (el.firstChild) el.firstChild.remove(); };
 const reduzido = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const corValida = c => (/^#[0-9a-f]{6}$/i.test(String(c || "")) ? c : null);
@@ -171,20 +193,46 @@ const corValida = c => (/^#[0-9a-f]{6}$/i.test(String(c || "")) ? c : null);
 /** plano 1000b · RB-182: o gráfico grande segue a largura REAL do contêiner (mínimo 200 px; antes 260 fixo estourava o cartão de 2 colunas a 360 px). */
 export const LARGURA_MIN_GRAFICO = 200;
 export function larguraGrafico(clientWidth) { return Math.max(LARGURA_MIN_GRAFICO, Math.round(clientWidth || 640)); }
+/**
+ * plano 2000d · DR-310: UM ResizeObserver para todos os gráficos da página (antes um por gráfico: 10 blocos = 10 observadores). Cada alvo
+ * registra a sua função; o alvo que saiu da página é solto sozinho. observarTamanho(alvo, fn) → desligar(). Sem ResizeObserver → nada.
+ */
+let roComum = null, roClasse = null;
+const alvosRo = new Map();
+export function observarTamanho(alvo, fn) {
+  if (typeof ResizeObserver !== "function" || !alvo) return () => {};
+  // outra implementação de ResizeObserver (troca de página, polyfill): começa de novo com ela
+  if (roComum && roClasse !== ResizeObserver) { try { roComum.disconnect(); } catch { /* ok */ } roComum = null; alvosRo.clear(); }
+  if (!roComum) {
+    roClasse = ResizeObserver;
+    roComum = new ResizeObserver(entradas => {
+      const alvos = Array.isArray(entradas) && entradas.length ? entradas.map(e => e && e.target) : [...alvosRo.keys()];
+      for (const t of alvos) {
+        const f = alvosRo.get(t);
+        if (!f) continue;
+        // plano 1000b · RB-167: o gráfico saiu da página (a tela redesenhou): solta o nó antigo
+        if (t.isConnected === false) { soltar(t); continue; }
+        try { f(); } catch (err) { console.error(err); }
+      }
+    });
+  }
+  alvosRo.set(alvo, fn);
+  roComum.observe(alvo);
+  return () => soltar(alvo);
+}
+function soltar(alvo) {
+  if (!alvosRo.has(alvo)) return;
+  alvosRo.delete(alvo);
+  try { if (roComum) roComum.unobserve(alvo); } catch { /* ok */ }
+  if (!alvosRo.size && roComum) { try { roComum.disconnect(); } catch { /* ok */ } roComum = null; }
+}
 /** Liga o redesenho por largura (o SVG é medido em px reais: texto nunca estica). */
 function responsivo(alvo, desenhar) {
-  let w = 0, ro = null;
+  let w = 0, desligar = null;
   const rodar = anim => { const nw = larguraGrafico(alvo.clientWidth); w = nw; desenhar(nw, anim); };
   rodar(true);
-  if (typeof ResizeObserver === "function") {
-    ro = new ResizeObserver(() => {
-      // plano 1000b · RB-167: o gráfico saiu da página (a tela redesenhou): o observador se desliga sozinho e solta os nós antigos
-      if (alvo.isConnected === false) { if (ro) ro.disconnect(); ro = null; return; }
-      const nw = Math.round(alvo.clientWidth || 0); if (nw && Math.abs(nw - w) > 24) rodar(false);
-    });
-    ro.observe(alvo);
-  }
-  return { destruir() { if (ro) ro.disconnect(); ro = null; }, redesenhar() { rodar(false); } };
+  desligar = observarTamanho(alvo, () => { const nw = Math.round(alvo.clientWidth || 0); if (nw && Math.abs(nw - w) > 24) rodar(false); });
+  return { destruir() { if (desligar) desligar(); desligar = null; }, redesenhar() { rodar(false); } };
 }
 
 /** plano 1000b · RB-186: o vazio dos gráficos de lista (funil, barras) — um texto, nunca o cartão em branco. */
@@ -215,6 +263,18 @@ function trilho(caixa, { n, texto, aoMostrar, aoEsconder }) {
   };
   const esconder = () => { atual = -1; dica.hidden = true; clearTimeout(tFala); tFala = 0; aoEsconder(); };
   return { mostrar, esconder, get atual() { return atual; } };
+}
+
+/**
+ * plano 2000d · IY-018: Esc com a dica do gráfico aberta só fecha a dica — não vaza para a tela (no Início o mesmo Esc saía do exemplo,
+ * em outras telas fechava a folha inteira). Sem dica aberta, o Esc segue para quem estiver ouvindo.
+ */
+export function escFecha(e, tr) {
+  if (!tr || !(tr.atual >= 0)) return false;
+  if (e && typeof e.preventDefault === "function") e.preventDefault();
+  if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+  tr.esconder();
+  return true;
 }
 
 /* ---------- 2.1 Diário do Ads: barras de gasto (Meta + Google) × linha de conversas (média 7 dias) ---------- */
@@ -321,7 +381,7 @@ export function grafDiario(alvo, o) {
   caixa.addEventListener("keydown", e => {
     const ult = o.serie.length - 1, n = tr.atual;
     const mapa = { ArrowRight: n < 0 ? 0 : n + 1, ArrowLeft: n < 0 ? ult : n - 1, Home: 0, End: ult };
-    if (e.key === "Escape") return tr.esconder();
+    if (e.key === "Escape") return escFecha(e, tr);     // plano 2000d · IY-018
     if (!(e.key in mapa) || !geo) return;
     e.preventDefault();
     const k = Math.max(0, Math.min(ult, mapa[e.key]));
@@ -362,7 +422,8 @@ export function linha(alvo, o) {
     const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": o.resumo, class: anim && !reduzido() ? "g-anim" : "" });
     const grade = s("g", { class: "g-grade", "aria-hidden": "true" });
     ticks(Math.max(1, ...o.pontos.flatMap(p => p.valores.map(v => v || 0)))).forEach(v => {
-      grade.append(s("line", { x1: P.l, x2: W - P.r, y1: f1(y(v)), y2: f1(y(v)) }), s("text", { x: P.l - 8, y: f1(y(v) + 4), "text-anchor": "end" }, o.fmtEixo ? o.fmtEixo(v) : o.fmt(v)));
+      // plano 2000d · DR-308: sem fmtEixo próprio, o eixo usa a forma curta a partir de 10 mil («R$ 120 mil», não «R$ 120.000» espremido na margem)
+      grade.append(s("line", { x1: P.l, x2: W - P.r, y1: f1(y(v)), y2: f1(y(v)) }), s("text", { x: P.l - 8, y: f1(y(v) + 4), "text-anchor": "end" }, o.fmtEixo ? o.fmtEixo(v) : textoEixoCurto(v, o.fmt)));
     });
     svg.append(grade);
     o.series.forEach((se, j) => {
@@ -395,7 +456,7 @@ export function linha(alvo, o) {
   caixa.addEventListener("keydown", e => {
     const ult = o.pontos.length - 1, n = tr.atual;
     const mapa = { ArrowRight: n < 0 ? 0 : n + 1, ArrowLeft: n < 0 ? ult : n - 1, Home: 0, End: ult };
-    if (e.key === "Escape") return tr.esconder();
+    if (e.key === "Escape") return escFecha(e, tr);     // plano 2000d · IY-018
     if (!(e.key in mapa) || !geo) return;
     e.preventDefault();
     const k = Math.max(0, Math.min(ult, mapa[e.key]));
@@ -454,13 +515,16 @@ export function barras(alvo, o) {
     aoEsconder: () => { linhas.forEach(li => li.classList.remove("g-ativa")); caixa.classList.remove("g-foco"); },
   });
   const mostrarLinha = k => { const li = linhas[k]; if (!li) return; const p = posNaCaixa(caixa, li); caixa.style.setProperty("--y", `${Math.round(p.y)}px`); tr.mostrar(k, p.x); };
-  caixa.addEventListener("pointermove", e => { const li = e.target && e.target.closest ? e.target.closest(".g-hitem") : null; if (!li) return tr.esconder(); mostrarLinha(+li.dataset.k); });
+  const aoPonteiroB = e => { const li = e.target && e.target.closest ? e.target.closest(".g-hitem") : null; if (!li) return tr.esconder(); mostrarLinha(+li.dataset.k); };
+  caixa.addEventListener("pointermove", aoPonteiroB);
+  // plano 2000d · DR-275: no toque (sem hover) tocar numa barra fixa a dica — e ela fica até tocar fora (o pointerleave do toque não esconde)
+  caixa.addEventListener("pointerdown", aoPonteiroB);
   caixa.addEventListener("pointerleave", e => { if (e.pointerType !== "touch") tr.esconder(); });
   caixa.addEventListener("blur", () => tr.esconder());
   caixa.addEventListener("keydown", e => {
     const ult = o.itens.length - 1, n = tr.atual;
     const mapa = { ArrowDown: n < 0 ? 0 : n + 1, ArrowRight: n < 0 ? 0 : n + 1, ArrowUp: n < 0 ? ult : n - 1, ArrowLeft: n < 0 ? ult : n - 1, Home: 0, End: ult };
-    if (e.key === "Escape") return tr.esconder();
+    if (e.key === "Escape") return escFecha(e, tr);     // plano 2000d · IY-018
     if (!(e.key in mapa) || ult < 0) return;
     e.preventDefault();
     mostrarLinha(Math.max(0, Math.min(ult, mapa[e.key])));
@@ -492,8 +556,23 @@ export function rosca(alvo, o) {
     leg.append(h("li", {}, h("i", { class: `g-marca g-c${i % 8}` }), h("span", { class: "g-rl-nome", texto: it.rotulo }),
       h("b", { texto: `${o.fmt(it.valor)}${f ? ` · ${Math.round(f.pct)}%` : ""}` }), it.extra ? h("small", { texto: it.extra }) : null));
   });
-  alvo.append(h("div", { class: "g-rosca-caixa" }, svg, leg));
+  const caixaR = h("div", { class: "g-rosca-caixa" }, svg, leg);
+  alvo.append(caixaR);
+  tabelaDaRosca(alvo, caixaR, o, fs);      // plano 2000d · DR-306
   return { destruir() {} };
+}
+
+/**
+ * plano 2000d · DR-306: `tabela: true` na rosca/donut — «Ver como tabela» com rótulo, valor e % (como as linhas e barras já tinham). Quem monta
+ * a sua tabela por fora (Relatórios: motivos de perda) não passa a opção. Devolve o botão ou null.
+ */
+function tabelaDaRosca(alvo, caixa, o, fs) {
+  if (!o || o.tabela !== true || !Array.isArray(o.fatias) || !o.fatias.length) return null;
+  const rod = h("div", { class: "g-rodape" });
+  alvo.append(rod);
+  return alternarTabela(rod, caixa, { colunas: [o.colunaRotulo || "Item", o.colunaValor || "Valor", "%"],
+    linhas: o.fatias.map((it, i) => { const f = (fs || []).find(x => x.i === i); return [String(it.rotulo ?? ""), o.fmt(Number(it.valor) || 0), f ? `${Math.round(f.pct)}%` : "0%"]; }),
+    legenda: o.resumo });
 }
 
 /* ---------- 2.5 Funil horizontal por etapa ---------- */
@@ -505,6 +584,7 @@ export function taxaEntreEtapas(qtd, anterior) {
 }
 /** @param o {etapas:[{nome, cor, qtd, valorTxt, conversao (texto)|null, tipo}], resumo, taxas?: true}
     Sem `conversao` na etapa, a taxa entre etapas vizinhas é calculada das próprias quantidades (plano 50 · A3); `taxas: false` desliga. */
+let seqDicaFunil = 0;
 export function funil(alvo, o) {
   limpar(alvo);
   if (!Array.isArray(o.etapas) || !o.etapas.length) { alvo.append(semDados()); return { destruir() {} }; }     // plano 1000b · RB-186
@@ -521,14 +601,36 @@ export function funil(alvo, o) {
     // plano 1000 (pedido de Relatórios): `etapa.dica` explica a conversão (ex.: taxa acima de 100% porque entraram negócios direto na etapa) —
     // vira a dica do valor (title + data-dica do ui.ligarDicas) e uma descrição para o leitor de tela
     const dica = typeof e.dica === "string" && e.dica.trim() ? e.dica.trim().slice(0, 240) : null;
-    const li = h("li", { class: `g-fetapa g-f-${e.tipo || "aberto"}`, style: { "--i": n } },
-      h("span", { class: "g-fnome" }, h("i", { class: "g-fcor", style: cor ? { "--cor": cor } : {} }), h("span", { texto: e.nome })),
+    // plano 1500c · RC-341: `etapa.href` (só «#/…», nada externo) faz o nome da etapa virar link — tocar em «Ganhas» abre quem ganhou
+    const href = typeof e.href === "string" && /^#\//.test(e.href) ? e.href : null;
+    const nomeEl = h("span", { texto: e.nome });
+    // plano 1500c · RC-243: a dica da taxa (acima de 100%) ganha um «i» que abre no toque — antes só title (mouse) e sr-only
+    // plano 2000d · IY-015: o «i» aponta para o texto que abre (aria-controls); IY-016: Esc fecha o texto aberto e o foco fica no «i»
+    const idDica = dica ? `g-fdica-${++seqDicaFunil}` : null;
+    const btDica = dica ? h("button", { type: "button", class: "g-fdica-bt", "aria-label": `Por que «${convTxt}»?`, "aria-expanded": "false", "aria-controls": idDica, texto: "i" }) : null;
+    const textoDica = dica ? h("span", { class: "g-fdica-txt", role: "note", id: idDica, texto: dica }) : null;
+    if (btDica) {
+      textoDica.hidden = true;
+      btDica.addEventListener("click", ev => { if (ev && ev.preventDefault) ev.preventDefault(); const abrir = textoDica.hidden; textoDica.hidden = !abrir; btDica.setAttribute("aria-expanded", String(abrir)); });
+      btDica.addEventListener("keydown", ev => {
+        if (ev.key !== "Escape" || textoDica.hidden) return;
+        ev.preventDefault(); if (typeof ev.stopPropagation === "function") ev.stopPropagation();
+        textoDica.hidden = true; btDica.setAttribute("aria-expanded", "false");
+      });
+    }
+    // plano 2000d · DR-403: etapa com 0 não some — classe g-fzero (o CSS mostra o trilho vazio marcado) e «nenhum» para o leitor de tela
+    const zero = !(Number(e.qtd) > 0);
+    const li = h("li", { class: `g-fetapa g-f-${e.tipo || "aberto"}${href ? " g-fetapa-link" : ""}${zero ? " g-fzero" : ""}`, style: { "--i": n }, ...(zero ? { "data-zero": "1" } : {}) },
+      h("span", { class: "g-fnome" }, h("i", { class: "g-fcor", style: cor ? { "--cor": cor } : {} }), href ? h("a", { class: "g-flink", href, "aria-label": `Abrir ${e.nome}: ${typeof o.fmtQtd === "function" ? o.fmtQtd(e.qtd || 0) : fmtInteiro(e.qtd || 0)}` }, nomeEl) : nomeEl),     // plano 1500c · IC-017: o link diz quantos abre
       h("span", { class: "g-ftrilho" }, h("span", { class: "g-fbarra", style: { "--w": `${pct.toFixed(2)}%`, ...(cor ? { "--cor": cor } : {}) } }),
-        h("span", { class: "g-fqtd", texto: String(e.qtd || 0) })),
+        // plano 1500c · RC-241: «1.500», não «1500» (o.fmtQtd quando a tela quiser outro formato)
+        h("span", { class: "g-fqtd", texto: typeof o.fmtQtd === "function" ? o.fmtQtd(e.qtd || 0) : fmtInteiro(e.qtd || 0) })),
       h("span", { class: "g-fvalor", texto: e.valorTxt || "" }),
       h("span", { class: `g-fconv${taxa ? " g-fconv-taxa" : ""}${dica ? " g-fconv-dica" : ""}`, texto: convTxt, ...(taxa ? { "data-taxa": String(Math.round(taxa.pct)) } : {}),
         ...(dica ? { title: dica, "data-dica": dica } : {}) }),
-      dica ? h("span", { class: "sr-only", texto: `(${dica})` }) : null);
+      btDica, textoDica,
+      dica ? h("span", { class: "sr-only", texto: `(${dica})` }) : null,
+      zero ? h("span", { class: "sr-only", texto: "(nenhum nesta etapa)" }) : null);
     lista.append(li);
   });
   alvo.append(lista);
@@ -577,18 +679,27 @@ export function calor(alvo, o) {
     aoMostrar: k => { if (atual >= 0) celulas[Math.floor(atual / 24)][atual % 24].classList.remove("g-ativa"); atual = k; celulas[Math.floor(k / 24)][k % 24].classList.add("g-ativa"); },
     aoEsconder: () => { if (atual >= 0) celulas[Math.floor(atual / 24)][atual % 24].classList.remove("g-ativa"); atual = -1; },
   });
+  const celulaMaior = () => {
+    let melhor = { lin: 0, hr: 8, v: 0 };
+    ordem.forEach((d, lin) => { for (let hr = 0; hr < 24; hr++) { const v = valorCalor(d, hr); if (v > melhor.v) melhor = { lin, hr, v }; } });
+    return melhor;
+  };
   const mostrarCelula = (lin, hr) => {
     lin = Math.max(0, Math.min(6, lin)); hr = Math.max(0, Math.min(23, hr));
     const c = celulas[lin][hr], p = posNaCaixa(caixa, c);
     caixa.style.setProperty("--y", `${Math.round(p.y)}px`);
     tr.mostrar(lin * 24 + hr, p.x);
   };
-  caixa.addEventListener("pointermove", e => { const c = e.target && e.target.closest ? e.target.closest(".g-calor .g-cal-c") : null; if (!c) return tr.esconder(); mostrarCelula(+c.dataset.l, +c.dataset.h); });
+  const aoPonteiroC = e => { const c = e.target && e.target.closest ? e.target.closest(".g-calor .g-cal-c") : null; if (!c) return tr.esconder(); mostrarCelula(+c.dataset.l, +c.dataset.h); };
+  caixa.addEventListener("pointermove", aoPonteiroC);
+  caixa.addEventListener("pointerdown", aoPonteiroC);     // plano 2000d · DR-275: o toque fixa a dica da célula
   caixa.addEventListener("pointerleave", e => { if (e.pointerType !== "touch") tr.esconder(); });
   caixa.addEventListener("blur", () => tr.esconder());
   caixa.addEventListener("keydown", e => {
-    if (e.key === "Escape") return tr.esconder();
-    const lin = atual < 0 ? 0 : Math.floor(atual / 24), hr = atual < 0 ? 8 : atual % 24;   // começa na segunda às 8h (horário comercial)
+    if (e.key === "Escape") return escFecha(e, tr);     // plano 2000d · IY-018
+    // plano 1500c · RC-244: a 1ª seta começa na célula de MAIOR valor (antes segunda 8h fixo — fora do horário de quem abre às 7h ou no sábado)
+    const inicio = celulaMaior();
+    const lin = atual < 0 ? inicio.lin : Math.floor(atual / 24), hr = atual < 0 ? inicio.hr : atual % 24;
     const mapa = { ArrowRight: [lin, hr + 1], ArrowLeft: [lin, hr - 1], ArrowDown: [lin + 1, hr], ArrowUp: [lin - 1, hr], Home: [lin, 0], End: [lin, 23] };
     if (!(e.key in mapa)) return;
     e.preventDefault();
@@ -596,7 +707,29 @@ export function calor(alvo, o) {
     mostrarCelula(...mapa[e.key]);
   });
   alvo.append(caixa);
-  return { destruir() { tr.esconder(); }, mostrar: mostrarCelula, esconder: () => tr.esconder() };
+  // plano 2000d · DR-307: `tabela: true` — a mesma matriz em tabela (dia × hora) com «Ver como tabela», para o leitor de tela que não entra
+  // na grade (role=img); quem já monta a sua tabela por fora (Relatórios) não passa a opção
+  if (o.tabela === true) {
+    const rod = h("div", { class: "g-rodape" });
+    alvo.append(rod);
+    alternarTabela(rod, caixa, { colunas: ["Dia", ...Array.from({ length: 24 }, (_, hr) => `${String(hr).padStart(2, "0")}h`)],
+      linhas: ordem.map(d => [o.dias[d], ...Array.from({ length: 24 }, (_, hr) => o.fmt(valorCalor(d, hr)))]), legenda: o.resumo });
+  }
+  // plano 1500c · RC-304: girar o celular/redimensionar troca o passo das horas (1 ↔ 3) sem redesenhar a grade; só quando a tela não fixou o passo
+  let ro = null;
+  const rotulosH = [...grade.querySelectorAll(".g-cal-h")];
+  const aplicarPasso = p => { grade.setAttribute("data-passo-horas", p); rotulosH.forEach((el, hr) => { el.textContent = hr % p === 0 ? String(hr).padStart(2, "0") : ""; }); };
+  if (!(o.passoHoras === 1 || o.passoHoras === 3) && typeof ResizeObserver === "function") {
+    ro = new ResizeObserver(() => {
+      if (alvo.isConnected === false) { if (ro) ro.disconnect(); ro = null; return; }
+      const w = Number(alvo.clientWidth) || 0;
+      if (!w) return;
+      const p = passoHorasCalor(w, false);
+      if (String(p) !== grade.getAttribute("data-passo-horas")) aplicarPasso(p);
+    });
+    ro.observe(alvo);
+  }
+  return { destruir() { tr.esconder(); if (ro) ro.disconnect(); ro = null; }, mostrar: mostrarCelula, esconder: () => tr.esconder(), passo: p => aplicarPasso(p === 1 ? 1 : 3) };
 }
 
 /* ---------- 2.7 "Ver como tabela" (alternativa acessível de todo gráfico) ---------- */
@@ -604,26 +737,82 @@ export function calor(alvo, o) {
  * Cartão com o gráfico e um botão que alterna para uma tabela com os mesmos números.
  * @param o {colunas:[rótulos], linhas:[[células texto]], legenda: texto da <caption>}
  */
+let seqTabela = 0;
 export function alternarTabela(rodape, alvoGrafico, o) {
-  const tabela = h("div", { class: "g-tabela-caixa" });
+  // plano 2000d · IY-013: a caixa da tabela tem id e o botão aponta para ela (aria-controls) — o leitor sabe o que o botão mostra
+  const idTabela = `g-tab-${++seqTabela}`;
+  const tabela = h("div", { class: "g-tabela-caixa", id: idTabela });
   tabela.hidden = true;
+  // plano 2000d · IY-014: sem linhas, a tabela diz «Sem dados no período.» (antes um cabeçalho solto, sem corpo)
+  const linhas = Array.isArray(o.linhas) ? o.linhas : [];
+  const nCol = Math.max(1, (o.colunas || []).length);
   const t = h("table", { class: "g-tabela" }, h("caption", { class: "sr-only", texto: o.legenda || "" }),
-    h("thead", {}, h("tr", {}, o.colunas.map((c, j) => h("th", { scope: "col", class: j ? "num" : "", texto: c })))),
-    h("tbody", {}, o.linhas.map(l => h("tr", {}, l.map((c, j) => h(j ? "td" : "th", j ? { class: "num", texto: c } : { scope: "row", texto: c }))))));
+    h("thead", {}, h("tr", {}, (o.colunas || []).map((c, j) => h("th", { scope: "col", class: j ? "num" : "", texto: c })))),
+    h("tbody", {}, linhas.length ? linhas.map(l => h("tr", {}, l.map((c, j) => h(j ? "td" : "th", j ? { class: "num", texto: c } : { scope: "row", texto: c }))))
+      : h("tr", { class: "g-tabela-vazia" }, h("td", { colspan: String(nCol), texto: TEXTO_SEM_DADOS }))));
   tabela.append(t);
   // plano 1000b · RB-181: o texto troca («Ver como gráfico») e por isso NÃO há aria-pressed — os dois juntos davam «Ver como gráfico,
   // pressionado» (estado incoerente). O nome diz a ação seguinte; data-modo guarda o que está à vista para quem precisar ler.
-  const btn = h("button", { type: "button", class: "g-ver-tabela", "data-modo": "grafico" }, "Ver como tabela");
+  const btn = h("button", { type: "button", class: "g-ver-tabela", "data-modo": "grafico", "aria-controls": idTabela }, "Ver como tabela");
+  // plano 1500c · RC-245: a tabela recebe o foco quando aparece (o leitor anuncia a tabela, não fica no botão sem saber do que mudou)
+  t.setAttribute("tabindex", "-1");
+  // plano 1500c · RC-246: «Copiar tabela» (colunas separadas por tabulação: cola certo no Excel/Planilhas) — só com a tabela à vista
+  const btCopiar = h("button", { type: "button", class: "g-copiar-tabela", "aria-label": `Copiar a tabela${o.legenda ? `: ${o.legenda}` : ""}` }, "Copiar tabela");
+  btCopiar.hidden = true;
+  btCopiar.addEventListener("click", () => copiarTexto(tabelaTsv(o.colunas, linhas), btCopiar));
   btn.addEventListener("click", () => {
     const ligado = tabela.hidden;
     tabela.hidden = !ligado;
     alvoGrafico.hidden = ligado;
+    btCopiar.hidden = !ligado;
     btn.setAttribute("data-modo", ligado ? "tabela" : "grafico");
     btn.textContent = ligado ? "Ver como gráfico" : "Ver como tabela";
+    if (ligado && typeof t.focus === "function") { try { t.focus({ preventScroll: true }); } catch { t.focus(); } }
   });
   alvoGrafico.after(tabela);
-  rodape.append(btn);
+  rodape.append(btn, btCopiar);
   return btn;
+}
+/** plano 1500c · RC-246: a tabela em texto TSV (tabulação entre colunas, quebra entre linhas; tabulação/quebra dentro da célula vira espaço). */
+export function tabelaTsv(colunas = [], linhas = []) {
+  // plano 2000d · IY-009: célula que começa com = + @ (ou − seguido de letra) vira fórmula ao colar no Excel/Planilhas — um nome de contato
+  // «=HIPERLINK(…)» executaria. Ganha um apóstrofo na frente (a planilha mostra o texto como está); números negativos («-5», «−R$ 800») ficam
+  const cel = v => { const t = String(v ?? "").replace(/[\t\r\n]+/g, " "); return /^[=+@]/.test(t) || /^[-−](?![\d\s.,]|R\$)/.test(t) ? `'${t}` : t; };
+  return [colunas, ...linhas].map(l => (Array.isArray(l) ? l : []).map(cel).join("\t")).join("\n");
+}
+/**
+ * Copia para a área de transferência (navigator.clipboard) e diz no próprio botão «Copiada» por 2 s; sem clipboard, «Não deu para copiar».
+ * plano 2000d · IY-010: o rótulo original fica guardado no botão — dois cliques seguidos não prendem «Copiada» como nome para sempre;
+ * IY-011: o nome acessível (aria-label) troca junto, senão o leitor de tela nunca ouvia o resultado; IY-012: sem navigator.clipboard
+ * (página fora de https, navegador antigo) tenta o copiar clássico (textarea + execCommand) antes de desistir.
+ */
+export function copiarTexto(texto, bt, ms = 2000) {
+  if (bt.dataset && bt.dataset.rotulo === undefined) { bt.dataset.rotulo = bt.textContent; bt.dataset.rotuloAria = bt.getAttribute("aria-label") || ""; }
+  const rotulo = bt.dataset ? bt.dataset.rotulo : bt.textContent;
+  const aria = bt.dataset ? bt.dataset.rotuloAria : "";
+  const dizer = t => {
+    bt.textContent = t;
+    if (aria) bt.setAttribute("aria-label", t);
+    clearTimeout(bt.__copiarT);
+    bt.__copiarT = setTimeout(() => { bt.textContent = rotulo; if (aria) bt.setAttribute("aria-label", aria); }, ms);
+  };
+  const classico = () => {
+    try {
+      if (typeof document === "undefined" || typeof document.execCommand !== "function") return false;
+      const area = document.createElement("textarea");
+      area.value = texto; area.setAttribute("readonly", ""); area.className = "sr-only";
+      document.body.append(area);
+      if (typeof area.select === "function") area.select();
+      const ok = !!document.execCommand("copy");
+      area.remove();
+      return ok;
+    } catch { return false; }
+  };
+  try {
+    const cb = typeof navigator !== "undefined" && navigator && navigator.clipboard;
+    if (!cb || typeof cb.writeText !== "function") { const ok = classico(); dizer(ok ? "Copiada" : "Não deu para copiar"); return Promise.resolve(ok); }
+    return cb.writeText(texto).then(() => { dizer("Copiada"); return true; }, () => { const ok = classico(); dizer(ok ? "Copiada" : "Não deu para copiar"); return ok; });
+  } catch { dizer("Não deu para copiar"); return Promise.resolve(false); }
 }
 
 /* ---------- 2.8 Números que contam (odômetro simples) ---------- */
@@ -667,9 +856,21 @@ export function animarValor(el, valor, pintar, acessivel = String(valor)) {
   const dur = duracaoToken("--t-dados");
   if (!dur || !fin(valor) || valor === 0 || typeof requestAnimationFrame !== "function") { final(); return el; }
   let ativo = true, frame = 0;
+  // plano 2000d · DR-404: aria-label num elemento sem papel (<b>, <span>) é ignorado — o leitor lia «0… 1.200… 15.200» a cada quadro. Durante a
+  // contagem o número fica aria-hidden e um sr-only ao lado diz o valor final; no fim os dois saem e o número volta a ser lido
+  let sombra = null;
+  const tinhaOculto = typeof el.getAttribute === "function" ? el.getAttribute("aria-hidden") : null;
+  if (typeof el.setAttribute === "function" && typeof el.after === "function" && typeof document !== "undefined" && document.createElement && !el.getAttribute?.("role") && tinhaOculto !== "true") {
+    sombra = document.createElement("span");
+    sombra.className = "sr-only g-contando";
+    sombra.textContent = acessivel;
+    el.setAttribute("aria-hidden", "true");
+    try { el.after(sombra); } catch { sombra = null; el.removeAttribute?.("aria-hidden"); }
+  }
   const limpar = () => {
     if (!ativo) return false;
     ativo = false;
+    if (sombra) { sombra.remove(); sombra = null; if (tinhaOculto === null) el.removeAttribute?.("aria-hidden"); else el.setAttribute("aria-hidden", tinhaOculto); }
     if (el.__pararContagem === limpar) el.__pararContagem = null;
     if (frame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame);
     document.removeEventListener?.("visibilitychange", visibilidade);
@@ -716,6 +917,17 @@ export function destacar(el) {
    As classes vivem no app.css (não no relatorios.css): KPI do Início, cartão do CRM e painel de Conversas
    usam estas peças sem carregar o CSS de Relatórios.
    ============================================================ */
+/**
+ * plano 2000d · DR-280: a tendência da linha em palavras para o leitor de tela (a linha do KPI é aria-hidden) — «Tendência: subindo nos últimos
+ * 14 dias.»; com `linha` (a linha mede outra coisa: «conversas novas por dia») o nome vai junto. "" com menos de 2 pontos.
+ */
+export function resumoTendencia(valores, { linha = null } = {}) {
+  const u = (valores || []).filter(v => v !== null && v !== undefined && v !== "").map(Number).filter(fin);     // ponto vazio (null) não conta como zero
+  if (u.length < 2) return "";
+  const t = tendenciaDe(u);
+  const como = t === "sobe" ? "subindo" : t === "desce" ? "caindo" : "estável";
+  return `Tendência${linha ? ` de ${linha}` : ""}: ${como} nos últimos ${u.length} dias.`;
+}
 /** Tendência de uma série: compara o último ponto útil com o primeiro. */
 export function tendenciaDe(valores) {
   const u = (valores || []).map(Number).filter(fin);
@@ -736,18 +948,12 @@ export function pontosSparkline(valores, W, H, P = 3) {
 }
 /** Redesenho por largura para peças pequenas (mínimo 48 px; o `responsivo` dos gráficos grandes começa em 260). */
 function responsivoMini(alvo, desenhar, minimo = 48) {
-  let w = 0, ro = null;
+  let w = 0, desligar = null;
   const rodar = anim => { const nw = Math.max(minimo, Math.round(alvo.clientWidth || 120)); w = nw; desenhar(nw, anim); };
   rodar(true);
-  if (typeof ResizeObserver === "function") {
-    ro = new ResizeObserver(() => {
-      // plano 1000b · RB-167: a linha saiu da página (o Início redesenhou os KPIs): desliga sozinho em vez de segurar os nós antigos
-      if (alvo.isConnected === false) { if (ro) ro.disconnect(); ro = null; return; }
-      const nw = Math.round(alvo.clientWidth || 0); if (nw && Math.abs(nw - w) > 12) rodar(false);
-    });
-    ro.observe(alvo);
-  }
-  return { destruir() { if (ro) ro.disconnect(); ro = null; }, redesenhar() { rodar(false); } };
+  // plano 2000d · DR-310: o observador comum (a linha que saiu da página é solta sozinha — RB-167)
+  desligar = observarTamanho(alvo, () => { const nw = Math.round(alvo.clientWidth || 0); if (nw && Math.abs(nw - w) > 12) rodar(false); });
+  return { destruir() { if (desligar) desligar(); desligar = null; }, redesenhar() { rodar(false); } };
 }
 
 /* ---------- 3.1 Sparkline: SVG de 32 px, último ponto marcado ---------- */
@@ -761,7 +967,7 @@ export function sparkline(alvo, o = {}) {
   const valores = (o.valores || []).map(v => (fin(Number(v)) ? Number(v) : null));
   const uteis = valores.filter(fin);
   const rotulo = o.rotulo || "Série";
-  const fmt = o.fmt || (v => String(Math.round(v * 100) / 100).replace(".", ","));
+  const fmt = o.fmt || fmtNumero;     // plano 1500c · RC-242: «15.200» no resumo acessível (antes «15200»)
   const H = Math.max(28, Math.min(40, Number(o.altura) || 32));
   alvo.classList.add("g-spark-alvo");
   if (uteis.length < 2) {
@@ -859,6 +1065,8 @@ export function donut(alvo, o) {
   svg.addEventListener("pointermove", e => { const p = e.target && e.target.closest ? e.target.closest(".g-fatia") : null; if (!p) return tr.esconder(); const pos = posNaCaixa(caixa, p); caixa.style.setProperty("--y", `${Math.round(pos.y)}px`); tr.mostrar(+p.dataset.i, pos.x); });
   svg.addEventListener("pointerleave", () => tr.esconder());
   desenharFatias();
-  alvo.append(h("div", { class: "g-rosca-caixa g-donut-env" }, caixa, leg));
+  const env = h("div", { class: "g-rosca-caixa g-donut-env" }, caixa, leg);
+  alvo.append(env);
+  tabelaDaRosca(alvo, env, o, fatiasDe(fatias.map(f => f.valor)));      // plano 2000d · DR-306
   return { destruir() { tr.esconder(); }, ocultas: () => [...ocultas], alternar };
 }

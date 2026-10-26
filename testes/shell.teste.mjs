@@ -99,10 +99,14 @@ await teste("antes.js: injeta o modulepreload da tela do endereço (8 telas + lo
     "automacoes.js": ["modulepreload:auto-logica.js?v=VTESTE", "modulepreload:auto-pecas.js?v=VTESTE", "preload:automacoes.css?v=VTESTE"],
     "config.js": ["modulepreload:crm-config.js?v=VTESTE", "modulepreload:cv-config.js?v=VTESTE", "modulepreload:ads-config.js?v=VTESTE", "modulepreload:agenda-config.js?v=VTESTE",
       "modulepreload:rastreio-config.js?v=VTESTE", "preload:config.css?v=VTESTE"],
+    // plano 1500c: UCC-065 — Agenda, Anúncios e Relatórios também aquecem a lógica e o CSS que pedem ao abrir
+    "agenda.js": ["modulepreload:crm-logica.js?v=VTESTE", "modulepreload:graficos.js?v=VTESTE", "preload:agenda.css?v=VTESTE"],
+    "anuncios.js": ["modulepreload:rel-logica.js?v=VTESTE", "modulepreload:graficos.js?v=VTESTE", "modulepreload:../nucleo.js?v=VTESTE", "preload:relatorios.css?v=VTESTE"],
+    "relatorios.js": ["modulepreload:rel-logica.js?v=VTESTE", "modulepreload:graficos.js?v=VTESTE", "modulepreload:anuncios.js?v=VTESTE", "preload:relatorios.css?v=VTESTE"],
   };
   for (const [hash, arq] of casos) assert.deepEqual(rodarAntes({ hash, token: "t" }).preloads, [`modulepreload:${arq}?v=VTESTE`, ...(extras[arq] || [])], hash);
   assert.deepEqual(rodarAntes({ hash: "", token: "t" }).preloads, ["modulepreload:inicio.js?v=VTESTE", ...extras["inicio.js"]], "sem rota: Início");
-  assert.deepEqual(rodarAntes({ hash: "", search: "?produto=ads", token: "t" }).preloads, ["modulepreload:anuncios.js?v=VTESTE"], "entrada do Nexus Ads");
+  assert.deepEqual(rodarAntes({ hash: "", search: "?produto=ads", token: "t" }).preloads, ["modulepreload:anuncios.js?v=VTESTE", ...extras["anuncios.js"]], "entrada do Nexus Ads");
   assert.deepEqual(rodarAntes({ hash: "", search: "?produto=atendimento", token: "t" }).preloads, ["modulepreload:conversas.js?v=VTESTE", ...extras["conversas.js"]]);
   assert.deepEqual(rodarAntes({ hash: "", search: "?produto=crm", token: "t" }).preloads, ["modulepreload:crm.js?v=VTESTE", ...extras["crm.js"]]);
 });
@@ -206,10 +210,9 @@ await teste("sw.js: cross-origin, POST, ambiente fictício e versao.json passam 
     m.req("", { url: "https://dtjznipitihnwmcgpzqh.supabase.co/rest/v1/rpc/nx_pulso" }),
     m.req("/app/app.js?v=V1", { method: "POST" }),
     m.req("/__dev_falso/boot.js"),
-    m.req("/app/versao.json"),
-    m.req("/app/versao.json?t=1"),
+    // plano 1500c: UCC-050 — o versao.json agora passa pelo sw (sempre da rede, no-store; sem rede, 503 em JSON)
     m.req("/app/sw.js?v=V1"),
-    m.req("/app/manifest.webmanifest"),
+    // plano 1500c: UCC-045 — o manifesto (sem ?v=) agora é servido do cache desta versão (testes/plano1500c-sis)
     m.req("/app/api.js"),                                   // sem ?v=: não é arquivo versionado
     m.req("/app/", { mode: "navigate", url: "https://outro.test/app/" }),
   ];
@@ -704,7 +707,7 @@ await teste("rede.js: chamada lenta (aos 4 s) vira 'lento' e volta sozinha; offl
 await teste("rede.js: tenta sozinho em 2, 4, 8, 15 e 30 s (e 30 s depois); acha a internet, depois o servidor, e volta", async () => {
   let internet = false, servidor = false, sondagens = 0;
   const rel = relogioFalso(), jan = janelaFalsa(), nav = { onLine: false };
-  const r = REDE.criarRede({ nav, janela: jan, agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora, ping: async () => internet,
+  const r = REDE.criarRede({ aleatorio: () => .5, /* plano 2000d: SX-036 sorteia ±20 %; .5 = a espera-base */ nav, janela: jan, agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora, ping: async () => internet,
     sondar: async () => { sondagens++; if (servidor) r.sucesso(); else r.falha({ codigo: "http_503" }); } });
   assert.equal(r.estado, "offline");
   const esperas = [];
@@ -726,7 +729,7 @@ await teste("rede.js: tenta sozinho em 2, 4, 8, 15 e 30 s (e 30 s depois); acha 
 await teste("rede.js: «Tentar agora» e o evento online tentam já (sem esperar o recuo)", async () => {
   let sondagens = 0, internet = false;
   const rel = relogioFalso(), jan = janelaFalsa(), nav = { onLine: true };
-  const r = REDE.criarRede({ nav, janela: jan, agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora, ping: async () => internet, sondar: async () => { sondagens++; r.sucesso(); } });
+  const r = REDE.criarRede({ aleatorio: () => .5, /* plano 2000d: SX-036 */ nav, janela: jan, agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora, ping: async () => internet, sondar: async () => { sondagens++; r.sucesso(); } });
   r.falha({ codigo: "http_503" });
   assert.equal(r.proximaTentativaEm - rel.agora(), 2000);
   internet = false; await r.tentarAgora();
@@ -1157,11 +1160,12 @@ await teste("rascunho.js: sem armazenamento ou com armazenamento que lança erro
 await teste("app.js (M17): sessão expirada abre a janela sem desmontar a tela; outra conta limpa tudo; logout apaga os rascunhos; ctx.rascunho e rascunho.js entram no boot", () => {
   const pedir = /async function pedirLoginNaTela\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
   assert.doesNotMatch(pedir, /desmontarAtual\(|ui\.limpar\(/, "a tela e o que foi digitado ficam como estão");
-  assert.match(pedir, /titulo: "Sua sessão expirou"/); assert.match(pedir, /valor: antes\.email/, "e-mail preenchido");
+  // plano 2000d: DU-400 — o título vem do motivo da queda («Sua sessão expirou» quando o servidor não diz outro)
+  assert.match(pedir, /titulo: queda\.titulo/); assert.match(APP_JS, /titulo: "Sua sessão expirou"/); assert.match(pedir, /valor: antes\.email/, "e-mail preenchido");
   assert.match(pedir, /nova\.conta\.id !== antes\.id\) return "outra"/);
   assert.match(pedir, /if \(r === "outra"\) \{\s*if \(E\.rascunhos\) E\.rascunhos\.apagarTudo\(\);/);
   assert.match(pedir, /E\.M\.dados\.guardarToken\(r2\.token\)/);
-  const caiu = /function sessaoCaiu\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
+  const caiu = /function sessaoCaiu\((?:e = null)?\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];   // plano 2000d: DU-400 — recebe o erro (motivo da queda)
   assert.match(caiu, /if \(!E\.sessao\) \{ sessaoCaiuTotal\(\); return false; \}/, "na abertura (sem sessão) segue o caminho antigo");
   assert.match(caiu, /loginPendente = pedirLoginNaTela\(\)/, "várias leituras que falham dividem UMA janela");
   assert.match(fnDoApp("sair"), /E\.rascunhos\.apagarTudo\(\)/);   // plano 1000: sair({ perguntar, manterRascunhos })
@@ -1351,12 +1355,12 @@ await teste("app.js (M16): sessão guardada pinta o shell e a rede revalida; sel
     // plano 1000b: o sair() espera a limpeza (UB-135: await limparComPrazo(), que chama limparDadosDoAparelho)
     assert.match(corpo, /limparDadosDoAparelho\(\)|await limparComPrazo\(\)/, `${nome} limpa o cache`);
   }
-  assert.match(/async function pedirLoginNaTela\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0], /if \(r === "outra"\) \{[\s\S]*?limparDadosDoAparelho\(\);/, "troca de conta limpa o cache");
+  assert.match(/async function pedirLoginNaTela\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0], /if \(r === "outra"\) \{[\s\S]*?await limparComPrazo\(1500\);/, "troca de conta limpa o cache");   // plano 1500c: UCC-027 — espera a limpeza (com prazo) antes do reload
   assert.match(APP_JS, /function limparDadosDoAparelho\(\) \{\s*const feito = E\.cache \? E\.cache\.limpar\(\)\.catch\(\(\) => \{\}\) : Promise\.resolve\(\);/);
   assert.match(APP_JS, /Mostrando dados de \$\{hora\} · atualizando…/);
   assert.match(APP_JS, /reiniciarSelo\(\);\s*marcarMenu\(r\.modulo\);/, "o selo recomeça a cada tela");
   assert.match(HTML, /<link rel="modulepreload" href="cache\.js\?v=/);
-  assert.match(APP_JS, /ui\.esqueleto\(rotas\.esqueletoDaRota\(r\.modulo, r\.partes\)\)/);
+  assert.match(APP_JS, /ui\.esqueleto\(rotas\.esqueletoDaRota\(r\.modulo, r\.partes\), \{ demorou:/);   // plano 2000d: DU-360 — e diz o que carrega depois de 5 s
   const tiposUi = [...ler("ui.js").matchAll(/tipo === "([a-z]+)"/g)].map(m => m[1]);
   for (const m of ["inicio", "conversas", "crm", "contatos", "empresas", "tarefas", "agenda", "anuncios", "relatorios", "automacoes", "config", "admin", "qualquer"]) {
     const tipo = ROTAS_MOD.esqueletoDaRota(m, []);
@@ -1504,7 +1508,8 @@ await teste("app.js (revisão R119): a rede devolveu OUTRA conta → limpa o apa
   assert.equal(r.E.sessao, guardada, "a sessão da outra conta não é misturada à tela da anterior");
   const limpar = fnDoApp("limparERecarregar");
   assert.match(limpar, /await limparComPrazo\(\); location\.reload\(\);/);
-  assert.match(fnDoApp("limparComPrazo"), /Promise\.race\(\[limparDadosDoAparelho\(\), new Promise\(r => setTimeout\(r, 800\)\)\]\)/, "a limpeza do IndexedDB não é cortada pelo recarregamento");
+  // plano 1500c: UCC-027 — o prazo virou parâmetro (800 ms por padrão; a troca de conta espera 1,5 s)
+  assert.match(fnDoApp("limparComPrazo"), /function limparComPrazo\(ms = 800\) \{\s*return Promise\.race\(\[limparDadosDoAparelho\(\), new Promise\(r => setTimeout\(r, ms\)\)\]\)/, "a limpeza do IndexedDB não é cortada pelo recarregamento");
   const dados = fnDoApp("limparDadosDoAparelho");
   assert.match(dados, /LS\.apagar\(CHAVE_CONTA\);\s*E\.sessaoGuardada = null;\s*return feito;/, "sem CHAVE_CONTA a próxima abertura lê a sessão da rede (não há laço de recarga)");
 });
@@ -1538,7 +1543,9 @@ await teste("app.js (revisão R119): empresa removida → cache dela apagado, ou
 });
 
 await teste("app.js (revisão R119): entrar ou aceitar convite com outra conta aberta não adota a sessão antiga; rota pública não dispara a sessão antecipada", () => {
-  const entrar = /async aoEntrar\(token, \{ cliente_id(?:, compartilhado)? \} = \{\}\) \{[\s\S]*?\n    \},/.exec(APP_JS)[0];
+  // plano 1500c: UCC-030/UC-019/UCB-054 — o aoEntrar recebe também expira_em, boasVindas e demo
+  // plano 2000d: DU-222/DU-119 — também tentativas e ativar2fa
+  const entrar = /async aoEntrar\(token, \{ cliente_id(?:, compartilhado)?(?:, expira_em, boasVindas, demo)?(?:, tentativas)?(?:, ativar2fa = false)? \} = \{\}\) \{[\s\S]*?\n    \},/.exec(APP_JS)[0];
   assert.match(entrar, /E\.sessaoPromessa = null; E\.sessaoGuardada = null;\s*limparDadosDoAparelho\(\);\s*E\.M\.dados\.guardarToken\(token\);/, "zera a antecipada e a guardada e limpa o aparelho ANTES de guardar o token e navegar");
   assert.ok(entrar.indexOf("limparDadosDoAparelho()") < entrar.indexOf("navegar(destino"), "limpa antes de navegar");
   const iniciar = /async function iniciar\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
@@ -1683,7 +1690,8 @@ await teste("app.js (M22): ctx.atalhosDeRegiao, alvo resolvido na hora do clique
   assert.match(APP_JS, /if \(alvo\) focarElemento\(alvo\); else E\.ui\.anunciar\("Essa área não está disponível agora\."\);/);
   assert.match(APP_JS, /b\.el\.hidden = !resolverAlvo\(b\.alvo\)/, "alvo que não existe agora não ganha atalho");
   const montar = /async function montarNoShell\([\s\S]*?\nfunction focarVista/.exec(APP_JS)[0];
-  assert.equal([...montar.matchAll(/if \(doUsuario\) focarTitulo\(seq\);/g)].length, 2, "as duas saídas de montarNoShell focam o título");
+  // plano 1500c: UCC-075 — na saída da tela montada, só quando a TELA mudou (abrir item na mesma tela não move o foco)
+  assert.equal([...montar.matchAll(/if \(doUsuario(?: && trocouDeTela)?\) focarTitulo\(seq\);/g)].length, 2, "as duas saídas de montarNoShell focam o título");
   assert.doesNotMatch(montar, /if \(doUsuario\) focarVista\(\);/, "nada de focar o <main> direto");
   const f = /function focarTitulo\(seq\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
   assert.match(f, /h1\.setAttribute\("tabindex", "-1"\)/); assert.match(f, /E\.ui\.anunciar\(`\$\{nome\}, carregado`\)/);
@@ -1734,7 +1742,8 @@ await teste("rotas.nomeDoApp: org padrão usa os títulos de sempre; white-label
   assert.deepEqual([n("Conecta", "crm").name, n("Conecta", "ads").name, n("Conecta", "atendimento").name], ["Conecta CRM", "Conecta Anúncios", "Conecta Atendimento"]);
   assert.equal(n("Conecta", "ads").short_name, "Conecta Ads"); assert.equal(n("Conecta", "crm").short_name, "Conecta CRM");
   for (const x of [n("Clínica Sorriso Vivo Odontologia", "atendimento"), n("Órbita", "atendimento"), n("X", "crm")]) assert.ok(x.short_name.length <= 12, x.short_name);
-  assert.equal(n("Conecta", null).name, "Conecta"); assert.equal(n("", null).name, "Órbita"); assert.equal(n(undefined, "inexistente").name, "Órbita");
+  // plano 2000d: DU-276 — sem produto (a marca ainda não chegou) o nome é neutro («Painel»), nunca o da plataforma
+  assert.equal(n("Conecta", null).name, "Conecta"); assert.equal(n("", null).name, "Painel"); assert.equal(n(undefined, "inexistente").name, "Painel");
   assert.equal(n("Conecta", "crm").description, "Contatos, oportunidades, vendas e automações.");
   assert.deepEqual(["crm", "ads", "atendimento", null].map(w => ROTAS_MOD.iconeDoProduto(w, "dente")), ["dente", "anuncio", "chat", "camadas"]);
   for (const ic of ["dente", "anuncio", "chat", "camadas", "funil"]) assert.ok(sprite.has(ic), `i-${ic} no sprite`);
@@ -1921,7 +1930,11 @@ await teste("ações do catálogo filtradas por papel e produto (aceite do M18)"
   assert.ok(!at.includes("nova-oportunidade") && !at.includes("nova-tarefa"), "no Atendimento não há CRM (oportunidade, tarefa)");
   // Anúncios: só o que vale em qualquer lugar
   const ads = idsDe(ambiente({ workspace: "ads" }));
-  assert.deepEqual(ads.filter(i => !["alternar-tema", "abrir-produto", "atalhos", "sair", "primeiros-passos"].includes(i)), [], "em Anúncios nenhuma ação de CRM/Conversas/Agenda");
+  // plano 1500c: UCC-082…085 — Central de ajuda, Ver plano, tour, recarregar e notificações valem em qualquer produto
+  // plano 1500c: UC-028/UC-038 — «Convidar pessoa» (admin) e «Situação dos serviços» também valem em qualquer produto
+  // plano 2000d: DU-141/DU-281 — «Bloquear a tela» e «Modo foco» são do shell (valem em todo produto)
+  // plano 2000d: SX-100 — «Modo apresentação» também é do shell (vale em todo produto)
+  assert.deepEqual(ads.filter(i => !["alternar-tema", "abrir-produto", "atalhos", "sair", "primeiros-passos", "central-ajuda", "ver-plano", "tour", "recarregar", "notificacoes", "convidar-pessoa", "situacao-servicos", "bloquear-tela", "modo-foco", "modo-apresentacao"].includes(i)), [], "em Anúncios nenhuma ação de CRM/Conversas/Agenda");
   // papel: leitura não cria nada; atendente cria mas não vê Primeiros passos (é do admin)
   const leitura = idsDe(ambiente({ papel: "leitura" }));
   assert.deepEqual(leitura.filter(i => i.startsWith("nova-") || i === "marcar-consulta" || i === "primeiros-passos"), [], "papel leitura: sem ações de criar");
@@ -1967,7 +1980,8 @@ await teste("rotas.itensDoMenu (o «Ir para» e o menu do shell): papel, plano, 
   assert.ok(ROTAS_MOD.itensDoMenu({ op: op(), vocab: {}, workspace: "crm" }).find(i => i.id === "crm").icone, "vocabulário vazio não quebra");
   assert.equal(ROTAS_MOD.itensDoMenu({ op: op(), vocab: VOC.vocab("odonto"), workspace: "ads", dev: true, prontos: ["inicio"] }).find(i => i.id === "anuncios").emConstrucao, true, "dev marca «obra»");
   const d = CMD.destinos(ROTAS_MOD.itensDoMenu({ op: op(), vocab: VOC.vocab("odonto"), workspace: "atendimento" }));
-  assert.deepEqual(d.find(x => x.id === "conversas"), { id: "conversas", rotulo: "Conversas", hash: "#/conversas", icone: "chat", palavras: CMD.PALAVRAS_DESTINO.conversas, emConstrucao: false });
+  // plano 2000d: DU-410 — o destino traz o atalho «G C»
+  assert.deepEqual(d.find(x => x.id === "conversas"), { id: "conversas", rotulo: "Conversas", hash: "#/conversas", icone: "chat", palavras: CMD.PALAVRAS_DESTINO.conversas, emConstrucao: false, atalho: "G C" });
   assert.deepEqual(CMD.filtrar(d, "whatsapp").map(x => x.id), ["conversas"], "«whatsapp» leva a Conversas pelas palavras extras");
   assert.equal(ROTAS_MOD.itensDoMenu({ op: op(), vocab: VOC.vocab("odonto"), workspace: "relatorios_nao_existe" }).length > 5, true, "produto desconhecido não filtra (como antes)");
   assert.equal(d.find(x => x.id === "config").hash, "#/config");
@@ -2045,9 +2059,10 @@ await teste("app.js (M18): a paleta abre em todo produto, módulo carregado sob 
   tem(APP_JS, 'E.comandos.temAtalho("?") || document.querySelector("dialog[open]")', "«?» fica com a tela que o registra (Conversas) e não abre sobre outra janela");
   tem(APP_JS, "function definirTitulo(texto) { E.titulo = texto || \"\"; atualizarTitulo(); lembrarRecente(texto); }", "Recentes pelo título da tela de detalhe");
   tem(APP_JS, "const prefixos = [E.M.comandos ? E.M.comandos.PREFIXO_RECENTES", "Recentes (nomes de pessoas) saem no logout/queda de sessão");
-  tem(APP_JS, '{ rotulo: "Aparência", icone:', "tema no menu da conta"); tem(APP_JS, '{ rotulo: "Ajuda", icone: "ajuda", fn: () => abrirMenuAjuda(ancora) }', "Ajuda no menu da conta");
+  tem(APP_JS, '{ rotulo: "Aparência", icone:', "tema no menu da conta"); tem(APP_JS, 'icone: "ajuda", fn: () => abrirMenuAjuda(ancora) }', "Ajuda no menu da conta");   // plano 2000d: DU-286 — o rótulo diz «· há novidades»
   tem(APP_JS, '"Primeiros passos"', "Ajuda: Primeiros passos"); tem(APP_JS, '"Atalhos de teclado"', "Ajuda: Atalhos"); tem(APP_JS, '"Falar com o suporte"', "Ajuda: suporte");
-  tem(APP_JS, "Preciso de ajuda no ${app}${tela}${emp}", "o texto do suporte leva produto, tela e empresa");
+  // plano 2000d: DU-285 — o texto do suporte saiu para comandos.textoSuporte (empresa, tela, versão e aparelho)
+  tem(APP_JS, "textoSuporte({ app, tela: E.titulo, empresa: E.cliente ? E.cliente.nome : \"\", versao: VERSAO, aparelho })", "o texto do suporte leva produto, tela e empresa");
   tem(APP_JS, "E.ui.linkWhatsApp(", "link pelo helper (número só com dígitos)");
   tem(APP_JS, 'class: "pilula-teste"', "pílula de teste"); tem(APP_JS, "Ocultar por 24 h", "dispensável por 24 h");
   assert.doesNotMatch(APP_JS.slice(APP_JS.indexOf("function desenharFaixas")), /Teste grátis até/, "o teste em andamento não é mais faixa de linha inteira");

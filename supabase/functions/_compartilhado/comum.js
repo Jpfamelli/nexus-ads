@@ -12,7 +12,8 @@ export class ErroHttp extends Error {
 
 /** Plano 1000 (SV-257): toda resposta JSON das funções sai com «no-store» (resposta com contexto de conversa não fica em cache de
     proxy) e «nosniff» (o navegador não reinterpreta o tipo). */
-export const CAB_SEGURANCA = Object.freeze({ "cache-control": "no-store", "x-content-type-options": "nosniff" });
+// plano 2000d · DS-143: e «no-referrer» (um link dentro de uma resposta nunca leva a URL da função com parâmetros para fora)
+export const CAB_SEGURANCA = Object.freeze({ "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" });
 
 export const json = (dados, status = 200) => new Response(JSON.stringify(dados), {
   status, headers: { "content-type": "application/json; charset=utf-8", ...CAB_SEGURANCA },
@@ -104,6 +105,46 @@ export const anonId = id => (id == null ? null : `${String(id).slice(0, 12)}…`
 export const anonimizarEnvio = envio => (envio || []).map(e => ({ ...e, destino: anonTelefone(e.destino), ...(e.id != null ? { id: anonId(e.id) } : {}),
   ...(Array.isArray(e.ids) ? { ids: e.ids.length } : {}) }));
 
+/* plano 1500c · SC-098 (LGPD): CPF, CNPJ e cartão saem mascarados do texto que vai à IA. Só número VÁLIDO (dígitos
+   verificadores do CPF/CNPJ, Luhn do cartão) é trocado — telefone, protocolo e valor ficam como estão. CPF sem pontuação que
+   também tem cara de celular (DDD válido + 9) fica (o telefone do próprio cliente é útil para a resposta). */
+const soDig = t => String(t).replace(/\D/g, "");
+export function cpfValido(v) {
+  const d = soDig(v);
+  if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+  const dv = n => { let s = 0; for (let i = 0; i < n; i++) s += Number(d[i]) * (n + 1 - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; };
+  return dv(9) === Number(d[9]) && dv(10) === Number(d[10]);
+}
+export function cnpjValido(v) {
+  const d = soDig(v);
+  if (d.length !== 14 || /^(\d)\1{13}$/.test(d)) return false;
+  const dv = n => { const p = n === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+    let s = 0; for (let i = 0; i < n; i++) s += Number(d[i]) * p[i]; const r = s % 11; return r < 2 ? 0 : 11 - r; };
+  return dv(12) === Number(d[12]) && dv(13) === Number(d[13]);
+}
+export function luhnValido(v) {
+  const d = soDig(v);
+  if (d.length < 14 || d.length > 19) return false;
+  let s = 0;
+  for (let i = 0; i < d.length; i++) { let x = Number(d[d.length - 1 - i]); if (i % 2) { x *= 2; if (x > 9) x -= 9; } s += x; }
+  return s % 10 === 0;
+}
+export function mascararSensiveis(texto) {
+  let s = String(texto ?? "");
+  // cartão: 14–19 dígitos, juntos ou em grupos com espaço/hífen
+  s = s.replace(/(?<![\d])(?:\d[ -]?){13,18}\d(?![\d])/g, m => (luhnValido(m) ? "[cartão omitido]" : m));
+  // CNPJ (com ou sem pontuação)
+  s = s.replace(/(?<![\d])\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}(?![\d])/g, m => (cnpjValido(m) ? "[CNPJ omitido]" : m));
+  // CPF formatado sempre; sem pontuação só quando não parece celular
+  s = s.replace(/(?<![\d])\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?![\d])/g, m => {
+    if (!cpfValido(m)) return m;
+    const d = soDig(m);
+    if (m === d && dddValido(d) && d[2] === "9") return m;
+    return "[CPF omitido]";
+  });
+  return s;
+}
+
 /** 16 hex aleatórios por chamada: o texto de terceiros (conversa, cadastro, pedido) fica entre essas marcas
     no prompt — é DADO, nunca instrução — e nenhuma marca igual pode aparecer dentro dele. */
 export function novoDelimitador() {
@@ -157,7 +198,23 @@ export function limparErro(msg) {
 /* ------------------------------------------------------------
    IA (Anthropic): um só padrão para Conversas, automações e relatório (plano 100, S-F14)
    ------------------------------------------------------------ */
-export const MODELO_PADRAO = "claude-opus-5-5";
+// plano 1500c · SC-085/SC-086/SC-087/SC-097: o padrão do CÓDIGO é o modelo barato (Haiku 5.5, ~40× mais barato que o Opus); o
+// Sonnet 5.5 só onde a tarefa pede texto mais longo/estruturado (montar automação, resumo mensal). O que estiver configurado
+// (cfg.ia.modelo do cliente, nx_config.modelo_ia / modelo_ia_automacao, env NX_MODELO_PADRAO) continua valendo antes disso.
+export const MODELO_BARATO = "claude-haiku-5-5";
+export const MODELO_MEDIO = "claude-sonnet-5-5";
+export const MODELO_PADRAO = MODELO_BARATO;
+/** Modelo de cada tarefa quando nada está configurado. */
+export const MODELOS_TAREFA = Object.freeze({
+  sugerir: MODELO_BARATO, resumir: MODELO_BARATO, decidir: MODELO_BARATO, diario: MODELO_BARATO, semanal: MODELO_BARATO,
+  montar: MODELO_MEDIO, mensal: MODELO_MEDIO,
+  // plano 2000d · DS-016 / DS-028: as ações novas do nx-ia são curtas — modelo barato
+  reescrever: MODELO_BARATO, traduzir: MODELO_BARATO, simular: MODELO_BARATO,
+});
+/** plano 1500c · SC-085: NX_MODELO_PADRAO (segredo/env da função) troca o padrão sem deploy de código; ausente no Node. */
+export function modeloDoAmbiente() {
+  try { return String(globalThis.Deno?.env?.get?.("NX_MODELO_PADRAO") ?? "").trim(); } catch { return ""; }
+}
 // modelos cujos classificadores podem recusar e que aceitam a reserva do servidor (fallbacks: "default")
 export const COM_RESERVA = new Set(["claude-opus-5", "claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"]);
 // modelos que NÃO aceitam output_config.effort (dariam 400): anteriores ao Opus 4.5, Sonnet 4.5 e Haiku 4.5 —
@@ -184,17 +241,25 @@ export const esquecerAvisosIA = () => SEM_PRECO_AVISADO.clear();
 /** Plano 1000 (SV-073): o modelo configurado (nx_config.modelo_ia / modelo_ia_automacao) só vale se for um claude-* com preço
     conhecido; erro de digitação ou modelo que não existe cai no MODELO_PADRAO (com um aviso no log) em vez de fazer TODA chamada
     de IA dar 404 até alguém olhar. Vazio → o padrão, sem aviso. */
-export function modeloIA(...candidatos) {
+function escolherModelo(candidatos, padrao) {
   for (const c of candidatos) {
     const m = String(c ?? "").trim();
     if (!m) continue;
     if (/^claude-[a-z0-9.-]{2,60}$/.test(m) && chavePreco(m)) return m;
     if (!SEM_PRECO_AVISADO.has(`modelo:${m}`) && SEM_PRECO_AVISADO.size <= 50) {
       SEM_PRECO_AVISADO.add(`modelo:${m}`);
-      log("aviso", "ia_modelo_desconhecido", { modelo: m.slice(0, 80), usado: MODELO_PADRAO });
+      log("aviso", "ia_modelo_desconhecido", { modelo: m.slice(0, 80), usado: padrao });
     }
   }
-  return MODELO_PADRAO;
+  return padrao;
+}
+export function modeloIA(...candidatos) {
+  return escolherModelo([...candidatos, modeloDoAmbiente()], MODELO_PADRAO);
+}
+/** plano 1500c · SC-085/SC-097: modelo da TAREFA — o 1º candidato configurado e válido (cliente, plataforma), depois o env
+    NX_MODELO_PADRAO e por fim o padrão barato da tarefa (MODELOS_TAREFA). */
+export function modeloPara(tarefa, ...candidatos) {
+  return escolherModelo([...candidatos, modeloDoAmbiente()], MODELOS_TAREFA[tarefa] || MODELO_PADRAO);
 }
 
 /** Custo estimado em US$. Com prompt caching o input tem três preços: o normal, a ESCRITA no cache (1,25×) e a LEITURA
@@ -636,6 +701,7 @@ export function comPainelUrl(cliente, cfg) {
 export const tituloRadar = (nome, n) => `Radar ${nome}: ${n} ${n === 1 ? "alerta novo" : "alertas novos"}`;
 export function tituloRelatorio(tipo, nome, referencia) {
   const [, m, d] = String(referencia).slice(0, 10).split("-");
+  if (tipo === "semanal") return `Resumo da semana ${nome} ${d}/${m}`;   // plano 1500c · AC-055
   return tipo === "mensal" ? `Resultados de ${MESES[Number(m) - 1]} · ${nome}` : `Relatório diário ${nome} ${d}/${m}`;
 }
 
@@ -664,6 +730,27 @@ export async function comTrava(db, nome, segundos, fn) {
 }
 
 export const EM_EXECUCAO = "já em execução";
+
+/** plano 1500c · SC-054/SC-055: trava de AVISO que só vira longa quando o aviso SAIU. Pega curta (`curtoS`, ~10 min: segura o
+    cron paralelo) e devolve {estender(), soltar()}: estender grava o prazo longo (nx_trava_estender; banco sem ela → solta e
+    pega de novo com o longo), soltar libera para a próxima rodada tentar de novo. null quando outra execução já tem a trava.
+    Antes a trava de 6 h/26 h era pega ANTES do envio: um WhatsApp que falhava sumia com o aviso por 6 h (ou o dia inteiro). */
+export async function travaDeAviso(db, nome, curtoS, longoS, dono = crypto.randomUUID()) {
+  if (await db.rpc("nx_trava_pegar", { p_nome: nome, p_segundos: curtoS, p_dono: dono }) !== true) return null;
+  return {
+    async estender() {
+      try { return await db.rpc("nx_trava_estender", { p_nome: nome, p_segundos: longoS, p_dono: dono }) === true; }
+      catch (e) {
+        if (!funcaoAusente(e, "nx_trava_estender")) { log("aviso", "trava_estender_falhou", { nome, erro: e }); return false; }
+        try { await db.rpc("nx_trava_soltar", { p_nome: nome, p_dono: dono }); return await db.rpc("nx_trava_pegar", { p_nome: nome, p_segundos: longoS, p_dono: dono }) === true; }
+        catch { return false; }
+      }
+    },
+    async soltar() {
+      try { await db.rpc("nx_trava_soltar", { p_nome: nome, p_dono: dono }); return true; } catch { return false; }   // vence sozinha
+    },
+  };
+}
 
 /**
  * Trava POR CLIENTE ('nx-ciclo:<id>', 'nx-relatorio:<tipo>:<id>'). O que não pode acontecer
@@ -761,10 +848,13 @@ const ACESSO = new Set(["sem_acesso", "sem_permissao", "conta_suspensa", "teste_
 const SESSAO = new Set(["sessao_invalida", "conta_pendente"]);
 // plano 1000 (SV-104): limites de taxa → 429 (antes 400: o painel tratava como dado inválido e não esperava para tentar de novo)
 const LIMITE = new Set(["muitas_tentativas", "limite_taxa", "muitos_pedidos", "aguarde"]);
-/** HTTP do código: sessão 401 · acesso 403 · limite 429 · *_nao_encontrad[oa] 404 · resto (dados) 400. */
+// plano 2000d · DS-361: conflito de edição concorrente → 409 (o painel pergunta/relê em vez de tratar como dado inválido; não repete sozinho)
+const CONFLITO = new Set(["dono_mudou", "versao_antiga", "conflito", "envio_em_andamento"]);
+/** HTTP do código: sessão 401 · acesso 403 · conflito 409 · limite 429 · *_nao_encontrad[oa] 404 · resto (dados) 400. */
 export function statusDoCodigo(codigo) {
   if (SESSAO.has(codigo)) return 401;
   if (ACESSO.has(codigo)) return 403;
+  if (CONFLITO.has(codigo)) return 409;
   if (LIMITE.has(codigo)) return 429;
   if (/_nao_encontrad[oa]$/.test(codigo)) return 404;
   return 400;
@@ -834,11 +924,41 @@ export async function lerCorpoPainel(req, max = 64_000, drenagem = {}) {
 
 /** Envolve um handler de painel: OPTIONS, método, erros → {ok:false, erro}. O corpo que
     não foi lido (OPTIONS, 405, falha antes da leitura) é drenado antes da resposta. */
+/* plano 1500c · SC-022: CORS só para as origens do produto quando o env NX_ORIGENS existir (lista separada por vírgula; aceita
+   «http://localhost:*» para qualquer porta). Sem o env, continua «*» (o painel white-label pode estar em domínio próprio: ligar
+   a lista é decisão de operação, sem deploy de código). A resposta leva a origem exata e «Vary: Origin»; origem fora da lista
+   recebe «null» (o navegador bloqueia a leitura). */
+export function origensPermitidas(bruto) {
+  let v = bruto;
+  if (v === undefined) { try { v = globalThis.Deno?.env?.get?.("NX_ORIGENS"); } catch { v = null; } }
+  const lista = String(v ?? "").split(",").map(x => x.trim().replace(/\/+$/, "")).filter(Boolean);
+  return lista.length ? lista : null;
+}
+export function origemPermitida(origem, lista) {
+  const o = String(origem ?? "").trim();
+  if (!o || !lista) return false;
+  return lista.some(p => (p.endsWith(":*") ? new RegExp(`^${p.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(:\\d{1,5})?$`).test(o) : p === o));
+}
+/** Ajusta o Access-Control-Allow-Origin da resposta do painel à origem do pedido (só com NX_ORIGENS). Nunca lança. */
+export function comCors(r, req, lista = origensPermitidas()) {
+  if (!lista || !(r instanceof Response)) return r;
+  const o = req?.headers?.get?.("origin");
+  try {
+    r.headers.set("Access-Control-Allow-Origin", origemPermitida(o, lista) ? o : "null");
+    r.headers.set("Vary", "Origin");
+    return r;
+  } catch {
+    const h = new Headers(r.headers);
+    h.set("Access-Control-Allow-Origin", origemPermitida(o, lista) ? o : "null"); h.set("Vary", "Origin");
+    return new Response(r.body, { status: r.status, statusText: r.statusText, headers: h });
+  }
+}
+
 export async function tratarPainel(req, fn, drenagem = {}) {
   const reqId = novoReqId();
-  const marcar = r => { try { r?.headers?.set?.(CAB_REQ, reqId); } catch { /* resposta imutável: fica sem o cabeçalho */ } return r; };
+  const marcar = r => { try { r?.headers?.set?.(CAB_REQ, reqId); } catch { /* resposta imutável: fica sem o cabeçalho */ } return comCors(r, req); };
   return soltandoCorpo(req, async () => {
-    if (req.method === "OPTIONS") return preflight();
+    if (req.method === "OPTIONS") return comCors(preflight(), req);
     if (req.method !== "POST") return marcar(respostaErro("metodo_invalido", 405));
     try {
       return marcar(await fn());

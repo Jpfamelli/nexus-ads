@@ -146,8 +146,12 @@ begin
   update public.nx_clientes set plano = 'p19_' || sfx where id = cA;
   n0 := (select count(*) from public.nx_contatos where cliente_id = cA);
   j := public.nx_lead_entrada(chave, jsonb_build_object('nome', 'Site Cheio', 'telefone', '(12) 99777-1' || lpad((floor(random() * 900) + 100)::text, 3, '0')));
-  perform pg_temp.ok((j ->> 'ok')::boolean and (select count(*) from public.nx_contatos where cliente_id = cA) = n0, 'plano cheio: formulário responde ok e NÃO cria contato');
-  perform pg_temp.ok(exists (select 1 from public.nx_notificacoes n where n.cliente_id = cA and n.titulo = 'Limite de contatos do plano atingido'), 'admin avisado do limite');
+  -- plano 2000d · REV-M2 (20261026a): plano cheio NÃO descarta mais o lead — o contato e o negócio entram; aviso + marca na auditoria
+  perform pg_temp.ok((j ->> 'ok')::boolean and (select count(*) from public.nx_contatos where cliente_id = cA) = n0 + 1
+                     and exists (select 1 from public.nx_leads l join public.nx_contatos k on k.id = l.contato_id where k.cliente_id = cA and k.nome = 'Site Cheio'),
+                     'plano cheio: formulário responde ok e o lead ENTRA (REV-M2)');
+  perform pg_temp.ok(exists (select 1 from public.nx_notificacoes n where n.cliente_id = cA and n.titulo = 'Limite de contatos do plano atingido')
+                     and exists (select 1 from public.nx_auditoria a where a.cliente_id = cA and a.acao = 'limite_contatos_excedido'), 'admin avisado do limite e marca na auditoria');
   update public.nx_clientes set plano = 'interno' where id = cA;
   update public.nx_planos set limites = '{}'::jsonb where id = 'p19_' || sfx;
 

@@ -681,11 +681,13 @@ await teste("M36: textoRascunhoLista — uma linha, até 80 caracteres, sem queb
 
 await teste("M36: o compositor liga o rascunho por conversa (e a nota à parte), só apaga depois de o envio estar GUARDADO e devolve o texto cancelado", () => {
   const comp = ler("cv-composer.js"), conv = ler("conversas.js"), lista = ler("cv-lista.js");
-assert.match(comp, /r\.ligar\(ta, `conversa:\$\{idDoCampo\}\$\{modoNota \? ":nota" : ""\}`, \{ seloEm: seloRasc \}\)/, "chave pela conversa DO CAMPO; nota com rascunho próprio");
+  // plano 2000d: DC-110/DC-218 — o ligar recebe também depoisDe e aoGrande
+  assert.match(comp, /r\.ligar\(ta, `conversa:\$\{idDoCampo\}\$\{modoNota \? ":nota" : ""\}`, \{ seloEm: seloRasc,/, "chave pela conversa DO CAMPO; nota com rascunho próprio");
   assert.match(comp, /function apagarRascunho\(\) \{ if \(rasc && !ta\.value\.trim\(\)\)/, "não apaga o que a pessoa já digitou depois");
   assert.match(comp, /const r = await A\.acoes\.enviar\(\{ tipo: "texto", texto, respondeA: citada \}\);\s*if \(r && r\.persistido !== false\) apagarRascunho\(\)/, "o rascunho sai depois de o item estar na fila");
   assert.match(comp, /devolverTexto\(texto\)/, "Cancelar na fila devolve o texto ao campo");
-  assert.match(comp, /rasc\.apagar\(\); if \(typeof rasc\.parar === "function"\) rasc\.parar\(\)/, "alternar nota/mensagem move o rascunho");
+  // plano 2000d: DC-206 — o novo é gravado antes de o antigo sair
+  assert.match(comp, /if \(typeof velho\.parar === "function"\) velho\.parar\(\)[\s\S]{0,300}if \(gravou\) \{ try \{ A\.ctx\.rascunho\.apagar\(chaveVelha\)/, "alternar nota/mensagem move o rascunho");
   assert.match(lista, /L\.textoRascunhoLista\(A\.acoes\.rascunhoDe\(c\.id\)\)/);
   assert.match(lista, /h\("em", null, "Rascunho: "\)/, "\"Rascunho:\" em itálico na linha da lista");
   assert.match(conv, /function rascunhoDe\(id\)/);
@@ -694,7 +696,8 @@ assert.match(comp, /r\.ligar\(ta, `conversa:\$\{idDoCampo\}\$\{modoNota \? ":not
 await teste("M36: o texto vai pela fila (IndexedDB antes do servidor, client_ref por intenção, backoff, online/pulso/20 s) e a falha definitiva guarda o texto", () => {
   const conv = ler("conversas.js"), chat = ler("cv-chat.js");
   assert.match(conv, /indexedDB\.open\(DB_FILA, 1\)/);
-  assert.match(conv, /(?:const|let) persistido = await filaSalvar\(it\);[\s\S]{0,1400}transmitir\(it\);\s*\/\/ sem await/, "grava na fila ANTES de transmitir, sem esperar o servidor; o trecho offline também pode atualizar o resultado da persistência");
+  // plano 2000d: o trecho offline ganhou o aviso próprio do modelo (DC-068) — a janela do regex cresceu
+  assert.match(conv, /(?:const|let) persistido = await filaSalvar\(it\);[\s\S]{0,1800}transmitir\(it\);\s*\/\/ sem await/, "grava na fila ANTES de transmitir, sem esperar o servidor; o trecho offline também pode atualizar o resultado da persistência");
   assert.match(conv, /acao: "texto", conversa: it\.conversa, texto: it\.texto, client_ref: it\.id/, "o MESMO client_ref em toda repetição do item");
   assert.match(conv, /window\.addEventListener\("orbita:online", aoOnline\)/);
   assert.match(conv, /A\.ctx\.rede\.aoVoltar\(\(\) => esvaziarFila\(\{ forcar: true \}\)\)/);
@@ -846,7 +849,8 @@ await teste("R119: «Tentar de novo» de falha gravada pelo servidor pede o reen
   assert.match(conv, /A\.reenviadas\.add\(m\.id\);/);
   assert.match(conv, /if \(daAberta\) return enviarTexto\(\{ tipo: "texto", texto: m\.corpo, reenvio: Number\(m\.id\) \}\);/, "falha da conversa aberta: reenvio da própria mensagem");
   assert.match(conv, /const daAberta = m\.conversa_id == null \|\| Number\(m\.conversa_id\) === Number\(A\.ver\.conversa\.id\);/, "falha de atendimento anterior não usa o reenvio (o servidor recusaria: atendimento resolvido)");
-  assert.match(conv, /replace\(\/\^\\\*\[\^\*\\n\]\+:\\\*\\n\/, ""\), reenvio: null \}\);/, "texto novo sai sem a assinatura já gravada");
+  // plano 2000d: DC-097 — a mesma regra (L.semAssinatura) agora vale para o reenvio, o encaminhar e o copiar
+  assert.match(conv, /texto: A\.L\.semAssinatura\(m\.corpo\), reenvio: null \}\);/, "texto novo sai sem a assinatura já gravada");
   assert.match(chat, /m\.tipo === "texto" && m\.corpo && !A\.acoes\.foiReenviada\(m\)\) \{[\s\S]{0,260}A\.acoes\.reenviarGravada\(m\)/);
   assert.doesNotMatch(chat, /A\.acoes\.enviar\(\{ tipo: "texto", texto: m\.corpo \}\)/, "o texto já assinado não volta como mensagem nova");
 });
@@ -1105,7 +1109,8 @@ await teste("Atendimento follow-up: modelo é validado de novo com status e cons
   assert.match(erros.join(" "), /não receber marketing/i);
 });
 
-await teste("Atendimento follow-up: colar várias imagens informa que só a primeira será anexada", async () => {
+// plano 1500c: CC-048 — várias imagens coladas vão pelo fluxo de várias fotos (um modal com as duas; antes só a 1ª era anexada)
+await teste("Atendimento follow-up: colar várias imagens abre o envio de várias fotos", async () => {
   const t = await montarCompositor(); t.selecionar(77);
   const criar = URL.createObjectURL, revogar = URL.revokeObjectURL, bitmap = globalThis.createImageBitmap;
   URL.createObjectURL = () => "blob:paste-followup"; URL.revokeObjectURL = () => {};
@@ -1115,9 +1120,9 @@ await teste("Atendimento follow-up: colar várias imagens informa que só a prim
     const ev = { type: "paste", clipboardData: { items: imagens.map(f => ({ kind: "file", type: f.type, getAsFile: () => f })) }, preventDefault() { this.defaultPrevented = true; } };
     t.ta.dispatchEvent(ev); await new Promise(r => setTimeout(r, 15));
     assert.equal(ev.defaultPrevented, true);
-    assert.match(t.toasts.join(" "), /2 imagens|somente a primeira/i);
-    assert.equal(t.enviados.length, 1);
-    assert.equal(t.enviados[0].arquivo.name, "um.png");
+    assert.doesNotMatch(t.toasts.join(" "), /somente a primeira/i);
+    assert.equal(t.enviados.length, 2, "as duas fotos saem");
+    assert.deepEqual(t.enviados.map(e => e.arquivo.name), ["um.png", "dois.png"]);
   } finally { URL.createObjectURL = criar; URL.revokeObjectURL = revogar; if (bitmap === undefined) delete globalThis.createImageBitmap; else globalThis.createImageBitmap = bitmap; }
 });
 
@@ -1528,7 +1533,8 @@ await teste("CodeWords gravação: se a conversão para WAV falhar, avisa e ofer
     soltar({ duration: 1 });
     await reg.gravadores[1].fim; await tique();
     assert.deepEqual(t.enviados, []);
-    assert.match(t.toasts.join("\n"), /Você trocou de conversa enquanto o áudio era preparado: nada foi enviado/);
+    // plano 2000d: DC-091 — em vez de sumir com um aviso, o áudio fica guardado para a conversa de origem (Enviar · Baixar · Descartar)
+    assert.equal(acharClasse(t.comp.el, "cvx-audio-guardado").hidden, false);
     // trocar de conversa DURANTE a gravação cancela (como já era)
     acharClasse(t.comp.el, "cvx-audio").dispatchEvent({ type: "click" }); await tique();
     assert.equal(reg.gravadores[2].state, "recording");
@@ -1548,7 +1554,8 @@ await teste("CodeWords tela: nenhum texto diz mais que o canal é «só texto»;
   assert.match(comp, /btModelos\.hidden = codeWords;/);
   assert.match(comp, /btModelos\.disabled = codeWords \|\| modoNota \|\| !\(s === "ok" \|\| s === "janela"\);/);
   // plano 1000b (revisão · CB-132): abrirModelos virou a trava contra toque duplo; a checagem do CodeWords mora em abrirModelosAgora
-  assert.match(comp, /async function abrirModelosAgora\(\) \{\s*if \(usaCodeWords\(\)\) \{ ui\.toast\("Modelos da Meta não estão disponíveis neste canal CodeWords\."/);
+  // plano 2000d: DC-045 — abrirModelosAgora recebe { modeloId } (o modelo escolhido na «Nova conversa»)
+  assert.match(comp, /async function abrirModelosAgora\([^)]*\) \{\s*if \(usaCodeWords\(\)\) \{ ui\.toast\("Modelos da Meta não estão disponíveis neste canal CodeWords\."/);
   assert.match(comp, /!usaCodeWords\(\) \? \{ rotulo: "Modelos aprovados"/);
   // gravação: na Meta exige ogg/mp4; no CodeWords basta gravador + decodificador, e o WAV sai da função pura
   assert.match(comp, /function podeGravar\(\) \{ return !!globalThis\.isSecureContext && \(usaCodeWords\(\) \? gravaWav\(\) : !!formatoGravacao\(\)\); \}/);
@@ -1568,12 +1575,15 @@ await teste("CodeWords tela: nenhum texto diz mais que o canal é «só texto»;
   assert.match(colagem, /const arquivos = itens\.filter\(i => i\.kind === "file"\);/);
   assert.match(colagem, /arquivos\[0\]\.getAsFile\(\)/, "a colagem só anexa o primeiro arquivo da área de transferência");
   assert.match(colagem, /getAsFile\(\)[\s\S]*new File\(/);
-  assert.match(colagem, /somente a primeira será anexada/);
+  // plano 1500c: CC-048 — várias IMAGENS coladas vão pelo anexarVarios; só arquivos mistos ficam no aviso de «somente o primeiro»
+  assert.match(colagem, /somente o primeiro será anexado/);
+  assert.match(colagem, /anexarVarios\(fs\)/);
   // resposta ambígua (timeout/5xx do aparelho): a mensagem gravada entra marcada e a bolha avisa, sem reenviar sozinha
   assert.match(conv, /const msg = r && r\.mensagem \? \{ \.\.\.r\.mensagem, \.\.\.\(r\.ambigua === true \? \{ ambigua: true \} : \{\}\) \} : null;\s*A\.msgs = A\.msgs\.filter\(m => m\.id !== tmp\.id\);/);
   assert.match(conv, /if \(tmp\.midia && tmp\.midia\.local_url && msg\.midia && msg\.midia\.path\) A\.midia\.set\(msg\.midia\.path, \{ url: null, local: tmp\.midia\.local_url/, "a prévia local segue na bolha gravada");
   assert.match(chat, /const ambigua = m\.ambigua === true \|\| \(m\.status === "pendente" && \/\^status incerto:\/i\.test\(String\(m\.erro \|\| ""\)\)\);/);
-  assert.match(chat, /"Pode ter saído — confira no WhatsApp antes de reenviar\."/);
+  // plano 2000d: na Meta a bolha diz como saber (o cliente responder) e no CodeWords manda conferir no celular do número (DC-163)
+  assert.match(chat, /"Pode ter saído — confira no celular do número antes de reenviar\." : "Se o cliente responder, saiu\. Enviar de novo não duplica\."/);
   assert.match(chat, /if \(\["imagem", "video", "audio", "documento", "sticker"\]\.includes\(m\.tipo\)\) bolha\.appendChild\(blocoMidia\(m\)\);/);
   // falha do aparelho: o servidor devolve a saída gravada como «falhou» e a tela mostra o motivo dele
   assert.match(conv, /if \(codigo === "envio_falhou" && salva && salva\.id\) \{/);
@@ -1777,7 +1787,7 @@ await teste("M35: anúncio da lista — conversa nova (a aberta não), texto «N
 await teste("M40: base e primeira página da central iniciam juntas; falha da base desmonta a lista pendente", () => {
   const cv = ler("conversas.js");
   const listaInicial = cv.indexOf("const listaInicial = carregarLista({ reset: true });");
-  const base = cv.indexOf("await carregarBase();", listaInicial);
+  const base = cv.indexOf("await carregarBase({ cache: true });", listaInicial);   // plano 2000d: DC-067 — a base guardada abre sem internet
   const listaAguardar = cv.indexOf("await listaInicial;", base);
   const rota = cv.indexOf("await aplicarRota(ctx.rota);", listaAguardar);
   assert.ok(listaInicial >= 0 && base > listaInicial && listaAguardar > base && rota > listaAguardar);
@@ -1788,7 +1798,7 @@ await teste("M22: respostas rápidas do compositor anunciam opções sem aria-ex
   const comp = ler("cv-composer.js");
   assert.doesNotMatch(comp, /ta\.setAttribute\("aria-expanded"/);
   assert.match(comp, /role: "status", "aria-live": "polite", "aria-atomic": "true"/);
-  assert.match(comp, /rrStatus\.textContent = rrItens\.length/);
+  assert.match(comp, /anunciarRR\(rrItens\.length/);   // plano 2000d: anúncio com atraso de 600 ms (DC-144)
   assert.match(comp, /Resposta rápida aplicada\./);
 });
 
@@ -1803,16 +1813,19 @@ await teste("M35: a tela liga o teclado (um ouvinte que sai ao desmontar, sem se
   assert.match(cv, /def\("atender", "Atender o próximo"/); assert.match(cv, /def\("nova", "Nova conversa"/);
   assert.match(cv, /"Alt\+Shift\+R"/);
   // Atender o próximo: a fila «aguardando», a regra pura, abre, e assume (a IA do CodeWords pausa pelo mesmo caminho do botão)
-  assert.match(cv, /rpcC\("nx_cv_listar", \{ p_filtro: \{ aba: "aguardando" \}/);
+  // plano 1500c: CC-012 — a fila pedida leva também o departamento/número filtrados (…extra)
+  assert.match(cv, /rpcC\("nx_cv_listar", \{ p_filtro: \{ aba: "aguardando", \.\.\.extra \}/);
   // plano 1000b: CB-121 — até 3 páginas da aba Aguardando (a 1ª podia ser toda de colegas); a mesma regra pura e o mesmo filtro do Desfazer
   assert.match(cv, /c = A\.L\.proximaParaAtender\(itens\.filter\(x => !_pendResolver\.has\(x\.id\)\), A\.eu && A\.eu\.id\);/,
     "a regra pura escolhe; a recém-resolvida (Desfazer ainda na tela) fica de fora");
-  assert.match(cv, /est\.primaria === "assumir_ia"\) await acoes\.assumirIA\(\);\s*else if \(est\.primaria === "assumir"\) await acoes\.assumir\(\);/);
+  // plano 2000d: DC-002 — com a RPC atômica (nx_cv_pegar_proxima) a conversa já vem atribuída e o «Assumir» não roda de novo
+  assert.match(cv, /est\.primaria === "assumir_ia"\) await acoes\.assumirIA\(\);\s*else if \(est\.primaria === "assumir" && !atomico\) await acoes\.assumir\(\);/);
   assert.match(lista, /class: "bt bt-sec bt-p cvl-atender", hidden: true/, "no cabeçalho da lista, só quando há fila");
   assert.match(lista, /btAtender\.hidden = !\(ag > 0\)/);
   assert.match(chat, /cvc-atender[\s\S]{0,200}A\.acoes\.atenderProximo\(ev\.currentTarget\)/, "e no painel vazio");
   // Esc no campo devolve o foco à lista; Alt+Shift+N alterna a nota do próprio compositor
-  assert.match(comp, /ev\.key === "Escape" && !ev\.isComposing\) \{ ev\.preventDefault\(\); A\.acoes\.focarLista\(\); return; \}/);
+  // plano 2000d: com um painel flutuante aberto o 1º Esc só o fecha (DC-205)
+  assert.match(comp, /ev\.key === "Escape" && !ev\.isComposing\) \{\s*ev\.preventDefault\(\);[\s\S]{0,600}A\.acoes\.focarLista\(\); return;/);
   assert.match(comp, /alternarNota\(forcar\) \{ if \(el\.hidden \|\| !A\.podeEscrever\) return false; alternarNota\(forcar\); return modoNota; \}/);
   assert.match(css, /\.cvl-item:focus-visible \{ outline: 2px solid var\(--c-prim\)/, "o foco do j/k aparece na lista");
 });
@@ -1863,7 +1876,8 @@ await teste("M35: o leitor de tela ouve a lista (role=status aria-live=polite), 
   assert.match(lista, /L\.esperaAnuncio\(ultimoAnuncio, Date\.now\(\)\)/);
   assert.match(lista, /textoPendente = texto;/);
   assert.match(cv, /const novas = A\.L\.novasEntradas\(A\.itens, r\.itens \|\| \[\], \{ ignorar: A\.selId && !document\.hidden \? A\.selId : null \}\);\s*if \(novas\.length\) A\.lista\.anunciar\(A\.L\.textoNovaMensagem\(novas\)\);/);
-  assert.match(cv, /if \(!reset && !mais && mesmoFiltro\) \{\s*avisarNovidades/, "só nos pulsos, nunca na 1ª página nem em «carregar mais»");
+  // plano 2000d: DC-024 — com o nx_cv_novidades valendo, o aviso vem de lá; sem ele, continua só nos pulsos
+  assert.match(cv, /if \(!reset && !mais && mesmoFiltro\) \{[\s\S]{0,200}?if \(!A\.comNovidades\) avisarNovidades/, "só nos pulsos, nunca na 1ª página nem em «carregar mais»");
 });
 
 await teste("M35 (navegador): 3 conversas resolvidas sem mouse no dev-falso (atender, nota, resolver que avança, fila zerada, anúncio, Desfazer) — roda com ORBITA_QA_NAVEGADOR=1", async () => {

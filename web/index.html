@@ -184,7 +184,7 @@
         </button>
         <button class="nav-b" data-aba="pacientes" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.8a3.4 3.4 0 0 1 0 6.4M18.5 14.8c1.7.8 2.8 2.5 3.2 5.2"/></svg>
-          Pacientes
+          <span data-rot-pessoas>Pacientes</span>
         </button>
         <button class="nav-b" data-aba="radar" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l6.4-6.4"/></svg>
@@ -208,7 +208,8 @@
           <p><b id="side-nome"></b><span id="side-papel"></span></p>
           <button class="pill pill-ghost-dark" id="btn-sair" type="button">Sair</button>
         </div>
-        <p class="side-assina">Preparado pela<br><b>Nexus · Taubaté</b></p>
+        <!-- plano 2000d · KX-043: quem assina vem da agência do cliente (painel.js · aplicarAgencia) -->
+        <p class="side-assina">Preparado pela<br><b id="side-assina-nome">Nexus · Taubaté</b></p>
       </div>
     </aside>
 
@@ -216,7 +217,7 @@
     <main class="main" id="main" tabindex="-1">
       <p class="ribbon" id="ribbon" role="note" hidden>
         <button class="ribbon-chip" id="ribbon-chip" type="button" aria-expanded="false" aria-controls="ribbon-txt"><i aria-hidden="true"></i>Demonstração</button>
-        <span class="ribbon-txt" id="ribbon-txt"><b>Demonstração</b> — números ilustrativos, gerados para mostrar como o painel funciona. Nenhum dado real de paciente.</span>
+        <span class="ribbon-txt" id="ribbon-txt"><b>Demonstração</b> — números ilustrativos, gerados para mostrar como o painel funciona. Nenhum dado real de paciente. <a class="ribbon-sair" id="ribbon-sair" href="./">Sair da demonstração</a></span><!-- plano 1500c · AC-282: saída visível também no celular (abre com o chip) -->
         <button class="ribbon-link" id="btn-link-reuniao" type="button" hidden>Copiar link da reunião</button>
       </p>
 
@@ -239,6 +240,8 @@
           <h1 id="top-h1">Visão geral</h1>
           <div class="top-sync-row">
             <p class="top-sync" id="top-sync"></p>
+            <!-- plano 2000d · DA-387: a mesma tela no Órbita (app novo) -->
+            <a class="link-orbita" id="link-orbita" href="https://orbita-nexus-ads.netlify.app/app/" target="_blank" rel="noopener" hidden>Ver no Órbita →</a>
             <div class="sync-box">
               <button class="sync-pill" id="sync-pill" type="button" aria-expanded="false" aria-controls="sync-pop" hidden><i class="sync-pt" aria-hidden="true"></i><span id="sync-txt"></span></button>
               <div class="sync-pop" id="sync-pop" role="group" aria-label="Leitura dos anúncios" hidden></div>
@@ -266,6 +269,8 @@
               <button type="button" role="radio" data-v="google" aria-checked="false">Google</button>
             </div>
           </div>
+          <!-- plano 2000d · DA-390: vibrar o celular a cada venda nova (opcional, só onde o aparelho vibra) -->
+          <label class="op-vibrar" id="op-vibrar-l" hidden><input type="checkbox" id="op-vibrar"> Vibrar a cada venda nova</label>
           <button class="pill pill-ghost" id="btn-tour" type="button" aria-label="Tour de 1 minuto" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
             <span>Tour<span class="tour-mais"> de 1 minuto</span></span>
@@ -323,14 +328,16 @@
             <div class="chart" id="chart-dia" tabindex="0" role="group" aria-label="Gráfico diário. Use as setas para ler cada dia; Home e End vão às pontas."></div>
             <div class="tabela-dia" id="tabela-dia" hidden></div>
             <form class="marco-form" id="marco-form" novalidate hidden></form>
+            <!-- plano 1500c · AC-272: todos os marcos numa lista, com «Remover» (o marco errado de fora do período também sai) -->
+            <details class="marcos-lista" id="marcos-lista" hidden><summary id="marcos-lista-s">Marcos</summary><ul id="marcos-lista-ul"></ul></details>
           </article>
 
           <div class="grid g-d">
             <article class="card card-funil" data-tour="funil" data-cena>
               <header class="card-h">
                 <div>
-                  <h2>Funil do paciente</h2>
-                  <p class="sub">Do anúncio até a cadeira do consultório.</p>
+                  <h2 id="vx-funil-t">Funil do paciente</h2>
+                  <p class="sub" id="vx-funil-s">Do anúncio até a cadeira do consultório.</p>
                 </div>
               </header>
               <div class="funil" id="funil"></div>
@@ -379,8 +386,10 @@
             <header class="card-h">
               <div>
                 <h2>Campanhas</h2>
-                <p class="sub"><span class="so-largo">Clique no título de uma coluna para ordenar. </span>A bolinha compara o custo por conversa com a meta.</p>
+                <p class="sub"><span class="so-largo">Clique no título de uma coluna para ordenar. </span>A bolinha compara o custo com a meta da campanha.</p>
               </div>
+              <!-- plano 1500c · AC-248: a tabela em planilha (CSV para o Excel/Planilhas) -->
+              <button class="pill pill-ghost pill-sm" id="btn-csv-camp" type="button">Baixar planilha (CSV)</button>
             </header>
             <div class="tbl-wrap" id="tbl-campanhas"></div>
           </article>
@@ -388,8 +397,10 @@
             <header class="card-h">
               <div>
                 <h2>Criativos</h2>
-                <p class="sub">Frequência acima de 3 = as mesmas pessoas vendo o mesmo anúncio. Hora de trocar.</p>
+                <p class="sub" id="cri-sub">Frequência acima de 3 = as mesmas pessoas vendo o mesmo anúncio. Hora de trocar.</p>
               </div>
+              <!-- plano 2000d · KX-087: os criativos em planilha também (o que a tabela mostra: período, plataforma e ordem) -->
+              <button class="pill pill-ghost pill-sm" id="btn-csv-cri" type="button">Baixar planilha (CSV)</button>
             </header>
             <div class="tbl-wrap" id="tbl-criativos"></div>
           </article>
@@ -406,9 +417,9 @@
             </div>
             <div class="k-tools">
               <label class="busca">
-                <span class="sr-only">Buscar paciente por nome ou telefone</span>
+                <span class="sr-only" id="k-busca-l">Buscar paciente por nome, telefone ou tratamento</span>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
-                <input type="search" id="k-busca" placeholder="Buscar paciente" autocomplete="off">
+                <input type="search" id="k-busca" placeholder="Buscar paciente" autocomplete="off" enterkeyhint="search"><!-- plano 2000d · KX-095: tecla «Buscar» no teclado do celular -->
               </label>
               <button class="pill pill-ink" id="btn-novo-lead" type="button" aria-haspopup="dialog">+ Paciente</button>
             </div>
@@ -421,8 +432,8 @@
         <article class="card" data-cena>
           <header class="card-h">
             <div>
-              <h2>Anúncio × consultório</h2>
-              <p class="sub">A plataforma conta conversas. O consultório conta pacientes. As duas colunas juntas mostram o que dá resultado.</p>
+              <h2 id="vx-origem-t">Anúncio × consultório</h2>
+              <p class="sub" id="vx-origem-s">A plataforma conta conversas. O consultório conta pacientes. As duas colunas juntas mostram o que dá resultado.</p>
             </div>
           </header>
           <div class="tbl-wrap" id="tbl-origem"></div>
@@ -430,7 +441,7 @@
         <article class="card card-donut" data-cena>
           <header class="card-h">
             <div>
-              <h2>Tratamentos fechados</h2>
+              <h2 id="vx-donut-t">Tratamentos fechados</h2>
               <p class="sub" id="donut-sub">Pacientes dos anúncios no período.</p>
             </div>
           </header>
@@ -468,7 +479,7 @@
               <div class="fone fone-reto fone-aviso" data-tilt="6" data-foco>
                 <div class="fone-tela">
                   <div class="ph-screen">
-                    <div class="ph-top"><span class="ph-av"><svg class="nx-mono"><use href="#nx-mono"/></svg></span><div><b>Nexus · Radar</b><small>aviso automático</small></div></div>
+                    <div class="ph-top"><span class="ph-av" data-av-agencia><svg class="nx-mono"><use href="#nx-mono"/></svg></span><div><b id="ph-radar-t">Nexus · Radar</b><small>aviso automático</small></div></div>
                     <div class="ph-body wa-inline" id="wa-alerta"></div>
                   </div>
                 </div>
@@ -539,7 +550,7 @@
             <div class="fone fone-reto fone-chat" data-tilt="6" data-foco>
               <div class="fone-tela">
                 <div class="ph-screen">
-                  <div class="ph-top"><span class="ph-av"><svg class="nx-mono"><use href="#nx-mono"/></svg></span><div><b>Nexus · Tráfego</b><small>relatório automático</small></div></div>
+                  <div class="ph-top"><span class="ph-av" data-av-agencia><svg class="nx-mono"><use href="#nx-mono"/></svg></span><div><b id="ph-trafego-t">Nexus · Tráfego</b><small>relatório automático</small></div></div>
                   <div class="ph-body" id="ph-diario"></div>
                 </div>
                 <div class="fone-bloq" id="bloq-diario" aria-hidden="true" hidden></div>
@@ -550,7 +561,7 @@
           <article class="phone-col" data-tour="relatorio" data-cena>
             <header class="phone-head">
               <h2>Resumo do mês</h2>
-              <p class="sub">Todo dia 1º, no WhatsApp da clínica — sem tecniquês.</p>
+              <p class="sub" id="vx-rel-s">Todo dia 1º, no WhatsApp da clínica — sem tecniquês.</p>
               <div class="phone-tools">
                 <label class="sel"><span class="sr-only">Mês do resumo</span><select id="sel-mes"></select></label>
                 <button class="pill pill-ghost" type="button" data-copiar="mensal">Copiar texto</button>
@@ -578,6 +589,8 @@
             </div>
           </header>
           <ul class="rel-lista" id="rel-lista"></ul>
+          <!-- plano 2000d · DA-408: quando sai o próximo diário -->
+          <p class="nota rel-proximo" id="rel-proximo" aria-live="polite"></p>
         </article>
         <p class="nota" id="rel-nota"></p>
       </section>
@@ -589,7 +602,7 @@
             <header class="card-h">
               <div>
                 <h2 id="aj-cliente-h">Cliente</h2>
-                <p class="sub">Metas, valor de cada tratamento e quem recebe o WhatsApp.</p>
+                <p class="sub" id="vx-aj-s">Metas, valor de cada tratamento e quem recebe o WhatsApp.</p>
               </div>
               <button class="pill pill-ghost" id="btn-novo-cliente" type="button">+ Novo cliente</button>
             </header>
@@ -600,8 +613,8 @@
           <article class="card card-marca" id="aj-marca-card">
             <header class="card-h">
               <div>
-                <h2>Marca da clínica</h2>
-                <p class="sub">Logo e cor da clínica nos objetos do painel: selo do topo, celular do resumo, apresentação e folha do mês. A Nexus continua assinando.</p>
+                <h2 id="vx-marca-t">Marca da clínica</h2>
+                <p class="sub" id="vx-marca-s">Logo e cor da clínica nos objetos do painel: selo do topo, celular do resumo, apresentação e folha do mês. A Nexus continua assinando.</p>
               </div>
             </header>
             <form class="aj-form" id="form-marca" novalidate></form>
@@ -688,7 +701,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg><span>Campanhas</span>
       </button>
       <button type="button" data-aba="pacientes">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.8a3.4 3.4 0 0 1 0 6.4M18.5 14.8c1.7.8 2.8 2.5 3.2 5.2"/></svg><span>Pacientes</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.8a3.4 3.4 0 0 1 0 6.4M18.5 14.8c1.7.8 2.8 2.5 3.2 5.2"/></svg><span data-rot-pessoas>Pacientes</span>
       </button>
       <button type="button" data-aba="radar">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l6.4-6.4"/></svg><span>Radar</span>
@@ -735,25 +748,26 @@
           </label>
         </div>
         <div class="gv-box" id="lf-box-valor" hidden>
-          <label class="campo"><span>Valor do tratamento fechado (R$)</span>
-            <input type="number" id="lf-valor" min="0" step="10" inputmode="decimal" aria-describedby="lf-valor-dica">
+          <label class="campo"><span id="lf-valor-l">Valor do tratamento fechado (R$)</span>
+            <!-- plano 2000d · KX-072: texto com teclado numérico — no type=number «1.200,50» chegava vazio e o valor sumia calado -->
+            <input type="text" id="lf-valor" inputmode="decimal" autocomplete="off" spellcheck="false" aria-describedby="lf-valor-dica">
             <small id="lf-valor-dica"></small>
           </label>
         </div>
 
         <div class="form-2">
           <label class="campo"><span>Nome</span>
-            <input type="text" id="lf-nome" autocomplete="off">
+            <input type="text" id="lf-nome" autocomplete="off" autocapitalize="words"><!-- plano 2000d · KX-094: nome com maiúscula no teclado do celular -->
           </label>
           <label class="campo"><span>Telefone (WhatsApp)</span>
             <input type="tel" id="lf-tel" autocomplete="off" inputmode="tel">
           </label>
         </div>
-        <label class="campo"><span>Tratamento de interesse</span>
+        <label class="campo"><span id="lf-servico-l">Tratamento de interesse</span>
           <select id="lf-servico"></select>
         </label>
         <div id="lf-box-origem">
-          <label class="campo"><span>Como chegou até a clínica</span>
+          <label class="campo"><span id="lf-origem-l">Como chegou até a clínica</span>
             <select id="lf-origem"></select>
           </label>
         </div>
@@ -787,11 +801,20 @@
   <!-- ===================== O CURTA (modo apresentação · curta.js) ===================== -->
   <div class="palco-curta" id="palco-curta" role="dialog" aria-modal="true" aria-roledescription="apresentação" aria-label="Apresentação dos resultados" hidden></div>
 
+  <!-- plano 1500c · AC-242: confirmação do próprio painel (no lugar do confirm() nativo) -->
+  <dialog class="dlg-confirmar" id="dlg-confirmar" aria-labelledby="dlg-confirmar-t">
+    <form method="dialog"><p id="dlg-confirmar-t" class="dlg-t"></p>
+      <div class="acoes"><button class="pill pill-ghost" value="nao" type="submit" data-cancelar>Cancelar</button><button class="pill pill-bronze" value="sim" type="submit" data-ok>Confirmar</button></div>
+    </form>
+  </dialog>
+
   <!-- ===================== FOLHA DO MÊS (A4 · folha.js) ===================== -->
   <div class="folha-modal" id="folha-modal" role="dialog" aria-modal="true" aria-label="Folha do mês" hidden>
     <div class="folha-barra">
       <p class="folha-barra-t" id="folha-barra-t">Folha do mês</p>
       <button class="pill pill-bronze" id="folha-imprimir" type="button">Imprimir ou salvar PDF</button>
+      <!-- plano 2000d · DA-122: esconder o faturamento antes de imprimir -->
+      <button class="pill pill-ghost" id="folha-ocultar" type="button" aria-pressed="false">Ocultar valores de venda</button>
       <button class="pill pill-ghost" id="folha-fechar" type="button">Fechar</button>
     </div>
     <div class="folha-mesa" id="folha-mesa"><article class="folha" id="folha" hidden></article></div>

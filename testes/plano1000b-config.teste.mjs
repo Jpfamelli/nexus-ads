@@ -322,6 +322,8 @@ test("UB-081 + UB-082 + UB-259 + UB-260 hub: Enter abre a 1ª seção achada; es
     assert.equal(onb(), 1, "AS-080 continua: navegar usa o mesmo estado");
     t.ctx.rota.partes = ["perfil"]; await cfg.montar(t.ctx); await tique(6);
     const form = t.ctx.alvo.querySelector(".cfg-sec form");
+    // plano 2000d: FX-011 — sem mudança o Perfil não grava; o nome muda antes
+    form.querySelector("input[name=nome]").value = "Ana Maria";
     form.dispatchEvent(new d.Evento("submit")); await tique(6);
     assert.equal(t.chamadas.filter(c => c[0] === "nx_perfil_salvar").length, 1);
     t.ctx.rota.partes = ["usuarios"]; await cfg.montar(t.ctx); await tique(10);
@@ -345,11 +347,17 @@ test("UB-083 + UB-084 + UB-085 + UB-086 + UB-087 + UB-196 + UB-197 + UB-198 Perf
     t.ctx.shell.recarregarSessao = async () => { throw new Error("sessão não releu"); };
     await cfg.montar(t.ctx); await tique(8);
     const raiz = t.ctx.alvo;
-    const [formDados, formSenha] = raiz.querySelectorAll(".cfg-sec form");
+    // plano 2000d: FX-003 pôs o form do horário silencioso no cartão de avisos — os forms são achados pelo conteúdo
+    const formDados = raiz.querySelectorAll(".cfg-sec form").find(f => f.querySelector("input[name=nome]"));
+    const formSenha = raiz.querySelectorAll(".cfg-sec form").find(f => f.querySelector("input[name=nova]"));
     // UB-196 / UB-197
     assert.match(textoDe(formDados.querySelector("[data-campo=telefone]")), /Para avisos do sistema a você; clientes não veem\./);
-    assert.match(textoDe(formDados.querySelector("[data-campo=email_ro]")), /Para trocar o e-mail, peça a um administrador\./);
+    // plano 1500c: UCB-111 — nenhum administrador tem a ação na tela; a ajuda manda falar com o suporte
+    // plano 2000d: DU-144 — a ajuda diz quem troca (outro administrador, quando existe; senão quem cuida do plano), não «o suporte»
+    assert.match(textoDe(formDados.querySelector("[data-campo=email_ro]")), /Para trocar o e-mail, fale com quem cuida do seu plano\.|peça a outro administrador/);
     // UB-083: salvou; a releitura falhou → só o toast de sucesso
+    // plano 2000d: FX-011 — salvar sem mudança não chama o servidor; o nome muda antes
+    formDados.querySelector("input[name=nome]").value = "Ana Maria";
     formDados.dispatchEvent(new d.Evento("submit")); await tique(8);
     assert.deepEqual(t.toasts.map(x => x[1].tipo), ["ok"]);
     assert.equal(t.toasts[0][0], "Dados salvos.");

@@ -22,7 +22,8 @@
 .crm-fita .busca { flex: 1 1 16rem; min-width: 0; max-width: 420px; }
 .crm-fita .busca input { min-height: 40px; }
 .crm-filtro-bt[aria-expanded="true"], .crm-filtro-bt.ativo { border-color: var(--c-prim); color: var(--c-prim-luz); }
-.crm-filtro-n { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 .3rem; border-radius: 999px; background: var(--c-prim); color: var(--c-prim-txt); font-family: var(--f-mono); font-size: var(--fs-11); }
+/* plano 1500c · RC-303: o contador dos filtros com 12 px e 20 px de largura mínima (era 11 px num círculo de 18) */
+.crm-filtro-n { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 .3rem; border-radius: 999px; background: var(--c-prim); color: var(--c-prim-txt); font-family: var(--f-mono); font-size: var(--fs-12); }
 .crm-chips { display: flex; flex-wrap: wrap; gap: .4rem; min-width: 0; }
 .crm-chip {
   display: inline-flex; align-items: center; gap: .35rem; min-height: 30px; max-width: 100%; padding: .2rem .35rem .2rem .75rem; border-radius: 999px;
@@ -328,6 +329,10 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .tf-meta > span { display: inline-flex; align-items: center; gap: .25rem; }
 .tf-meta .atrasada { color: var(--c-ruim); font-weight: 700; }
 .tf-meta .hoje { color: var(--c-aten); font-weight: 700; }
+/* plano 1500c · RC-137: «sem prazo» é um selo neutro */
+.tf-meta .tf-sem-prazo { padding: 0 .4rem; border-radius: 999px; border: 1px dashed var(--c-borda); color: var(--c-texto-3); }
+/* plano 1500c · RC-131: links e telefones dentro da nota */
+.nota p a { color: inherit; text-decoration: underline; overflow-wrap: anywhere; }
 .tf-meta a { display: inline-flex; align-items: center; gap: .25rem; color: var(--c-texto-2); }
 .tf-acoes { display: flex; gap: .1rem; }
 .tf-acoes .bt-icone { width: 32px; height: 32px; }
@@ -335,6 +340,9 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .nota { display: flex; flex-direction: column; gap: .4rem; padding: .75rem .85rem; border-radius: var(--r-p); background: var(--c-nota); border: 1px solid color-mix(in srgb, var(--c-aten) 30%, transparent); color: var(--c-nota-txt); }
 .nota.fixada { box-shadow: inset 3px 0 0 var(--c-aten); }
 .nota p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-14); }
+/* plano 1500c · RC-130: nota longa recolhida em 6 linhas; «Ver mais» com alvo de 44px */
+.nota p.nota-recolhida { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; line-clamp: 6; overflow: hidden; }
+.nota-ver-mais { align-self: flex-start; min-height: 44px; padding: 0 .25rem; color: var(--c-nota-txt); text-decoration: underline; }
 .nota-meta { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; font-size: var(--fs-12); color: var(--c-texto-3); }
 .nota-meta .cresce { flex: 1; }
 .nota-meta .bt-icone { width: 30px; height: 30px; }
@@ -407,7 +415,8 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   border: 1px solid var(--c-borda); border-radius: var(--r-p); background: linear-gradient(var(--c-sup), var(--c-sup)), var(--c-fundo);
 }
 .ct-abrir { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: .65rem; min-height: 52px; color: inherit; text-decoration: none; border-radius: var(--r-pp); }
-.ct-abrir .avatar { width: 40px; height: 40px; flex: none; font-size: var(--fs-13); }
+/* plano 2000d · PX-051 (DU-309): o tamanho vem do .avatar-g do app.css (ui.avatar {tamanho:"g"}) — aqui só o que é da linha */
+.ct-abrir .avatar { flex: none; }
 .ct-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: .05rem; }
 .ct-nome { max-width: 100%; font-size: var(--fs-15); font-weight: 700; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ct-sub { max-width: 100%; color: var(--c-texto-2); font-size: var(--fs-13); line-height: 1.25; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -559,7 +568,51 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .fe-etapas.sem-marco .fe-etapa { grid-template-columns: auto auto minmax(0, 1.8fr) minmax(0, 1fr) minmax(0, .7fr) minmax(0, 1.15fr) auto; grid-template-areas: "alca cor nome tipo num sla rem"; }
 .fe-etapas.sem-marco .fe-marco, .fe-cab.sem-marco .fe-marco-cab { display: none; }
 .fe-alca { grid-area: alca; } .fe-cor { grid-area: cor; } .fe-nome-cel { grid-area: nome; } .fe-tipo { grid-area: tipo; }
-.fe-marco { grid-area: marco; } .fe-num { grid-area: num; } .fe-sla { grid-area: sla; } .fe-rem { grid-area: rem; }
+.fe-marco { grid-area: marco; } .fe-num { grid-area: num; } .fe-sla-cel { grid-area: sla; min-width: 0; } .fe-rem { grid-area: rem; }
+/* plano 1500c · RC-147: mini-rótulos «Chance»/«Prazo» só no celular (lá o cabeçalho .fe-cab some) */
+.fe-mini { display: none; font-size: var(--fs-12); color: var(--c-texto-2); font-weight: 600; }
+/* plano 1500c · RC-146: a bolinha da cor continua 26 px no desenho, mas o alvo do toque tem 44 px */
+.fe-cor { position: relative; }
+.fe-cor::after { content: ""; position: absolute; inset: -9px; }
+/* plano 1500c · RC-165/152/154 */
+.crm-cfg-grupo-t { display: block; margin-bottom: .2rem; }
+.crm-cfg-abertos { color: var(--c-texto-3); }
+.fe-modelo-campo { display: flex; flex-direction: column; gap: .25rem; }
+/* plano 1500c · RC-164: a etiqueta que já existia fica destacada por um instante */
+.crm-cfg-item.crm-cfg-destaque { outline: 2px solid var(--c-prim); outline-offset: 2px; }
+.crm-cfg-sugeridos { flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .5rem; }
+/* plano 1500c · RC-289: imprimir a ficha ou o negócio sai só com o conteúdo — sem menu, botões nem gaveta cortada; links com o endereço */
+@media print {
+  body:has(.crm) * { visibility: hidden; }
+  body:has(.crm) .crm, body:has(.crm) .crm * { visibility: visible; }
+  body:has(.crm) .crm { position: absolute; top: 0; left: 0; width: 100%; }
+  body:has(dialog.gaveta[open]) .crm, body:has(dialog.gaveta[open]) .crm * { visibility: hidden; }
+  body:has(dialog.gaveta[open]) dialog.gaveta[open], body:has(dialog.gaveta[open]) dialog.gaveta[open] * { visibility: visible; }
+  dialog.gaveta[open] { position: absolute; inset: 0 auto auto 0; width: 100%; max-width: none; height: auto; max-height: none; overflow: visible; transform: none; box-shadow: none; border: 0; }
+  .crm .bt, .crm .bt-icone, .crm-fab, .crm-kb-ferramentas, .crm-visoes, .crm-sel, .ng-acoes, .ng-nav, .tf-acoes, .tf-check, .nota-meta button, .ng-prev-atalhos, .tf-atalhos, .kb-tour, .kb-sem-rede,
+  dialog.gaveta .bt, dialog.gaveta .bt-icone { display: none !important; }
+  .crm a[href^="http"]::after, dialog.gaveta a[href^="http"]::after { content: " (" attr(href) ")"; font-size: var(--fs-12); }
+}
+/* plano 1500c · RC-312/311: observação da empresa em bloco neutro; valor em aberto no cartão */
+.emp-obs { display: grid; gap: .2rem; padding: .6rem .75rem; border-radius: var(--r-p); border: 1px solid var(--c-borda); background: var(--c-fundo); }
+.emp-obs-txt { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-14); }
+/* plano 1500c · RC-268: «R$» dentro do campo de valor da gaveta */
+.ng-dd-moeda { display: flex; align-items: center; gap: .35rem; }
+.ng-moeda { color: var(--c-texto-3); font-size: var(--fs-13); }
+/* plano 1500c · RC-253: dicas da 1ª visita ao quadro */
+.kb-tour { display: grid; gap: .5rem; margin-bottom: .75rem; }
+.kb-tour-t { font-size: var(--fs-16); }
+.kb-tour-lista { margin: 0; padding-left: 1.2rem; display: grid; gap: .3rem; font-size: var(--fs-14); }
+/* plano 1500c · RC-264: sem internet o arrasto fica desligado */
+.kb-offline .kc { cursor: default; }
+/* plano 1500c · RC-257: «Por pessoa» no resumo do funil */
+.crm-fr-pessoas { margin-top: .75rem; display: grid; gap: .4rem; }
+.crm-fr-pessoas-t { font-size: var(--fs-14); }
+/* plano 1500c · RC-136/173/175/178/177 */
+.tf-horas { margin-top: .25rem; }
+.imp-dono { align-items: center; gap: .4rem; flex-wrap: wrap; }
+.imp-det-regra summary { cursor: pointer; min-height: 44px; display: inline-flex; align-items: center; }
+.imp-abas-prob { margin-bottom: .5rem; }
 .fe-nome-cel { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
 .fe-n { color: var(--c-texto-3); font-size: var(--fs-12);      /* plano 1000b · RB-162 */ font-family: var(--f-mono); padding-left: .2rem; }
 .fe-num { display: flex; align-items: center; gap: .3rem; min-width: 0; color: var(--c-texto-3); font-size: var(--fs-13); }
@@ -683,6 +736,8 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .fe-etapa, .fe-etapas.sem-marco .fe-etapa { grid-template-columns: auto auto minmax(0, 1fr) minmax(0, 1fr) auto;
     grid-template-areas: "alca cor nome nome rem" "alca . tipo marco marco" "alca . num sla sla"; }
   .fe-etapas.sem-marco .fe-etapa { grid-template-areas: "alca cor nome nome rem" "alca . tipo tipo tipo" "alca . num sla sla"; }
+  .fe-mini { display: inline; }      /* plano 1500c · RC-147 */
+  .fe-sla-cel { display: flex; flex-direction: column; gap: .15rem; }
   .crm-cfg-item > span { flex-basis: calc(100% - 3rem); }
 }
 @media (max-width: 760px), (pointer: coarse) {
@@ -919,7 +974,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .emp-cartao:focus-within { border-color: var(--c-prim); }
 .emp-cab { display: flex; align-items: center; gap: .7rem; min-width: 0; min-height: 44px; color: inherit; text-decoration: none; border-radius: var(--r-pp); }
 .emp-cab:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
-.emp-cab .avatar { width: 40px; height: 40px; font-size: var(--fs-13); }
+/* plano 2000d · PX-051 (DU-309): tamanho pelo .avatar-g (antes 40 px local) */
 .emp-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
 .emp-nome { font-weight: 700; font-size: var(--fs-15); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .emp-txt small { color: var(--c-texto-3); font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1248,7 +1303,25 @@ fieldset.crm-filtros-grupo > legend.rotulo { padding: 0; margin-bottom: .45rem; 
 /* CR-212: a 1ª etiqueta com o nome no desktop; no celular volta a ser ponto */
 .kc-etq1 { display: inline-block; max-width: 7.5rem; padding: .05rem .45rem; border-radius: var(--r-p); background: var(--c-sup-2); border: 1px solid var(--cor, var(--c-borda-2)); color: var(--c-texto-2); font-size: var(--fs-12); font-weight: 600; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kc-ponto-1 { display: none; }
-@media (max-width: 760px) { .kc-etq1 { display: none; } .kc-ponto-1 { display: inline-block; } }
+/* plano 1500c · RC-073/074/084/086: motivo da perda, valor final do ganho, legenda da pontuação e cartão sem contato */
+.kc-motivo { display: block; margin-top: .15rem; font-size: var(--fs-12); color: var(--c-texto-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kc-valor-final { color: var(--c-ok, inherit); }
+.kc-score-un { margin-left: .1rem; font-size: var(--fs-12); font-weight: 500; opacity: .8; }
+.kc-sem-contato { flex: none; }
+/* plano 1500c · RC-065/066: previsão de fechamento no cartão e soma dos perdidos (o que deixou de entrar) */
+.kc-previsao { display: inline-flex; align-items: center; gap: .2rem; font-size: var(--fs-12); color: var(--c-texto-2); }
+.kc-previsao.vencida { color: var(--c-ruim); font-weight: 600; }
+.kb-col-soma-perdida { text-decoration: line-through; text-decoration-thickness: 1px; color: var(--c-texto-2); }
+/* plano 1500c · RC-087: modo apresentação do quadro (reunião/TV) — sem ferramentas, letra maior, fundo da página */
+.crm.kb-apresentacao { background: var(--c-fundo, var(--c-sup)); padding: 1rem; overflow: auto; }
+.crm.kb-apresentacao .crm-kb-ferramentas, .crm.kb-apresentacao .crm-fab, .crm.kb-apresentacao .crm-novo, .crm.kb-apresentacao .crm-sel,
+.crm.kb-apresentacao .kc-rapidas, .crm.kb-apresentacao .kc-mover, .crm.kb-apresentacao .kb-col-mais, .crm.kb-apresentacao .kb-col-sel { display: none !important; }
+.crm.kb-apresentacao .kc-t { font-size: var(--fs-16); }
+.crm.kb-apresentacao .kb-col-nome { font-size: var(--fs-20); } /* plano 1500c · RX-002: só token de letra */
+.crm-apresentar[aria-pressed="true"] { background: var(--c-prim-suave); }
+@media (max-width: 760px) { .crm-apresentar { display: none; } }
+/* plano 1500c · RC-076: no celular a 1ª etiqueta continua com o NOME (mais curta) — pontos sem nome não diziam nada ao toque */
+@media (max-width: 760px) { .kc-etq1 { max-width: 5rem; } }
 /* CR-213: o avatar do responsável é um botão (filtra o quadro por ele) */
 .kc-dono { display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: none; color: inherit; cursor: pointer; }
 .kc-dono:hover .avatar { box-shadow: 0 0 0 2px var(--c-prim); }
@@ -1357,3 +1430,167 @@ fieldset.crm-filtros-grupo > legend.rotulo { padding: 0; margin-bottom: .45rem; 
 /* plano 1000b · RB-125: semana no celular — os dias livres viram uma linha só («Livres: qua, qui, sáb») */
 .tfp-livres { display: none; margin: 0 0 .5rem; }
 @media (max-width: 760px) { .tfp-dia.tfp-dia-livre { display: none; } .tfp-livres { display: block; } }
+/* plano 1500c · RC-310: período dos fechados no cabeçalho da coluna */
+.kb-col-periodo { font-size: var(--fs-12); color: var(--c-texto-3); }
+.kb-col-periodo::before { content: "· "; }
+/* plano 1500c · RC-330: busca na folha «Mover para…» com muitas etapas */
+.kb-mover-com-busca { display: grid; gap: .5rem; }
+.kb-mover-busca { width: 100%; min-height: 44px; padding: .35rem .6rem; border: 1px solid var(--c-borda-2); border-radius: var(--r-p); background: var(--c-sup); color: var(--c-texto); font: inherit; }
+.kb-mover-busca:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 1px; }
+.kb-mover li[hidden] { display: none !important; }
+/* plano 1500c · RC-305 / RC-307 / RC-327 */
+.imp-so-mapeadas { justify-self: start; min-height: 44px; }
+.imp-mapa-l[hidden] { display: none !important; }
+.tfp-csv { min-height: 44px; margin-inline-start: auto; }
+.crm-filtros-link { justify-self: start; min-height: 44px; }
+/* plano 1500c · RC-294: a tabela «Previsão por mês» usa o mesmo desenho da «Por pessoa» */
+.crm-fr-meses { margin-top: .75rem; }
+/* plano 1500c · RX-058: o «×» do chip de filtro mostra o foco do teclado (antes só mudava no hover) */
+.crm-chip button:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 1px; background: var(--c-tinta); color: var(--c-texto); }
+/* plano 1500c · RX-059: telefone da gaveta é link de ligar (cor do texto, sublinhado ao passar; alvo de toque com altura) */
+.ng-contato .ng-tel { color: inherit; text-decoration: none; display: inline-flex; align-items: center; min-height: 32px; }
+.ng-contato .ng-tel:hover { text-decoration: underline; }
+.ng-contato .ng-tel:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; border-radius: 4px; }
+@media (pointer: coarse) { .ng-contato .ng-tel { min-height: 44px; } }
+/* plano 1500c · RX-060: «Sem valor» nas mini-listas (ficha e gaveta) no mesmo tom fraco do cartão */
+.ng-mini .sem { flex: none; color: var(--c-texto-2); font-size: var(--fs-13); font-weight: 500; }
+/* plano 1500c · RX-061: o «+2» das etiquetas tem dica (title) — o cursor diz que dá para passar o mouse */
+.kc-mais-etq[title] { cursor: help; }
+/* plano 1500c · RX-062: a faixa da seleção ganhou «Tirar etiqueta…» — no celular os botões da faixa dividem a linha sem estourar 360 px */
+@media (max-width: 760px) { .crm-sel > .bt { flex: 1 1 calc(50% - .5rem); min-height: 44px; } .crm-sel-n { flex-basis: 100%; } }
+/* plano 1500c · RX-076: detalhes da tarefa com link longo não estouram a linha no celular; o link tem cara de link */
+.tf-desc { overflow-wrap: anywhere; }
+.tf-desc a { color: inherit; text-decoration: underline; }
+/* plano 1500c · RX-078: «WhatsApp» da gaveta (sem o módulo Conversas) do tamanho dos outros botões */
+.ng-contato .ng-wa { flex: none; min-height: 44px; }
+
+/* ============================================================ plano 2000d · frente crm */
+/* plano 2000d · DR-007: «Sair da apresentação» sempre à vista no modo apresentação (sem tela cheia no iPhone, TV sem teclado) */
+.kb-sair-apres { position: fixed; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); z-index: 30; min-height: 44px; box-shadow: var(--sombra-2); }
+/* plano 2000d · DR-061/024: a contagem do recorte e o aviso do filtro local, discretos sob os chips */
+.crm-recorte { margin: 0; font-size: var(--fs-13); color: var(--c-texto-2); }
+/* plano 2000d · DR-032: o trecho achado pela busca */
+.kc-achado { background: var(--c-aten-suave); color: inherit; border-radius: 2px; padding: 0 1px; }
+.kc-tel-achado { font-variant-numeric: tabular-nums; }
+/* plano 2000d · DR-012: o nome na tabela «Por pessoa» é botão (filtra o quadro) */
+.crm-fr-pessoa { min-height: 32px; text-align: left; }
+@media (pointer: coarse) { .crm-fr-pessoa { min-height: 44px; } }
+/* plano 2000d · DR-023: «Este mês» / «Mês passado» */
+.crm-filtros-atalhos { flex-wrap: wrap; gap: .4rem; }
+.crm-filtros-atalhos .bt { min-height: 36px; }
+@media (pointer: coarse) { .crm-filtros-atalhos .bt { min-height: 44px; } }
+/* plano 2000d · DR-033: «2 em Pós-venda» quando a busca não achou neste funil */
+.kb-outros-funis { flex-wrap: wrap; gap: .5rem; justify-content: center; margin-top: .5rem; }
+/* plano 2000d · DR-066: a etapa com cartões fora do prazo avisa no cabeçalho */
+.kb-col-sla { flex: none; font-size: var(--fs-12); font-weight: 600; color: var(--c-ruim); background: var(--c-ruim-suave); border-radius: 999px; padding: 0 .5rem; }
+.kb-col-alerta .kb-col-cab { box-shadow: inset 0 -2px 0 var(--c-ruim); }
+/* plano 2000d · DR-067: «Etapa 3 de 10» sob a fita, só no celular (onde a fita aparece) */
+.kb-fita-pos { display: none; }
+@media (max-width: 760px) { .kb-fita-pos:not(:empty) { display: block; margin: -.3rem 0 0; font-size: var(--fs-12); color: var(--c-texto-2); text-align: right; } }
+/* plano 2000d · DR-072: lead que acabou de chegar */
+.kc-novo { box-shadow: inset 3px 0 0 var(--c-info); }
+.kc-novo-selo { flex: none; margin-left: auto; font-size: var(--fs-12); font-weight: 600; color: var(--c-info); background: var(--c-info-suave); border-radius: 999px; padding: 0 .45rem; }
+/* plano 2000d · DR-084/085: «Depois da venda» no modal de ganho */
+.crm-ganho-depois { border: 0; padding: 0; margin: 0; display: grid; gap: .5rem; }
+.crm-ganho-depois .crm-ck { display: flex; align-items: center; gap: .5rem; min-height: 44px; }
+/* plano 2000d · DR-081/090: e-mail que abre o app de e-mail; «Mensagem pronta» ao lado de «Ver ficha» */
+.ng-email { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.ng-msg-pronta { min-height: 36px; }
+@media (pointer: coarse) { .ng-msg-pronta { min-height: 44px; } }
+/* plano 2000d · DR-089: a conversa recente na gaveta (quando o servidor mandar) */
+.ng-msgs-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+.ng-msg { display: grid; gap: .1rem; padding: .4rem .6rem; border-radius: var(--r); background: var(--c-sup-2); max-width: 90%; }
+.ng-msg.saida { justify-self: end; background: var(--c-prim-suave); }
+.ng-msg small { color: var(--c-texto-2); font-size: var(--fs-12); }
+/* plano 2000d · DR-096: os campos opcionais vazios recolhidos */
+.ng-campos-vazios > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--c-texto-2); }
+/* plano 2000d · DR-121/126/130 */
+.tf-cadencia { min-height: 36px; }
+@media (pointer: coarse) { .tf-cadencia { min-height: 44px; } }
+.tfp-por-pessoa { margin: 0 0 .5rem; }
+.tf-contato-id { color: inherit; }
+/* plano 2000d · DR-091: quanto tempo ficou na etapa, ao lado do evento */
+.tempo-ficou { color: var(--c-texto-2); }
+/* plano 2000d · DR-162: título longo do negócio em no máximo 2 linhas no celular (o texto inteiro fica ao editar) */
+@media (max-width: 760px) { .ng-titulo-txt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; } }
+/* plano 2000d · DR-164: a jornada do negócio (chegou → agendou → fechou) */
+.ng-jornada { list-style: none; margin: .25rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: .25rem .5rem; font-size: var(--fs-13); }
+.ng-jornada-it { display: inline-flex; gap: .3rem; align-items: baseline; }
+.ng-jornada-it + .ng-jornada-it::before { content: "→"; color: var(--c-texto-2); margin-right: .2rem; }
+.ng-jornada-it small { color: var(--c-texto-2); }
+/* plano 2000d · DR-151/159/168/176 */
+.tempo-sistema { display: inline-flex; align-items: center; gap: .2rem; }
+.tempo-sistema .ic { width: 12px; height: 12px; }
+.tf-wa { color: inherit; }
+.fx-obs-lgpd { display: block; margin-top: .25rem; }
+.fx-neg-sit { margin-left: .25rem; }
+
+/* ============================================================
+   plano 2000d · lote crm-d4 — importação, ficha, quadro
+   ============================================================ */
+/* plano 2000d · DR-199: passo já feito vira botão (volta sem vários «Voltar») */
+.imp-passo-bt { min-height: 44px; padding: 0 .4rem; border: 0; background: transparent; color: inherit; font: inherit; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; border-radius: var(--r-p); }
+.imp-passo-bt:hover { color: var(--c-prim); }
+/* plano 2000d · DR-224: copiar o telefone ao lado do número */
+.fx-copiar-tel { min-width: 44px; min-height: 44px; vertical-align: middle; color: var(--c-texto-2); }
+/* plano 2000d · DR-240: «Criar também um negócio» no cadastro */
+.ct-criar-neg { display: flex; align-items: center; gap: .5rem; min-height: 44px; font-size: var(--fs-13); color: var(--c-texto-2); }
+/* plano 2000d · DR-345: faixa «cartões sem responsável» com o botão de distribuir */
+.kb-sem-dono { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.kb-sem-dono-txt { flex: 1 1 12rem; min-width: 0; }
+.kb-sem-dono-bt { min-height: 44px; }
+/* plano 2000d · DR-314: anel de foco comum nos controles do CRM (cartões, colunas, ficha, importação e configurações) */
+:is(.crm, .crm-cfg-crm, .imp-corpo, .imp-passos, .fx-cab, .kb-sem-dono) :is(button, a[href], [tabindex="0"], select):focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+/* plano 2000d · DR-316: com movimento reduzido, nada pulsa nem gira no CRM (o «salvando» do cartão fica parado) */
+@media (prefers-reduced-motion: reduce) {
+  .kc.salvando::after, .kc.chegou, .crm-chip, .ng-confirmando, .crm-fr-lista.anim .crm-fr-barra, .kb-col.alvo, .kb-lugar, .kc.kc-solto, .imp-barra.andando i, .tf-check input:checked + span::after { animation-name: none !important; }
+  .imp-passo-bt, .fx-copiar-tel { transition: none !important; }
+}
+
+/* ============================================================
+   plano 2000d · lote crm-d5 — tablet, zoom, toque, números, apresentação
+   ============================================================ */
+/* plano 2000d · DR-358: tablet na horizontal (e janela média) — colunas em rem um pouco mais estreitas: cabem 3 a 4 em vez de 2,7 */
+@media (min-width: 761px) and (max-width: 1180px) {
+  .kb { grid-auto-columns: minmax(15rem, 17.5rem); gap: .7rem; }
+}
+/* plano 2000d · DR-367: zoom de 200% / tela baixa — as faixas fixas soltam (o cabeçalho cobria metade da altura) */
+@media (max-height: 520px) {
+  .crm[data-tela="contatos"] .crm-fixa, .kb-fita, .crm-sel, .ng-abas { position: static; }
+}
+/* plano 2000d · DR-368: no toque, os botões do cartão têm área de 44 px (o selo de não lidas ganha a área invisível em volta) */
+@media (pointer: coarse) {
+  .kc-mover { width: 44px; height: 44px; }
+  button.kc-naolidas { position: relative; }
+  button.kc-naolidas::before { content: ""; position: absolute; inset: -10px; }
+}
+/* plano 2000d · DR-376: números com largura fixa onde se comparam valores */
+.crm-tot b, .kb-col-n, .kb-col-soma, .kc-valor, .ng-valor b, .ng-valor-cmp, .tfp-pn b, .fx-ltv, .ct-lista .mono, .imp-prog-txt { font-variant-numeric: tabular-nums; }
+/* plano 2000d · DR-390: no modo apresentação do quadro (TV/projeção) o contato e o telefone do cartão ficam borrados */
+.crm.kb-apresentacao .kc-s.dado-pessoal, .crm.kb-apresentacao .kc-tel-achado { filter: blur(6px); }
+@media (forced-colors: active) { .crm.kb-apresentacao .kc-s.dado-pessoal, .crm.kb-apresentacao .kc-tel-achado { filter: none; opacity: .2; } }
+/* plano 2000d · DR-417: contador do nome da etapa */
+.fe-nome-cont { font-size: var(--fs-12); color: var(--c-texto-2); font-variant-numeric: tabular-nums; }
+/* plano 2000d · DR-421/422: previsto × fechado no ganho */
+.ng-valor-cmp { display: block; font-size: var(--fs-12); color: var(--c-texto-2); }
+.ng-valor-cmp.desconto { color: var(--c-aten); }
+/* plano 2000d · DR-359: o cabeçalho do cartão na gaveta antes da leitura */
+.ng-previa { display: flex; flex-direction: column; gap: .35rem; margin-bottom: .8rem; }
+/* plano 2000d · DR-377: etiqueta de cor escura (azul-marinho) no tema escuro — a borda puxa para o tom do texto e não some no fundo */
+.kc-etq1 { border-color: color-mix(in srgb, var(--cor, var(--c-borda-2)) 70%, var(--c-texto-3)); }
+/* plano 2000d · PX-050: alto contraste do Windows (forced-colors) — cartão, cartão selecionado/pego, coluna-alvo e chips não dependem só de cor/sombra */
+@media (forced-colors: active) {
+  .kc { border: 1px solid CanvasText; }
+  .kc.kc-sel, .kc.pego { outline: 3px solid Highlight; outline-offset: 1px; }
+  .kc:focus-visible { outline: 3px solid Highlight; outline-offset: 2px; }
+  .kb-col.alvo { outline: 2px dashed Highlight; outline-offset: -2px; }
+  .crm-chip { border: 1px solid CanvasText; }
+  .ng-pres[aria-pressed="true"] { outline: 2px solid Highlight; }
+}
+/* plano 2000d · PX-036/037: a dica «Quis dizer …?» do e-mail nos cadastros novos */
+.crm-dica-email { margin: .25rem 0 0; font-size: var(--fs-13); color: var(--c-texto-2); }
+.crm-dica-email .crm-dica-usar { min-height: 44px; padding: 0 .25rem; }
+/* plano 2000d · PX-073: a contagem da nota perto do limite (no fim, em âmbar) · PX-086: o aviso da previsão no passado do cadastro */
+.nota-conta { margin-right: auto; font-size: var(--fs-12); font-variant-numeric: tabular-nums; }
+.nota-conta.aten { color: var(--c-aten); font-weight: 600; }
+.ng-prev-aviso { display: block; margin-top: .25rem; }

@@ -30,7 +30,7 @@
   --c-borda: #D8D6D1;
   --c-borda-2: #C6C5C1;
   --c-prim: #B0761F;
-  --c-prim-hi: #9B681B;
+  --c-prim-hi: #B9863A;   /* plano 1500c · UCC-071: o hover afasta-se da cor do texto (igual ao tema.js) */
   --c-prim-txt: #0B1B2B;
   --c-prim-luz: #8D5F19;
   --c-prim-suave: #E8DCC9;
@@ -94,6 +94,11 @@
 
   /* ---- forma ---- */
   --r: 18px; --r-g: 24px; --r-p: 12px; --r-pp: 8px;
+  /* plano 2000d · DU-297: uma opacidade de desabilitado só; DU-315: três degraus de elevação (repouso, flutuante, arrastando) */
+  --opac-desab: .55;
+  --sombra-1: 0 1px 2px var(--c-sombra);
+  --sombra-2: 0 6px 18px var(--c-sombra);
+  --sombra-3: 0 14px 36px var(--c-sombra), 0 2px 6px var(--c-sombra);
   --lat: 232px; --lat-rec: 72px; --topo: 56px; --barra: 64px;
   --pad: clamp(1rem, 2.4vw, 2rem);
 
@@ -199,7 +204,10 @@ html[data-esquema="claro"] .palco .grao { mix-blend-mode: multiply; opacity: .05
 }
 .bt .ic { width: 16px; height: 16px; }
 .bt:active:not(:disabled) { transform: scale(.97); }
-.bt:disabled { opacity: .5; }
+/* plano 2000d · DU-295/DU-296: desabilitado com cores próprias (o texto não cai abaixo de 3:1 como na opacidade .5), borda tracejada e o cursor
+   que diz «não dá»; [aria-disabled="true"] (botão que continua focável para o leitor de tela explicar o porquê) com o MESMO estilo */
+.bt:disabled, .bt[aria-disabled="true"] { opacity: 1; background: var(--c-sup-2); color: var(--c-texto-2); border-color: var(--c-borda-2); border-style: dashed; box-shadow: none; cursor: not-allowed; }
+.bt[aria-disabled="true"]:hover { background: var(--c-sup-2); }
 .bt-prim { background: var(--c-prim); color: var(--c-prim-txt); }
 .bt-prim:hover:not(:disabled) { background: var(--c-prim-hi); }
 .bt-sec { background: var(--c-tinta); border-color: var(--c-borda-2); color: var(--c-texto); }
@@ -210,6 +218,11 @@ html[data-esquema="claro"] .palco .grao { mix-blend-mode: multiply; opacity: .05
 .bt-perigo { background: transparent; border-color: var(--c-ruim); color: var(--c-ruim); }
 .bt-perigo:hover:not(:disabled) { background: var(--c-ruim-suave); }
 .bt-perigo[aria-busy="true"]::after { border-color: var(--c-ruim); border-right-color: transparent; }
+/* plano 2000d · DU-304: o botão FINAL de uma ação destrutiva é cheio (o contorno fica para o botão que abre a confirmação) e o de confirmação positiva */
+.bt-perigo-cheio { background: var(--c-ruim); border-color: var(--c-ruim); color: var(--c-ruim-txt); }
+.bt-perigo-cheio:hover:not(:disabled) { background: color-mix(in srgb, var(--c-ruim) 86%, var(--c-texto)); }
+.bt-ok { background: var(--c-ok); border-color: var(--c-ok); color: var(--c-ok-txt); }
+.bt-ok:hover:not(:disabled) { background: color-mix(in srgb, var(--c-ok) 86%, var(--c-texto)); }
 .bt-p { min-height: 32px; padding: .3rem .8rem; font-size: var(--fs-13); }
 .bt-g { min-height: 48px; padding: .75rem 1.4rem; font-size: var(--fs-15); }
 .bt-bloco { width: 100%; }
@@ -285,7 +298,7 @@ html[data-esquema="escuro"] .cartao { box-shadow: 0 24px 48px -36px var(--c-somb
   outline: 2px solid var(--c-foco); outline-offset: 1px; border-color: var(--c-prim);
 }
 .campo [aria-invalid="true"], .cor-hex[aria-invalid="true"] { border-color: var(--c-ruim) !important; }
-.campo input:disabled, .campo select:disabled, .campo textarea:disabled { opacity: .6; cursor: not-allowed; }
+.campo input:disabled, .campo select:disabled, .campo textarea:disabled { opacity: var(--opac-desab); cursor: not-allowed; }   /* plano 2000d · DU-297 */
 .campo input[readonly] { background: var(--c-sup-2); }
 .campo-ajuda { color: var(--c-texto-3); font-size: var(--fs-13); }
 .campo-erro { color: var(--c-ruim); font-size: var(--fs-13); font-weight: 600; line-height: 1.4; margin-block-start: var(--esp-1); text-wrap: pretty; }
@@ -305,16 +318,21 @@ html[data-esquema="claro"] input[type="date"]::-webkit-calendar-picker-indicator
 .campo-switch .check-marca { width: 38px; height: 22px; border-radius: 999px; }
 .campo-switch .check-marca::after { left: 2px; top: 2px; width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--c-texto-3); transform: none; transition: transform var(--t-ui) var(--e-out), background-color var(--t-ui) var(--e-out); }
 .campo-switch input:checked + .check-marca::after { transform: translateX(16px); background: var(--c-prim-txt); }
-.campo-check input:disabled + .check-marca { opacity: .5; }
+.campo-check input:disabled + .check-marca { opacity: var(--opac-desab); }   /* plano 2000d · DU-297 */
 .campo-multi legend { margin-bottom: .5rem; }
 .multi-opcoes { display: flex; flex-wrap: wrap; gap: .45rem; }
 .chip-check { position: relative; display: inline-flex; align-items: center; cursor: pointer; }
 .chip-check input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .chip-check span { display: inline-flex; align-items: center; min-height: 34px; padding: .3rem .85rem; border-radius: 999px; border: 1px solid var(--c-borda-2); color: var(--c-texto-2); font-weight: 600; font-size: var(--fs-13); transition: background-color var(--t-ui) var(--e-out), border-color var(--t-ui) var(--e-out), color var(--t-ui) var(--e-out); }
 .chip-check input:checked + span { background: var(--c-prim-suave); border-color: var(--c-prim); color: var(--c-texto); }
-.chip-check input:checked + span::before { content: "✓"; margin-right: .35rem; color: var(--c-prim-luz); }
+/* plano 2000d · DU-303: o ✓ do chip marcado é um desenho (máscara), não um glifo — a fonte do Windows não desloca nem vira emoji */
+.chip-check input:checked + span::before { content: ""; width: .9em; height: .9em; margin-right: .35rem; flex: none; background: var(--c-prim-luz);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4.5 12.5l5 5L19.5 7' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4.5 12.5l5 5L19.5 7' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; }
+/* plano 2000d · DU-302: o chip responde ao mouse */
+@media (hover: hover) { .chip-check input:not(:disabled):not(:checked) + span:hover { background: var(--c-hover); border-color: var(--c-texto-3); color: var(--c-texto); } }
 .chip-check input:focus-visible + span { outline: 2px solid var(--c-foco); outline-offset: 2px; }
-.chip-check input:disabled + span { opacity: .45; cursor: not-allowed; }
+.chip-check input:disabled + span { opacity: var(--opac-desab); cursor: not-allowed; }   /* plano 2000d · DU-297 */
 .form-grade { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem 1rem; }
 .form-grade .inteiro { grid-column: 1 / -1; }
 .busca { position: relative; min-width: 0; }
@@ -356,7 +374,8 @@ html[data-esquema="claro"] input[type="date"]::-webkit-calendar-picker-indicator
 .pilula-info:not(:has(.ic))::before { content: "i"; display: inline-grid; place-items: center; width: 1.2em; height: 1.2em; border: 1.5px solid currentColor; border-radius: 50%; font-size: .72em; }
 .pilula-cor { background: color-mix(in srgb, var(--cor) 18%, var(--c-fundo)); color: color-mix(in srgb, var(--cor) 58%, var(--c-texto)); }
 .etiq {
-  display: inline-flex; align-items: center; gap: .4rem; min-height: 26px; max-width: 100%; padding: .15rem .6rem .15rem .5rem; border-radius: 999px;
+  /* plano 2000d · DU-310: a mesma altura da pílula (24) — numa linha com as duas nada fica desalinhado */
+  display: inline-flex; align-items: center; gap: .4rem; min-height: 24px; max-width: 100%; padding: .12rem .6rem .12rem .5rem; border-radius: 999px;
   background: var(--c-sup-2); border: 1px solid var(--c-borda); color: var(--c-texto-2); font-size: var(--fs-12); font-weight: 600;
 }
 .etiq > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -508,8 +527,16 @@ dialog { color: var(--c-texto); }
 .menu-motivo { display: block; font-size: var(--fs-12); color: var(--c-texto-3); font-weight: 400; line-height: 1.3; margin-top: var(--esp-1); }   /* plano 1000 · AS-288 */
 .menu-item:hover:not(:disabled), .menu-item:focus-visible { background: var(--c-hover); outline: none; }
 .menu-item.perigo, .menu-item.perigo .ic { color: var(--c-ruim); }
-.menu-item:disabled { opacity: .45; }
+.menu-item:disabled { opacity: var(--opac-desab); }   /* plano 2000d · DU-297 */
 .menu-sep { border: 0; height: 1px; background: var(--c-borda); margin: .3rem .4rem; }
+/* CC-139 (plano 1500c) · plano 2000d: título de grupo dentro do menu */
+.menu-titulo { margin: .45rem .6rem .2rem; font-size: var(--fs-12); font-weight: 600; color: var(--c-texto-3); }
+.menu-titulo:first-child { margin-top: .2rem; }
+/* plano 2000d · DU-360 */
+.sk-demora { margin: 0 0 var(--esp-3); color: var(--c-texto-2); font-size: var(--fs-14); }
+/* plano 2000d · DU-452: o nome curto da empresa no topo do celular (conta com mais de uma) */
+.emp-curto { display: none; }
+@media (max-width: 480px) { .empresa-bt .emp-curto { display: inline; max-width: 9ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-13); font-weight: 600; } }
 .flut-busca { width: 100%; min-height: 38px; padding: .45rem .8rem; border-radius: 10px; border: 1px solid var(--c-borda-2); background: var(--c-poco); color: var(--c-texto); }
 .flut-lista { display: flex; flex-direction: column; gap: .15rem; max-height: 260px; overflow: auto; }
 .flut-op { display: flex; align-items: center; gap: .55rem; min-height: 36px; padding: .25rem .4rem; border-radius: 8px; cursor: pointer; }
@@ -811,6 +838,11 @@ html.menu-recolhido .lat-conta { justify-content: center; }
 .entrar-cartao .sub { margin-top: .4rem; }
 .entrar-form { display: flex; flex-direction: column; gap: .95rem; margin-top: 1.4rem; }
 .entrar-erro { padding: .7rem .9rem; border-radius: var(--r-p); background: var(--c-ruim-suave); color: var(--c-ruim); font-weight: 600; font-size: var(--fs-14); }
+/* plano 2000d · SX-046: «Você quis dizer …?» logo abaixo do e-mail */
+.entrar-sugestao { margin: .3rem 0 0; font-size: var(--fs-13); }
+.entrar-sugestao .link { font-weight: 600; }
+/* plano 2000d · SX-055: o tempo poupado no aviso de fim do teste */
+.aviso-teste-poupado { padding: .55rem .8rem; border-radius: var(--r-p); background: var(--c-ok-suave); color: var(--c-texto); font-weight: 600; }
 .entrar-ok { padding: .7rem .9rem; border-radius: var(--r-p); background: var(--c-ok-suave); color: var(--c-ok); font-weight: 600; font-size: var(--fs-14); }
 .entrar-rodape { display: flex; justify-content: space-between; align-items: center; gap: .6rem; flex-wrap: wrap; margin-top: .3rem; font-size: var(--fs-14); }
 .entrar-nota { font-size: var(--fs-13); color: var(--c-texto-3); line-height: 1.45; }
@@ -1055,7 +1087,7 @@ body.palco-vivo .palco .brilho-b { animation: orbitaBrilhoB 39s cubic-bezier(.45
 .busca-item b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .busca-item small { color: var(--c-texto-3); font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .busca-item[aria-selected="true"], .busca-item:hover { background: var(--c-hover); }
-.flut.notifs { width: min(390px, calc(100vw - 16px)); max-width: calc(100vw - 16px); }
+.flut.notifs { width: min(380px, calc(100vw - 32px)); max-width: calc(100vw - 32px); }   /* plano 1500c · UCC-118: 16 px de respiro de cada lado */
 .notif-item { display: flex; gap: .7rem; width: 100%; padding: .6rem .5rem; border-radius: 12px; text-align: left; }
 .notif-item:hover { background: var(--c-hover); }
 .notif-item i { width: 8px; height: 8px; margin-top: .45rem; border-radius: 50%; background: var(--c-prim); flex: none; }
@@ -1081,7 +1113,7 @@ body.palco-vivo .palco .brilho-b { animation: orbitaBrilhoB 39s cubic-bezier(.45
 .cores-sug { align-items: center; padding: .7rem .8rem; border-radius: var(--r-p); background: var(--c-sup-2); }
 .cores-sug .rotulo { margin-right: .3rem; }
 .cores-caixa { gap: 1.1rem; }
-.cores-caixa:disabled { opacity: .5; }
+.cores-caixa:disabled { opacity: var(--opac-desab); }   /* plano 2000d · DU-297 */
 .cor-campo { display: flex; flex-direction: column; gap: .6rem; }
 .marca-acoes { gap: .5rem; }
 .marca-espaco { flex: 1 1 auto; }
@@ -1223,6 +1255,7 @@ html.aba-oculta .palco i, html.aba-oculta .palco::before, html.aba-oculta .palco
 }
 @media (prefers-reduced-motion: reduce) {
   body .palco i, body .palco::before, body .palco::after { animation: none; transform: none; will-change: auto; }
+  .palco::before { filter: none; display: none; }   /* plano 1500c · UCC-114: movimento reduzido também dispensa o blur(74px) */
 }
 
 @media (forced-colors: active) {
@@ -1267,7 +1300,9 @@ html[data-produto="atendimento"] { --c-prod: var(--c-prod-atend); }
 .cab-txt { flex: 1 1 18rem; min-width: 0; }
 .cab-rotulo { margin-bottom: .3rem; }
 .cab-titulo { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-h1); letter-spacing: -.02em; line-height: 1.1; text-wrap: balance; overflow-wrap: anywhere; }
+/* plano 2000d · DU-325: o título recebe o foco a cada troca de tela — sem anel no foco por script, com um traço discreto para quem chega pelo teclado */
 .cab-titulo:focus { outline: none; }
+.cab-titulo:focus-visible { outline: 1px solid var(--c-foco); outline-offset: 4px; border-radius: var(--r-pp); }
 .cab-sub { margin-top: .45rem; color: var(--c-texto-2); font-size: var(--fs-corpo); max-width: 68ch; }
 .cab-acoes { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; min-width: 0; }
 .cab-n2 { margin: 0 0 1rem; }
@@ -1363,7 +1398,9 @@ html[data-produto="atendimento"] { --c-prod: var(--c-prod-atend); }
 .protege-faixa { display: flex; align-items: center; justify-content: space-between; gap: .6rem 1rem; flex-wrap: wrap; padding: .75rem 1.2rem; background: var(--c-aten-suave); border-block: 1px solid var(--c-borda); color: var(--c-texto); font-size: var(--fs-14); font-weight: 600; }
 .protege-faixa p { flex: 1 1 12rem; min-width: 0; }
 .protege-faixa .linha { flex: none; }
+/* plano 2000d · DU-324: o contêiner focado ao abrir (quando não há campo) mostra onde o foco está, discreto */
 .modal:focus, .gaveta:focus { outline: none; }
+.modal:focus-visible, .gaveta:focus-visible { outline: 2px solid color-mix(in srgb, var(--c-foco) 55%, transparent); outline-offset: -2px; }
 
 /* ---- campo com validação ao vivo, máscara e medidor ---- */
 .campo[data-estado="erro"] .campo-erro::before { content: "! "; font-weight: 800; }
@@ -1431,13 +1468,21 @@ button, a, [role="button"], [role="tab"], [role="option"], [role="menuitem"], in
   .modal-rod .bt { width: 100%; }
 }
 @media (pointer: coarse) {
+  /* plano 2000d · SX-078: no celular o campo tem 16 px — com menos, o iPhone dá zoom na tela inteira ao tocar no campo */
+  .campo input:not([type=checkbox]):not([type=radio]), .campo select, .campo textarea, .sel, .busca input, .busca-campo, .cor-hex { font-size: var(--fs-16); }
+
   .toast-x, .toast-acao { min-width: var(--alvo-toque); min-height: var(--alvo-toque); }
+  .topo-busca, .empresa-bt, .topo-produtos { min-height: var(--alvo-toque); }   /* plano 1500c · UCC-107/UCC-108/UCC-109: 44 px no toque */
   .campo-check label, .chip-check, .chip-check span { min-height: var(--alvo-toque); }
+  .flut-busca, .cor-hex, .dom-add input, .papel-sel { min-height: var(--alvo-toque) !important; }   /* plano 1500c · UCC-110/UCC-111/UCC-112/UCC-113: 44 px no toque */
+  .palco::before { filter: none; display: none; }   /* plano 1500c · UCC-114: sem a aurora com blur(74px) no celular (os brilhos radiais continuam) */
 }
 @media (forced-colors: active) {
   .menu-item:focus-visible, .empresa-op:focus-visible {
     outline-color: Highlight; outline-style: solid; outline-width: var(--foco-largura);
   }
+  /* plano 1500c · UCC-073: alto contraste — pílulas, chips e etiquetas perdem o fundo colorido; a borda do sistema mantém o contorno */
+  .pilula, .chip, .chip-check span, .etiq, .badge, .pilula-teste { border: 1px solid ButtonText; }
 }
 
 /* ============================================================
@@ -1680,6 +1725,9 @@ html[data-esquema="escuro"] .modal, html[data-esquema="escuro"] .gaveta, html[da
 }
 html[data-esquema="escuro"] .topo, html[data-esquema="escuro"] .lateral, html[data-esquema="escuro"] .barra, html[data-esquema="escuro"] .faixa, html[data-esquema="escuro"] .lat-pe,
 html[data-esquema="escuro"] .modal-rod, html[data-esquema="escuro"] .gaveta-cab { border-color: var(--c-borda-alfa); }
+/* plano 2000d · DU-306: no escuro a elevação é a borda alfa — também nos avisos, faixas, painéis flutuantes, etiquetas e na tela de bloqueio */
+html[data-esquema="escuro"] .aviso, html[data-esquema="escuro"] .faixa, html[data-esquema="escuro"] .flut, html[data-esquema="escuro"] .menu-pop,
+html[data-esquema="escuro"] .etiq, html[data-esquema="escuro"] .tela-bloqueio-cartao, html[data-esquema="escuro"] .toast { border-color: var(--c-borda-alfa); }
 html[data-esquema="escuro"] .tabela th, html[data-esquema="escuro"] .tabela td, html[data-esquema="escuro"] .divisor { border-color: var(--c-borda-alfa); }
 html[data-esquema="escuro"] .campo input:not([type=checkbox]):not([type=radio]), html[data-esquema="escuro"] .campo select, html[data-esquema="escuro"] .campo textarea,
 html[data-esquema="escuro"] .sel, html[data-esquema="escuro"] .busca input { border-color: var(--c-borda-alfa-2); }
@@ -1760,7 +1808,7 @@ html[data-esquema="escuro"] .entrar-cartao { box-shadow: 0 0 0 1px var(--c-borda
 .campo-caps { display: inline-flex; align-items: center; gap: var(--esp-1); color: var(--c-aten); font-size: var(--fs-13); font-weight: 600; margin-block-start: var(--esp-1); }
 .campo-caps .ic { width: 14px; height: 14px; }
 /* AS-209: sem internet, os botões de salvar avisam antes do clique (o clique continua dando a frase honesta) */
-html.sem-internet [data-sem-rede] { opacity: .6; cursor: not-allowed; }
+html.sem-internet [data-sem-rede] { opacity: var(--opac-desab); cursor: not-allowed;   /* plano 2000d · DU-297 */ }
 /* AS-243: ponto vermelho em Conversas enquanto um número de WhatsApp estiver desconectado */
 .canal-ponto { position: absolute; top: 6px; left: 26px; width: 9px; height: 9px; border-radius: 50%; background: var(--c-ruim); box-shadow: 0 0 0 2px var(--c-fundo); }
 .barra-b .canal-ponto { top: 6px; left: calc(50% + 6px); }
@@ -1782,3 +1830,109 @@ html.sem-internet [data-sem-rede] { opacity: .6; cursor: not-allowed; }
 .sobre-app { margin: 0; padding: var(--esp-3); border-radius: var(--r-p); background: var(--c-poco); border: 1px solid var(--c-borda); font-size: var(--fs-13); white-space: pre-wrap; overflow-wrap: anywhere; }
 /* pedido de Relatórios: a conversão com explicação ganha o sublinhado pontilhado de «tem dica» */
 .g-fconv-dica { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+
+/* plano 1500c · UC-025: empresa só para consulta (teste vencido/suspensa): os botões de escrita marcados ficam visivelmente desligados */
+html.somente-consulta [data-so-consulta] { opacity: .55; cursor: not-allowed; }
+/* plano 1500c · UCB-054: faixa da demonstração */
+.faixa-demo { background: var(--c-info-suave, var(--c-aten-suave)); }
+.faixa-demo .ic { color: var(--c-info, var(--c-aten)); }
+/* plano 1500c · UCB-120/UCB-053: validade curta do convite e o caminho de quem ainda não usa */
+.entrar-validade-aten { color: var(--c-aten); font-weight: 600; }
+.entrar-prospect { margin: 0; text-align: center; font-size: var(--fs-14); }
+.entrar-prospect .link { display: inline-flex; align-items: center; min-height: var(--alvo-toque); }
+/* plano 1500c · UCC-038: Central de ajuda */
+.ajuda { max-width: 46rem; }
+.ajuda-busca { width: 100%; min-height: var(--alvo-toque); }
+.ajuda-itens { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--esp-1); }
+.ajuda-itens a { display: flex; align-items: center; min-height: var(--alvo-toque); padding: 0 var(--esp-3); border-radius: var(--r-p); background: var(--c-poco); border: 1px solid var(--c-borda); color: inherit; text-decoration: none; overflow-wrap: anywhere; }
+.ajuda-itens a:hover { border-color: var(--c-prim); }
+.ajuda-itens a:focus-visible { outline: 2px solid var(--c-foco, var(--c-prim)); outline-offset: 2px; }
+.ajuda-passos { margin: 0; padding-left: 1.3rem; display: grid; gap: var(--esp-2); line-height: 1.5; }
+.ajuda-rodape { font-size: var(--fs-14); }
+/* plano 1500c · UCC-080: «(3×)» do aviso repetido */
+.toast-vezes { font-variant-numeric: tabular-nums; opacity: .8; }
+/* plano 1500c · UCC-091/UCC-094/UCC-095: faixa de fim de teste, selo «Não incluso» e a lista do que o módulo resolve */
+.faixa-aviso { background: var(--c-aten-suave); } .faixa-aviso .ic { color: var(--c-aten); }
+.produto-op-selo { flex: none; padding: .1rem .5rem; border-radius: 999px; border: 1px solid var(--c-borda-2); color: var(--c-texto-3); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; }
+.produto-op-fora .produto-op-icone { opacity: .6; }
+.beneficios { list-style: none; margin: var(--esp-3) auto 0; padding: 0; display: grid; gap: var(--esp-2); max-width: 30rem; text-align: left; }
+.beneficios li { display: flex; gap: .5rem; align-items: flex-start; }
+.beneficios .ic { flex: none; width: 18px; height: 18px; color: var(--c-ok); margin-top: .15rem; }
+
+/* ============================================================
+   plano 2000d · frente sis
+   ============================================================ */
+/* DU-229: «A+» da entrada — texto 12 % maior no aparelho inteiro (o antes.js aplica antes de pintar) */
+html[data-texto="grande"] { font-size: 112.5%; }
+.entrar-a-mais { font-weight: 800; letter-spacing: .02em; }
+/* DU-141: tela bloqueada com PIN (a sessão continua aberta por baixo) */
+.tela-bloqueio { position: fixed; inset: 0; z-index: 140; display: grid; place-items: center; padding: var(--pad); background: var(--c-fundo); }
+.tela-bloqueio-cartao { width: min(100%, 22rem); display: grid; gap: var(--esp-3); padding: var(--esp-5, 1.5rem); border-radius: var(--r); background: var(--c-sup); border: 1px solid var(--c-borda); box-shadow: var(--sombra-2); text-align: center; }
+.tela-bloqueio-cartao > .ic { width: 32px; height: 32px; margin: 0 auto; color: var(--c-prim-luz); }
+/* DU-281: modo foco — sem menu lateral e sem as faixas que não bloqueiam (o bloqueio continua aparecendo) */
+html.modo-foco .lateral { display: none; }
+html.modo-foco .coluna { margin-left: 0; }
+html.modo-foco .faixas > .faixa:not(.faixa-bloqueio) { display: none; }
+/* DU-242/DU-152: objetivo e textos da revenda nas boas-vindas */
+.bv-objetivo { display: flex; flex-wrap: wrap; gap: var(--esp-2); }
+.bv-objetivo legend { width: 100%; margin-bottom: var(--esp-1); font-weight: 700; }
+.chip-op { min-height: var(--alvo-toque, 44px); padding: .3rem .9rem; border-radius: 999px; border: 1px solid var(--c-borda-2); color: var(--c-texto-2); font-weight: 600; }
+.chip-op[aria-pressed="true"] { background: var(--c-prim-suave); border-color: var(--c-prim); color: var(--c-texto); }
+.chip-op:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.bv-org { white-space: pre-line; }
+.bv-contato { display: flex; align-items: center; gap: .4rem; }
+/* DU-227: o passo pedido vem destacado no «Comece aqui» */
+.passo-equipe[data-destaque="1"] { outline: 2px solid var(--c-prim); outline-offset: 2px; border-radius: var(--r-p); }
+/* DU-134/DU-216: os botões de reenviar mostram a espera */
+.entrar-reenviar { font-variant-numeric: tabular-nums; }
+.campo-aceite .check-txt a { display: inline; }
+/* DU-315: o item que está sendo arrastado sobe um degrau de elevação */
+.arrastando, [aria-grabbed="true"] { box-shadow: var(--sombra-3); }
+/* DU-308: quem pede mais contraste no sistema — textos secundários viram o texto principal e as bordas sobem um degrau */
+@media (prefers-contrast: more) {
+  :root { --c-texto-2: var(--c-texto); --c-texto-3: var(--c-texto); --c-borda: var(--c-borda-2); --c-borda-2: var(--c-texto-3); }
+  .link, a.link { text-decoration-thickness: 2px; }
+}
+/* DU-321: a caixa de seleção dentro de tabela ganha a área de toque de 44 px (o rótulo cresce, a caixa continua 20) */
+@media (any-pointer: coarse) { .tabela .campo-check label, .tabela td > label:has(input[type="checkbox"]) { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; } }
+/* DU-316: link dentro de texto corrido sempre sublinhado (a cor da marca pode ficar perto da cor do texto) */
+.vista p a:not(.bt), .vista li a:not(.bt), .entrar p a:not(.bt) { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+/* DU-282: «Ir para o menu» ao lado do «Pular para o conteúdo» */
+.pular-menu:focus { left: 1rem; top: 3.4rem; }
+
+/* plano 2000d · DU-277: escolher os itens da barra de baixo */
+.opcao-check { display: flex; align-items: center; gap: .6rem; min-height: 44px; padding: 0 .25rem; border-radius: var(--r-p); cursor: pointer; }
+.opcao-check:hover { background: var(--c-hover); }
+.opcao-check input:disabled + .ic, .opcao-check input:disabled ~ span { opacity: var(--opac-desab); }
+/* plano 2000d · DU-286: ponto de novidade da versão na conta (some ao abrir as novidades) */
+.lat-conta { position: relative; }
+.lat-conta[data-novidade="1"]::after { content: ""; position: absolute; top: .45rem; left: 2.1rem; width: 9px; height: 9px; border-radius: 50%; background: var(--c-prim); box-shadow: 0 0 0 2px var(--c-sup); }
+/* plano 2000d · DU-145: termos, privacidade e suporte da revenda no pé da entrada */
+.entrar-links { display: flex; flex-wrap: wrap; justify-content: center; gap: .25rem 1rem; margin-top: var(--esp-3); font-size: var(--fs-13); }
+.entrar-links a { min-height: 44px; display: inline-flex; align-items: center; color: var(--c-texto-2); }
+
+/* ============================================================
+   plano 2000d · lote sis-x (SX-070…SX-079): acabamento do sistema
+   ============================================================ */
+/* plano 2000d · SX-070: quem pediu menos transparência no aparelho vê o topo, a barra, o menu lateral e o véu dos diálogos sólidos (sem desfoque) */
+@media (prefers-reduced-transparency: reduce) {
+  .topo, .barra, .lateral, .modal, .gaveta, .menu-pop, .flut { backdrop-filter: none; -webkit-backdrop-filter: none; background-color: var(--c-sup); }
+  .modal::backdrop, .gaveta::backdrop { backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+/* plano 2000d · SX-071: imprimir uma tela (relatório, ficha) sai só o conteúdo: sem menu, topo, barra, faixas nem avisos */
+@media print {
+  .lateral, .topo, .barra, .faixas, .pular-regioes, .toasts, .palco, .boot { display: none !important; }
+  .app, .coluna, .vista { display: block; margin: 0; padding: 0; overflow: visible; height: auto; }
+}
+/* plano 2000d · SX-072: caixas de marcar, opções e controles deslizantes na cor da marca em todo o app (não só no menu flutuante) */
+input[type=checkbox], input[type=radio], input[type=range], progress { accent-color: var(--c-prim); }
+/* plano 2000d · SX-073: o cursor de digitação na cor da marca (acha-se o cursor mais rápido num campo comprido) */
+input, textarea, [contenteditable] { caret-color: var(--c-prim-luz); }
+/* plano 2000d · SX-074: rolar até o fim de um menu, paleta ou lista não rola a página de trás */
+.menu-pop, .flut, .busca-res, .toasts { overscroll-behavior: contain; }
+/* plano 2000d · SX-075: botões e itens de menu respondem ao toque na hora (sem a espera do toque duplo de zoom) */
+.bt, .bt-icone, .menu-item, .aba, .busca-item, .toast-acao, .toast-x { touch-action: manipulation; }
+/* plano 2000d · SX-076: a página não pula de lado quando a barra de rolagem aparece ou some (abrir uma janela, filtrar uma lista) */
+html { scrollbar-gutter: stable; }
+/* plano 2000d · SX-077: link ou código comprido num aviso quebra a linha em vez de empurrar o aviso para fora da tela de 360 px */
+.toast p { overflow-wrap: anywhere; }

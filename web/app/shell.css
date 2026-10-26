@@ -64,6 +64,15 @@ h1[tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
 .entrar-produto .ic { flex: none; width: 20px; height: 20px; margin-top: .05rem; color: var(--c-prod, var(--c-prim)); }
 .entrar-produto b { color: var(--c-texto); font-weight: 700; }
 .instalar-passos { margin: 0; padding-left: 1.2rem; display: grid; gap: .5rem; color: var(--c-texto); }
+/* plano 2000d · DU-258: o passo do iPhone com o desenho do botão */
+.instalar-passos-ios { list-style: none; padding-left: 0; counter-reset: passo; }
+.instalar-passos-ios li { display: flex; gap: .75rem; align-items: flex-start; counter-increment: passo; }
+.instalar-passo-ico { flex: 0 0 auto; display: grid; place-items: center; width: 44px; height: 44px; border-radius: var(--r-p); background: var(--c-sup-2); color: var(--c-prim-luz); }
+.instalar-passo-txt { display: grid; gap: .15rem; }
+.instalar-passo-txt::before { content: counter(passo) ". "; font-weight: 600; }
+.instalar-passo-txt small { color: var(--c-texto-2); font-size: var(--fs-13); }
+/* plano 2000d · DU-257 */
+.faixa-versao-ver { min-height: 44px; }
 .folha-mais button { display: flex; flex-direction: column; align-items: center; gap: .4rem; padding: 1rem .25rem; min-width: 0; overflow-wrap: anywhere; border-radius: var(--r); background: var(--c-sup-2); border: 1px solid var(--c-borda); font-size: var(--fs-12); font-weight: 600; text-align: center; color: inherit; cursor: pointer; }
 .folha-mais button .ic { width: 22px; height: 22px; color: var(--c-prim-luz); }
 
@@ -103,4 +112,60 @@ h1[tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
   .faixa .bt, .faixa-rede .bt, .menu-item, .flut-op, .flut-criar, .empresa-op {
     min-height: var(--alvo-toque);
   }
+}
+
+/* plano 1500c · UCC-059: instalado no iPhone (barra «black-translucent» + viewport-fit=cover) o topo não fica embaixo do relógio/notch */
+@media (display-mode: standalone) {
+  .topo { padding-top: env(safe-area-inset-top); height: calc(var(--topo) + env(safe-area-inset-top)); }
+}
+/* plano 1500c · UCC-098: balão do tour */
+.tour-balao { max-width: min(320px, calc(100vw - 32px)); padding: var(--esp-3); }
+.tour-balao .rotulo { margin: 0; }
+/* plano 1500c · UCC-092: no celular a pílula mostra os dias compactos («3 d») */
+.pilula-teste .pt-compacto { display: none; font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) {
+  .pilula-teste:has(.pt-compacto) .pt-txt { display: none; }
+  .pilula-teste .pt-compacto { display: inline; }
+}
+/* plano 1500c · UCC-115: celular deitado (notch na lateral) — o topo respeita a área segura dos lados */
+.topo { padding-inline: max(var(--pad), env(safe-area-inset-left)) max(var(--pad), env(safe-area-inset-right)); }
+/* plano 1500c · UCC-116: a paleta não passa da área visível (o teclado do celular encolhe a visualViewport) */
+.modal.busca-g { max-height: min(92dvh, calc(var(--altura-util, 100dvh) - 16px)); }
+/* plano 1500c · UCC-117: «+N avisos» no fim da faixa que ficou */
+.faixa-mais { flex: none; white-space: nowrap; }
+/* plano 1500c · UC-030: modo apresentação — fotos, iniciais e o que as telas marcarem como .dado-pessoal ficam borrados (a própria conta e a empresa, não) */
+html.apresentacao .dado-pessoal { filter: blur(6px); }
+html.apresentacao .lat-conta .dado-pessoal, html.apresentacao #bt-conta-topo .dado-pessoal, html.apresentacao .empresa-bt .dado-pessoal { filter: none; }
+@media (forced-colors: active) { html.apresentacao .dado-pessoal { filter: none; opacity: .2; } }
+/* plano 1500c · UC-034: «3/9» dos primeiros passos junto do Início */
+.nav-passos { margin-inline-start: auto; padding: 0 var(--esp-1); border-radius: 999px; background: var(--c-prim-suave); color: var(--c-prim-txt, var(--c-texto)); font-size: var(--fs-11); font-weight: 700; font-variant-numeric: tabular-nums; }
+html.menu-recolhido .nav-passos { display: none; }
+/* plano 1500c · UC-012: «Comece aqui» */
+.passos-equipe { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--esp-2); }
+.passo-equipe { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--esp-2); }
+.passo-equipe[data-feito="1"] > span { color: var(--c-texto-3); text-decoration: line-through; }
+.passo-equipe .ic { width: 18px; height: 18px; }
+/* plano 1500c · UC-038: situação dos serviços */
+.situacao-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--esp-2); }
+.situacao-it { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: var(--esp-2); align-items: baseline; }
+.situacao-it > span:last-child { grid-column: 2; color: var(--c-texto-2); }
+.situacao-ponto { width: 10px; height: 10px; border-radius: 50%; background: var(--c-texto-3); grid-row: span 2; align-self: center; }
+.situacao-it[data-tom="bom"] .situacao-ponto { background: var(--c-ok); }
+.situacao-it[data-tom="aten"] .situacao-ponto { background: var(--c-aten); }
+.situacao-it[data-tom="ruim"] .situacao-ponto { background: var(--c-ruim); }
+/* plano 1500c · UC-018: boas-vindas */
+.bv-grade { --bv-col: minmax(min(100%, 180px), 1fr); display: grid; grid-template-columns: repeat(auto-fit, var(--bv-col)); gap: var(--esp-2); }
+.bv-cartao { display: flex; flex-direction: column; align-items: flex-start; gap: var(--esp-1); min-height: var(--alvo-toque); padding: var(--esp-3); border-radius: 14px; border: 1px solid var(--c-borda-2); background: var(--c-sup); color: var(--c-texto); text-align: start; cursor: pointer; }
+.bv-cartao:hover { border-color: var(--c-prim-luz); background: var(--c-hover); }
+.bv-cartao:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.bv-cartao small { color: var(--c-texto-2); }
+/* plano 1500c · UC-003/UC-037 */
+.pedido-contratacao { white-space: pre-wrap; margin: 0; }
+.lista-novidades { margin: 0; padding-inline-start: 1.2em; display: grid; gap: var(--esp-1); }
+/* plano 2000d · SX-079: contraste forçado (Windows) — o ponto da situação dos serviços e o «3/9» dos passos ganham contorno (a cor some nesse modo) */
+@media (forced-colors: active) {
+  .situacao-ponto { forced-color-adjust: none; border: 2px solid CanvasText; }
+  .situacao-it[data-tom="bom"] .situacao-ponto { background: Canvas; }
+  .situacao-it[data-tom="ruim"] .situacao-ponto, .situacao-it[data-tom="aten"] .situacao-ponto { background: CanvasText; }
+  .nav-passos { border: 1px solid CanvasText; }
 }

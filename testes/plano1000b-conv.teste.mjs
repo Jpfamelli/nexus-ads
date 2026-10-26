@@ -1070,6 +1070,8 @@ test("CB-094 (central) · etiquetar em lote conta as que já tinham as etiquetas
     d.aoModal(async o => { achar(o.corpo, "#cv-etl-e1").checked = true; return o.acoes[1].fn({ erro() {} }); });
     achar(c.alvo, ".cvl-lote-etq").click();
     await esperar(30);
+    // plano 2000d: DC-014 — etiquetar em lote agora tem Desfazer: o servidor só ouve quando o aviso fecha
+    { const des = d.desfazeres.at(-1); await des.firmar({}); await esperar(10); }
     assert.equal(srv.conta("nx_cv_etiquetas"), 1);
     assert.equal(d.toasts.at(-1), "1 conversa etiquetada · 2 já tinham as etiquetas.");
   } finally { c.fim(); d.fim(); }
@@ -1395,7 +1397,7 @@ test("CB-009/CB-219 (DOM) · citação de resposta da IA, de colega e de mensage
     const cita = (id, rid) => txt(id, "in", 20 - (id - 60), { responde_a: { id: rid, direcao: "out", resumo: "x" } });
     const { chat } = await montarChat(d, { msgs: [ia, colega, minha, cita(60, 50), cita(61, 51), cita(62, 52), cita(63, 999)] });
     const quem = id => achar(chat.el, `.cv-msg[data-id="${id}"] .cv-cita b`).textContent;
-    assert.equal(quem(60), "IA");
+    assert.equal(quem(60), "Assistente · IA");   // plano 1500c: CC-004 — a IA é identificada (com o nome do assistente) em qualquer número, também na citação
     assert.equal(quem(61), "Ana Paula");
     assert.equal(quem(62), "Você");
     assert.equal(quem(63), "Equipe", "não carregada: «Equipe»");
@@ -1713,8 +1715,9 @@ test("CB-048 (central) · transferir em lote marca quem não atende o departamen
     assert.equal(rotulo, "Bia (não atende este departamento)");
     await d.desfazeres.at(-1).firmar();
     const nomes = srv.chamadas.filter(x => x[0] === "nx_cv_nota" || x[0] === "nx_cv_atribuir").map(x => [x[0], x[1].p_conversa, x[1].p_texto || x[1].p_conta]);
-    assert.deepEqual(nomes, [["nx_cv_nota", 901, "Transferência: clientes do implante"], ["nx_cv_atribuir", 901, "u3"],
-      ["nx_cv_nota", 902, "Transferência: clientes do implante"], ["nx_cv_atribuir", 902, "u3"]]);
+    // plano 1500c: a nota do recado diz para quem foi — «Transferida para Bia (<departamento>): …» (CC-312)
+    assert.deepEqual(nomes.map(x => (x[0] === "nx_cv_nota" ? [x[0], x[1], x[2].replace(/^Transferida para Bia \([^)]+\): /, "")] : x)), [["nx_cv_nota", 901, "clientes do implante"], ["nx_cv_atribuir", 901, "u3"],
+      ["nx_cv_nota", 902, "clientes do implante"], ["nx_cv_atribuir", 902, "u3"]]);
   } finally { c.fim(); d.fim(); }
 });
 
@@ -1747,7 +1750,8 @@ test("CB-130/CB-055 (central) · exportar confirma antes; o aviso tem «Cancelar
   const u0 = URL.createObjectURL;
   const blobs = [];
   URL.createObjectURL = b => { blobs.push(b); return "blob:exp"; };
-  const c = await montarCentral(d, srv);
+  // plano 2000d: DC-029 — o supervisor ganha a janela com «Incluir notas internas»; este teste é o de quem atende (confirmar simples)
+  const c = await montarCentral(d, srv, { extraCtx: { pode: p => p !== "supervisor" } });
   try {
     await c.abrir(901);
     const confirmacoes = [];
@@ -2212,7 +2216,8 @@ test("CB-037/CB-236 (DOM) · áudio do medidor «suspended»: resume() e nada de
       await esperar(1300);
       Date.now = real;
       assert.equal(achar(comp.el, ".cvx-rec-mudo").hidden, true, "com o áudio suspenso não acusa microfone mudo");
-      const cancelar = comp.el.querySelectorAll("button").find(b => b.textContent === "Cancelar" && !b.closest(".cv-fila"));
+      // plano 2000d: o «Cancelar» da sugestão da IA (DC-177) vem antes no DOM — este é o da gravação
+      const cancelar = comp.el.querySelectorAll("button").find(b => b.textContent === "Cancelar" && !b.closest(".cv-fila") && !b.classList.contains("cvx-ia-cancelar"));
       if (cancelar) cancelar.click();
       await esperar(5);
       void d;
@@ -2431,8 +2436,9 @@ test("CB-018 (central) · lote que falha no meio: as que não foram voltam selec
     await o.firmar(); o._fim({ estado: "mantida" }); await esperar(20);
     assert.equal(achar(c.alvo, ".cvl-lote").hidden, false, "a seleção voltou");
     const marcadas = c.alvo.querySelectorAll('.cvl-item[aria-checked="true"]').map(x => Number(x.dataset.id));
-    assert.deepEqual(marcadas.sort(), [902, 903]);
-    assert.ok(d.toasts.some(t => /2 conversas ficaram sem marcar/.test(t)));
+    // plano 2000d: DC-012 — o lote marca em paralelo (4 por vez) e a falha numa não para as outras: só a 902 sobra.
+    assert.deepEqual(marcadas.sort(), [902]);
+    assert.ok(d.toasts.some(t => /1 conversa ficou sem marcar/.test(t)));
   } finally { c.fim(); d.fim(); }
 });
 
@@ -2487,7 +2493,7 @@ test("CB-116/CB-244 (central) · filtro lembrado com departamento e etiqueta que
   try {
     await esperar(20);
     assert.ok(d.toasts.some(t => /Um filtro guardado foi removido/.test(t)));
-    assert.deepEqual(JSON.parse(globalThis.localStorage.getItem("nx-cv-filtro:c1")), { etiquetas: ["e1"] });
+    assert.deepEqual(JSON.parse(globalThis.localStorage.getItem("nx-cv-filtro:c1:u1")), { etiquetas: ["e1"] });   // plano 2000d: DC-020 — por conta
     const ult = srv.chamadas.filter(x => x[0] === "nx_cv_listar").at(-1)[1].p_filtro;
     assert.equal(ult.departamento_id, undefined);
     assert.deepEqual(ult.etiquetas, ["e1"]);

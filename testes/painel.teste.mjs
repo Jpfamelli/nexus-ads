@@ -486,7 +486,7 @@ const trechoPuro = (() => {
   assert.ok(i > 0 && f > i, "marcas do trecho PURO no painel.js");
   return JS.slice(i, f);
 })();
-const P = runInNewContext(`${trechoPuro};({ statusEnvio, corTexto, contraste, hexValido, logoValido, canalDe, nomeRegraSrv, estadoIntegracao, simular, LEIGO, LEIGO_LINHA })`,
+const P = runInNewContext(`${trechoPuro};({ statusEnvio, corTexto, contraste, hexValido, logoValido, canalDe, nomeRegraSrv, estadoIntegracao, simular, LEIGO, LEIGO_LINHA, ctrFrase })`,
   { horaSP: iso => new Date(iso).toISOString().slice(11, 16), quandoSP: iso => "hoje às " + new Date(iso).toISOString().slice(11, 16), Date, Math, JSON, String, Number });
 
 await teste("statusEnvio: ✓ enviado · ✓✓ entregue · ! não saiu — honesto e nunca azul", () => {
@@ -529,7 +529,9 @@ await teste("conexão com Meta/Google: nome próprio, estado (erro/atrasado/agua
   for (const id of ["sync-pill", "sync-pop", "faixa-integ"]) assert.ok(idsHtml.has(id), id);
   assert.match(JS, /setInterval\(\(\) => \{ if \(!document\.hidden\) renderIntegracao\(\); \}, 30000\)/);
   // plano 1000b: AB-142 — «já foi avisada» só quando o aviso de conexão saiu (equipeAvisada); senão pede para avisar
-  assert.match(JS, /\(!gestor\(\) \? `<p class="fi-nota">\$\{esc\(equipeAvisada\(.*\) \? "A Nexus já foi avisada e está resolvendo\." : "Avise a Nexus para refazer a conexão\."\)\}<\/p>`/, "a clínica lê se a Nexus já sabe");
+  // plano 2000d: o texto sai de avisoEquipe(agência, avisada) — cliente de revenda lê o nome da agência dele (KX-041)
+  assert.match(JS, /\(!gestor\(\) \? `<p class="fi-nota">\$\{esc\(avisoEquipe\(agencia\(\), equipeAvisada\(.*\)\)\)\}<\/p>`/, "a clínica lê se a equipe já sabe");
+  assert.match(JS, /const avisoEquipe = \(ag, avisada\) => \(avisada \? `A \$\{ag\} já foi avisada e está resolvendo\.` : `Avise a \$\{ag\} para refazer a conexão\.`\);/);
   assert.match(JS, /: `<button class="pill pill-ink pill-sm" type="button" data-ir="ajustes">Abrir Ajustes<\/button>`\);/, "o gestor ganha o atalho");
   assert.match(JS, /const SIMULAR_INTEG = DEMO && Q\.get\("simular"\) === "integracao";/, "?simular só vale na demo");
 });
@@ -547,7 +549,8 @@ await teste("marca da clínica: contraste pela luminância, só por textContent/
   // ?clinica= vira texto (nunca HTML) e ?cor= só hex; gerarDemo recebe SÓ o nome
   assert.match(JS, /const CLINICA_Q = DEMO \? String\(Q\.get\("clinica"\)/);
   assert.match(JS, /\/\^\[0-9a-f\]\{6\}\$\/i\.test\(Q\.get\("cor"\)/);
-  assert.match(JS, /montarDe\(gerarDemo\(\{ nome: S\.nomeDemo \}\)\);/);
+  // plano 2000d: DA-389 — a demo também recebe a vertical (?vertical=), nunca o cfg
+  assert.match(JS, /montarDe\(gerarDemo\(\{ nome: S\.nomeDemo, vertical: VERTICAL_Q \}\)\);/);
   assert.ok(!/gerarDemo\(\{[^}]*cfg/.test(JS), "gerarDemo nunca recebe cfg");
   assert.match(JS, /b\.textContent = `Demonstração para \$\{CLINICA_Q\}`;/, "faixa da demo com o nome da clínica, por textContent");
   assert.match(HTML, /Demonstração<\/b> — números ilustrativos/, "o texto estático da faixa continua");
@@ -672,7 +675,8 @@ await teste("linguagem leiga: dicionário LEIGO/rot(); a clínica lê 'Conversa 
   assert.match(JS, /const rot = k => \{ const e = LEIGO\[k\]; return !e \? k : gestor\(\) \? e\[0\] : e\[1\]; \};/);
   assert.match(JS, /gestor\(\) \? `<span title="\$\{esc\(e\[1\]\)\}">\$\{esc\(e\[0\]\)\}<\/span>`/);
   // as mensagens do núcleo não mudam: a linha leiga vai ACIMA delas
-  assert.match(JS, /<p class="al-leigo">\$\{esc\(LEIGO_LINHA\[id\]\)\}<\/p>`[^`]*: ""\}<p class="al-m">\$\{esc\(a\.msg\)\}<\/p>/);
+  // plano 2000d: a linha leiga do ritmo depende do tipo (DA-083) — leigoLinhaDe(a)
+  assert.match(JS, /<p class="al-leigo">\$\{esc\(leigoLinhaDe\(a\)\)\}<\/p>`[^`]*: ""\}<p class="al-m">\$\{esc\(a\.msg\)\}<\/p>/);
 });
 
 await teste("paleta (Ctrl/⌘+K): começo do texto > início de palavra > contém, sem acento; nunca telefone", async () => {
@@ -697,7 +701,8 @@ await teste("simulador só na demo, em faixa de ±20% com as taxas do período, 
   assert.deepEqual(r.pacientes, [20, 31]);
   assert.deepEqual(r.tratamentos, [20100, 30300]);
   assert.match(JS, /if \(!S\.demo\) \{ const sim = \$\("#card-sim"\); if \(sim\) sim\.remove\(\); \}/, "no modo real o simulador sai do DOM");
-  assert.match(JS, /Estimativa com as taxas desta demonstração\. Não é promessa: cada clínica tem o seu ritmo\./);
+  // plano 2000d: «cada clínica» só na odonto; oficina/loja leem «cada negócio» (KX-081)
+  assert.match(JS, /Estimativa com as taxas desta demonstração\. Não é promessa: cada \$\{esc\(M && M\.vertical !== "odonto" \? "negócio" : "clínica"\)\} tem o seu ritmo\./);
 });
 
 await teste("gaveta: cartão do anúncio de origem e fita de 4 fotogramas; marcos (claquetes) no gráfico; 'desde a última visita'", () => {
@@ -707,7 +712,8 @@ await teste("gaveta: cartão do anúncio de origem e fita de 4 fotogramas; marco
   assert.match(JS, /\{ t: "Fechou", q: fechou \? \(M\.valorDe\(L\)\.semValor \? "sem valor" : brl0\(M\.valorLead\(L\)\)\) : null/);
   assert.match(JS, /const MARCOS_DEMO = \[/);
   // plano 1000b: AB-162 — a lista é relida do servidor e mesclada por data (mesclarMarcos corta em 40)
-  assert.match(JS, /await salvarCfgCliente\(\{ marcos: mesclarMarcos\(frescos, d, t\) \}\);/);
+  // plano 2000d: vários marcos no mesmo dia (DA-098) — mesclarMarcosDia, com o texto do marco a remover
+  assert.match(JS, /await salvarCfgCliente\(\{ marcos: mesclarMarcosDia\(frescos, d, t, typeof texto === "string" \? texto : null\) \}\);/);
   assert.match(JS, /maxlength="60"/);
   assert.match(JS, /if \(!gestor\(\) \|\| i == null\) \{ f\.hidden = true; return; \}/, "clínica só lê os marcos");
   assert.match(JS, /const chaveVistos = \(\) => `nx-fechados-\$\{S\.clienteId\}`;/);
@@ -852,7 +858,8 @@ await teste("gráfico diário: topo do eixo ~8% acima da maior barra, em degraus
 });
 
 await teste("kanban: campanha em linha própria (nome inteiro no title); 'Faltou' e o valor na linha do nome; cabeçalhos com 2 linhas", () => {
-  assert.match(JS, /<span class="l-nome"><strong>\$\{esc\(L\.nome\)\}<\/strong>\$\{etq\}\$\{val\}<\/span>/);
+  // plano 1500c: AC-245 — no modo apresentação o nome sai em iniciais (nomeExibido)
+  assert.match(JS, /<span class="l-nome"><strong>\$\{esc\(OCULTAR_NOMES \? nomeExibido\(L\.nome, true\) : L\.nome\)\}<\/strong>\$\{etq\}\$\{val\}<\/span>/);
   assert.match(JS, /<span class="chips">\$\{origem\}<\/span><\/button>`;/);
   assert.match(JS, /class="chip chip-camp" title="\$\{esc\(camp \? camp\.nome : ""\)\}"/);
   const c = semComentarios(CSS);
@@ -876,7 +883,8 @@ await teste("retorno: a folha usa a MESMA base do herói (anúncios + gestão), 
   assert.match(FL, /Cada R\$ 1 investido virou \$\{brl\(retorno\)\}/);
   assert.match(FL, /só anúncio: \$\{brl\(roas\)\}/);
   // plano 1000 (AD-211): o rótulo vem do vocabulário da vertical (odonto: «Tratamentos») e «(estimativa)» só quando há estimativa
-  assert.match(FL, /\$\{esc\(T\.receita\)\}\$\{est \? " \(estimativa\)" : ""\}/, "rótulo de uma linha só");
+  // plano 2000d: o rótulo distingue «(estimativa)» de «(parte estimada)» — rotuloEstimativa (KX-029)
+  assert.match(FL, /\$\{esc\(T\.receita\)\}\$\{rotuloEstimativa\(c\)\}/, "rótulo de uma linha só");
   // plano 1000b: AB-140 — o tooltip leva o rótulo da receita da vertical (template, não string fixa)
   assert.match(JS, /\["roas", "Retorno do anúncio", `\$\{V\.receita\} ÷ investimento/);
 });
@@ -892,14 +900,16 @@ await teste("curta: o número de cada cena é o MESMO da tarja de progresso (02 
 
 await teste("radar: a conta de alertas soma a conexão caída; a clínica lê regras leigas e a tradução do CTR; parado no celular", () => {
   assert.match(JS, /const nAtivos = atuais\.length \+ conexoesCaidas\(\);/);
-  assert.match(JS, /atualizarBadge\(nAtivos\);/);
+  // plano 1500c: AC-238 — o número do ícone soma a conexão caída, mas não os informativos (ritmo), como o Órbita (AD-045)
+  assert.match(JS, /atualizarBadge\(atuais\.filter\(a => a\.sev !== "info"\)\.length \+ conexoesCaidas\(\)\);/);
   // plano 1000 (AD-235/AD-237): r5/r6 trazem a condição leiga escrita; a condição técnica também sai escapada
   // plano 1000 (AD-010): a r1 também traz descricaoLeiga do núcleo (régua por plataforma / parada sem meta)
   assert.match(JS, /const condR = leigo \? `<span title="\$\{esc\(cond\)\}">\$\{esc\(r\.descricaoLeiga \|\| condLeiga\(r\)\)\}<\/span>` : esc\(cond\);/);
   const fonte = JS.match(/function traducaoCTR\(msg, tag = "span"\) \{[\s\S]*?\n\}/);
   assert.ok(fonte, "traducaoCTR");
-  const tr = g => runInNewContext(`(${fonte[0]})`, { gestor: () => g, fin: Number.isFinite, parseFloat, String });
-  assert.match(tr(false)("O criativo X está com CTR de 0,83% — pouca gente clicando (limite 0,90%).", "p"), /menos de 1 tocou/);
+  const tr = g => runInNewContext(`(${fonte[0]})`, { gestor: () => g, fin: Number.isFinite, parseFloat, String, ctrFrase: P.ctrFrase });
+  // plano 2000d: a mesma régua do ctrLeigo (DA-084) — 0,83% = 8 em cada 1.000 (antes «menos de 1 tocou»)
+  assert.match(tr(false)("O criativo X está com CTR de 0,83% — pouca gente clicando (limite 0,90%).", "p"), /de cada 1\.000 que viram, 8 tocaram/);
   assert.match(tr(false)("CTR de 2,40% hoje"), /2 tocaram/);
   assert.equal(tr(true)("CTR de 0,83%"), "", "o gestor lê o técnico");
   assert.match(CINE_SRC, /const VIVO = \(\) => ANIM && !MOVEL;[\s\S]*if \(!VIVO\(\) \|\| !st\.visivel \|\| document\.hidden\) return;/);

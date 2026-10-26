@@ -498,7 +498,8 @@ begin
        and has_function_privilege('anon', p.oid, 'execute')
        and not ('p_token' = any(coalesce(p.proargnames, '{}'::text[])))
        and p.proname not in ('nx_entrar', 'nx_criar_conta', 'nx_convite_ver', 'nx_convite_aceitar', 'nx_senha_redefinir',
-                             'nx_lead_entrada', 'nx_rastreio_registrar', 'nx_marca_publica')
+                             'nx_lead_entrada', 'nx_rastreio_registrar', 'nx_marca_publica',
+                             'nx_teste_criar')   -- plano 2000d · DS-274: o teste grátis pelo site (limites por IP/e-mail/global)
      order by 1
   loop
     raise exception 'FALHOU: anon executa função fora da lista pública (sem p_token): %', r.fn;

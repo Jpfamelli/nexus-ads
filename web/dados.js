@@ -18,6 +18,9 @@ export function usarFetch(f) { _fetch = f || ((...a) => globalThis.fetch(...a));
 /** Chamado sempre que o servidor responder "sessao_invalida" — o painel volta para o login. */
 export function aoSessaoInvalida(fn) { _aoSessaoInvalida = fn; }
 
+/** Plano 2000d · DA-091: o nome da agência do cliente aberto (o painel chama ao carregar; sem chamada, «Nexus»). */
+let _agencia = "Nexus";
+export function definirAgencia(nome) { const n = String(nome || "").replace(/\s+/g, " ").trim().slice(0, 40); _agencia = n || "Nexus"; return _agencia; }
 export const MENSAGENS = {
   sessao_invalida: "Sua sessão expirou. Entre de novo.",
   conta_pendente: "Sua conta ainda está aguardando a aprovação da Nexus.",
@@ -67,16 +70,34 @@ const COM_HINT = {
 /** Texto amigável para um erro lançado por rpc().
     Plano 1000b · AB-166: o código cru («(http_502)», «(PGRST301)») não vai mais para a tela — http 5xx vira «servidor fora agora» e os
     demais códigos desconhecidos ficam só no console (para quem for depurar). */
+/** Plano 2000d · KX-021/KX-022/KX-023: textos de http sem código do PostgREST — limite de chamadas (429), acesso recusado (401/403) e
+    função que o servidor ainda não tem (404: atualização pendente). Antes todos caíam no genérico «Não deu certo agora». */
+const HTTP_TXT = {
+  http_429: "Muitas chamadas seguidas ao servidor. Espere um minuto e tente de novo.",
+  http_401: "O servidor recusou o acesso. Entre de novo; se continuar, fale com o suporte.",
+  http_403: "O servidor recusou o acesso. Entre de novo; se continuar, fale com o suporte.",
+  http_404: "Esta função ainda não existe no servidor (atualização pendente). Fale com o suporte.",
+};
 export function mensagemErro(e) {
+  // plano 2000d · KX-020: aceita o código em texto («sem_conexao») — antes virava a frase genérica
+  if (typeof e === "string") e = { codigo: e };
   const c = e && (e.codigo || e.message);
+  // plano 2000d · KX-024: sem rede NO APARELHO (navigator.onLine falso) diz isso — o problema é o Wi-Fi/dados, não o servidor
+  if (c === "sem_conexao" && e && e.offline) return "O aparelho está sem internet. Confira o Wi-Fi ou os dados móveis e tente de novo.";
+  if (HTTP_TXT[c]) return HTTP_TXT[c];
   const hint = e && e.detalhe && typeof e.detalhe === "object" && e.detalhe.hint ? String(e.detalhe.hint).trim() : "";
   if (hint && COM_HINT[c]) { const t = COM_HINT[c](hint); if (t) return t; }
-  if (MENSAGENS[c]) return MENSAGENS[c];
+  // plano 1500c · AC-284: o tempo-limite do PRÓPRIO navegador (30 s sem resposta) não é «operação grande demais» (essa é a do banco)
+  if (c === "tempo_esgotado" && e && e.local) return "O servidor demorou demais para responder. Confira a internet e tente de novo.";
+  // plano 2000d · DA-091: cliente de agência parceira lê o nome DELA (definirAgencia), nunca «Nexus»
+  if (MENSAGENS[c]) return _agencia === "Nexus" ? MENSAGENS[c] : MENSAGENS[c].replace(/Nexus/g, _agencia);
   if (/^http_5\d\d$/.test(String(c || ""))) return "O servidor está fora agora. Tente em instantes.";
   if (c) { try { console.warn("[nexus] erro sem tradução:", String(c).slice(0, 80)); } catch { /* sem console */ } }
   return "Não deu certo agora. Tente de novo em instantes.";
 }
 
+/** Plano 2000d · KX-024: o navegador sabe que o aparelho está sem rede (navigator.onLine === false). Fora do navegador: false. */
+export const semRedeNoAparelho = () => { try { return !!globalThis.navigator && globalThis.navigator.onLine === false; } catch { return false; } };
 function erro(codigo, extra = {}) {
   const e = new Error(codigo);
   e.codigo = codigo;
@@ -87,15 +108,35 @@ function erro(codigo, extra = {}) {
 /** Plano 1000b · AB-165: tempo-limite de cada chamada (rede presa deixava o clássico em «Carregando» para sempre). */
 export const TEMPO_LIMITE_MS = 30e3;
 
+/** Plano 1500c · AC-285: RPCs só de LEITURA — numa queda de rede passageira (sem_conexao) tentam mais 1 vez depois de RETRY_MS. Escrita
+    nunca repete sozinha (salvar duas vezes). */
+export const RPC_LEITURA = new Set(["nx_dados", "nx_sessao", "nx_integracoes_status", "nx_contas_listar", "nx_config_ver"]);
+export const RETRY_MS = 700;
+
 /** POST /rest/v1/rpc/<nome>. Erro do PostgREST → Error com .codigo = message. */
+// plano 2000d · DA-101: 502/503/504 passageiros do Supabase também repetem (só leitura) — até 2 vezes, com espera dobrando (700 ms, 1,4 s)
+export const HTTP_PASSAGEIRO = new Set(["http_502", "http_503", "http_504"]);
 export async function rpc(nome, params = {}) {
+  let espera = RETRY_MS;
+  for (let tentativa = 0; ; tentativa++) {
+    try { return await rpcUmaVez(nome, params); }
+    catch (e) {
+      // plano 2000d · KX-025: 429 (limite de chamadas) também repete na LEITURA, uma vez, esperando o dobro (o limite costuma ser por segundo)
+      const passageiro = e && (e.codigo === "sem_conexao" ? tentativa < 1 && !e.offline : e.codigo === "http_429" ? tentativa < 1 : HTTP_PASSAGEIRO.has(e.codigo) && tentativa < 2);
+      if (!(passageiro && RPC_LEITURA.has(nome))) throw e;
+      await new Promise(r => setTimeout(r, e.codigo === "http_429" ? espera * 2 : espera));
+      espera *= 2;
+    }
+  }
+}
+async function rpcUmaVez(nome, params = {}) {
   let r, txt;
   // AD-200: chamada com o token guardado conta como uso (renova a ociosidade da sessão em origem compartilhada)
   if (params && params.p_token && modoSessao() && params.p_token === lerToken(Date.now(), { renovar: false })) lerToken();
   // AB-165: AbortController + corrida com o relógio — mesmo um fetch que ignora o sinal não prende a tela; estoura com «tempo_esgotado»
   const ctl = typeof AbortController === "function" ? new AbortController() : null;
   let tLimite = null;
-  const limite = new Promise((_, rej) => { tLimite = setTimeout(() => { try { ctl && ctl.abort(); } catch { /* ok */ } rej(erro("tempo_esgotado")); }, TEMPO_LIMITE_MS); });
+  const limite = new Promise((_, rej) => { tLimite = setTimeout(() => { try { ctl && ctl.abort(); } catch { /* ok */ } rej(erro("tempo_esgotado", { local: true })); }, TEMPO_LIMITE_MS); });   // AC-284
   limite.catch(() => { /* tratado na corrida */ });
   try {
     try {
@@ -107,7 +148,7 @@ export async function rpc(nome, params = {}) {
       }), limite]);
     } catch (causa) {
       if (causa && causa.codigo === "tempo_esgotado") throw causa;
-      throw erro("sem_conexao", { causa });
+      throw erro("sem_conexao", { causa, offline: semRedeNoAparelho() });   // plano 2000d · KX-024
     }
     // AB-168: a conexão pode cair no meio da leitura do corpo — também é «sem conexão», nunca um TypeError cru
     try { txt = await Promise.race([r.text(), limite]); }

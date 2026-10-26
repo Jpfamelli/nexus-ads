@@ -47,7 +47,9 @@ export async function montarContatos(k, el, rota) {
   // plano 1000b · RB-033: filtro guardado com campo personalizado excluído não vai cru ao servidor (dados_invalidos|campo)
   if (S.filtro.campo) { const fc = L.filtroCampoLimpo(S.filtro.campo, k.base.campos); if (fc) S.filtro.campo = fc; else delete S.filtro.campo; }
   // plano 1000 (CR-105): voltando da ficha pelo «Voltar», a lista reabre na página em que estava
-  if (memLista && memLista.voltando && (typeof location === "undefined" || memLista.hash === location.hash) && Date.now() - memLista.em < 30 * 60000) S.pagina = memLista.pagina || 1;
+  // plano 2000d · DR-229: … e na mesma ROLAGEM (antes voltava ao topo da página de 50)
+  let voltarY = 0;
+  if (memLista && memLista.voltando && (typeof location === "undefined" || memLista.hash === location.hash) && Date.now() - memLista.em < 30 * 60000) { S.pagina = memLista.pagina || 1; voltarY = memLista.y || 0; }
   if (memLista && memLista.voltando) memLista = null;
   // plano 1000 (CR-077): o que veio do LINK (?busca, ?empresa, ?origem, ?criado_de) vale só nesta visita — não é gravado como preferência
   // (antes, abrir «Pacientes» pelo menu depois de «Ver contatos» da empresa continuava filtrado pela empresa)
@@ -60,6 +62,10 @@ export async function montarContatos(k, el, rota) {
   if (q.origem && L.ROTULO_ORIGEM[q.origem]) daUrl.origem = [q.origem];
   if (q.criado_de && /^\d{4}-\d{2}-\d{2}$/.test(q.criado_de)) daUrl.criado_de = q.criado_de;
   if (q.etiqueta) daUrl.etiquetas = { op: "alguma", ids: [q.etiqueta] };
+  // plano 2000d · PX-028: o fim do período também vem do link (?criado_ate=AAAA-MM-DD — o funil do Anúncios manda o mês inteiro)
+  if (q.criado_ate && /^\d{4}-\d{2}-\d{2}$/.test(q.criado_ate)) daUrl.criado_ate = q.criado_ate;
+  // plano 2000d · PX-027 (DA-358): ?etapa=agendou|compareceu|fechou — cada passo do funil do Anúncios abre a lista dele (vai como «marco» no filtro)
+  if (L.marcoDoLink && L.marcoDoLink(q.etapa)) daUrl.marco = L.marcoDoLink(q.etapa);
   if (Object.keys(daUrl).length) {
     // o link manda: os filtros que a pessoa tinha guardado ficam guardados, mas não se misturam com os do link
     S.filtro = { ...daUrl };
@@ -87,7 +93,7 @@ export async function montarContatos(k, el, rota) {
 
   const sub = h("span");      // a contagem «12 pacientes» entra no subtítulo do ui.cabecalho
   // plano 1000b · RB-037: maxlength 120 (a visão já corta em 120)
-  const busca = h("input", { type: "search", maxlength: "120", placeholder: pequena() ? `Buscar ${k.v.min("contatos")}` : "Buscar por nome, telefone, e-mail ou documento", "aria-label": `Buscar ${k.v.min("contatos")}`, value: S.filtro.busca || "" });
+  const busca = h("input", { type: "search", enterkeyhint: "search", maxlength: "120", placeholder: pequena() ? `Buscar ${k.v.min("contatos")}` : "Buscar por nome, telefone, e-mail ou documento", "aria-label": `Buscar ${k.v.min("contatos")}`, value: S.filtro.busca || "" });      // plano 1500c · RX-030
   const aoBuscar = ui.debounce(() => { const q = busca.value.trim(); if (q) S.filtro.busca = q; else delete S.filtro.busca; S.pagina = 1; gravar(); carregar(); }, 320);
   busca.addEventListener("input", aoBuscar);
   const nF = h("span", { class: "crm-filtro-n", hidden: true });
@@ -143,22 +149,26 @@ export async function montarContatos(k, el, rota) {
   const colunas = [
     // plano 1000 (CR-280): o nome é um link de verdade (Ctrl+clique / botão do meio abrem em nova aba); a linha continua clicável
     { chave: "nome", rotulo: "Nome", principal: true, render: c => h("div", { class: "cel-nome" }, ui.avatar(c.nome || c.telefone, c.id),
-      h("div", null, h("a", { class: "ct-nome-link", href: `#/contatos/${c.id}`, on: { click: ev => { if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1) { if (ev.stopPropagation) ev.stopPropagation(); return; } lembrarLista(); } } }, h("b", null, L.nomeContato(c))),
+      h("div", null, h("a", { class: "ct-nome-link", href: `#/contatos/${c.id}`, on: { click: ev => { if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1) { if (ev.stopPropagation) ev.stopPropagation(); return; } lembrarLista(); } } }, h("b", { class: "dado-pessoal" }, L.nomeContato(c))),      // plano 1500c · UC-030
         // plano 1000b · RB-096: embaixo do nome só a cidade (a origem tem coluna própria); «Não quer marketing» vira pílula à parte
         c.cidade ? h("small", null, c.cidade) : null,
         c.optin_marketing === false ? ui.pilula("Não quer marketing", "aten", { class: "ct-optin", tamanho: "p" }) : null)) },
-    { chave: "telefone", rotulo: "Telefone", render: c => c.telefone ? h("span", { class: "mono" }, ui.telBR(c.telefone)) : null },
-    { chave: "email", rotulo: "E-mail" },
+    { chave: "telefone", rotulo: "Telefone", render: c => c.telefone ? h("span", { class: "mono dado-pessoal" }, ui.telBR(c.telefone)) : null },
+    { chave: "email", rotulo: "E-mail", render: c => c.email ? h("span", { class: "dado-pessoal" }, c.email) : null },      // plano 1500c · UC-030: borrados no modo apresentação
     // plano 1000 (CR-085): nome longo de empresa em no máximo 2 linhas (o nome inteiro na dica)
     { chave: "empresa", rotulo: "Empresa", render: c => c.empresa ? h("span", { class: "ct-emp", title: c.empresa.nome }, c.empresa.nome) : null },
     { chave: "etiquetas", rotulo: "Etiquetas", render: c => {
       const e = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean);
-      return e.length ? h("div", { class: "ct-etqs" }, e.slice(0, 3).map(x => ui.etiqueta(x)), e.length > 3 ? h("span", { class: "kc-mais-etq" }, `+${e.length - 3}`) : null) : null;
+      return e.length ? h("div", { class: "ct-etqs" }, e.slice(0, 3).map(x => ui.etiqueta(x)), e.length > 3 ? h("span", { class: "kc-mais-etq", title: e.slice(3).map(x => x.nome).join(", "), "aria-label": `mais ${e.length - 3}: ${e.slice(3).map(x => x.nome).join(", ")}` }, `+${e.length - 3}`) : null) : null;      // plano 1500c · RX-038: o «+2» diz quais são
     } },
     // C4: a origem com a pílula padrão (anúncio com a plataforma; site, orgânico, WhatsApp, manual…)
     { chave: "origem", rotulo: "Origem", render: c => { const o = L.origemPilula(c); return o ? ui.pilula(null, o.chave, { variante: "origem", plataforma: o.plataforma, tamanho: "p" }) : (c.origem || null); } },
     { chave: "negocios_abertos", rotulo: `${k.v.negocios} abert${k.v.art("negocio")}s`, alinhar: "dir", render: c => h("span", { class: ["ct-nneg", c.negocios_abertos > 0 && "tem"] }, String(c.negocios_abertos || 0)) },
     { chave: "ultimo_contato_em", rotulo: "Último contato", render: c => quando(c.ultimo_contato_em) },
+    // plano 2000d · DR-165: quem cuida do contato (o filtro por responsável já existe nos atalhos)
+    { chave: "dono", rotulo: "Responsável", render: c => { if (c.dono_id == null) return h("span", { class: "fraco" }, "—"); const u = k.usuario(c.dono_id); return h("span", { class: "ct-dono" }, (u && u.nome) || c.dono_nome || "Pessoa removida"); } },
+    // plano 2000d · DR-166: data do cadastro (o cabeçalho ordena pelos mais recentes)
+    { chave: "criado_em", rotulo: "Cadastrado em", render: c => (c.criado_em ? h("time", { datetime: c.criado_em, title: ui.dataHoraBR(c.criado_em) }, ui.dataBR(c.criado_em)) : null) },
   ];
   // plano 1000 (CR-084): menu «Colunas» — esconder E-mail, Empresa… (o Nome fica sempre); lembrado por empresa e conta neste aparelho
   const chaveCols = `nx-app-crm-ct-cols-${ctx.cliente.id}-${conta}`;
@@ -178,15 +188,15 @@ export async function montarContatos(k, el, rota) {
     // plano 1000b · RB-214: clicar de novo na ordem ativa não troca para «Recentes» (só repete o aviso)
     const ths = tab.el.querySelectorAll("thead th");
     cabsOrd = [];
-    ["nome", "ultimo_contato_em"].forEach(chave => {
+    ["nome", "ultimo_contato_em", "criado_em"].forEach(chave => {      // plano 2000d · DR-166: + Cadastrado em
       const th = ths[vis.findIndex(x => x.chave === chave)];
       if (!th) return;
       const rot = th.textContent;
-      const b = h("button", { type: "button", class: "th-ord ct-ord", title: chave === "nome" ? "Ordenar por nome (A–Z)" : "Ordenar pelo último contato (mais recente primeiro)" }, rot, ui.icone("ordenar"));
+      const b = h("button", { type: "button", class: "th-ord ct-ord", title: chave === "nome" ? "Ordenar por nome (A–Z)" : chave === "criado_em" ? "Ordenar pelos cadastros mais recentes" : "Ordenar pelo último contato (mais recente primeiro)" }, rot, ui.icone("ordenar"));
       b.addEventListener("click", () => {
         const antes = S.ordem;
         S.ordem = L.ordemAoClicar(chave, S.ordem);
-        if (S.ordem === antes) { ui.anunciar(`Já está ordenado por ${chave === "nome" ? "nome, de A a Z" : "último contato, do mais recente"}.`); return; }
+        if (S.ordem === antes) { ui.anunciar(`Já está ordenado por ${chave === "nome" ? "nome, de A a Z" : chave === "criado_em" ? "cadastro, do mais recente" : "último contato, do mais recente"}.`); return; }
         selOrdem.value = S.ordem; S.pagina = 1; gravar(); marcarOrdem(); carregar();
         ui.anunciar(S.ordem === "recentes" ? "Ordenado pelos cadastros mais recentes." : `Ordenado por ${chave === "nome" ? "nome, de A a Z" : "último contato, do mais recente"}.`);
       });
@@ -220,7 +230,12 @@ export async function montarContatos(k, el, rota) {
   const listaM = listaCompacta(k, { aoMudar: () => carregar(), aoAbrir: () => lembrarLista(), textoVazio: () => L.textoSemResultado(S.filtro) });
 
   /** plano 1000 (CR-105): a lista lembra a página de onde a ficha foi aberta — o «Voltar» da ficha volta a ela (history.back). */
-  function lembrarLista() { memLista = { hash: typeof location !== "undefined" ? location.hash : "", pagina: S.pagina, em: Date.now(), voltando: false }; }
+  function lembrarLista() {
+    // plano 2000d · DR-229: guarda também a rolagem da página
+    let y = 0;
+    try { const se = typeof document !== "undefined" && document.scrollingElement; y = se ? se.scrollTop || 0 : 0; } catch { /* ok */ }
+    memLista = { hash: typeof location !== "undefined" ? location.hash : "", pagina: S.pagina, em: Date.now(), voltando: false, y };
+  }
 
   // plano 1000 (CR-092): só a forma visível vai para a página (tabela no desktop, lista compacta no celular); trocar a largura troca a forma
   const mqCel = typeof matchMedia === "function" ? matchMedia("(max-width: 760px)") : null;
@@ -244,14 +259,20 @@ export async function montarContatos(k, el, rota) {
     const usaCache = S.pagina === 1 && L.filtroVazio(S.filtro) && (S.ordem === ORDEM_PADRAO || S.ordem === "recentes");
     const pintar = r => {
       S.total = r.total;
+      S.marcoAplicado = !!(r && r.marco_aplicado);      // plano 2000d · PX-027: o servidor diz quando já filtra pelo marco
+      if (S.filtro && S.filtro.marco) desenharChips();      // plano 2000d · PX-027: o chip troca o aviso quando o servidor confirma
       S.ultima = Date.now();
       const n = r.total != null ? r.total : r.total_aprox;
-      sub.textContent = n != null ? `${ui.num(n)}${r.total == null ? "+" : ""} ${n === 1 ? k.v.min("contato") : k.v.min("contatos")}` : "";
+      // plano 1500c · RC-113: com filtro, o total diz que é do filtro («32 pacientes com o filtro») — dá para ver se o filtro pegou
+      const comFiltro = !L.filtroVazio(S.filtro);
+      sub.textContent = n != null ? `${ui.num(n)}${r.total == null ? "+" : ""} ${n === 1 ? k.v.min("contato") : k.v.min("contatos")}${comFiltro ? " com o filtro" : ""}` : "";
       ui.limpar(corpo);
       if (!r.itens.length && L.filtroVazio(S.filtro) && S.pagina === 1) {
         const fem = k.v.art("contato") === "a";
+        // plano 1500c · RC-102: sem o módulo Conversas não promete «entram sozinhos pelo WhatsApp»
+        const temConv = !!(ctx && typeof ctx.temModulo === "function" && ctx.temModulo("conversas"));
         corpo.appendChild(ui.vazio({ titulo: `${k.v.nenhum("contato")} ainda.`, tema: "crm",
-          texto: `${fem ? "Elas entram sozinhas" : "Eles entram sozinhos"} pelo WhatsApp ou pela importação de planilha.`,
+          texto: temConv ? `${fem ? "Elas entram sozinhas" : "Eles entram sozinhos"} pelo WhatsApp ou pela importação de planilha.` : `Cadastre ${fem ? "a primeira" : "o primeiro"} ou importe uma planilha.`,
           acao: k.pode("atendente") ? { rotulo: k.v.novo("contato"), fn: novoContato } : null,
           acoes: k.pode("supervisor") ? [{ rotulo: "Importar planilha", fn: () => ctx.navegar("#/contatos/importar") }] : [] }));
         ui.limpar(pag);
@@ -275,6 +296,10 @@ export async function montarContatos(k, el, rota) {
       f.atualizar(r.itens);
       corpo.appendChild(f.el);
       desenharPaginas(r);
+      // plano 2000d · DR-230: a legenda da tabela diz quantos são («Contatos, 1.240»)
+      try { const cap = tab && tab.el && tab.el.querySelector && tab.el.querySelector("caption"); if (cap && n != null) cap.textContent = `${k.v.contatos}, ${ui.num(n)}${r.total == null ? "+" : ""}${comFiltro ? " com o filtro" : ""}`; } catch { /* ok */ }
+      // plano 2000d · DR-229: voltando da ficha, a lista volta à rolagem em que estava (uma vez)
+      if (voltarY) { const yy = voltarY; voltarY = 0; try { const se = typeof document !== "undefined" && document.scrollingElement; if (se) se.scrollTop = yy; } catch { /* ok */ } }
     };
     try {
       let doCache = false;
@@ -339,6 +364,8 @@ export async function montarContatos(k, el, rota) {
     if (f.empresa_id) add(`Empresa: ${f.empresa_nome || "escolhida"}`, () => { delete f.empresa_id; delete f.empresa_nome; });
     if (f.optin_marketing === false) add("Não querem marketing", () => delete f.optin_marketing);
     if (f.campo) add(L.textoFiltroCampo(f.campo, k.base.campos), () => delete f.campo);
+    // plano 2000d · PX-027: o marco do link vira chip; enquanto o servidor não confirma (marco_aplicado), o chip diz que a lista ainda não separa
+    if (f.marco) add(`${L.rotuloMarcoLink(f.marco, k.v)}${S.marcoAplicado ? "" : " (ainda não separado na lista)"}`, () => delete f.marco);
     if (n) chips.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p crm-chips-limpar", on: { click: () => {
       const b = S.filtro.busca; S.filtro = b ? { busca: b } : {}; S.pagina = 1; gravar(); carregar();
     } } }, "Limpar filtros"));
@@ -377,9 +404,10 @@ export async function montarContatos(k, el, rota) {
       aoMudar: id => { f.dono = id || undefined; if (segDono) for (const b of segDono.children) b.setAttribute("aria-pressed", String(!id && b.textContent === "Todos")); } });
     const de = h("input", { type: "date", "aria-label": "Cadastrados de", value: f.criado_de || "" });
     const ate = h("input", { type: "date", "aria-label": "Cadastrados até", value: f.criado_ate || "" });
+    const erroData = h("small", { class: "ed-erro crm-filtros-erro", role: "alert", id: `crm-fd-${Math.random().toString(36).slice(2, 8)}`, hidden: true });     // plano 1500c · RC-323
     // empresa (busca no servidor; escolhe uma)
     let empresa = f.empresa_id ? { id: f.empresa_id, nome: f.empresa_nome } : null;
-    const empBusca = h("input", { type: "search", placeholder: "Buscar empresa", "aria-label": "Buscar empresa", autocomplete: "off" });
+    const empBusca = h("input", { type: "search", enterkeyhint: "search", maxlength: "120" /* plano 2000d · PX-078: busca com limite (colar texto enorme travava a digitação) */, placeholder: "Buscar empresa", "aria-label": "Buscar empresa", autocomplete: "off" });
     const empRes = h("div", { class: "crm-busca-res", role: "group", "aria-label": "Empresas encontradas" });   // plano 1000b · RB-052: grupo de botões comuns (Tab entre eles) — era listbox sem setas nem aria-selected
     const empEsc = h("div", { class: "crm-escolhido" });
     function desenharEmp() {
@@ -429,7 +457,7 @@ export async function montarContatos(k, el, rota) {
       // plano 1000b · RB-098: «Não querem marketing» também se liga aqui (antes só chegava por filtro salvo antigo; o servidor já filtra)
       h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Marketing"),
         seg([["", "Tanto faz"], ["nao", "Não querem"]], f.optin_marketing === false ? "nao" : "", v => { f.optin_marketing = v === "nao" ? false : undefined; }, "Marketing")),
-      h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Cadastrados entre"), h("div", { class: "crm-filtros-linha" }, de, ate)),
+      h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Cadastrados entre"), h("div", { class: "crm-filtros-linha" }, de, ate), erroData),
       h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Empresa"), empEsc, empBusca, empRes),
       grupoCampo ? grupoCampo.el : null,
       h("div", { class: "crm-filtros-rod" }, pendTxt, limpar, aplicar));
@@ -442,9 +470,10 @@ export async function montarContatos(k, el, rota) {
       if (typeof f.tem_negocio_aberto === "boolean") nf.tem_negocio_aberto = f.tem_negocio_aberto;
       if (de.value) nf.criado_de = de.value;
       if (ate.value) nf.criado_ate = ate.value;
-      if (de.value && ate.value && de.value > ate.value) return { erro: "A data inicial precisa ser anterior ou igual à final.", foco: de };
+      if (de.value && ate.value && de.value > ate.value) return { erro: "A data inicial precisa ser anterior ou igual à final.", foco: de, data: true };     // plano 1500c · RC-323
       if (empresa) { nf.empresa_id = empresa.id; nf.empresa_nome = empresa.nome; }
       if (f.optin_marketing === false) nf.optin_marketing = false;      // plano 1000b · RB-098: vem do segmento «Marketing»
+      if (S.filtro.marco) nf.marco = S.filtro.marco;      // plano 2000d · PX-096: a etapa do anúncio (veio do link) continua ao mexer nos outros filtros — sai pelo «×» do chip
       if (grupoCampo) { const c = grupoCampo.ler(); if (c.erro) return { erro: c.erro }; if (c.campo) nf.campo = c.campo; }
       else if (S.filtro.campo) nf.campo = S.filtro.campo;
       return { nf };
@@ -470,7 +499,14 @@ export async function montarContatos(k, el, rota) {
     limpar.addEventListener("click", () => { resolvido = true; const b = S.filtro.busca; S.filtro = b ? { busca: b } : {}; S.pagina = 1; gravar(); pop.fechar(); carregar(); });
     aplicar.addEventListener("click", () => {
       const r = lerNovo();
-      if (!r.nf) { ui.toast(r.erro, { tipo: "erro" }); if (r.foco) r.foco.focus(); return; }
+      // plano 1500c · RC-323: período invertido mostra o erro junto das datas
+      for (const x of [de, ate]) x.removeAttribute("aria-invalid");
+      erroData.hidden = true; erroData.textContent = "";
+      if (!r.nf) {
+        if (r.data) { erroData.textContent = r.erro; erroData.hidden = false; for (const x of [de, ate]) { x.setAttribute("aria-invalid", "true"); x.setAttribute("aria-describedby", erroData.id); } }
+        else ui.toast(r.erro, { tipo: "erro" });
+        if (r.foco) r.foco.focus(); return;
+      }
       resolvido = true;
       S.filtro = r.nf; S.pagina = 1; gravar(); pop.fechar(); carregar();
     });
@@ -483,10 +519,17 @@ export async function montarContatos(k, el, rota) {
     const itens = [];
     if (S.exportando) { S.exportando.cancelado = true; return; }       // 2º toque no botão durante a exportação = Cancelar
     // plano 1000b · RB-253: muitas linhas (acima de 2.000) pedem confirmação antes de começar — leva minutos
-    if (S.total != null && S.total > 2000) {
-      const ok = await ui.confirmar({ titulo: `Exportar ${ui.num(S.total)} ${k.v.min("contatos")}?`, rotulo: "Exportar",
-        texto: "Leva alguns minutos. Dá para cancelar no meio; nesse caso nenhum arquivo é baixado." });
+    // plano 2000d · DR-235: LGPD — a 1ª exportação da sessão lembra que o arquivo tem dados pessoais (uma confirmação só, junto da de «muitas linhas»)
+    const chaveLgpd = `nx-app-crm-lgpd-exp-${ctx.cliente && ctx.cliente.id}`;
+    let jaAvisou = false;
+    try { jaAvisou = sessionStorage.getItem(chaveLgpd) === "1"; } catch { /* sem sessionStorage: avisa sempre */ }
+    const muitas = S.total != null && S.total > 2000;
+    if (muitas || !jaAvisou) {
+      const ok = await ui.confirmar({ titulo: muitas ? `Exportar ${ui.num(S.total)} ${k.v.min("contatos")}?` : "Baixar planilha com dados pessoais?", rotulo: "Exportar",
+        texto: [muitas ? "Leva alguns minutos. Dá para cancelar no meio; nesse caso nenhum arquivo é baixado." : null,
+          jaAvisou ? null : L.TEXTO_LGPD_EXPORTAR].filter(Boolean).join(" ") });
       if (!ok || S.exportando) return;
+      try { sessionStorage.setItem(chaveLgpd, "1"); } catch { /* ok */ }
     }
     const job = { cancelado: false };
     S.exportando = job;
@@ -532,11 +575,10 @@ export async function montarContatos(k, el, rota) {
     }
     if (!itens.length) { ui.toast("Nada para exportar com esses filtros.", { tipo: "info" }); return; }
     const { cabecalho, linhas } = L.linhasExportacao(itens, k.base.campos);
-    const url = URL.createObjectURL(new Blob([L.gerarCSV(cabecalho, linhas)], { type: "text/csv;charset=utf-8" }));
-    const a = h("a", { href: url, download: `${k.v.min("contatos")}-${ui.hojeSP()}.csv`, hidden: true });
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    ui.toast(`${ui.num(itens.length)} ${itens.length === 1 ? k.v.min("contato") : k.v.min("contatos")} na planilha.`, { tipo: "ok" });
+    L.baixarArquivo(L.gerarCSV(cabecalho, linhas), L.nomeArquivoImportacao("", k.v.min("contatos"), ui.hojeSP()), { h });      // plano 2000d · PX-045: nome do arquivo sem acento/espaço («hóspedes» → «hospedes-2026-10-25.csv»)
+         // plano 2000d · DR-339: um helper só; o link vive 60 s (antes 2 s: o iPhone baixava vazio)
+    // plano 2000d · PX-076: com a etapa do anúncio no filtro (que o servidor ainda não separa), o aviso diz que a planilha saiu sem essa separação
+    ui.toast(`${ui.num(itens.length)} ${itens.length === 1 ? k.v.min("contato") : k.v.min("contatos")} na planilha.${filtro && filtro.marco && !S.marcoAplicado ? " A etapa do anúncio ainda não separa a lista: a planilha saiu sem essa separação." : ""}`, { tipo: "ok" });
   }
 
   async function novoContato() {
@@ -591,7 +633,7 @@ export function listaCompacta(k, { aoMudar, aoAbrir, textoVazio = null }) {
     try {
       if (id === "tarefa") {
         const T = await k.mod("tarefas");
-        const t = await T.formTarefa(k, null, { contato_id: c.id });
+        const t = await T.formTarefa(k, null, { contato_id: c.id, ...(c.dono_id != null ? { dono_id: c.dono_id } : {}) /* plano 1500c · RC-240 */ });
         if (t) ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 });
       } else if (id === "negocio") {
         const N = await k.mod("negocio");
@@ -603,7 +645,8 @@ export function listaCompacta(k, { aoMudar, aoAbrir, textoVazio = null }) {
   function linha(c) {
     const nome = L.nomeContato(c);
     // plano 1000b · RB-096: o subtítulo é sempre telefone · cidade · último contato; «Não quer marketing» é uma pílula à parte (não troca de lugar com a origem)
-    const sub = [c.telefone ? ui.telBR(c.telefone) : null, c.cidade, c.ultimo_contato_em ? `último contato ${ui.relativo(c.ultimo_contato_em)}` : null].filter(Boolean).join(" · ");      // plano 1000b · RB-215: diz do quê
+    // plano 1500c · RC-105: sem telefone, o e-mail no 1º lugar (o contato não fica sem nenhum meio de contato na linha)
+    const sub = [c.telefone ? ui.telBR(c.telefone) : c.email || null, c.cidade, c.ultimo_contato_em ? `último contato ${ui.relativo(c.ultimo_contato_em)}` : null].filter(Boolean).join(" · ");      // plano 1000b · RB-215: diz do quê
     const pilOptin = c.optin_marketing === false ? ui.pilula("Não quer marketing", "aten", { class: "ct-optin", tamanho: "p" }) : null;
     const etq = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean)[0];
     // C4: anúncio (com a plataforma) vence; depois a 1ª etiqueta; senão a origem — sempre a pílula padrão de origem
@@ -614,11 +657,13 @@ export function listaCompacta(k, { aoMudar, aoAbrir, textoVazio = null }) {
     const mais = h("button", { type: "button", class: "bt-icone ct-bt", "aria-label": `Mais ações para ${nome}`, title: "Mais ações" }, ui.icone("opcoes"));
     mais.addEventListener("click", () => ui.menu(mais, A.menu.map(id => ({ rotulo: ROT[id][0], icone: ROT[id][1], fn: () => executar(id, c) }))));
     const frente = h("div", { class: "ct-linha" },
-      h("a", { class: "ct-abrir", href: `#/contatos/${c.id}` }, ui.avatar(c.nome || c.telefone, c.id),
-        h("span", { class: "ct-txt" }, h("b", { class: "ct-nome" }, nome), sub ? h("small", { class: "ct-sub" }, sub) : null, pil, pilOptin)),
+      h("a", { class: "ct-abrir", href: `#/contatos/${c.id}` }, ui.avatar(c.nome || c.telefone, c.id, null, { tamanho: "g" }) /* plano 2000d · PX-051 */,
+        h("span", { class: "ct-txt" }, h("b", { class: "ct-nome dado-pessoal" }, nome), sub ? h("small", { class: "ct-sub dado-pessoal" }, sub) : null, pil, pilOptin)),
       h("div", { class: "ct-bts" },
         A.botoes.includes("ligar") ? h("a", { class: "bt-icone ct-bt", href: L.hrefTel(c.telefone), "aria-label": `Ligar para ${nome}`, title: "Ligar" }, ui.icone("telefone")) : null,
-        A.botoes.includes("conversa") ? h("a", { class: "bt-icone ct-bt", href: `#/conversas?contato=${c.id}`, "aria-label": `Abrir conversa com ${nome}`, title: "Abrir conversa" }, ui.icone("whatsapp")) : null,
+        A.botoes.includes("conversa") ? h("a", { class: "bt-icone ct-bt", href: `#/conversas?contato=${c.id}`, "aria-label": `Abrir conversa com ${nome}`, title: "Abrir conversa" }, ui.icone("whatsapp"))
+          // plano 1500c · RC-106: só com o CRM (sem o módulo Conversas) o WhatsApp do contato abre direto no wa.me
+          : !comConversas && L.hrefWhatsApp(c.telefone) ? h("a", { class: "bt-icone ct-bt ct-wa", href: L.hrefWhatsApp(c.telefone), target: "_blank", rel: "noopener", "aria-label": `Abrir ${nome} no WhatsApp`, title: "Abrir no WhatsApp" }, ui.icone("whatsapp")) : null,
         mais));
     const fundo = (lado, id) => id ? h("div", { class: `ct-fundo ct-fundo-${lado}`, "aria-hidden": "true" }, ui.icone(ROT[id][1]), h("span", null, FUNDO[id])) : null;
     const li = h("li", { class: "ct-li", dataset: { id: c.id } }, fundo("d", A.direita), fundo("e", A.esquerda), frente);
@@ -631,6 +676,16 @@ export function listaCompacta(k, { aoMudar, aoAbrir, textoVazio = null }) {
     atualizar(itens) {
       ui.limpar(raiz);
       if (!itens.length) { raiz.appendChild(ui.vazio({ tipo: "sem_resultado", titulo: textoVazio ? textoVazio() : "Nada encontrado com esses filtros." })); return; }   // plano 1000b · RB-213
+      // plano 1500c · RC-116: dica única do gesto (como a do quadro, CR-270) — some no «Entendi» e não volta neste aparelho
+      const CHAVE_DICA = "nx-app-ct-dica-deslizar";
+      let mostrarDica = false;
+      try { mostrarDica = pode && !!(globalThis.matchMedia && globalThis.matchMedia("(pointer: coarse)").matches) && localStorage.getItem(CHAVE_DICA) !== "1"; } catch { /* ok */ }
+      if (mostrarDica) {
+        const dica = h("p", { class: "aviso ct-dica-deslizar", role: "note" }, ui.icone("info"),
+          h("span", null, `Deslize ${k.v.art("contato") === "a" ? "a" : "o"} ${k.v.min("contato")} para a direita para criar uma tarefa, ou para a esquerda para ${k.v.novo("negocio").toLowerCase()}.`),
+          h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { dica.remove(); try { localStorage.setItem(CHAVE_DICA, "1"); } catch { /* ok */ } } } }, "Entendi"));
+        raiz.appendChild(dica);
+      }
       raiz.appendChild(h("ul", { class: "ct-lista", role: "list", "aria-label": k.v.contatos }, itens.map(linha)));
     },
   };
@@ -647,18 +702,22 @@ export async function formContato(k, { nome = "", telefone = "" } = {}) {
   // plano 1000b · RB-109: sugere «eu» como responsável (como o novo negócio) — dá para trocar
   const dono = ui.seletorPessoa({ usuarios: k.base.usuarios, valor: typeof k.eu === "function" ? k.eu() || null : null, rotulo: "Responsável" });
   const idDonoCt = L.idUnico("ct-dono");      // plano 1000b · RB-207
+  // plano 2000d · DR-240: só com funil ativo para abrir o negócio
+  const chkNeg = (k.base.funis || []).some(f => f && f.ativo !== false) && typeof N.novoNegocio === "function" ? h("input", { type: "checkbox", name: "criar_negocio" }) : null;
   dono.id = idDonoCt;
   dono.name = "dono_id";
   const form = h("form", { class: "crm-form", novalidate: true },
     h("div", { class: "crm-form-2" },
       h("div", { class: "inteiro" }, ui.campo({ rotulo: "Nome", nome: "nome", valor: nome, max: 160, autocomplete: "off" })),
       ui.campo({ rotulo: "Telefone / WhatsApp", nome: "telefone", tipo: "tel", valor: telefone, placeholder: "(12) 99830-3030", autocomplete: "off", validar: "telefone" }),
-      ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", autocomplete: "off" }),
+      N.dicaEmail ? N.dicaEmail(k, ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", autocomplete: "off" })) : ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", autocomplete: "off" }),      // plano 2000d · PX-036
       ui.campo({ rotulo: "Origem", nome: "origem", tipo: "select", valor: "manual", opcoes: L.origensManuais().map(([valor, rotulo]) => ({ valor, rotulo })) }),     // plano 1000 (CR-094): sem «Anúncio» (nem «Importação») à mão
       ui.campo({ rotulo: "Cidade", nome: "cidade", max: 80 }),
       h("div", { class: "campo" }, h("label", { for: idDonoCt }, "Responsável"), dono)),      // plano 1000b · RB-207: o rótulo aponta para o seletor
     h("div", { class: "pilha-p" }, h("span", { class: "campo-rot" }, "Etiquetas"), etq),
     ...campos.map(c => N.campoPersonalizado(k, c, null)),
+    // plano 2000d · DR-240: cadastrar e já abrir o negócio — um passo a menos para a recepção
+    chkNeg ? h("label", { class: "crm-op ct-criar-neg" }, chkNeg, h("span", null, `Criar também ${k.v.art("negocio") === "a" ? "uma" : "um"} ${k.v.min("negocio")} para ${k.v.art("contato") === "a" ? "ela" : "ele"}`)) : null,
     h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true }));
   const status = form.querySelector(".crm-status");
   // M24: o aviso de cadastro já existente aparece enquanto digita o telefone (não só depois de salvar)
@@ -666,7 +725,7 @@ export async function formContato(k, { nome = "", telefone = "" } = {}) {
   const caixaDup = N.avisoDuplicado(k, form.querySelector("[name=telefone]"), { aoUsar: achado => { if (apiModal) apiModal.fechar(null); k.ctx.navegar(`#/contatos/${achado.id}`); } });
   form.querySelector("[name=telefone]").closest(".campo").appendChild(caixaDup);
   let reqAtual = null, reqConteudo = "";   // M25: uma chave por intenção; erro ambíguo repete com a MESMA chave
-  return ui.modal({
+  const resCt = await ui.modal({
     titulo: k.v.novo("contato"), corpo: form, aoAbrir: a => { apiModal = a; },
     acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: null },
@@ -674,8 +733,9 @@ export async function formContato(k, { nome = "", telefone = "" } = {}) {
         ui.marcarErro(form, null);
         const d = ui.lerForm(form);
         if (!d.nome && !d.telefone && !d.email) { ui.marcarErro(form, "nome", "Informe o nome, o telefone ou o e-mail."); return false; }
-        if (d.telefone && !L.normalizarTelefone(d.telefone)) { ui.marcarErro(form, "telefone", "Telefone inválido. Use DDD + número."); return false; }
+        if (d.telefone && !L.normalizarTelefone(d.telefone)) { ui.marcarErro(form, "telefone", L.textoTelefoneInvalido(d.telefone)); return false; }      // plano 1500c · RC-098
         // plano 1000b · RB-054: a mesma conferência da ficha antes de ir ao servidor
+        if (d.email && L.emailLimpo) d.email = L.emailLimpo(d.email);      // plano 2000d · PX-097: « Ana @ X.com » vale (e grava ana@x.com)
         if (d.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(d.email).trim())) { ui.marcarErro(form, "email", "E-mail inválido. Confira, por exemplo: ana@exemplo.com.br."); return false; }
         const { valores, erros } = N.lerCamposPersonalizados(k, form, campos);
         if (erros.length) { ui.marcarErro(form, erros[0].nome, erros[0].texto); return false; }
@@ -692,8 +752,14 @@ export async function formContato(k, { nome = "", telefone = "" } = {}) {
           status.hidden = true;
           if (e && e.ambigua) { api.erro("Não foi possível confirmar se foi salvo. Toque em «Cadastrar» de novo: é seguro, não duplica."); return false; }
           if (e && e.codigo === "telefone_em_uso" && /^\d+$/.test(String(e.hint || ""))) {
-            api.erro(`${k.erro(e)} Abrindo o cadastro existente…`);
-            setTimeout(() => { api.fechar(null); k.ctx.navegar(`#/contatos/${e.hint}`); }, 900);
+            // plano 1500c · RC-107: não navega sozinho (o que foi digitado se perdia) — a pessoa escolhe: abrir o existente ou corrigir o telefone
+            api.erro(k.erro(e));
+            const velho = form.querySelector(".ct-em-uso");
+            if (velho) velho.remove();
+            const campoTel = form.querySelector("[name=telefone]");
+            form.appendChild(h("div", { class: "linha ct-em-uso", role: "group", "aria-label": "Telefone já cadastrado" },
+              h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { api.fechar(null); k.ctx.navegar(`#/contatos/${e.hint}`); } } }, "Abrir cadastro existente"),
+              h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { if (campoTel) { campoTel.focus(); if (campoTel.select) campoTel.select(); } } } }, "Corrigir telefone")));
             return false;
           }
           api.erro(k.erro(e)); return false;
@@ -701,6 +767,9 @@ export async function formContato(k, { nome = "", telefone = "" } = {}) {
       } },
     ],
   });
+  // plano 2000d · DR-240: marcado «Criar também…», o formulário do negócio abre já com o cadastro (sem esperar: quem chamou segue para a ficha)
+  if (resCt && resCt.id != null && chkNeg && chkNeg.checked) { try { Promise.resolve(N.novoNegocio(k, { contato_id: resCt.id })).catch(() => {}); } catch { /* ok */ } }
+  return resCt;
 }
 
 /* ============================================================ ficha 360 */
@@ -774,7 +843,7 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
           return;
         }
         if (!pode) { dd.append(h("span", { class: "fraco" }, "Sem empresa")); return; }
-        const busca = h("input", { type: "search", class: "ed fx-emp-busca", placeholder: "Buscar empresa para ligar", "aria-label": "Buscar empresa para ligar", autocomplete: "off" });
+        const busca = h("input", { type: "search", enterkeyhint: "search", class: "ed fx-emp-busca", maxlength: "120" /* plano 2000d · PX-078: busca com limite (colar texto enorme travava a digitação) */, placeholder: "Buscar empresa para ligar", "aria-label": "Buscar empresa para ligar", autocomplete: "off" });
         const res = h("div", { class: "crm-busca-res", role: "group", "aria-label": "Empresas encontradas" });   // plano 1000b · RB-052: grupo de botões comuns (Tab entre eles) — era listbox sem setas nem aria-selected
         let seqE = 0;
         busca.addEventListener("input", ui.debounce(async () => {
@@ -797,19 +866,23 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
     }
 
     /* cabeçalho */
-    const hojeFx = ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10);
+    const hojeFx = ui.hojeSP ? ui.hojeSP() : L.hojeSP();      // plano 2000d · DR-340: sem ui.hojeSP, o dia de São Paulo (não o UTC)
     const aniv = c.nascimento && L.aniversario ? L.aniversario(c.nascimento, hojeFx) : null;
     const idade = c.nascimento && L.idadeEm ? L.idadeEm(c.nascimento, hojeFx) : null;
-    const nomeH = h(gaveta ? "h2" : "h1", { class: "fx-nome" }, L.nomeContato(c));      // plano 1000b · RB-208: na gaveta é h2 (ela já tem título)
+    const nomeH = h(gaveta ? "h2" : "h1", { class: "fx-nome dado-pessoal" }, L.nomeContato(c));      // plano 1500c · UC-030      // plano 1000b · RB-208: na gaveta é h2 (ela já tem título)
     const menuBt = h("button", { type: "button", class: "bt-icone", "aria-label": "Mais ações" }, ui.icone("opcoes"));
     const novoNeg = () => N.novoNegocio(k, { contato_id: c.id }, { aoCriar: () => carregar({ silencioso: true }) });
-    const novaTar = async () => { const t = await T.formTarefa(k, null, { contato_id: c.id }); if (t) { ui.toast("Tarefa criada.", { tipo: "ok" }); carregar({ silencioso: true }); } };
+    const novaTar = async () => { const t = await T.formTarefa(k, null, { contato_id: c.id, ...(c.dono_id != null ? { dono_id: c.dono_id } : {}) /* plano 1500c · RC-240 */ }); if (t) { ui.toast("Tarefa criada.", { tipo: "ok" }); carregar({ silencioso: true }); } };
     menuBt.addEventListener("click", () => ui.menu(menuBt, [
       // plano 1000 (CR-228): no celular a ação principal fica à vista e «+ Oportunidade» / «+ Tarefa» moram aqui (os botões quebravam em 3 linhas a 360 px)
       pode && pequena() ? { rotulo: k.v.novo("negocio"), icone: "funil", fn: novoNeg } : null,
       pode && pequena() ? { rotulo: "Nova tarefa", icone: "tarefa", fn: novaTar } : null,
       pode && pequena() ? "-" : null,
       c.telefone ? { rotulo: "Copiar telefone", icone: "copiar", fn: () => ui.copiar(ui.telBR(c.telefone)) } : null,
+      // plano 1500c · RC-111: o formato internacional (+5512998303030) para colar em outro sistema ou no WhatsApp Web
+      c.telefone && L.telInternacional(c.telefone) ? { rotulo: "Copiar no formato internacional", icone: "copiar", fn: () => ui.copiar(L.telInternacional(c.telefone)) } : null,
+      // plano 1500c · RC-106: só com o CRM (sem Conversas), o WhatsApp do contato abre no wa.me
+      c.telefone && !(ctx.temModulo && ctx.temModulo("conversas")) && L.hrefWhatsApp(c.telefone) ? { rotulo: "Abrir no WhatsApp", icone: "whatsapp", fn: () => { try { window.open(L.hrefWhatsApp(c.telefone), "_blank", "noopener"); } catch { /* ok */ } } } : null,
       // plano 1000 (CR-263): o e-mail também se copia daqui
       c.email ? { rotulo: "Copiar e-mail", icone: "copiar", fn: () => ui.copiar(c.email) } : null,
       // plano 1000b · RB-045: sem linkPublico, o endereço DA FICHA (aberta na gaveta, location.href era o da tela de trás)
@@ -817,26 +890,33 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
       gaveta ? { rotulo: "Abrir em página", icone: "externo", fn: () => { gaveta.fechar(); ctx.navegar(`#/contatos/${c.id}`); } } : null,
       k.pode("admin") ? "-" : null,
       // plano 1000 (CR-103): direito de acesso do titular — um arquivo com tudo o que a ficha tem DESTA pessoa (nada de outros contatos)
-      k.pode("admin") ? { rotulo: "Baixar dados do titular (LGPD)", icone: "baixar", fn: () => baixarDadosTitular(k, d) } : null,
+      k.pode("admin") ? { rotulo: "Baixar dados do titular (LGPD)", icone: "baixar", fn: () => baixarTitularCompleto(k, d) } : null,      // plano 2000d · DR-175
       k.pode("admin") ? { rotulo: "Excluir cadastro (LGPD)", icone: "lixeira", perigo: true, fn: excluir } : null,
     ].filter(Boolean)));
     const cab = h("section", { class: "fx-cab", "aria-label": "Identificação" },
       ui.avatar(c.nome || c.telefone, c.id),
       h("div", { class: "fx-id" }, nomeH,
+        // plano 1500c · RC-103/104/118: telefone liga (tel:) e e-mail escreve (mailto:) com um toque; ícones decorativos e rótulo para o leitor
         h("p", null,
-          c.telefone ? h("span", null, ui.icone("telefone"), h("span", { class: "mono" }, ui.telBR(c.telefone))) : null,
-          c.email ? h("span", null, ui.icone("enviar"), c.email) : null,
-          c.cidade ? h("span", null, ui.icone("globo"), `${c.cidade}${c.uf ? `/${c.uf}` : ""}`) : null),
+          c.telefone ? h("span", null, h("span", { "aria-hidden": "true" }, ui.icone("telefone")), h("span", { class: "sr-only" }, "Telefone: "),
+            L.hrefTel(c.telefone) ? h("a", { class: "mono fx-tel dado-pessoal", href: L.hrefTel(c.telefone), "aria-label": `Ligar para ${ui.telBR(c.telefone)}` }, ui.telBR(c.telefone)) : h("span", { class: "mono dado-pessoal" }, ui.telBR(c.telefone)),
+            // plano 2000d · DR-224: copiar o número com um toque, ao lado dele
+            h("button", { type: "button", class: "bt-icone fx-copiar-tel", "aria-label": `Copiar telefone ${ui.telBR(c.telefone)}`, title: "Copiar telefone", on: { click: () => ui.copiar(ui.telBR(c.telefone)) } }, ui.icone("copiar"))) : null,
+          c.email ? h("span", null, h("span", { "aria-hidden": "true" }, ui.icone("enviar")), h("span", { class: "sr-only" }, "E-mail: "),
+            h("a", { class: "fx-email dado-pessoal", href: `mailto:${c.email}`, "aria-label": `Escrever para ${c.email}` }, c.email)) : null,
+          c.cidade ? h("span", null, h("span", { "aria-hidden": "true" }, ui.icone("globo")), h("span", { class: "sr-only" }, "Cidade: "), `${c.cidade}${c.uf ? `/${c.uf}` : ""}`) : null),
         h("div", { class: "linha", style: { gap: ".35rem" } },
           // plano 1000 (CR-101): a mesma pílula de origem da lista e do quadro («Anúncio · Google», «WhatsApp»…)
           (() => { const o = L.origemPilula(c); return o ? ui.pilula(null, o.chave, { variante: "origem", plataforma: o.plataforma, class: "fx-origem" }) : null; })(),
           c.optin_marketing === false ? ui.pilula("Não quer marketing", "aten", { icone: "alerta" }) : null,
           // plano 1000 (CR-225): aniversário nos próximos 7 dias (ou hoje) no cabeçalho — a data era guardada e não aparecia
           aniv ? ui.pilula(aniv.texto, aniv.dias === 0 ? "ok" : "info", { icone: "calendario", class: "fx-aniv" }) : null,
+          // plano 1500c · RC-117: o que o cliente já fechou (LTV) — dos negócios ganhos que a ficha já traz
+          (() => { const tg = L.totalGanho(d.negocios); return tg.n ? ui.pilula(`Total ganho ${ui.brl(tg.valor, { centavos: false })} em ${tg.n} ${tg.n === 1 ? k.v.min("negocio") : k.v.min("negocios")}`, "ok", { class: "fx-ltv" }) : null; })(),
           c.bloqueado ? ui.pilula("Bloqueado", "ruim", { title: "Não recebe mensagens" }) : null),
         // plano 1000 (CR-261): o que «Bloqueado» quer dizer e onde desfazer
         c.bloqueado ? h("p", { class: "aviso aviso-ruim fx-bloqueado", role: "note" }, ui.icone("alerta"),
-          h("span", null, `Bloquead${k.v.art("contato")}: não recebe mensagens nem automações e as mensagens que mandar não abrem atendimento. `,
+          h("span", null, `Bloquead${k.v.art("contato")}${L.textoBloqueio(c, { usuario: k.usuario, data: x => (ui.dataCurtaBR ? ui.dataCurtaBR(x) : ui.dataBR(x)) })}: não recebe mensagens nem automações e as mensagens que mandar não abrem atendimento. `,      // plano 1500c · RC-315
             k.pode("supervisor") && ctx.temModulo && ctx.temModulo("conversas")
               ? h("a", { class: "link", href: conv ? `#/conversas/${conv.id}` : `#/conversas?contato=${c.id}` }, "Desbloquear na conversa")
               : "Para desbloquear, peça a um supervisor (na conversa, botão «Desbloquear»).")) : null),
@@ -845,8 +925,13 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
           if (gaveta) gaveta.fechar();
           ctx.navegar(conv ? `#/conversas/${conv.id}` : `#/conversas?contato=${c.id}`);
         } } }, ui.icone("whatsapp"), "Abrir conversa") : null,
-        pode ? h("button", { type: "button", class: "bt bt-sec fx-ac-sec", on: { click: novoNeg } }, ui.icone("mais"), k.v.novo("negocio")) : null,
+        // plano 1500c · RC-331: sem o módulo Conversas o topo não fica sem ação à vista — «Nova oportunidade» vira a principal (não desce ao ⋮ no celular)
+        pode ? h("button", { type: "button", class: ["bt", ctx.temModulo && ctx.temModulo("conversas") ? "bt-sec fx-ac-sec" : "bt-prim fx-ac-principal"], on: { click: novoNeg } }, ui.icone("mais"), k.v.novo("negocio")) : null,
         pode ? h("button", { type: "button", class: "bt bt-sec fx-ac-sec", on: { click: novaTar } }, ui.icone("tarefa"), "Tarefa") : null,
+        // plano 2000d · DR-169: «Marcar consulta/visita» já com o contato buscado na agenda
+        pode && ctx.carregar && (!ctx.temModulo || ctx.temModulo("agenda")) ? h("button", { type: "button", class: "bt bt-sec fx-ac-sec fx-marcar", on: { click: async () => {
+          try { const ag = await ctx.carregar("agenda"); await ag.marcarConsulta(ctx, { busca: c.telefone || c.nome || "", aoMudar: () => carregar({ silencioso: true }) }); } catch (e) { k.toastErro(e); }
+        } } }, ui.icone("calendario"), `Marcar ${L.palavraCompromisso(k.v)}`) : null,
         menuBt));
 
     /* coluna da esquerda: dados */
@@ -857,6 +942,10 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
         salvar: async v => { await salvar({ nome: v }); nomeH.textContent = L.nomeContato(c); } }),
       ...N.linhaEd(k, { rotulo: "Telefone", desabilitado: !pode, controle: inp("tel", c.telefone ? ui.telBR(c.telefone) : "", { placeholder: "(12) 99830-3030" }),
         ler: x => { const dg = x.value.replace(/\D/g, ""); return dg ? (x.value.trim().startsWith("+") ? "+" : "") + dg : null; },
+        // plano 1500c · RX-035: número que o servidor recusaria é avisado aqui, com a frase do número de outro país (sem ida e volta)
+        validar: x => (x.value.replace(/\D/g, "") && !L.normalizarTelefone(x.value) ? L.textoTelefoneInvalido(x.value) : null),
+        // plano 2000d · DR-140: celular de 10 dígitos (sem o 9) passa, mas avisa com a sugestão
+        aviso: x => { const s = L.sugestaoNonoDigito ? L.sugestaoNonoDigito(x.value) : null; return s ? `Celular sem o 9? Quis dizer ${s}?` : null; },
         // plano 1000 (CR-097): apagar o telefone de quem tem conversa corta o WhatsApp — pergunta antes
         salvar: async v => {
           if (!v && c.telefone && (d.conversas || []).length) {
@@ -871,24 +960,34 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
           }
         } }),
       // plano 1000 (CR-098): e-mail e UF conferidos aqui, com a mesma regra do servidor — sem ida e volta e com a frase certa
-      ...N.linhaEd(k, { rotulo: "E-mail", desabilitado: !pode, controle: inp("email", c.email), ler: x => x.value.trim() || null, salvar: v => salvar({ email: v }),
-        validar: x => (x.value.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x.value.trim()) ? "E-mail inválido. Confira, por exemplo: ana@exemplo.com.br." : null) }),
+      ...N.linhaEd(k, { rotulo: "E-mail", desabilitado: !pode, controle: inp("email", c.email), ler: x => (L.emailLimpo ? L.emailLimpo(x.value) : x.value.trim().toLowerCase()) || null /* plano 2000d · PX-098 */, salvar: v => salvar({ email: v }),
+        // plano 1500c · RX-082: «gmail.con» ganha a sugestão (aviso que não bloqueia)
+        aviso: x => { const s = L.sugestaoEmail ? L.sugestaoEmail(x.value) : null; return s ? `Quis dizer ${s}?` : null; },      // plano 1500c · RX-077: e-mail em minúsculas (como a importação: «Ana@X.com» e «ana@x.com» são a mesma pessoa)
+        validar: x => (x.value.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(L.emailLimpo ? L.emailLimpo(x.value) : x.value.trim()) /* plano 2000d · PX-098: espaço em volta do @ não reprova */ ? "E-mail inválido. Confira, por exemplo: ana@exemplo.com.br." : null) }),
       // plano 1000 (CR-111): máscara de CPF/CNPJ ao sair do campo e aviso (sem bloquear) quando o dígito verificador não confere
       ...N.linhaEd(k, { rotulo: "CPF / CNPJ", desabilitado: !pode, controle: (() => { const x = inp("text", L.formatarDoc(c.documento || ""), { maxlength: 40, inputmode: "text", autocapitalize: "characters" });   // plano 1000b · RB-093: CNPJ alfanumérico tem letras
         x.addEventListener("blur", () => { x.value = L.formatarDoc(x.value); }, { capture: true }); return x; })(),
         ler: x => L.formatarDoc(x.value).trim() || null, aviso: x => L.avisoDoc(x.value), salvar: v => salvar({ documento: v }) }),
       // plano 1000 (CR-099): nascimento no futuro não é gravado (o calendário também para em hoje)
       // plano 1000 (CR-226): a idade ao lado («Nascimento (34 anos)»)
-      ...N.linhaEd(k, { rotulo: idade != null ? `Nascimento (${idade} ${idade === 1 ? "ano" : "anos"})` : "Nascimento", desabilitado: !pode, controle: inp("date", c.nascimento, { max: ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10) }), ler: x => x.value || null,
-        validar: x => (x.value && x.value > (ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10)) ? "A data de nascimento não pode ser no futuro." : null),
+      ...N.linhaEd(k, { rotulo: idade != null ? `Nascimento (${idade} ${idade === 1 ? "ano" : "anos"})` : "Nascimento", desabilitado: !pode, controle: inp("date", c.nascimento, { max: ui.hojeSP ? ui.hojeSP() : L.hojeSP() /* plano 2000d · DR-340 */ }), ler: x => x.value || null,
+        // plano 1500c · RX-070: ano antes de 1900 é quase sempre digitado errado («0199-…» no teclado do celular) — avisa antes de gravar
+        validar: x => (x.value && x.value > (ui.hojeSP ? ui.hojeSP() : L.hojeSP() /* plano 2000d · DR-340 */) ? "A data de nascimento não pode ser no futuro."
+          : x.value && x.value < "1900-01-01" ? "Confira o ano do nascimento (antes de 1900)." : null),
         salvar: v => salvar({ nascimento: v }) }),
       ...N.linhaEd(k, { rotulo: "Cidade", desabilitado: !pode, controle: inp("text", c.cidade, { maxlength: 80 }), ler: x => x.value.trim() || null, salvar: v => salvar({ cidade: v }) }),
-      ...N.linhaEd(k, { rotulo: "UF", desabilitado: !pode, controle: inp("text", c.uf, { maxlength: 2, style: { "text-transform": "uppercase", "max-width": "6rem" } }), ler: x => x.value.trim().toUpperCase() || null, salvar: v => salvar({ uf: v }),
-        validar: x => (x.value.trim() && !L.ufValida(x.value) ? "UF deve ter 2 letras de um estado (ex.: SP)." : null) }),     // plano 1000b · RB-074: «XX» não passa
+      // plano 1500c · RC-109: UF num select das 27 siglas (no celular digitar errava); a validação continua (valor antigo fora da lista aparece)
+      ...N.linhaEd(k, { rotulo: "UF", desabilitado: !pode, controle: h("select", { class: "fx-uf" }, h("option", { value: "" }, "—"),
+          c.uf && !L.UFS.includes(String(c.uf).toUpperCase()) ? h("option", { value: c.uf, selected: true }, c.uf) : null,
+          L.UFS.map(u => h("option", { value: u, selected: String(c.uf || "").toUpperCase() === u }, u))),
+        ler: x => String(x.value || "").trim().toUpperCase() || null, salvar: v => salvar({ uf: v }),
+        validar: x => (String(x.value || "").trim() && !L.ufValida(x.value) ? "UF deve ter 2 letras de um estado (ex.: SP)." : null) }),     // plano 1000b · RB-074: «XX» não passa
       // plano 1000 (CR-095): ligar o contato a uma empresa pela ficha (nx_contato_salvar já aceita empresa_id) — busca, link e «Tirar da empresa»
       campoEmpresa(),
       ...N.linhaEd(k, { rotulo: "Responsável", desabilitado: !pode,
-        controle: h("select", null, h("option", { value: "" }, "Sem responsável"), k.base.usuarios.map(u => h("option", { value: u.id, selected: u.id === c.dono_id }, u.nome))),
+        // plano 1500c · RC-108: responsável desativado aparece marcado («Ana (desativado)»), não «Sem responsável»
+        controle: h("select", null, h("option", { value: "", selected: !c.dono_id }, "Sem responsável"),
+          L.opcoesResponsavel(k.base.usuarios, c.dono_id, c.dono_nome).map(o => h("option", { value: o.valor, selected: String(o.valor) === String(c.dono_id) }, o.rotulo))),
         ler: x => x.value || null, salvar: v => salvar({ dono_id: v }) }),
       // plano 1000 (CR-046): sem origem gravada, a ficha diz isso (antes mostrava «Anúncio», a 1ª opção) e nada é gravado até escolherem
       ...N.linhaEd(k, { rotulo: "Origem", desabilitado: !pode || !!c.plataforma,
@@ -907,7 +1006,7 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
       const antes = (c.etiquetas || []).slice();
       const nomeDe = id => (k.etiqueta(id) || {}).nome || "etiqueta";
       const mais = ids.filter(i => !antes.includes(i)), menos = antes.filter(i => !ids.includes(i));
-      const texto = mais.length ? `Etiqueta «${nomeDe(mais[0])}» adicionada` : menos.length ? `Etiqueta «${nomeDe(menos[0])}» removida` : "Etiquetas atualizadas";
+      const texto = (L.textoEtiquetasMudaram && L.textoEtiquetasMudaram(mais.map(nomeDe), menos.map(nomeDe))) || "Etiquetas atualizadas";      // plano 1500c · RC-093
       try { await salvar({ etiquetas: ids }); }
       catch (e) { k.toastErro(e); montarEtq(antes); return; }
       ui.acaoComDesfazer({ texto, reverter: async () => {
@@ -920,6 +1019,8 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
     dl.append(h("div", { class: "ng-campo ng-campo-largo" }, h("dt", null, "Etiquetas"), ddEtq));
     const obs = h("textarea", { rows: 3, maxlength: 5000, placeholder: "Observações gerais" }, c.obs || "");
     dl.append(...N.linhaEd(k, { rotulo: "Observação", desabilitado: !pode, controle: obs, largo: true, ler: x => x.value.trim() || null, salvar: v => salvar({ obs: v }) }));
+    // plano 2000d · DR-176 (LGPD): a observação é vista por toda a equipe — não é lugar de dado de saúde/sensível
+    if (pode) { const bloco = dl.lastChild; const dd = bloco && bloco.querySelector && bloco.querySelector("dd"); if (dd) dd.appendChild(h("small", { class: "campo-ajuda fx-obs-lgpd" }, L.avisoDadoSensivel(k.v && k.v.vertical))); }
     const blocoDados = h("section", { class: "ng-bloco", "aria-label": "Dados" }, h("div", { class: "ng-bloco-cab" }, h("h3", null, "Dados")), dl);
 
     /* campos personalizados */
@@ -971,13 +1072,16 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
       h("div", null, h("span", { class: "rotulo" }, rotRfm.ultima), h("b", null, rfm.ultima_compra ? ui.dataBR(rfm.ultima_compra) : "—")),
       h("div", null, h("span", { class: "rotulo" }, "Ticket médio"), h("b", null, rfm.ticket_medio != null ? ui.brl(rfm.ticket_medio, { centavos: false }) : "—")));
     const listaNeg = h("div", { class: "ng-outros" });
-    for (const n of d.negocios || []) {
+    // plano 2000d · DR-168: abertos primeiro, depois os mais recentes; cada um com a situação (aberto, ganho, perdido)
+    for (const n of L.ordenarNegociosFicha ? L.ordenarNegociosFicha(d.negocios) : (d.negocios || [])) {
       const e = k.estagio(n.estagio_id), f = k.funil(n.funil_id);
+      const sit = n.status === "ganho" ? ui.pilula(k.v.ganhar, "ok", { tamanho: "p", class: "fx-neg-sit" }) : n.status === "perdido" ? ui.pilula(k.v.perder, "neutra", { tamanho: "p", class: "fx-neg-sit" }) : null;
       listaNeg.appendChild(h("button", { type: "button", class: "ng-mini", style: e && k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null,
         on: { click: () => N.abrirNegocio(k, n.id, { aoMudar: () => carregar({ silencioso: true }) }) } },
         h("i", { "aria-hidden": "true" }),
-        h("span", null, `${L.tituloCard(n)} · ${e ? e.nome : "—"}${f ? ` · ${f.nome}` : ""}`),
-        h("b", null, (n.status === "ganho" ? n.valor : n.valor_previsto) != null ? ui.brl(n.status === "ganho" ? n.valor : n.valor_previsto, { centavos: false }) : "—")));
+        h("span", null, `${L.tituloCard(n)} · ${e ? e.nome : "—"}${f ? ` · ${f.nome}` : ""}`), sit,
+        // plano 1500c · RX-036: a régua do cartão (ganho sem valor final usa o previsto) e «Sem valor» em vez de «—»
+        (n.status === "ganho" ? (n.valor ?? n.valor_previsto) : n.valor_previsto) != null ? h("b", null, ui.brl(L.valorCard(n), { centavos: L.temCentavos(L.valorCard(n)) })) : h("span", { class: "sem" }, "Sem valor")));
     }
     if (!(d.negocios || []).length) listaNeg.appendChild(h("p", { class: "fraco crm-vazio-txt" }   /* plano 1000b · RB-100 */, `${k.v.nenhum("negocio")} ainda.`));
     const blocoNeg = h("section", { class: "ng-bloco", "aria-label": k.v.negocios },
@@ -1026,7 +1130,7 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
           h("div", { class: "fx-col" }, blocoOrigem, blocoRfm, blocoNeg, blocoConv, blocoTar, blocoNotas, blocoTempo)))].filter(Boolean));
 
     async function registrarOptin() {
-      const nome = `opt-${Date.now()}`;
+      const nome = L.idUnico ? L.idUnico("opt") : `opt-${Date.now()}`;      // plano 1500c · RC-090
       const form = h("form", { class: "crm-form", novalidate: true },
         h("div", { class: "crm-motivos", role: "radiogroup", "aria-label": "Autorização" },
           // plano 1000b · RB-110 (LGPD): sem registro (optin null) nenhuma opção nasce marcada — a escolha tem de ser ativa
@@ -1046,13 +1150,34 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
     }
 
     async function excluir() {
-      const ok = await ui.confirmar({
-        titulo: "Excluir este cadastro?", perigo: true, digitar: "excluir", rotulo: "Excluir de vez",
-        texto: `Some tudo o que identifica ${c.nome || "esta pessoa"}: cadastro, conversas, mensagens, fotos e arquivos, tarefas e notas. ${k.v.negocios} ficam sem o nome (como «Removido») para os números do anúncio e as vendas não mudarem. Não dá para desfazer.`,
-      });
-      if (!ok) return;
+      // plano 2000d · DR-174 (LGPD): o motivo vai junto — «Pedido do titular» fica registrado (data, quem executou) para a empresa provar que atendeu
+      const nomeR = L.idUnico ? L.idUnico("exc") : `exc-${Date.now()}`;
+      const campoDig = ui.campo({ rotulo: "Digite «excluir» para confirmar", nome: "digitar", autocomplete: "off" });
+      const form = h("form", { class: "crm-form", novalidate: true },
+        h("p", { class: "confirma-txt" }, `Some tudo o que identifica ${c.nome || "esta pessoa"}: cadastro, conversas, mensagens, fotos e arquivos, tarefas e notas. ${k.v.negocios} ficam sem o nome (como «Removido») para os números do anúncio e as vendas não mudarem. Não dá para desfazer.`),
+        h("div", { class: "crm-motivos", role: "radiogroup", "aria-label": "Por que excluir" }, L.MOTIVOS_EXCLUSAO.map(([v, t]) =>
+          h("label", { class: "crm-motivo" }, h("input", { type: "radio", name: nomeR, value: v }), h("span", null, t)))),
+        campoDig);
+      const esc = await ui.modal({ titulo: "Excluir este cadastro?", corpo: form, largura: "p", acoes: [
+        { rotulo: "Cancelar", tipo: "neutro", valor: null },
+        { rotulo: "Excluir de vez", tipo: "perigo", fn: api => {
+          const sel = form.querySelector(`input[name="${nomeR}"]:checked`);
+          if (!sel) { api.erro("Escolha o motivo da exclusão."); return false; }
+          const dig = campoDig.querySelector("input");
+          if (String(dig ? dig.value : "").trim().toLowerCase() !== "excluir") { api.erro("Digite «excluir» para confirmar."); return false; }
+          return { motivo: sel.value };
+        } }] });
+      if (!esc) return;
       try {
-        const r = await k.api.rpcC("nx_contato_excluir", { p_id: c.id, p_confirmacao: "excluir" });
+        let r, semMotivo = false;
+        try { r = await k.api.rpcC("nx_contato_excluir", { p_id: c.id, p_confirmacao: "excluir", p_motivo: esc.motivo }); }
+        catch (e1) {
+          // servidor ainda sem o p_motivo: exclui do jeito antigo e avisa que o pedido não ficou registrado
+          if (!(L.rpcAusente && L.rpcAusente(e1))) throw e1;
+          r = await k.api.rpcC("nx_contato_excluir", { p_id: c.id, p_confirmacao: "excluir" });
+          semMotivo = true;
+        }
+        if (semMotivo && esc.motivo === "titular") ui.toast("Atenção: o servidor ainda não guarda o registro do pedido do titular. Anote a data e quem pediu.", { tipo: "aten", ms: 9000 });
         // plano 1000b · RB-099: plural de verdade («1 arquivo de mídia entra» / «3 arquivos de mídia entram»)
         const nm = Number(r && r.midias_na_fila) || 0;
         ui.toast(`Cadastro excluído${nm ? ` — ${nm} ${nm === 1 ? "arquivo de mídia entra" : "arquivos de mídia entram"} na faxina` : ""}.`, { tipo: "ok" });
@@ -1092,22 +1217,30 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
 }
 
 /** plano 1000 (CR-103): baixa o JSON do titular (L.dadosTitular: cadastro, consentimento, negócios, tarefas, notas, atendimentos, histórico). */
+/** plano 2000d · DR-175: com nx_contato_exportar_titular (mensagens incluídas) quando existir; sem a RPC, o arquivo de sempre (sem as conversas) e o aviso. */
+export async function baixarTitularCompleto(k, d) {
+  try {
+    const r = await k.api.rpcC("nx_contato_exportar_titular", { p_id: d.contato.id });
+    return baixarDadosTitular(k, { ...d, mensagens: (r && r.mensagens) || [] });
+  } catch (e) {
+    if (!(k.L.rpcAusente && k.L.rpcAusente(e))) { k.toastErro(e); return null; }
+    const nome = baixarDadosTitular(k, d);
+    if (nome) k.ui.toast("As mensagens das conversas não entraram no arquivo (o servidor ainda não as exporta).", { tipo: "aten", ms: 8000 });
+    return nome;
+  }
+}
 export function baixarDadosTitular(k, d) {
   const { ui, h, L } = k;
   // plano 1000b · RB-111: o histórico sai em frases (sem ids da equipe) — com o vocabulário e os motivos da conta
   const dados = L.dadosTitular(d, { geradoEm: new Date().toISOString(), vocab: k.v, brl: v => ui.brl(v), motivos: k.motivosPorId ? k.motivosPorId() : {} });
   if (!dados) { ui.toast("Não há dados deste cadastro para baixar.", { tipo: "info" }); return null; }
-  const nome = `dados-titular-${String(dados.cadastro.id)}-${ui.hojeSP()}.json`;
-  const baixar = (arq, conteudo, tipo) => {
-    const url = URL.createObjectURL(new Blob([conteudo], { type: tipo }));
-    const a = h("a", { href: url, download: arq, hidden: true });
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-  };
+  const nome = L.nomeArquivoTitular ? L.nomeArquivoTitular(dados.cadastro, ui.hojeSP()) : `dados-titular-${String(dados.cadastro.id)}-${ui.hojeSP()}.json`;      // plano 1500c · RC-320
+  const baixar = (arq, conteudo, tipo) => { L.baixarArquivo(conteudo, arq, { tipo, h }); };      // plano 2000d · DR-339: um helper só; o link vive 60 s (antes 2 s: o iPhone baixava vazio)
   baixar(nome, JSON.stringify(dados, null, 2), "application/json;charset=utf-8");
   // plano 1000b · RB-263: junto do JSON (técnico, completo) vai um .txt legível para a própria pessoa (seções com título)
   const nomeTxt = nome.replace(/\.json$/, ".txt");
-  baixar(nomeTxt, String.fromCharCode(0xFEFF) + `${L.textoTitular(dados, { data: v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? ui.dataBR(v) : ui.dataHoraBR(v)), brl: v => ui.brl(v), vocab: k.v })}`, "text/plain;charset=utf-8");
+  baixar(nomeTxt, String.fromCharCode(0xFEFF) + `${L.textoTitular(dados, { data: v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? ui.dataBR(v) : ui.dataHoraBR(v)), brl: v => ui.brl(v), vocab: k.v,
+    campos: (k.base && k.base.campos) || [], empresaConta: (k.ctx && k.ctx.cliente && (k.ctx.cliente.nome || k.ctx.cliente.nome_fantasia)) || null })}`, "text/plain;charset=utf-8");      // plano 1500c · RC-024/319
   ui.toast("Arquivos com os dados do titular baixados (um legível .txt e o completo .json). Envie só para a própria pessoa.", { tipo: "ok" });
   return nome;
 }
@@ -1122,28 +1255,31 @@ export function cartaoEmpresa(k, e) {
   const nCt = Number(e.contatos) || 0, abertos = Number(e.negocios_abertos) || 0;
   const sub = [e.documento ? k.L.formatarDoc(e.documento) : null, e.cidade ? `${e.cidade}${e.uf ? `/${e.uf}` : ""}` : null].filter(Boolean).join(" · ");     // plano 1000b · RB-101: CNPJ com máscara
   return h("li", { class: "emp-cartao", dataset: { id: e.id } },
-    h("a", { class: "emp-cab", href: `#/empresas/${e.id}` }, ui.avatar(e.nome, e.id),
+    h("a", { class: "emp-cab", href: `#/empresas/${e.id}` }, ui.avatar(e.nome, e.id, null, { tamanho: "g" }) /* plano 2000d · PX-051 */,
       h("span", { class: "emp-txt" }, h("b", { class: "emp-nome" }, e.nome || "Empresa"), h("small", null, sub || "Sem documento nem cidade"))),
     h("div", { class: "emp-nums" },
       h("span", { class: "emp-num" }, h("b", { class: "dado" }, ui.num(nCt)), h("small", null, nCt === 1 ? k.v.min("contato") : k.v.min("contatos"))),
-      h("span", { class: ["emp-num", abertos > 0 && "tem"] }, h("b", { class: "dado" }, ui.num(abertos)), h("small", null, `${abertos === 1 ? k.v.min("negocio") : k.v.min("negocios")} abert${k.v.art("negocio")}${abertos === 1 ? "" : "s"}`))),
+      h("span", { class: ["emp-num", abertos > 0 && "tem"] }, h("b", { class: "dado" }, ui.num(abertos)), h("small", null, `${abertos === 1 ? k.v.min("negocio") : k.v.min("negocios")} abert${k.v.art("negocio")}${abertos === 1 ? "" : "s"}`)),
+      // plano 1500c · RC-311: «R$ X em aberto» quando o servidor mandar valor_aberto (sem o dado, nada muda)
+      Number(e.valor_aberto) > 0 ? h("span", { class: "emp-num emp-valor" }, h("b", { class: "dado" }, ui.brl(Number(e.valor_aberto), { centavos: false })), h("small", null, "em aberto")) : null),
     h("div", { class: "emp-acoes" },
       h("a", { class: "bt bt-sec bt-p emp-ver-neg", href: `#/empresas/${e.id}?sec=negocios` }, ui.icone("funil"), `Ver ${k.v.min("negocios")}`),
       h("a", { class: "bt bt-fant bt-p emp-ver-ct", href: `#/contatos?empresa=${encodeURIComponent(e.id)}&empresa_nome=${encodeURIComponent(e.nome || "")}` }, ui.icone("contato"), `Ver ${k.v.min("contatos")}`)));
 }
 
 export async function montarEmpresas(k, el) {
-  const { ui, h, ctx } = k;
+  const { ui, h, ctx, L } = k;
   ctx.titulo("Empresas");
   const S = { busca: "", pagina: 1, seq: 0 };
-  const busca = h("input", { type: "search", placeholder: "Buscar empresa", "aria-label": "Buscar empresa" });
+  // plano 2000d · PX-062: até 120 letras, como as outras buscas (o servidor corta; colar um texto enorme travava a digitação)
+  const busca = h("input", { type: "search", enterkeyhint: "search", maxlength: "120", placeholder: "Buscar empresa", "aria-label": "Buscar empresa" });
   const corpo = h("div", { class: "pilha" });
   const pag = h("nav", { class: "ct-pag", "aria-label": "Páginas" });
   busca.addEventListener("input", ui.debounce(() => { S.busca = busca.value.trim(); S.pagina = 1; carregar(); }, 300));
   // plano 1000b · RB-216: Esc limpa a busca e recarrega (como na lista de contatos)
   busca.addEventListener("keydown", ev => { if (ev.key === "Escape" && busca.value) { ev.preventDefault(); busca.value = ""; S.busca = ""; S.pagina = 1; carregar(); } });
   el.append(
-    ui.cabecalho({ titulo: "Empresas", sub: "Convênios, frotas, parceiros — as organizações por trás dos seus contatos.",
+    ui.cabecalho({ titulo: "Empresas", sub: `Convênios, frotas, parceiros — as organizações por trás d${k.v.art("contato") === "a" ? "as suas" : "os seus"} ${k.v.min("contatos")}.` /* plano 2000d · PX-091: o termo da vertical */,
       acoes: k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: async () => {
         const e = await formEmpresa(k, null);
         if (e) ctx.navegar(`#/empresas/${e.id}`);
@@ -1168,16 +1304,31 @@ export async function montarEmpresas(k, el) {
         return;
       }
       ui.limpar(grade);
-      if (!r.itens.length) corpo.appendChild(ui.vazio({ tipo: "sem_resultado", titulo: "Nenhuma empresa com esse nome.", acao: { rotulo: "Limpar busca", fn: () => { busca.value = ""; S.busca = ""; S.pagina = 1; carregar(); } } }));
+      // plano 2000d · PX-089: o vazio diz o termo buscado; página que ficou vazia (sem busca) volta à primeira — antes dizia «com esse nome» sem busca nenhuma
+      if (!r.itens.length) corpo.appendChild(S.busca
+        ? ui.vazio({ tipo: "sem_resultado", titulo: `Nenhuma empresa para «${S.busca}».`, acao: { rotulo: "Limpar busca", fn: () => { busca.value = ""; S.busca = ""; S.pagina = 1; carregar(); } } })
+        : ui.vazio({ tipo: "sem_resultado", titulo: "Esta página ficou vazia.", acao: { rotulo: "Voltar à primeira página", fn: () => { S.pagina = 1; carregar(); } } }));;
       for (const e of r.itens) grade.appendChild(cartaoEmpresa(k, e));
       corpo.appendChild(grade);
-      pag.append(h("span", null, `${ui.num(r.total)} empresa${r.total === 1 ? "" : "s"}`), h("div", { class: "linha" },
+      // plano 1500c · RC-124: «Página 2 de 7» (o tamanho da página vem do servidor ou da 1ª página cheia)
+      if (r.por_pagina) S.porPagina = Number(r.por_pagina); else if (S.pagina === 1 && r.tem_mais && r.itens.length) S.porPagina = r.itens.length;
+      const nPag = L.paginasDe(r.total, S.porPagina);
+      // plano 1500c · RX-037: sem total do servidor, a contagem é da página («12+ empresas»), nunca «NaN empresas»
+      const totEmp = r.total != null && Number.isFinite(Number(r.total)) ? ui.num(Number(r.total)) : `${ui.num((S.pagina - 1) * (S.porPagina || r.itens.length) + r.itens.length)}${r.tem_mais ? "+" : ""}`;
+      pag.append(h("span", null, `${totEmp} empresa${Number(r.total) === 1 || (r.total == null && r.itens.length === 1 && !r.tem_mais) ? "" : "s"}${nPag > 1 ? ` · página ${ui.num(S.pagina)} de ${ui.num(nPag)}` : ""}`), h("div", { class: "linha" },
         h("button", { type: "button", class: "bt bt-sec bt-p", disabled: S.pagina <= 1, on: { click: () => { S.pagina--; carregar(); } } }, ui.icone("seta-esq"), "Anterior"),
         h("button", { type: "button", class: "bt bt-sec bt-p", disabled: !r.tem_mais, on: { click: () => { S.pagina++; carregar(); } } }, "Próxima", ui.icone("seta-dir"))));
     } catch (e) { if (minha === S.seq) { ui.limpar(corpo); corpo.appendChild(ui.erroCartao(e, carregar)); } }
   }
   await carregar();
-  return { desmontar() { S.seq++; } };
+  // plano 2000d · PX-063: «/» (fora de campos e diálogos) vai para a busca de empresas — como em Contatos e no quadro
+  const aoBarra = ev => {
+    const a = ev.target;
+    const editando = a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || "") || (a.closest && a.closest("[role=dialog],dialog")));
+    if (ev.key === "/" && !ev.altKey && !ev.ctrlKey && !ev.metaKey && !editando) { ev.preventDefault(); busca.focus(); }
+  };
+  document.addEventListener("keydown", aoBarra);
+  return { desmontar() { S.seq++; document.removeEventListener("keydown", aoBarra); } };
 }
 
 export async function formEmpresa(k, emp) {     // plano 1000 (CR-189): também pela paleta («Nova empresa»)
@@ -1191,10 +1342,10 @@ export async function formEmpresa(k, emp) {     // plano 1000 (CR-189): também 
     h("div", { class: "crm-form-2" },
       ui.campo({ rotulo: "CNPJ / documento", nome: "documento", valor: L.formatarDoc(e.documento || ""), max: 40 }),
       ui.campo({ rotulo: "Telefone", nome: "telefone", tipo: "tel", valor: e.telefone || "" }),
-      ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", valor: e.email || "" }),
+      N.dicaEmail ? N.dicaEmail(k, ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", valor: e.email || "" })) : ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", valor: e.email || "" }),      // plano 2000d · PX-084
       ui.campo({ rotulo: "Site", nome: "site", tipo: "url", valor: e.site || "", placeholder: "https://" }),
       ui.campo({ rotulo: "Cidade", nome: "cidade", valor: e.cidade || "", max: 80 }),
-      ui.campo({ rotulo: "UF", nome: "uf", valor: e.uf || "", max: 2 })),
+      ui.campo({ rotulo: "UF", nome: "uf", valor: e.uf || "", max: 20 /* plano 2000d · PX-085: cabe «São Paulo» (vira SP ao salvar) */ })),
     ui.campo({ rotulo: "Observação", nome: "obs", tipo: "textarea", valor: e.obs || "", max: 5000 }),
     obrig.map(c => N.campoPersonalizado(k, c, null)));
   const inDoc = form.querySelector("[name=documento]");
@@ -1213,11 +1364,21 @@ export async function formEmpresa(k, emp) {     // plano 1000 (CR-189): também 
       if (erros.length) { ui.marcarErro(form, erros[0].nome, erros[0].texto); return false; }
       const dados = Object.fromEntries(Object.entries(d).filter(([kk]) => !kk.startsWith("campo__")));
       // plano 1000b · RB-055: e-mail e UF conferidos aqui (sem ida ao servidor); a resposta do servidor continua tratada abaixo
+      if (dados.email && L.emailLimpo) dados.email = L.emailLimpo(dados.email);      // plano 2000d · PX-099: o e-mail da empresa limpo antes de conferir
       if (dados.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(dados.email).trim())) { ui.marcarErro(form, "email", "E-mail inválido."); return false; }
+      if (dados.email) dados.email = String(dados.email).trim().toLowerCase();      // plano 1500c · RX-077
+      if (dados.uf && L.ufDaPlanilha) dados.uf = L.ufDaPlanilha(dados.uf);      // plano 2000d · PX-085: «sp», «São Paulo» viram «SP» antes de conferir
       if (dados.uf && !L.ufValida(dados.uf)) { ui.marcarErro(form, "uf", "UF inválida: use a sigla do estado (ex.: SP)."); return false; }
+      // plano 1500c · RX-039: telefone da empresa conferido aqui (mesma regra do servidor) — antes o erro só voltava depois da ida ao servidor
+      if (dados.telefone && String(dados.telefone).replace(/\D/g, "") && !L.normalizarTelefone(dados.telefone)) { ui.marcarErro(form, "telefone", L.textoTelefoneInvalido(dados.telefone)); return false; }
       // plano 1000 (CR-111/112): documento com máscara (o dígito que não confere avisa sem bloquear) e site com https://
       if (dados.documento) dados.documento = L.formatarDoc(dados.documento);
-      if (dados.site) dados.site = L.normalizarSite(dados.site);
+      // plano 2000d · PX-083: «@loja» ou um e-mail no campo Site avisam (antes o site sumia ao salvar, sem dizer nada)
+      if (dados.site) {
+        const site = L.normalizarSite(dados.site);
+        if (!site) { ui.marcarErro(form, "site", /^@/.test(String(dados.site).trim()) ? "Perfil de rede social? Use o link inteiro (ex.: instagram.com/sualoja)." : "Site inválido. Use o endereço, por exemplo www.empresa.com.br."); return false; }
+        dados.site = site;
+      }
       try { return await k.api.rpcC("nx_empresa_salvar", { p_empresa: { ...(emp ? { id: emp.id } : {}), ...dados, uf: dados.uf ? dados.uf.toUpperCase() : null, ...(obrig.length ? { campos: valores } : {}) } }); }
       catch (err) {
         if (err && err.codigo === "telefone_invalido") { ui.marcarErro(form, "telefone", k.erro(err)); return false; }
@@ -1234,7 +1395,7 @@ export async function montarEmpresa(k, el, id, rota = {}) {
   let focarNegocios = !!(rota && rota.query && rota.query.sec === "negocios");   // veio de «Ver negócios» do cartão: abre já na seção
   /** plano 1000 (CR-096): busca um contato e liga à empresa. */
   async function ligarContato(emp) {
-    const busca = h("input", { type: "search", placeholder: "Nome ou telefone", "aria-label": `Buscar ${k.v.min("contato")}`, autocomplete: "off" });
+    const busca = h("input", { type: "search", enterkeyhint: "search", maxlength: "120" /* plano 2000d · PX-078: busca com limite (colar texto enorme travava a digitação) */, placeholder: "Nome ou telefone", "aria-label": `Buscar ${k.v.min("contato")}`, autocomplete: "off" });
     const res = h("div", { class: "crm-busca-res", role: "group", "aria-label": "Resultados" });   // plano 1000b · RB-052: grupo de botões comuns (Tab entre eles) — era listbox sem setas nem aria-selected
     let apiM = null, seq = 0;
     busca.addEventListener("input", ui.debounce(async () => {
@@ -1245,7 +1406,18 @@ export async function montarEmpresa(k, el, id, rota = {}) {
         const r = await k.api.rpcC("nx_contatos_listar", { p_filtro: { busca: q }, p_por_pagina: 8 });
         if (minha !== seq) return;
         const itens = (r && r.itens) || [];
-        if (!itens.length) { res.appendChild(h("p", { class: "flut-vazio" }, "Nada encontrado.")); return; }
+        if (!itens.length) {
+          res.appendChild(h("p", { class: "flut-vazio" }, "Nada encontrado."));
+          // plano 1500c · RC-122: cadastrar quem não existe já ligado à empresa (sem fechar, cadastrar e voltar)
+          if (k.pode("atendente")) res.appendChild(h("button", { type: "button", class: "bt bt-sec bt-p emp-cadastrar-novo", on: { click: async () => {
+            const tel = /^[0-9\s().+-]+$/.test(q);
+            const novo = await formContato(k, tel ? { telefone: q } : { nome: q });
+            if (!novo || novo.id == null) return;
+            try { await k.api.rpcC("nx_contato_salvar", { p_contato: { id: novo.id, empresa_id: emp.id } }); if (apiM) apiM.fechar({ ...novo, nome: novo.nome || q }); }
+            catch (err) { if (apiM) apiM.erro(k.erro(err)); }
+          } } }, ui.icone("mais"), `Cadastrar «${q}» nesta empresa`));
+          return;
+        }
         // plano 1000b · RB-252: quem já está na empresa continua focável (aria-disabled) — o teclado ouve «já está nesta empresa»
         for (const c of itens) res.appendChild(h("button", { type: "button", "aria-disabled": c.empresa && c.empresa.id === emp.id ? "true" : null,
           on: { click: async () => {
@@ -1290,11 +1462,20 @@ export async function montarEmpresa(k, el, id, rota = {}) {
       if (!(d.contatos || []).length) contatos.appendChild(h("p", { class: "fraco" }, `Nenhum ${k.v.min("contato")} ligado. Use «Ligar ${k.v.min("contato")}» ou escolha esta empresa na ficha de alguém.`));
       // plano 1000 (CR-096): ligar contatos daqui mesmo (busca → nx_contato_salvar com empresa_id)
       const btLigar = k.pode("atendente") ? h("button", { type: "button", class: "bt bt-sec bt-p emp-ligar", on: { click: () => ligarContato(e) } }, ui.icone("mais"), `Ligar ${k.v.min("contato")}`) : null;
-      const negs = h("div", { class: "ng-outros" }, (d.negocios || []).map(n => {
+      // plano 1500c · RC-121: abertos primeiro, depois os fechados (mais recentes antes), com um subtítulo entre eles
+      const ordenados = L.ordenarNegociosEmpresa(d.negocios);
+      const negs = h("div", { class: "ng-outros" });
+      ordenados.forEach((n, i) => {
         const est = k.estagio(n.estagio_id);
-        return h("button", { type: "button", class: "ng-mini", style: est && k.cor(est.cor) ? { "--cor": k.cor(est.cor) } : null, on: { click: () => N.abrirNegocio(k, n.id, { aoMudar: carregar }) } },
-          h("i", { "aria-hidden": "true" }), h("span", null, `${L.tituloCard(n)} · ${est ? est.nome : ""}`), h("b", null, ui.brl(n.status === "ganho" ? n.valor : n.valor_previsto, { centavos: false })));   // plano 1000b · RB-103
-      }));
+        const fechado = n.status && n.status !== "aberto";
+        if (fechado && (i === 0 || !(ordenados[i - 1].status && ordenados[i - 1].status !== "aberto"))) negs.appendChild(h("p", { class: "rotulo emp-neg-grupo" }, "Fechados"));
+        const v = n.status === "ganho" ? (n.valor ?? n.valor_previsto) : n.valor_previsto;
+        // plano 1500c · RC-119: mexer no negócio recarrega QUIETO (o aoMudar recebia o cartão como opções e a tela piscava com esqueleto)
+        negs.appendChild(h("button", { type: "button", class: "ng-mini", style: est && k.cor(est.cor) ? { "--cor": k.cor(est.cor) } : null, on: { click: () => N.abrirNegocio(k, n.id, { aoMudar: () => carregar({ quieto: true }) }) } },
+          h("i", { "aria-hidden": "true" }), h("span", null, `${L.tituloCard(n)} · ${est ? est.nome : ""}`),
+          // plano 1500c · RC-120: sem valor → «Sem valor» (antes «R$ 0»)
+          v != null ? h("b", null, ui.brl(v, { centavos: false })) : h("span", { class: "sem" }, "Sem valor")));   // plano 1000b · RB-103
+      });
       if (!(d.negocios || []).length) {
         negs.appendChild(h("p", { class: "fraco" }, `${k.v.nenhum("negocio")} por aqui.`));
         // plano 1000 (CR-235): a frase vira ação — uma oportunidade para alguém desta empresa (um contato: direto; vários: escolhe; nenhum: o formulário busca)
@@ -1336,8 +1517,11 @@ export async function montarEmpresa(k, el, id, rota = {}) {
         h("div", { class: "fx" },
           h("section", { class: "fx-cab" }, ui.avatar(e.nome, e.id),
             h("div", { class: "fx-id" }, h("h1", null, e.nome), h("p", null,
-              e.documento ? h("span", null, L.formatarDoc(e.documento)) : null,     /* plano 1000b · RB-101 */ e.telefone ? h("span", null, ui.icone("telefone"), ui.telBR(e.telefone)) : null,
-              e.email ? h("span", null, e.email) : null, e.cidade ? h("span", null, ui.icone("globo"), `${e.cidade}${e.uf ? `/${e.uf}` : ""}`) : null,
+              e.documento ? h("span", null, L.formatarDoc(e.documento)) : null,     /* plano 1000b · RB-101 */
+              // plano 1500c · RC-103/104: telefone liga e e-mail escreve com um toque
+              e.telefone ? h("span", null, h("span", { "aria-hidden": "true" }, ui.icone("telefone")),
+                L.hrefTel(e.telefone) ? h("a", { class: "fx-tel", href: L.hrefTel(e.telefone), "aria-label": `Ligar para ${ui.telBR(e.telefone)}` }, ui.telBR(e.telefone)) : ui.telBR(e.telefone)) : null,
+              e.email ? h("span", null, h("a", { class: "fx-email", href: `mailto:${e.email}`, "aria-label": `Escrever para ${e.email}` }, e.email)) : null, e.cidade ? h("span", null, ui.icone("globo"), `${e.cidade}${e.uf ? `/${e.uf}` : ""}`) : null,
               // plano 1000 (CR-112): «www.empresa.com» vira link de verdade (https://)
               // plano 1000b · RB-105: site que não vira endereço válido aparece como texto (antes: <a> sem href, fora do Tab)
               e.site ? (L.linkDeSite(e.site) ? h("a", { href: L.linkDeSite(e.site), target: "_blank", rel: "noopener noreferrer", class: "link" }, e.site) : h("span", { class: "emp-site-txt" }, e.site)) : null)),
@@ -1348,11 +1532,20 @@ export async function montarEmpresa(k, el, id, rota = {}) {
                 const nCt = res.contatos;
                 const txtCt = nCt ? `${ui.num(nCt)} ${nCt === 1 ? k.v.min("contato") : k.v.min("contatos")} deixa${nCt === 1 ? "" : "m"} de estar ligad${k.v.art("contato")}${nCt === 1 ? "" : "s"} a ela (os cadastros continuam).`
                   : `Nenhum ${k.v.min("contato")} está ligado a ela.`;
-                if (!(await ui.confirmar({ titulo: `Excluir a empresa «${e.nome}»?`, texto: txtCt, perigo: true }))) return;
-                try { await k.api.rpcC("nx_empresa_excluir", { p_id: e.id }); ui.toast("Empresa excluída.", { tipo: "ok" }); ctx.navegar("#/empresas", { substituir: true }); } catch (err) { k.toastErro(err); }
+                // plano 2000d · DR-173: sem o «tem certeza?» — o Desfazer de 7 s (padrão das outras exclusões) basta; o aviso diz quantos contatos saem
+                // plano 1500c · RC-125: 7 s de «Desfazer» antes de excluir de verdade (padrão do CRM); sair da tela grava na hora
+                let gravando = null;
+                const gravar = () => (gravando = gravando || k.api.rpcC("nx_empresa_excluir", { p_id: e.id }));
+                try {
+                  const r = typeof ui.acaoComDesfazer === "function" ? await ui.acaoComDesfazer({ texto: `Empresa «${e.nome}» excluída. ${txtCt}`, reverter: () => {}, firmar: () => gravar() }) : { estado: "mantida" };
+                  if (r && r.estado === "desfeita") { ui.anunciar && ui.anunciar("Exclusão desfeita."); return; }
+                  await gravar();
+                  ctx.navegar("#/empresas", { substituir: true });
+                } catch (err) { k.toastErro(err); }
               } } }, ui.icone("lixeira"), "Excluir") : null)),
           resumo,
-          e.obs ? h("p", { class: "aviso" }, ui.icone("nota"), h("span", null, e.obs)) : null,
+          // plano 1500c · RC-312: observação é texto comum — bloco neutro com título, não o amarelo de alerta
+          e.obs ? h("div", { class: "emp-obs" }, h("span", { class: "rotulo" }, "Observação"), h("p", { class: "emp-obs-txt" }, e.obs)) : null,
           blocoCampos,
           h("div", { class: "fx-grade" },
             h("section", { class: "ng-bloco", "aria-label": k.v.contatos }, h("div", { class: "ng-bloco-cab" }, h("h3", null, k.v.contatos),
@@ -1372,6 +1565,11 @@ export async function montarEmpresa(k, el, id, rota = {}) {
       if (!vivo) return;
       if (silencio) { k.toastErro(err); return; }      // a empresa que já está na tela fica; o erro vai num aviso
       ui.limpar(el);
+      // plano 2000d · DR-170: empresa excluída (link antigo) diz isso, com «Ver empresas» — sem o «Tentar de novo» que nunca daria certo
+      if (err && err.codigo === "empresa_nao_encontrada") {
+        el.appendChild(ui.vazio({ titulo: "Empresa não encontrada", texto: "Ela pode ter sido excluída.", icone: "empresa", acao: { rotulo: "Ver empresas", fn: () => ctx.navegar("#/empresas") } }));
+        return;
+      }
       el.appendChild(ui.erroCartao(err, () => carregar()));
     }
   }

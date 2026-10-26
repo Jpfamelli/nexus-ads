@@ -24,8 +24,8 @@ ou com `docs/orbita/ESPEC.md`, esses dois vencem.
 ## Órbita — estado e fonte da verdade
 - Fonte técnica: `CONTRATO.md` e `docs/orbita/ESPEC.md`; evidências e estado: `docs/orbita/estado/F1.md`…`F8.md`, `ESTADO.md` e `MELHORIAS-*.md`.
 - F8 está ACEITA e publicada desde 01/10/2026. O follow-up R119/PR #2 e o adendo R122/PR #3 estão mesclados; R122 (mídia CodeWords) está publicado em produção. Falta somente a prova manual de foto/áudio/arquivo com aparelho CodeWords pareado. Evidências: `docs/orbita/estado/F8.md` e `ESTADO.md`.
-- A suíte local consolidada é `node testes/rodar-tudo.mjs`: **60 arquivos** na lista `COMANDOS` (conferido em 15/10/2026; os 9
-  `plano1000-*` e os 11 `plano1000b-*` são opcionais até a frente entregar, os `plano100-*` são obrigatórios). Também executar `node scripts/rodar-local.mjs`
+- A suíte local consolidada é `node testes/rodar-tudo.mjs`: **80 arquivos** na lista `COMANDOS` (conferido em 26/10/2026; os 9
+  `plano1000-*`, os 11 `plano1000b-*`, os 10 `plano1500c-*` e os 10 `plano2000d-*` são opcionais até a frente entregar, os `plano100-*` são obrigatórios). Também executar `node scripts/rodar-local.mjs`
   (migrações + smokes no PGlite; só o `02_acesso` falha, por desenho, e está em `ESPERADAS`), `node scripts/lint-migracoes.mjs`,
   montagem das sete funções, `deno check` dos sete entrypoints e `git diff --check` antes de commitar. Relógio controlado para
   testes: `ORBITA_AGORA=02:50Z TZ=America/Sao_Paulo node testes/rodar-tudo.mjs` (`testes/apoio/relogio.mjs`).

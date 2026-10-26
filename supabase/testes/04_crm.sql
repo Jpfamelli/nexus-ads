@@ -38,7 +38,10 @@ declare
   t0 timestamptz; ms numeric; cols jsonb;
   -- SV-156: consulta SEMPRE no futuro (era '2026-10-05T14:30' fixo: depois dessa data o nx_negocio_mover passa a gravar a nota
   -- «a data já passou» e a gaveta deixava de ter 1 nota só)
-  dC date := (now() at time zone 'America/Sao_Paulo')::date + 7;
+  -- plano 2000d · tarefa 0: cai numa QUARTA-feira (7 a 13 dias à frente): +7 fixo caía no domingo quando o smoke rodava num domingo, o
+  -- nx_negocio_mover gravava a nota «fora do horário de atendimento da agenda» e a gaveta passava a ter 2 notas
+  dC date := (now() at time zone 'America/Sao_Paulo')::date + 7
+            + ((10 - extract(isodow from (now() at time zone 'America/Sao_Paulo')::date + 7)::int) % 7);
 begin
   -- ---------------------------------------------------------- cenário
   insert into public.nx_clientes (slug, nome, vertical) values ('teste-f4-a', 'Teste F4 A', 'odonto') returning id into cA;

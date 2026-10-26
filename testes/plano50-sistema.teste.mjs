@@ -241,8 +241,10 @@ test("A2 · G.calor: setas percorrem hora (← →) e dia (↑ ↓), a célula a
   G.calor(alvo, { matriz, dias: ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"], fmt: v => `${v} conversas`, resumo: "Leads por dia e hora" });
   const caixa = alvo.querySelector(".g-caixa.g-calcaixa"), dica = caixa.querySelector(".g-dica");
   assert.equal(caixa.getAttribute("tabindex"), "0");
+  // plano 1500c · RC-244: a 1ª seta começa na célula de MAIOR valor (antes segunda 8h fixo)
   ev(caixa, "keydown", { key: "ArrowRight" });
-  assert.equal(dica.textContent, "seg 08h: 3 conversas", "começa na segunda às 8h");
+  assert.equal(dica.textContent, "ter 08h: 5 conversas", "começa no pico");
+  ev(caixa, "keydown", { key: "ArrowUp" }); assert.equal(dica.textContent, "seg 08h: 3 conversas");
   ev(caixa, "keydown", { key: "ArrowDown" }); assert.equal(dica.textContent, "ter 08h: 5 conversas");
   ev(caixa, "keydown", { key: "ArrowRight" }); assert.equal(dica.textContent, "ter 09h: 1 conversas");
   const ativa = caixa.querySelector(".g-cal-c.g-ativa");
@@ -740,7 +742,8 @@ test("A13 · tema escuro afinado: bordas com alfa (--c-borda-alfa), sombras do c
 });
 test("A14 · login: erro de credencial fica inline no campo de senha, botão diz «Entrando…», kicker e régua editorial; A15 foco/skip-link; A7 pressão .98", () => {
   const login = ler("login.js");
-  assert.match(login, /if \(e && e\.codigo === "credenciais_invalidas"\) ui\.marcarErro\(form, "senha", msg\);/);
+  // plano 1500c · UCB-047: a frase ganha o aviso das tentativas que faltam
+  assert.match(login, /if \(e && e\.codigo === "credenciais_invalidas"\) ui\.marcarErro\(form, "senha", fraseSenhaErrada\(msg, e\.hint\)\);/);
   assert.match(login, /rotuloBt\.textContent = "Entrando…";/); assert.match(login, /class: "bt bt-prim bt-g bt-bloco bt-carrega"/);
   assert.match(login, /class: "entrar-kicker selo-caps"/); assert.match(login, /class: "entrar-regua"/);
   assert.doesNotMatch(login, /\bnarr\b/, "o login continua sem Zodiak");

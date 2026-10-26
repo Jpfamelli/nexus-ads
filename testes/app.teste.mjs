@@ -391,9 +391,10 @@ await teste("mensagemErro: erros da IA e das automações novas têm texto com o
     "etapa_invalida", "etiqueta_invalida", "pessoa_invalida", "departamento_invalido", "gatilho_invalido", "acao_invalida", "condicao_invalida", "tempo_invalido", "passo_invalido",
     "simulacao_indisponivel", "automacao_nao_encontrada", "muitos_pedidos", "ia_indisponivel"]) assert.ok(A.MENSAGENS[c] && A.MENSAGENS[c].length > 15, `texto para ${c}`);
   assert.match(A.mensagemErro({ codigo: "ia_cota" }), /próximo mês/);
-  assert.match(A.mensagemErro({ codigo: "sem_chave" }), /chave da Anthropic/);
+  // plano 2000d: DU-155 — a frase diz o que fazer sem citar o fornecedor da IA nem a plataforma (white-label)
+  assert.match(A.mensagemErro({ codigo: "sem_chave" }), /IA ainda não foi ligada.*quem fornece o sistema/);
   // o nx-ia manda {ok:false, erro:"ia_indisponivel", detalhe:"sem_chave"}: o texto diz o que falta, e não só "indisponível"
-  assert.match(A.mensagemErro({ codigo: "ia_indisponivel", detalhe_texto: "sem_chave", detalhe: "sem_chave" }), /chave da Anthropic/);
+  assert.match(A.mensagemErro({ codigo: "ia_indisponivel", detalhe_texto: "sem_chave", detalhe: "sem_chave" }), /IA ainda não foi ligada/);
   assert.match(A.mensagemErro({ codigo: "ia_indisponivel", detalhe_texto: "conversa_vazia" }), /não há mensagens|Ainda não há mensagens/i);
   assert.equal(A.mensagemErro({ codigo: "ia_indisponivel" }), "A IA não está disponível agora.");
   assert.equal(A.mensagemErro({ codigo: "automacao_invalida", hint: "ação 2: escolha a etapa" }), "A automação tem um problema: ação 2: escolha a etapa.");
@@ -417,10 +418,11 @@ await teste("mensagemErro: TODO código de erro do painel devolvido por nx-envia
   for (const c of ["codewords_sem_aparelho", "aparelho_nao_encontrado", "numero_diferente", "aparelho_desconectado", "metodo_invalido", "erro_interno"]) {
     assert.doesNotMatch(A.mensagemErro({ codigo: c }), /Não deu certo agora/, c);
   }
-  assert.match(A.mensagemErro({ codigo: "codewords_sem_aparelho" }), /pareado no CodeWords/);
-  // codewords_falhou mostra o motivo que o servidor já escreveu em português, sem o código técnico
-  assert.equal(A.mensagemErro({ codigo: "codewords_falhou", detalhe_texto: "O CodeWords recusou a chave (cwk-) deste número." }), "O CodeWords recusou a chave (cwk-) deste número.");
-  assert.equal(A.mensagemErro({ codigo: "codewords_falhou" }), "O CodeWords não concluiu o pedido. Tente de novo em instantes.");
+  // plano 2000d: DU-156 — o cliente da revenda não lê o nome do fornecedor (CodeWords); o código do erro é o mesmo
+  assert.match(A.mensagemErro({ codigo: "codewords_sem_aparelho" }), /pareado com o celular/);
+  // codewords_falhou mostra o motivo que o servidor já escreveu em português, sem o código técnico (e sem o nome do fornecedor)
+  assert.equal(A.mensagemErro({ codigo: "codewords_falhou", detalhe_texto: "O CodeWords recusou a chave (cwk-) deste número." }), "A conexão do aparelho recusou a chave (cwk-) deste número.");
+  assert.equal(A.mensagemErro({ codigo: "codewords_falhou" }), "A conexão do aparelho não concluiu o pedido. Tente de novo em instantes.");
 });
 await teste("sessao_invalida chama o callback do shell", async () => {
   let chamou = 0;
@@ -706,8 +708,10 @@ await teste("admin: três ofertas comerciais exatas e segmento livre sem quebrar
   assert.equal(Ad.verticalPorSegmento("Consultoria contábil"), "generico");
   const src = ler("admin.js");
   assert.ok(/nome: "segmento"/.test(src) && /nome: "especificacoes"/.test(src), "campos livres presentes no cadastro/edição");
-  assert.ok(/comercial: \{ pacote: oferta\.id, segmento: d\.segmento/.test(src), "cadastro envia oferta e especificações à RPC" );
-  assert.ok(src.includes("Plano de acesso ao Órbita"), "acesso técnico é diferenciado da oferta comercial");
+  // plano 2000d: FX-075 — a revenda sem pacote comercial (UCB-002) manda pacote null; o cadastro continua enviando a oferta e as especificações
+  assert.ok(/comercial: \{ pacote: oferta \? oferta\.id : null, segmento: d\.segmento/.test(src) && /especificacoes: d\.especificacoes/.test(src), "cadastro envia oferta e especificações à RPC" );
+  // plano 2000d: white-label (DU-193/DU-194) — o rótulo do acesso técnico não cita mais a marca da plataforma, mas continua separado da oferta
+  assert.ok(src.includes("Plano de acesso") && !src.includes("Plano de acesso ao Órbita"), "acesso técnico é diferenciado da oferta comercial");
 });
 
 await teste("migração dos pacotes: aditiva, valores fixos no servidor e retorno comercial limitado ao Admin", () => {
@@ -885,7 +889,8 @@ await teste("apps independentes: atalhos CRM/Ads/Atendimento, query de produto e
     const m = JSON.parse(readFileSync(join(APP, manifesto), "utf8"));
     assert.equal(m.start_url, `/app/?produto=${id}#/${rota}`);
     assert.equal(m.scope, "/app/");
-    assert.equal(m.icons.length, 1);
+    // plano 2000d: UCC-057 (plano 1500c) — os manifestos de produto ganham os PNG 192/512 e o 512 maskable (o SVG sozinho não instala em todo Android)
+    assert.ok(m.icons.some(i => i.sizes === "512x512" && i.purpose === "maskable") && m.icons.some(i => i.sizes === "192x192"));
     assert.equal(new URL(m.icons[0].src, `https://orbita.local/app/${manifesto}`).pathname, "/app/orbita-icon.svg");
   }
   const jsWorkspace = readFileSync(join(RAIZ, "web", "workspace.js"), "utf8");
@@ -894,10 +899,13 @@ await teste("apps independentes: atalhos CRM/Ads/Atendimento, query de produto e
   assert.match(jsWorkspace, /origem\.hash\.startsWith\("#\/"\) \? origem\.hash : `#\/\$\{atual\.rota\}`/, "entrada de produto preserva deep link interno validado pelo shell");
   const shell = ler("app.js");
   assert.match(shell, /rotaNoProduto\(E\.workspace, r\.modulo\)/, "shell identifica navegação fora do produto atual");
-  assert.match(shell, /produtoDaRota\(r\.modulo\)[\s\S]*?urlWorkspace\(destino, rotas\.montarHash\(r\.modulo, r\.partes, r\.query\)\)/, "rotas cruzadas preservam o destino e alternam para o produto correspondente");
+  // plano 1500c: UCC-036 passa o produto aberto (#/inicio fica no produto) — produtoDaRota(r.modulo, E.workspace)
+  assert.match(shell, /const destino = rotas\.produtoDaRota\(r\.modulo, E\.workspace\)[\s\S]*?urlWorkspace\(destino, rotas\.montarHash\(r\.modulo, r\.partes, r\.query\)\)/, "rotas cruzadas preservam o destino e alternam para o produto correspondente");
   assert.match(shell, /E\.workspace === null \|\| E\.workspace === "crm"/, "busca global só existe no Órbita completo ou no CRM");
-  assert.match(shell, /document\.title = E\.workspace \? rotas\.PRODUTOS\[E\.workspace\]\.titulo/, "cada atalho tem título próprio");
-  assert.match(shell, /const nomeApp = E\.workspace \? E\.M\?\.rotas\?\.PRODUTOS\?\.\[E\.workspace\]\?\.nome : "";/, "título mantém o produto mesmo quando muda a rota interna");
+  // plano 2000d: DU-155 — o título vem de nomeDoApp (o do produto na marca padrão; o da revenda, sem «Órbita»/«Nexus», na white-label)
+  assert.match(shell, /document\.title = rotas\.nomeDoApp\(\{ produto: E\.produto, workspace: E\.workspace \}\)\.name/, "cada atalho tem título próprio");
+  // plano 2000d: SX-067 — o nome do produto na aba vem de nomesProdutos (na revenda «Anúncios»; na marca padrão, o de sempre)
+  assert.match(shell, /const nomeApp = E\.workspace \? \(nomes \? nomes\[E\.workspace\] : E\.M\?\.rotas\?\.PRODUTOS\?\.\[E\.workspace\]\?\.nome\) : "";/, "título mantém o produto mesmo quando muda a rota interna");
   const seletor = shell.match(/function abrirSeletorProduto\(ancora\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.match(seletor, /const rotas = E\.M\.rotas;/, "seletor usa o módulo de rotas carregado no contexto");
   assert.match(seletor, /Object\.entries\(rotas\.PRODUTOS\)/, "seletor lista os três produtos configurados");
@@ -1330,8 +1338,9 @@ await teste("T03: «Valor previsto» com texto que não é número não apaga o 
   for (const bom of ["", "   ", "1.500,50", "R$ 2.000", "2.000", "0", "1500.5"]) assert.equal(CRMLOG.dinheiroInvalido(bom), false, JSON.stringify(bom));
   assert.equal(CRMLOG.lerNumero("1.500,50"), 1500.5);
   const g = ler("crm-negocio.js");
-  assert.match(g, /validar: c => k\.L\.dinheiroInvalido\(c\.value\)[^\n]*\n\s*salvar: v => salvar\(\{ valor_previsto: v \}\)/, "Valor previsto valida antes de gravar");
-  assert.match(g, /validar: c => k\.L\.dinheiroInvalido\(c\.value\)[^\n]*\n\s*salvar: v => salvar\(\{ valor: v \}\)/, "Valor final também");
+  // plano 1500c · RX-071: o validar usa erroDinheiro (também recusa negativo) e cai no dinheiroInvalido
+  assert.match(g, /validar: c => \(k\.L\.erroDinheiro[^\n]*k\.L\.dinheiroInvalido\(c\.value\)[^\n]*\n\s*salvar: v => salvar\(\{ valor_previsto: v \}\)/, "Valor previsto valida antes de gravar");
+  assert.match(g, /validar: c => \(k\.L\.erroDinheiro[^\n]*k\.L\.dinheiroInvalido\(c\.value\)[^\n]*\n\s*salvar: v => salvar\(\{ valor: v \}\)/, "Valor final também");
   assert.match(g, /if \(invalido\) \{ mostrarInvalido\(invalido\); return; \}/, "inválido mostra o erro e NÃO chama salvar");
 });
 await teste("T03: aviso «Ao salvar» do funil concorda no singular (1 negócio vai, 2 vão)", () => {
@@ -1356,7 +1365,7 @@ await teste("T04: o aparelho do CodeWords não tem janela de 24 h — a tela nã
 await teste("T06: bloqueio de dia(s) inteiro(s) mostra «Dia inteiro · 06/10/2026», não «06/10 00:00 — 07/10 00:00» (periodoBR)", () => {
   assert.equal(U.periodoBR("2026-10-06T03:00:00Z", "2026-10-07T03:00:00Z"), "Dia inteiro · 06/10/2026");
   assert.equal(U.periodoBR("2026-10-06T03:00:00Z", "2026-10-09T03:00:00Z"), "Dias inteiros · 06/10/2026 a 08/10/2026");
-  assert.equal(U.periodoBR("2026-10-06T12:00:00Z", "2026-10-06T15:00:00Z", " · "), "06/10/2026 09:00 · 06/10/2026 12:00", "faixa de horário continua com as horas");
+  assert.equal(U.periodoBR("2026-10-06T12:00:00Z", "2026-10-06T15:00:00Z", " · "), "06/10/2026 09:00 · 12:00", "faixa de horário continua com as horas (plano 2000d: SX-084 — no mesmo dia, a data uma vez)");
   assert.equal(U.periodoBR("2026-10-06T12:00:00Z", "2026-10-07T15:00:00Z"), "06/10/2026 09:00 — 07/10/2026 12:00");
   assert.match(ler("agenda.js"), /ui\.periodoBR\(b\.inicio, b\.fim, " · "\)/);
   assert.match(ler("agenda-config.js"), /ui\.periodoBR\(b\.inicio, b\.fim, " — "\)/);
@@ -1430,9 +1439,11 @@ await teste("T07: resumo mensal omite «Em relação a…» quando nenhum dos do
   assert.doesNotMatch(txt, /Em relação a/, "0 → 0 é ruído");
   assert.match(txt, /Resultados de setembro/);
   // com fechamento nos dois meses a comparação volta
+  // plano 1500c · AC-042: só compara com mês anterior que tem número na maior parte dos dias — agosto e setembro cheios
+  const cheias = ["2026-08", "2026-09"].flatMap(mes => Array.from({ length: mes === "2026-08" ? 31 : 30 }, (_, i) => ({ n: "campanha", d: `${mes}-${String(i + 1).padStart(2, "0")}`, p: "meta", c: "A", cn: "A", g: 10, imp: 100, cli: 1, conv: 1 })));
   const leads = [{ id: 1, data_conversa: "2026-09-10", plataforma: "meta", campanha_ext: "A", etapa: "fechou", data_agenda: "2026-09-12", servico: "Implante", valor: 3000 },
     { id: 2, data_conversa: "2026-08-10", plataforma: "meta", campanha_ext: "A", etapa: "fechou", data_agenda: "2026-08-12", servico: "Implante", valor: 3000 }];
-  const M2 = NUCLEO.montar(NUCLEO.datasetDeLinhas({ metricas, leads, hoje, dias: 130, cliente: { nome: "Clínica" } }));
+  const M2 = NUCLEO.montar(NUCLEO.datasetDeLinhas({ metricas: cheias, leads, hoje, dias: 130, cliente: { nome: "Clínica" } }));
   assert.match(M2.relMensal(M2.mesesDados().find(m => m.mes === 8 && m.completo)), /Em relação a agosto/);
 });
 
@@ -1712,7 +1723,9 @@ await teste("tema escuro (M01/M04): tudo que não é cor de estado sai IGUAL ao 
   // Golden gerado com o derivarTema anterior ao contrato. Fora do conjunto ficam só as cores de estado (ok, ruim, aten, info, meta, google, nota, sev-*, prod-*)
   // e o poço: o M04 gira essas cores quando a marca cai a menos de 30° delas e dá tom próprio a Meta e Google. O resto do escuro não pode mudar.
   const ESTADO = k => /^--c-(ok|ruim|aten|info|meta|google|nota|sev-|prod-|poco)/.test(k);
-  const ouro = { padrao: "ffrom8", vermelha: "kyq0od", azul: "y8mwxh", verde: "m6elem" };
+  // plano 1500c: o hover do primário (--c-prim-hi) agora se afasta da cor do texto (UCC-071: o texto branco sobre o hover clareado caía abaixo de 4,5:1)
+  // — vermelha e azul (texto branco) escurecem no hover; padrão e verde (texto escuro) já clareavam
+  const ouro = { padrao: "ffrom8", vermelha: "1fcjr34", azul: "t58snz", verde: "m6elem" };
   for (const [nome, m] of Object.entries(ESCURO_4)) {
     const { vars, escuro } = T.derivarTema(m);
     assert.equal(escuro, true, nome);
@@ -2183,7 +2196,8 @@ await teste("ui.toast: todo toast é anunciado (polido; erro urgente) e aoFechar
   const d = comDom();
   try {
     U.toast("Salvo.", { tipo: "ok" }); await esperar(50);
-    assert.equal(d.doc.getElementById("anuncio").textContent, "Salvo."); assert.equal(d.doc.getElementById("anuncio").getAttribute("aria-live"), "polite");
+    // plano 2000d: DU-434 — o sucesso é anunciado com «Pronto:» (não só a cor verde)
+    assert.equal(d.doc.getElementById("anuncio").textContent, "Pronto: Salvo."); assert.equal(d.doc.getElementById("anuncio").getAttribute("aria-live"), "polite");
     U.toast("Falhou.", { tipo: "erro" }); await esperar(50);
     assert.equal(d.doc.getElementById("anuncio-urgente").textContent, "Falhou."); assert.equal(d.doc.getElementById("anuncio-urgente").getAttribute("aria-live"), "assertive");
     assert.equal(d.doc.getElementById("toasts").getAttribute("aria-live"), null, "a caixa não fala por conta própria (uma só voz: anunciar)");
@@ -2513,7 +2527,7 @@ await teste("ui.numMoeda: 'R$' e centavos a 60 % (.num-moeda), centavos opcionai
   try {
     const a = U.numMoeda(1234.5); assert.ok(a.classList.contains("num-moeda")); assert.equal(a.textContent, "R$1.234,50");
     assert.equal(achar(a, ".nm-rs").textContent, "R$"); assert.equal(achar(a, ".nm-cent").textContent, ",50");
-    assert.equal(U.numMoeda(1234.5, { centavos: false }).textContent, "R$1.234"); assert.equal(U.numMoeda(1234.5, { centavos: false }).querySelector(".nm-cent"), null);
+    assert.equal(U.numMoeda(1234.5, { centavos: false }).textContent, "R$1.235");   // plano 2000d: SX-012 — arredonda como o brl, não corta assert.equal(U.numMoeda(1234.5, { centavos: false }).querySelector(".nm-cent"), null);
     assert.equal(U.numMoeda(null).textContent, "—"); assert.equal(U.numMoeda(-5).textContent, "R$−5,00");
   } finally { d.fim(); }
 });
@@ -3043,7 +3057,8 @@ await teste("A11Y: listas do kanban têm apenas filhos listitem, incluindo estad
   assert.match(crm, /class: "kb-lista", role: "list"/);
   assert.match(crm, /class: "kb-vazia", role: "listitem"/);
   assert.match(crm, /class: "kb-mais-item", role: "listitem"/);
-  assert.match(crm, /role: "listitem", tabindex: "0"/);
+  // plano 2000d: PX-032 — o cartão usa tabindex «roving» (DR-029: só um cartão por vez no Tab, «0» no ativo, «-1» nos outros); continua listitem focável
+  assert.match(crm, /role: "listitem", tabindex: (?:"0"|String\(S\.rovingId\) === String\(c\.id\) \? "0" : "-1")/);
 });
 
 await teste("M36/M40: o contexto expõe leitura de rascunhos ao módulo Conversas, com o escopo conta + empresa", () => {

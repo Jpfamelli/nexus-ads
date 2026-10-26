@@ -98,7 +98,8 @@ test("AB-142 · «A Nexus já foi avisada» só com aviso de conexão ENVIADO na
   assert.equal(P.equipeAvisada([al({ enviado_em: "2026-10-14T10:01:00Z" })], erros, agora), true);
   assert.equal(P.equipeAvisada([al({ enviado_em: "x", criado_em: "2026-10-12T10:00:00Z" })], erros, agora), false, "velho");
   assert.equal(P.equipeAvisada([al({ enviado_em: "x", chave: "integracao|google" })], erros, agora), false, "outra plataforma");
-  assert.match(PJS, /"Avise a Nexus para refazer a conexão\."/);
+  // plano 2000d: o texto vem de avisoEquipe(agência) — revenda lê o nome DELA (KX-041/KX-056)
+  assert.match(PJS, /`Avise a \$\{ag\} para refazer a conexão\.`/);
 });
 
 test("AB-138/AB-139/AB-148 · conversões fracionadas do Google não arredondam; sem conversão não vira «— cada»", () => {
@@ -134,7 +135,8 @@ test("AB-140/AB-213/AB-164 · tabelas e quadro com o vocabulário da vertical e 
   assert.match(CSS, /\.donut \.donut-trilha \{ stroke: var\(--tinta\); \}/);
   assert.match(PJS, /aria-label="\$\{esc\(l\)\}: \$\{tot\} \$\{esc\(tot === 1 \? V\.pessoa\[0\] : V\.pessoa\[1\]\)\}"/, "aria-label das colunas");
   assert.match(PJS, /<th scope="col">\$\{esc\(capt\(V\.novo\[1\]\)\)\}<\/th><th scope="col">\$\{esc\(V\.receita\)\}<\/th><th scope="col">Custo\/\$\{esc\(V\.pessoa\[0\]\)\}<\/th>/, "tabela de origem");
-  assert.match(PJS, /<small>\$\{c\.fecharam\} \$\{esc\(c\.fecharam === 1 \? V\.pessoa\[0\] : V\.pessoa\[1\]\)\}<\/small>/, "centro da rosca");
+  // plano 2000d: com int() (KX-051)
+  assert.match(PJS, /<small>\$\{int\(c\.fecharam\)\} \$\{esc\(c\.fecharam === 1 \? V\.pessoa\[0\] : V\.pessoa\[1\]\)\}<\/small>/, "centro da rosca");
 });
 
 test("AB-010/AB-231 · salvar o cliente no clássico preserva regrasOff que a tela não conhece", () => {
@@ -159,7 +161,8 @@ test("AB-145/AB-146 · credenciais conferidas antes de salvar; desligar a integr
   assert.match(P.erroCredencial("google_customer_id", "123-456-78"), /10 números/);
   assert.equal(P.erroCredencial("meta_access_token", ""), "", "em branco = mantém o salvo");
   assert.match(PJS, /const msg = erroCredencial\(i\.name, i\.value\);\n\s+if \(msg\) \{ i\.focus\(\); return avisoForm\(st, msg, true\); \}/);
-  assert.match(PJS, /if \(antes\.ativo && !ativo\) \{[\s\S]{0,200}if \(!confirm\(`Desligar a integração do \$\{nomeC\}\?/);
+  // plano 1500c: AC-242 — a pergunta continua, agora no diálogo do próprio painel (confirmar) em vez do confirm() nativo
+  assert.match(PJS, /if \(antes\.ativo && !ativo\) \{[\s\S]{0,200}if \(!\(await confirmar\(`Desligar a integração do \$\{nomeC\}\?/);
 });
 
 test("AB-147 · meta negativa não apaga a meta calada", () => {
@@ -201,7 +204,7 @@ test("AB-154 · período, plataforma e ordem guardados por cliente", () => {
   assert.deepEqual(JSON.parse(JSON.stringify(P.lerFiltros('{"dias":60,"plat":"meta","sort":{"key":"cpa","dir":1}}'))), { dias: 60, plat: "meta", sort: { key: "cpa", dir: 1 } });
   assert.deepEqual(JSON.parse(JSON.stringify(P.lerFiltros('{"dias":45,"plat":"tiktok","sort":{"key":"x","dir":3}}'))), { dias: 30, plat: "", sort: { key: "gasto", dir: -1 } }, "valor estranho cai no padrão");
   assert.deepEqual(JSON.parse(JSON.stringify(P.lerFiltros("{quebrado"))).dias, 30);
-  assert.match(PJS, /S\.dias = \+v; guardarFiltros\(\);/); assert.match(PJS, /S\.plat = v; S\.kVer = \{\}; guardarFiltros\(\);/);
+  assert.match(PJS, /S\.dias = \+v; guardarFiltros\(\);/); assert.match(PJS, /S\.plat = v; S\.kVer = \{\}; S\.criMax = CRI_PASSO; guardarFiltros\(\);/);   // plano 2000d: criativos voltam à 1ª página (KX-049)
   assert.match(PJS, /S\.clienteId = escolhido \? escolhido\.id : null;\n\s+aplicarFiltrosSalvos\(\);/, "a sessão volta com o guardado");
 });
 
@@ -212,7 +215,8 @@ test("AB-011/AB-137/AB-152 · tabela de campanhas acessível: aria-sort no <th>,
   assert.match(CSS, /th\[aria-sort="descending"\] button::after/);
   assert.match(PJS, /<tfoot><tr><th scope="row">Total<\/th>/);
   assert.match(CSS, /#tbl-campanhas tfoot th\[scope="row"\]/);
-  assert.match(PJS, /<span class="sr-only">\$\{esc\(NIVEL_CPA\[pontoCpa\(r\.t\.cpa\)\]\)\}: <\/span>/);
+  // plano 1500c: AC-224 — o nível do custo é contra a meta DA CAMPANHA (pontoCpa recebe a campanha)
+  assert.match(PJS, /<span class="sr-only">\$\{esc\(NIVEL_CPA\[pontoCpa\(r\.t\.cpa, r\.c\)\]\)\}: <\/span>/);
 });
 
 test("AB-012 · trilha do herói: sem base a taxa é null (marcador vazio), nunca «0%»", () => {
@@ -354,7 +358,7 @@ test("AB-016/AB-253 · diário: semana sem conversa sem «— por conversa»; in
   const t = M.relDiario(M.R);
   assert.doesNotMatch(t, /— por conversa/);
   assert.match(t, /nenhuma conversa na semana/);
-  assert.match(montarDe({ metricas: serie(1, 20) }).relDiario(129), /• Investido: R\$\s30,00 .*\(média dos 7 dias: R\$\s30,00\)/);
+  assert.match(montarDe({ metricas: serie(1, 20) }).relDiario(129), /• Investido: R\$\s30,00 .*\(média dos 7 dias anteriores: R\$\s30,00\)/);   // plano 1500c: AC-013 — média dos 7 dias ANTERIORES
 });
 
 test("AB-018 · melhor/pior da semana com o nome curto e «por conversão» no Google", () => {
@@ -417,7 +421,7 @@ test("AB-171 · mensal cita a campanha pelo nome curto", () => {
   const M0 = montarDe({ metricas: serie(1, 120, { cn: longo }) });
   const iso = N.isoDe(M0.dataDe(ultimoMes(M0).de + 3));
   const M = montarDe({ metricas: serie(1, 120, { cn: longo }), leads: [leadF(iso, { valor: 900 })] });
-  const linha = M.relMensal(ultimoMes(M)).split("\n").find(l => l.startsWith("• Anúncio que mais trouxe resultado"));
+  const linha = M.relMensal(ultimoMes(M)).split("\n").find(l => l.startsWith("• Campanha que mais trouxe resultado"));   // plano 1500c: AC-018 — é a campanha
   assert.ok(linha && !linha.includes(longo) && linha.includes(Object.values(M.CAMP).find(c => c.nome === longo).curto), linha);
 });
 
